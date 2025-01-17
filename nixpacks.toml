@@ -1,0 +1,8 @@
+[phases.setup]
+apt_pkgs = ["gcc", "postgresql-client"]
+
+[phases.install]
+cmd = "python -m venv /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt"
+
+[phases.start]
+cmd = "python main.py"
