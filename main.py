@@ -51,11 +51,15 @@ def generate_mega_setting():
     cursor.execute('SELECT name, description FROM Settings')
     settings = cursor.fetchall()
 
+    if not settings:
+        conn.close()
+        return jsonify({"error": "No settings found in the database."}), 500
+
     # Randomly select 3, 4, or 5 rows
     num_settings = random.choice([3, 4, 5])
-    selected_settings = random.sample(settings, num_settings)
+    selected_settings = random.sample(settings, min(num_settings, len(settings)))
 
-    # Combine names and descriptions
+    # Combine Names and Descriptions
     mega_name = " + ".join([row[0] for row in selected_settings])
     descriptions = [row[1] for row in selected_settings]
     mega_description = (
@@ -63,18 +67,23 @@ def generate_mega_setting():
         "Together, they form a grand vision, unexpected and brilliant."
     )
 
-    # Store results in the CurrentRoleplay table
+    # Store results in the "CurrentRoleplay" table
     cursor.execute('DELETE FROM CurrentRoleplay')  # Clear previous data
     cursor.execute('INSERT INTO CurrentRoleplay (key, value) VALUES (%s, %s)', ("MegaSetting", mega_name))
     cursor.execute('INSERT INTO CurrentRoleplay (key, value) VALUES (%s, %s)', ("MegaDescription", mega_description))
     conn.commit()
     conn.close()
 
+    # Debug logs for clarity
+    print("Mega Setting Name:", mega_name)
+    print("Mega Setting Description:", mega_description)
+
     return jsonify({
         "mega_name": mega_name,
         "mega_description": mega_description,
         "message": "Mega setting generated and stored successfully."
     })
+
 
 # Initialize the database on startup
 if __name__ == '__main__':
