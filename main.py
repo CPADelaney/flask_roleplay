@@ -48,7 +48,7 @@ def generate_mega_setting():
     cursor = conn.cursor()
 
     # Fetch settings from the "Settings" table
-    cursor.execute('SELECT name, description FROM Settings')
+    cursor.execute('SELECT name, description FROM settings_alt')
     settings = cursor.fetchall()
 
     if not settings:
