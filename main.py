@@ -19,7 +19,10 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS Settings (
             id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
-            description TEXT NOT NULL
+            mood_tone TEXT NOT NULL,
+            enhanced_features JSON NOT NULL,
+            stat_modifiers JSON NOT NULL,
+            activity_examples JSON NOT NULL
         );
     ''')
     cursor.execute('''
