@@ -107,6 +107,5 @@ def generate_mega_setting():
     })
 
 # Initialize the database on startup
-if __name__ == '__main__':
-    initialize_database()
-    app.run(host='0.0.0.0', port=5000)
+initialize_database()  # Just call it immediately
+app.run(host='0.0.0.0', port=5000)
