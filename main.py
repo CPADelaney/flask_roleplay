@@ -51,44 +51,60 @@ def test_db_connection():
 def generate_mega_setting():
     conn = get_db_connection()
     cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples 
+        FROM Settings
+    ''')
+    rows = cursor.fetchall()
+    conn.close()
 
-    # Fetch settings from the "Settings" table
-    cursor.execute('SELECT name, description FROM settings_alt')
-    settings = cursor.fetchall()
-
-    if not settings:
-        conn.close()
+    if not rows:
         return jsonify({"error": "No settings found in the database."}), 500
 
-    # Randomly select 3, 4, or 5 rows
-    num_settings = random.choice([3, 4, 5])
-    selected_settings = random.sample(settings, min(num_settings, len(settings)))
+    num_settings = random.choice([3,4,5])
+    selected = random.sample(rows, min(num_settings, len(rows)))
 
-    # Combine Names and Descriptions
-    mega_name = " + ".join([row[0] for row in selected_settings])
-    descriptions = [row[1] for row in selected_settings]
+    # Merge name, mood tone
+    mega_name = " + ".join([s[1] for s in selected])
+    mood_tones = [s[2] for s in selected]
     mega_description = (
-        f"The settings intertwine: {', '.join(descriptions[:-1])}, and finally, {descriptions[-1]}. "
+        f"The settings intertwine: {', '.join(mood_tones[:-1])}, and finally, {mood_tones[-1]}. "
         "Together, they form a grand vision, unexpected and brilliant."
     )
 
-    # Store results in the "CurrentRoleplay" table
-    cursor.execute('DELETE FROM CurrentRoleplay')  # Clear previous data
-    cursor.execute('INSERT INTO CurrentRoleplay (key, value) VALUES (%s, %s)', ("MegaSetting", mega_name))
-    cursor.execute('INSERT INTO CurrentRoleplay (key, value) VALUES (%s, %s)', ("MegaDescription", mega_description))
-    conn.commit()
-    conn.close()
+    # Merge JSON data
+    combined_enhanced_features = []
+    combined_stat_modifiers = {}
+    combined_activity_examples = []
 
-    # Debug logs for clarity
-    print("Mega Setting Name:", mega_name)
-    print("Mega Setting Description:", mega_description)
+    for s in selected:
+        ef = s[3]  # enhanced_features
+        sm = s[4]  # stat_modifiers
+        ae = s[5]  # activity_examples
 
+        # Extend combined_enhanced_features if it's a list
+        combined_enhanced_features.extend(ef)
+
+        # Merge stat_modifiers if it's a dict
+        for key, val in sm.items():
+            if key not in combined_stat_modifiers:
+                combined_stat_modifiers[key] = val
+            else:
+                # If numeric or string, handle how you want to combine them
+                combined_stat_modifiers[key] = f"{combined_stat_modifiers[key]}, {val}"
+
+        # Extend combined_activity_examples if it's a list
+        combined_activity_examples.extend(ae)
+
+    # Return everything in one response
     return jsonify({
         "mega_name": mega_name,
         "mega_description": mega_description,
+        "enhanced_features": combined_enhanced_features,
+        "stat_modifiers": combined_stat_modifiers,
+        "activity_examples": combined_activity_examples,
         "message": "Mega setting generated and stored successfully."
     })
-
 
 # Initialize the database on startup
 if __name__ == '__main__':
