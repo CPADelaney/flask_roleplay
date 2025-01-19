@@ -8,6 +8,8 @@ app = Flask(__name__)
 # Connect to PostgreSQL using the DATABASE_URL environment variable
 def get_db_connection():
     DATABASE_URL = os.getenv("DATABASE_URL")  # Fetch the database URL from Railway
+    if not DATABASE_URL:
+        raise EnvironmentError("DATABASE_URL is not set in the environment.")
     conn = psycopg2.connect(DATABASE_URL, sslmode='require')
     return conn
 
