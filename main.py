@@ -17,12 +17,12 @@ def initialize_database():
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Settings (
-            id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL,
-            mood_tone TEXT NOT NULL,
-            enhanced_features JSON NOT NULL,
-            stat_modifiers JSON NOT NULL,
-            activity_examples JSON NOT NULL
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    mood_tone TEXT NOT NULL,
+                    enhanced_features JSONB NOT NULL,
+                    stat_modifiers JSONB NOT NULL,
+                    activity_examples JSONB NOT NULL
         );
     ''')
     cursor.execute('''
