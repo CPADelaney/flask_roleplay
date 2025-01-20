@@ -58,8 +58,184 @@ def insert_missing_settings():
        stat_modifiers JSONB NOT NULL,
        activity_examples JSONB NOT NULL).
     """
-    # Only the "missing" settings from #11 to #30:
+    # Full set of 30
     settings_data = [
+        {
+            "name": "All-Girls College",  # #1
+            "mood_tone": "A socially charged, cliquish environment where gossip is weaponized, and every interaction reinforces your inferiority.",
+            "enhanced_features": [
+                "NPCs exploit social hierarchies, ensuring public shame at every opportunity.",
+                "Dormitories act as cages of judgment, with NPCs infiltrating your personal space to amplify humiliation. Gossip flows relentlessly, ensuring no failure is private."
+            ],
+            "stat_modifiers": {
+                "closeness": "rises as NPCs invade every aspect of your life. Shame increases with every public task, becoming a permanent modifier.",
+                "dependency": "grows as NPCs offer 'friendship' in exchange for degrading tasks."
+            },
+            "activity_examples": [
+                "Forced to perform demeaning tasks in front of classmates during group projects.",
+                "Publicly confessing imagined 'infractions' during assemblies, ensuring your embarrassment becomes a spectacle.",
+                "Participating in 'initiation ceremonies,' such as being paraded blindfolded through campus while peers mock your compliance.",
+                "Professors assigning tasks like scrubbing classroom floors while students watch and critique."
+            ]
+        },
+        {
+            "name": "Corporate Office",  # #2
+            "mood_tone": "A cold, hierarchical battlefield where power dynamics thrive, and mistakes are met with merciless punishment.",
+            "enhanced_features": [
+                "Surveillance systems capture every failure, broadcasting them to colleagues.",
+                "Promotions turn into punishments, placing you under the cruelest NPCs.",
+                "Professional authority is wielded to coerce submission, tying humiliation to job security."
+            ],
+            "stat_modifiers": {
+                "dominance": "spikes due to managerial control.",
+                "obedience": "locks at higher levels, making defiance impossible.",
+                "shame": "permanently rises with public performance reviews."
+            },
+            "activity_examples": [
+                "Crawling under conference tables while balancing items on your back during 'team-building exercises.'",
+                "Publicly reciting demeaning apologies during performance reviews, amplifying your Shame.",
+                "Wearing a placard listing your 'shortcomings' during work hours."
+            ]
+        },
+        {
+            "name": "Urban Life",  # #3
+            "mood_tone": "A bustling, dynamic world where anonymity and exposure coexist, creating endless opportunities for humiliation.",
+            "enhanced_features": [
+                "Public spaces become traps, with NPCs manipulating crowds to isolate and shame you.",
+                "NPCs manipulate casual encounters to trap you in degrading scenarios."
+            ],
+            "stat_modifiers": {
+                "closeness": "rises as NPCs exploit casual encounters to assert dominance.",
+                "shame": "spikes during public failures, ensuring no dignity remains."
+            },
+            "activity_examples": [
+                "Singing apologies at a crowded park, with NPCs recording and sharing the footage.",
+                "Carrying absurd items through busy streets as passersby stare and mock."
+            ]
+        },
+        {
+            "name": "Post-Apocalypse",  # #4
+            "mood_tone": "Brutal and desperate, where survival depends on submission to those who control resources.",
+            "enhanced_features": [
+                "Scarcity of resources forces submission, with NPCs fabricating need to deepen control.",
+                "Lawlessness amplifies physical dominance, with punishments designed to leave lasting scars."
+            ],
+            "stat_modifiers": {
+                "physical_endurance": "is tested through grueling tasks.",
+                "cruelty": "of NPCs escalates in response to resistance."
+            },
+            "activity_examples": [
+                "Digging ditches in the blistering sun while NPCs mock your weakness.",
+                "Publicly bartering your dignity for food or water, enduring ridicule as payment."
+            ]
+        },
+        {
+            "name": "Traditional Horror",  # #5
+            "mood_tone": "Dark and foreboding, where fear and submission intertwine in a supernatural nightmare.",
+            "enhanced_features": [
+                "NPCs use the environment’s eerie elements to isolate and disorient you.",
+                "Shadows shift and objects move, creating an inescapable sense of vulnerability.",
+                "Paranormal forces manipulate your senses, deepening your vulnerability."
+            ],
+            "stat_modifiers": {
+                "intensity": "rises during fear-inducing tasks.",
+                "corruption": "increases as you confront otherworldly influences."
+            },
+            "activity_examples": [
+                "Crawling through haunted corridors while NPCs taunt you from unseen vantage points.",
+                "Performing rituals meant to 'protect' you but designed to reinforce your dependence on NPCs.",
+                "Being locked in a room where whispers mock your failures, forcing you to beg for release."
+            ]
+        },
+        {
+            "name": "Occult Ritual",  # #6
+            "mood_tone": "Mystical, eerie, and inescapable, where submission feels inevitable under the weight of the supernatural.",
+            "enhanced_features": [
+                "Rituals are designed to strip you of autonomy, reframing your obedience as a 'sacred duty.'",
+                "Ritual sites warp reality, amplifying NPC power and deepening your helplessness.",
+                "Supernatural forces punish defiance with physical and psychological torment."
+            ],
+            "stat_modifiers": {
+                "corruption": "escalates with every completed ritual, permanently altering your dialogue and choices.",
+                "obedience": "locks through repeated indoctrination tasks."
+            },
+            "activity_examples": [
+                "Kneeling in a summoning circle, chanting humiliating phrases dictated by NPCs.",
+                "Serving as a living altar during sacrifices, with NPCs mocking your trembling.",
+                "Reciting chants that degrade your sense of self while NPCs inscribe magical symbols onto your body."
+            ]
+        },
+        {
+            "name": "Vampire Society/Clan",  # #7
+            "mood_tone": "Alluring yet predatory, with dominance wrapped in sensual manipulation and ancient traditions.",
+            "enhanced_features": [
+                "NPCs seduce and intimidate, using your desires and fears to enforce submission.",
+                "Mansions become labyrinths of sensual dominance, where every room tests your loyalty.",
+                "Vampire hierarchies demand constant displays of loyalty through degrading acts."
+            ],
+            "stat_modifiers": {
+                "lust": "spikes during intimate tasks.",
+                "corruption": "rises as submission feels increasingly seductive."
+            },
+            "activity_examples": [
+                "Serving as a blood bearer during ceremonies, kneeling to offer yourself as a living chalice.",
+                "Performing tasks that test your loyalty, such as reciting vows of eternal servitude."
+            ]
+        },
+        {
+            "name": "Femdom Empire",  # #8
+            "mood_tone": "Grand and unyielding, where matriarchal dominance is codified into law.",
+            "enhanced_features": [
+                "Laws demand constant displays of submission, ensuring every act reinforces systemic power.",
+                "Laws, customs, and societal norms ensure no act of rebellion goes unnoticed or unpunished.",
+                "Public punishments are commonplace, drawing crowds to witness your humiliation."
+            ],
+            "stat_modifiers": {
+                "dominance": "remains perpetually high due to the systemic power imbalance.",
+                "trust": "becomes nearly impossible to gain without total obedience.",
+                "respect": "is nearly impossible to earn without extreme acts of devotion."
+            },
+            "activity_examples": [
+                "Kneeling during public ceremonies while NPCs list your 'offenses.'",
+                "Paying exaggerated tributes, ensuring your financial ruin and deeper dependence."
+            ]
+        },
+        {
+            "name": "A Palace",  # #9
+            "mood_tone": "Lavish and opulent, but suffocatingly hierarchical, where every misstep becomes a public spectacle.",
+            "enhanced_features": [
+                "NPCs wield social influence to create tasks that showcase your inferiority.",
+                "The opulence of the palace becomes suffocating, with every room designed to highlight your inferiority.",
+                "Ceremonial authority ensures punishments are grand and theatrical."
+            ],
+            "stat_modifiers": {
+                "respect": "must be earned through acts of extreme servitude.",
+                "closeness": "rises with court advisors and servants who oversee your tasks.",
+                "shame": "rises with public punishments during court functions."
+            },
+            "activity_examples": [
+                "Cleaning golden staircases while nobles step over you.",
+                "Performing as a servant during court functions, wearing attire designed to humiliate."
+            ]
+        },
+        {
+            "name": "Matriarchy Kingdom",  # #10
+            "mood_tone": "Structured and suffocating, where female dominance is woven into every aspect of society.",
+            "enhanced_features": [
+                "NPCs enforce submission through public rituals and strict laws.",
+                "Towns and villages are structured to enforce public displays of submission.",
+                "Social norms demand visible acts of obedience, ensuring your degradation is always on display."
+            ],
+            "stat_modifiers": {
+                "respect": "is rarely granted, with men seen as inherently inferior.",
+                "trust": "grows only through unflinching compliance.",
+                "dependency": "grows as laws strip away autonomy."
+            },
+            "activity_examples": [
+                "Participating in town square punishments, with NPCs ensuring large crowds witness your shame.",
+                "Competing in degrading games during festivals, where the 'losers' face harsher public punishments."
+            ]
+        },
         {
             "name": "Monster Girl Alternate World",  # #11
             "mood_tone": "Whimsical yet terrifying, where non-human NPCs exploit their physical, magical, and primal advantages to dominate you.",
@@ -508,6 +684,7 @@ def store_roleplay_segment():
     return jsonify({"message": "Stored successfully"}), 200
 
 # Initialize & run (only if running locally—on Railway, it might auto-run via Gunicorn)
-initialize_database()
-insert_missing_settings()
-app.run(host='0.0.0.0', port=5000)
+if __name__ == "__main__":
+    initialize_database()
+    insert_missing_settings()
+  # app.run(debug=True)
