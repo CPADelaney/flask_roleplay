@@ -1,5 +1,5 @@
 import random
-from flask import Flask, request, jsonify
+from flask import Flask, request, g, jsonify
 import psycopg2
 import os
 
