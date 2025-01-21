@@ -19,7 +19,7 @@ def initialize_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Settings (
             id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL,
+            name TEXT UNIQUE NOT NULL,
             mood_tone TEXT NOT NULL,
             enhanced_features JSONB NOT NULL,
             stat_modifiers JSONB NOT NULL,
@@ -52,7 +52,7 @@ def insert_missing_settings():
     Inserts any of the remaining settings (#11-30) if they're not already in the database.
     Make sure you have a table named 'Settings' with columns:
       (id SERIAL PRIMARY KEY,
-       name TEXT NOT NULL,
+       name TEXT UNIQUE NOT NULL,
        mood_tone TEXT NOT NULL,
        enhanced_features JSONB NOT NULL,
        stat_modifiers JSONB NOT NULL,
@@ -581,64 +581,67 @@ def insert_missing_settings():
 
 @app.route('/generate_mega_setting', methods=['POST'])
 def generate_mega_setting():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples 
-        FROM Settings
-    ''')
-    rows = cursor.fetchall()
-    conn.close()
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples FROM Settings')
+        rows = cursor.fetchall()
+        conn.close()
 
-    if not rows:
-        return jsonify({"error": "No settings found in the database."}), 500
+        if not rows:
+            return jsonify({"error": "No settings found"}), 404
 
-    num_settings = random.choice([3,4,5])
-    selected = random.sample(rows, min(num_settings, len(rows)))
+        # Parse JSONB fields
+        parsed_rows = []
+        for row in rows:
+            parsed_rows.append((
+                row[0],
+                row[1],
+                row[2],
+                json.loads(row[3]),  # enhanced_features
+                json.loads(row[4]),  # stat_modifiers
+                json.loads(row[5]),  # activity_examples
+            ))
 
-    # Merge name, mood tone
-    mega_name = " + ".join([s[1] for s in selected])
-    mood_tones = [s[2] for s in selected]
-    mega_description = (
-        f"The settings intertwine: {', '.join(mood_tones[:-1])}, and finally, {mood_tones[-1]}. "
-        "Together, they form a grand vision, unexpected and brilliant."
-    )
+        num_settings = random.choice([3, 4, 5])
+        selected = random.sample(parsed_rows, min(num_settings, len(parsed_rows)))
 
-    # Merge JSON data
-    combined_enhanced_features = []
-    combined_stat_modifiers = {}
-    combined_activity_examples = []
+        # Merge name, mood tone
+        mega_name = " + ".join([s[1] for s in selected])
+        mood_tones = [s[2] for s in selected]
+        mega_description = (
+            f"The settings intertwine: {', '.join(mood_tones[:-1])}, and finally, {mood_tones[-1]}. "
+            "Together, they form a grand vision, unexpected and brilliant."
+        )
 
-    for s in selected:
-        ef = s[3]  # enhanced_features
-        sm = s[4]  # stat_modifiers
-        ae = s[5]  # activity_examples
+        # Merge JSON data
+        combined_enhanced_features = []
+        combined_stat_modifiers = {}
+        combined_activity_examples = []
 
-        # Extend combined_enhanced_features if it's a list
-        combined_enhanced_features.extend(ef)
+        for s in selected:
+            ef = s[3]  # enhanced_features
+            sm = s[4]  # stat_modifiers
+            ae = s[5]  # activity_examples
 
-        # Merge stat_modifiers if it's a dict
-        for key, val in sm.items():
-            if key not in combined_stat_modifiers:
-                combined_stat_modifiers[key] = val
-            else:
-                combined_stat_modifiers[key] = f"{combined_stat_modifiers[key]}, {val}"
+            combined_enhanced_features.extend(ef)
+            for key, val in sm.items():
+                if key not in combined_stat_modifiers:
+                    combined_stat_modifiers[key] = val
+                else:
+                    combined_stat_modifiers[key] = f"{combined_stat_modifiers[key]}, {val}"
+            combined_activity_examples.extend(ae)
 
-        # Extend combined_activity_examples if it's a list
-        combined_activity_examples.extend(ae)
-
-    return jsonify({
-        "mega_name": mega_name,
-        "mega_description": mega_description,
-        "enhanced_features": combined_enhanced_features,
-        "stat_modifiers": combined_stat_modifiers,
-        "activity_examples": combined_activity_examples,
-        "message": "Mega setting generated and stored successfully."
-    })
-
-#
-# NEW ENDPOINTS HERE
-#
+        return jsonify({
+            "mega_name": mega_name,
+            "mega_description": mega_description,
+            "enhanced_features": combined_enhanced_features,
+            "stat_modifiers": combined_stat_modifiers,
+            "activity_examples": combined_activity_examples,
+            "message": "Mega setting generated and stored successfully."
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500  # <-- Indent this line!
 
 @app.route('/get_current_roleplay', methods=['GET'])
 def get_current_roleplay():
@@ -659,32 +662,37 @@ def get_current_roleplay():
 
 @app.route('/store_roleplay_segment', methods=['POST'])
 def store_roleplay_segment():
-    """
-    Expects JSON: {"key": "...", "value": "..."}
-    Overwrites any existing entry for that key.
-    """
-    payload = request.get_json()
-    segment_key = payload.get("key")
-    segment_value = payload.get("value")
+    try:
+        payload = request.get_json()
+        segment_key = payload.get("key")
+        segment_value = payload.get("value")
 
-    if not segment_key:
-        return jsonify({"error": "Missing 'key'"}), 400
-    if segment_value is None:
-        return jsonify({"error": "Missing 'value'"}), 400
+        if not segment_key or segment_value is None:
+            return jsonify({"error": "Missing key or value"}), 400
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    # delete old entry if exists
-    cursor.execute("DELETE FROM CurrentRoleplay WHERE key = %s", (segment_key,))
-    # insert the new one
-    cursor.execute("INSERT INTO CurrentRoleplay (key, value) VALUES (%s, %s)", (segment_key, segment_value))
-    conn.commit()
-    conn.close()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM CurrentRoleplay WHERE key = %s", (segment_key,))
+        cursor.execute("INSERT INTO CurrentRoleplay (key, value) VALUES (%s, %s)", (segment_key, segment_value))
+        conn.commit()
+        return jsonify({"message": "Stored successfully"}), 200
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
 
-    return jsonify({"message": "Stored successfully"}), 200
+def close_db(e=None):
+    conn = getattr(g, '_database', None)
+    if conn is not None:
+        conn.close()
+
+app.teardown_appcontext(close_db)  # <-- Add this line
 
 # Initialize & run (only if running locally—on Railway, it might auto-run via Gunicorn)
 if __name__ == "__main__":
-    initialize_database()
-    insert_missing_settings()
-  # app.run(debug=True)
+    with app.app_context():
+        initialize_database()
+        insert_missing_settings()
+    app.run(debug=True)
