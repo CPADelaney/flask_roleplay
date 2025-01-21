@@ -41,15 +41,6 @@ def init_tables_and_settings():
     initialize_database()
     insert_missing_settings()
 
-@app.route('/init_db_manual', methods=['POST'])
-def init_db_manual():
-    try:
-        initialize_database()
-        insert_missing_settings()
-        return jsonify({"message": "DB initialized and settings inserted"}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 import subprocess
 
 @app.route("/version")
@@ -713,6 +704,15 @@ def store_roleplay_segment():
     finally:
         if conn:
             conn.close()
+
+@app.route('/init_db_manual', methods=['POST'])
+def init_db_manual():
+    try:
+        initialize_database()
+        insert_missing_settings()
+        return jsonify({"message": "DB initialized and settings inserted"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 def close_db(e=None):
     conn = getattr(g, '_database', None)
