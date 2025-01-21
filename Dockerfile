@@ -44,5 +44,5 @@ USER appuser
 ENV PORT=8080
 EXPOSE 8080 
 
-CMD ["sh", "-c", "echo 'PORT is set to:' $PORT && sleep 60"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "main:app"]
 
