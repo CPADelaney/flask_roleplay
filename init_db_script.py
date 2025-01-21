@@ -1,6 +1,7 @@
 # init_db_script.py
-from main import initialize_database  # <--- or whatever your main file is named, e.g. 'from main import initialize_database'
+from main import initialize_database, insert_missing_settings
 
 if __name__ == "__main__":
     initialize_database()
-    print("Database initialized (or already exists).")
+    insert_missing_settings()
+    print("Database and settings inserted (or already exist).")
