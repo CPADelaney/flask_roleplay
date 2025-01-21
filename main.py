@@ -41,6 +41,15 @@ def init_tables_and_settings():
     initialize_database()
     insert_missing_settings()
 
+@app.route('/init_db_manual', methods=['POST'])
+def init_db_manual():
+    try:
+        initialize_database()
+        insert_missing_settings()
+        return jsonify({"message": "DB initialized and settings inserted"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/test_db_connection', methods=['GET'])
 def test_db_connection():
     try:
