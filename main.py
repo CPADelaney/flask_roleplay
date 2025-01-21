@@ -35,6 +35,11 @@ def initialize_database():
     ''')
     conn.commit()
     conn.close()
+    
+@app.before_first_request
+def init_tables_and_settings():
+    initialize_database()
+    insert_missing_settings()
 
 @app.route('/test_db_connection', methods=['GET'])
 def test_db_connection():
