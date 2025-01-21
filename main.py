@@ -627,6 +627,7 @@ def generate_mega_setting():
 
         num_settings = random.choice([3, 4, 5])
         selected = random.sample(parsed_rows, min(num_settings, len(parsed_rows)))
+        picked_names = [s[1] for s in selected]
 
         # Merge name, mood tone
         mega_name = " + ".join([s[1] for s in selected])
