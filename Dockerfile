@@ -14,13 +14,21 @@ RUN apt-get update && apt-get install -y \
 # Stage 2: Runtime
 FROM python:3.10-slim
 
+# Install runtime dependencies (libpq5 for PostgreSQL)
+RUN apt-get update && apt-get install -y libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY . .
 
+# Set default port for Railway
+ENV PORT=8080
+EXPOSE $PORT
+
+# Run as non-root user
 RUN useradd -m appuser
 USER appuser
 
-EXPOSE 5000
-CMD ["gunicorn", "main:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:${PORT}", "main:app"]
