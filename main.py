@@ -50,6 +50,23 @@ def init_db_manual():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+import subprocess
+
+@app.route("/version")
+def version():
+    # Option A: Hardcode a version string or date
+    # return "Version 1.2.3 - Deployed on Feb 1, 2025"
+
+    # Option B: If you commit a file named COMMIT_SHA or something,
+    # you can read it from the repo:
+    try:
+        with open("COMMIT_SHA", "r") as f:
+            sha = f.read().strip()
+            return f"Current commit: {sha}"
+    except:
+        return "No commit SHA found"
+
+
 @app.route('/test_db_connection', methods=['GET'])
 def test_db_connection():
     try:
