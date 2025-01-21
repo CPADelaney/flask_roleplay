@@ -36,7 +36,7 @@ def initialize_database():
     conn.commit()
     conn.close()
     
-@app.before_first_request
+# @app.before_first_request
 def init_tables_and_settings():
     initialize_database()
     insert_missing_settings()
