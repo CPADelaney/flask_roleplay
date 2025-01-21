@@ -663,16 +663,16 @@ def generate_mega_setting():
             "message": "Mega setting generated and stored successfully."
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500  # <-- Indent this line!
+        return jsonify({"error": str(e)}), 500  
 
 @app.route('/get_current_roleplay', methods=['GET'])
 def get_current_roleplay():
     """
-    Returns an array of {key, value} objects from the CurrentRoleplay table.
+    Returns an array of {key, value} objects from the currentroleplay table.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT key, value FROM CurrentRoleplay")
+    cursor.execute("SELECT key, value FROM currentroleplay")
     rows = cursor.fetchall()
     conn.close()
 
@@ -694,8 +694,8 @@ def store_roleplay_segment():
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM CurrentRoleplay WHERE key = %s", (segment_key,))
-        cursor.execute("INSERT INTO CurrentRoleplay (key, value) VALUES (%s, %s)", (segment_key, segment_value))
+        cursor.execute("DELETE FROM currentroleplay WHERE key = %s", (segment_key,))
+        cursor.execute("INSERT INTO currentroleplay (key, value) VALUES (%s, %s)", (segment_key, segment_value))
         conn.commit()
         return jsonify({"message": "Stored successfully"}), 200
     except Exception as e:
