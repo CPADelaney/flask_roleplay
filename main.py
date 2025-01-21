@@ -655,6 +655,7 @@ def generate_mega_setting():
             combined_activity_examples.extend(ae)
 
         return jsonify({
+            "selected_settings": picked_names,
             "mega_name": mega_name,
             "mega_description": mega_description,
             "enhanced_features": combined_enhanced_features,
