@@ -573,7 +573,7 @@ def insert_missing_settings():
     cursor = conn.cursor()
 
     # 2) Fetch existing names
-    cursor.execute("SELECT name FROM Settings")
+    cursor.execute("SELECT name FROM settings")
     existing_names = {row[0] for row in cursor.fetchall()}
 
     # 3) Insert only missing ones
@@ -606,7 +606,7 @@ def generate_mega_setting():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples FROM Settings')
+        cursor.execute('SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples FROM settings')
         rows = cursor.fetchall()
         conn.close()
 
