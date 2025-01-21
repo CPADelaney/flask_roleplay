@@ -18,5 +18,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Start the Flask app
 COPY . .
-EXPOSE 5000
+EXPOSE 8080
 CMD ["gunicorn", "main:app"]
