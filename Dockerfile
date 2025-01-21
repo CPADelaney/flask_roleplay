@@ -37,13 +37,12 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Now copy your project files from the local repo to the image
 COPY . .
 
-# For Railway or similar platforms that set PORT in env
-ENV PORT=8080
-EXPOSE $PORT
-
 # Switch to a non-root user (optional best practice)
 RUN useradd -m appuser
 USER appuser
 
-# Start Gunicorn, binding to $PORT
+ENV PORT=8080
+EXPOSE 8080 
+
 CMD ["gunicorn", "--bind", "0.0.0.0:${PORT}", "main:app"]
+
