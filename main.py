@@ -387,6 +387,123 @@ def insert_default_player_stats_chase():
         print("Inserted default stats for Chase.")
 
     conn.close()
+
+@app.route('/start_new_game', methods=['POST'])
+def start_new_game():
+    """
+    Clears out Settings, CurrentRoleplay, etc. 
+    Only 'Chase' remains in PlayerStats with default stats.
+    Randomly:
+      - Some NPCs keep their row (carryover). 
+      - A small % of those carryover NPCs get a 'memory' that references old session data.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # 1. Clear out 'Settings' for the new session
+        cursor.execute("DELETE FROM Settings;")
+
+        # 2. Clear out 'CurrentRoleplay' (quests, narrative states, etc.)
+        cursor.execute("DELETE FROM CurrentRoleplay;")
+
+        # 3. NPC carryover logic
+        cursor.execute("SELECT npc_id, npc_name, memory FROM NPCStats;")
+        all_npcs = cursor.fetchall()
+
+        import random
+
+        keep_chance = 0.20        # 20% chance to keep an NPC
+        fourth_wall_chance = 0.02 # 2% chance to trigger "Monica-like" memory
+
+        for npc_id, npc_name, old_memory in all_npcs:
+            if random.random() > keep_chance:
+                # Remove them
+                cursor.execute("DELETE FROM NPCStats WHERE npc_id = %s", (npc_id,))
+            else:
+                # We keep this NPC
+                print(f"Carrying over NPC {npc_name} (ID {npc_id}) to new game.")
+
+                # Possibly reset or adjust their memory 
+                # We'll do a second random check for "Monica" style
+                if random.random() < fourth_wall_chance:
+                    # They "remember" the old session.
+                    # You can incorporate old_memory if you want to chain multiple resets
+                    new_memory = f"""You sense the world has reset. 
+You recall events that should no longer exist... 
+You see glimpses of {old_memory or 'strange fragments'}, 
+and you remember 'Chase' from a previous cycle. 
+Everything else was erased, but somehow you remain."""
+                    cursor.execute("UPDATE NPCStats SET memory = %s WHERE npc_id = %s", (new_memory, npc_id))
+                    print(f"NPC {npc_name} now has a 'fourth wall' memory!")
+                else:
+                    # For normal carryover, maybe we wipe or preserve existing memory
+                    # Let's do a partial preserve example:
+                    # "Your life continues. The world changed, but you remain the same."
+                    # If you want them to forget everything, set memory = NULL or empty
+                    preserve_text = old_memory or "You vaguely recall normal life..."
+                    cursor.execute("UPDATE NPCStats SET memory = %s WHERE npc_id = %s", (preserve_text, npc_id))
+
+        # 4. PlayerStats logic: only keep or reset Chase
+        cursor.execute("DELETE FROM PlayerStats WHERE player_name != 'Chase';")
+
+        # Check if "Chase" row exists
+        cursor.execute("SELECT id FROM PlayerStats WHERE player_name = %s", ("Chase",))
+        row = cursor.fetchone()
+
+        if row:
+            # Update Chase's stats to default
+            cursor.execute('''
+                UPDATE PlayerStats
+                SET corruption = %s,
+                    confidence = %s,
+                    willpower = %s,
+                    obedience = %s,
+                    dependency = %s,
+                    lust = %s,
+                    mental_resilience = %s,
+                    physical_endurance = %s
+                WHERE player_name = 'Chase'
+            ''', (
+                10,  # corruption
+                60,  # confidence
+                50,  # willpower
+                20,  # obedience
+                10,  # dependency
+                15,  # lust
+                55,  # mental_resilience
+                40   # physical_endurance
+            ))
+            print("Updated 'Chase' to default stats.")
+        else:
+            # Insert new default stats for Chase
+            cursor.execute('''
+                INSERT INTO PlayerStats
+                  (player_name, corruption, confidence, willpower, obedience,
+                   dependency, lust, mental_resilience, physical_endurance)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ''', (
+                "Chase",
+                10,  # corruption
+                60,  # confidence
+                50,  # willpower
+                20,  # obedience
+                10,  # dependency
+                15,  # lust
+                55,  # mental_resilience
+                40   # physical_endurance
+            ))
+            print("Inserted new default stats for Chase.")
+
+        conn.commit()
+        return jsonify({"message": "New game started. All data cleared except for Chase. Some NPCs carry over, rarely with fourth-wall memory."}), 200
+
+    except Exception as e:
+        conn.rollback()
+        print("Error in start_new_game:", e)
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
     
 # @app.before_first_request
 def init_tables_and_settings():
