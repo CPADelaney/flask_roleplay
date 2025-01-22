@@ -4,62 +4,104 @@ from flask import Blueprint, request, jsonify
 from db.connection import get_db_connection
 import random, json
 
-settings_bp = Blueprint('settings_bp', __name__)
+settings_bp = Blueprint('settings', __name__)
 
-@app.route('/generate_mega_setting', methods=['POST'])
-def generate_mega_setting():
+@settings_bp.route('/generate_mega_setting', methods=['POST'])
+def generate_mega_setting_route():
+    """
+    POST /generate_mega_setting
+    ---------------------------
+    Randomly selects several Settings from the database, merges them
+    into a "mega setting," and returns the combined data as JSON.
+    
+    Returns JSON structure of:
+      {
+        "selected_settings": [...],
+        "mega_name": "...",
+        "mega_description": "...",
+        "enhanced_features": [...],
+        "stat_modifiers": { ... },
+        "activity_examples": [...],
+        "message": "Mega setting generated and stored successfully."
+      }
+    """
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples FROM settings')
+        
+        cursor.execute("""
+            SELECT id, 
+                   name, 
+                   mood_tone, 
+                   enhanced_features, 
+                   stat_modifiers, 
+                   activity_examples
+            FROM Settings
+        """)
         rows = cursor.fetchall()
         conn.close()
 
         if not rows:
             return jsonify({"error": "No settings found"}), 404
 
-        # Parse JSONB fields
-        parsed_rows = []
-        for row in rows:
-            parsed_rows.append((
-                row[0],
-                row[1],
-                row[2],
-                row[3],  # enhanced_features (list)
-                row[4],  # stat_modifiers (dict)
-                row[5],  # activity_examples (list)
-            ))
+        # Convert DB rows into a convenient structure
+        all_settings = []
+        for row_id, row_name, row_mood, row_ef, row_sm, row_ae in rows:
+            all_settings.append({
+                "id": row_id,
+                "name": row_name,
+                "mood_tone": row_mood,
+                "enhanced_features": row_ef,       # JSONB from DB
+                "stat_modifiers": row_sm,         # JSONB from DB
+                "activity_examples": row_ae       # JSONB from DB
+            })
 
+        # Randomly pick 3-5 settings to combine
         num_settings = random.choice([3, 4, 5])
-        selected = random.sample(parsed_rows, min(num_settings, len(parsed_rows)))
-        picked_names = [s[1] for s in selected]
+        selected = random.sample(all_settings, min(num_settings, len(all_settings)))
+        picked_names = [s["name"] for s in selected]
 
-        # Merge name, mood tone
-        mega_name = " + ".join([s[1] for s in selected])
-        mood_tones = [s[2] for s in selected]
-        mega_description = (
-            f"The settings intertwine: {', '.join(mood_tones[:-1])}, and finally, {mood_tones[-1]}. "
-            "Together, they form a grand vision, unexpected and brilliant."
-        )
+        # Merge name, mood tone, etc.
+        mega_name = " + ".join(picked_names)
+        all_mood_tones = [s["mood_tone"] for s in selected]
+        if len(all_mood_tones) == 1:
+            # If only 1 setting for some reason
+            mega_description = f"The setting is just {all_mood_tones[0]}, forming a single thematic environment."
+        else:
+            # Normal multi-merge
+            mega_description = (
+                f"The settings intertwine: {', '.join(all_mood_tones[:-1])}, and finally, {all_mood_tones[-1]}. "
+                "Together, they form a grand vision, unexpected and brilliant."
+            )
 
         # Merge JSON data
         combined_enhanced_features = []
         combined_stat_modifiers = {}
         combined_activity_examples = []
 
-        for s in selected:
-            ef = s[3]  # enhanced_features
-            sm = s[4]  # stat_modifiers
-            ae = s[5]  # activity_examples
+        for setting_obj in selected:
+            # enhanced_features: list
+            ef_list = setting_obj["enhanced_features"]
+            # stat_modifiers: dict
+            sm_dict = setting_obj["stat_modifiers"]
+            # activity_examples: list
+            ae_list = setting_obj["activity_examples"]
 
-            combined_enhanced_features.extend(ef)
-            for key, val in sm.items():
+            # Extend the big list
+            combined_enhanced_features.extend(ef_list)
+
+            # Merge the dict
+            for key, val in sm_dict.items():
                 if key not in combined_stat_modifiers:
                     combined_stat_modifiers[key] = val
                 else:
+                    # Merge or append
                     combined_stat_modifiers[key] = f"{combined_stat_modifiers[key]}, {val}"
-            combined_activity_examples.extend(ae)
 
+            # Extend activity examples
+            combined_activity_examples.extend(ae_list)
+
+        # Return final JSON
         return jsonify({
             "selected_settings": picked_names,
             "mega_name": mega_name,
@@ -69,21 +111,17 @@ def generate_mega_setting():
             "activity_examples": combined_activity_examples,
             "message": "Mega setting generated and stored successfully."
         })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500  
 
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 def insert_missing_settings():
     """
-    Inserts any of the remaining settings (#11-30) if they're not already in the database.
-    Make sure you have a table named 'Settings' with columns:
-      (id SERIAL PRIMARY KEY,
-       name TEXT UNIQUE NOT NULL,
-       mood_tone TEXT NOT NULL,
-       enhanced_features JSONB NOT NULL,
-       stat_modifiers JSONB NOT NULL,
-       activity_examples JSONB NOT NULL).
+    Inserts the default 1–30 settings if they do not exist.
+    This is usually called as part of initialization or admin logic.
     """
+    # Full set of 30 (truncated excerpt shown here for brevity).
+    # In your code, you have the entire list from #1 to #30.
     # Full set of 30
     settings_data = [
         {
@@ -572,20 +610,20 @@ def insert_missing_settings():
         }
     ]
 
-    # 1) Connect to DB
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 2) Fetch existing names
-    cursor.execute("SELECT name FROM settings")
-    existing_names = {row[0] for row in cursor.fetchall()}
+    # 1. Retrieve existing setting names
+    cursor.execute("SELECT name FROM Settings")
+    existing = {row[0] for row in cursor.fetchall()}
 
-    # 3) Insert only missing ones
+    # 2. Only insert if not existing
     for setting in settings_data:
-        if setting["name"] not in existing_names:
+        if setting["name"] not in existing:
             cursor.execute(
                 '''
-                INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
+                INSERT INTO Settings
+                  (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
                 VALUES (%s, %s, %s, %s, %s)
                 ''',
                 (
@@ -596,10 +634,10 @@ def insert_missing_settings():
                     json.dumps(setting["activity_examples"])
                 )
             )
-            print(f"Inserted: {setting['name']}")
+            print(f"Inserted new setting: {setting['name']}")
         else:
-            print(f"Skipped (already exists): {setting['name']}")
+            print(f"Skipped existing setting: {setting['name']}")
 
     conn.commit()
     conn.close()
-    print("All settings processed.")
+    print("All settings processed or skipped (already existed).")
