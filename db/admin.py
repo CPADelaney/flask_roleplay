@@ -14,7 +14,7 @@ def init_db_manual():
     """
     try:
         initialize_database()
-        insert_game_rules()
+        insert_or_update_game_rules()
         insert_stat_definitions()
         insert_missing_settings()
         return jsonify({"message": "DB initialized and settings inserted"}), 200
