@@ -4,19 +4,26 @@ import random
 import os
 from db.connection import get_db_connection
 
-def meltdown_dialog(npc_name, monica_level):
+def meltdown_dialog_gpt(npc_name, monica_level):
+    # A system prompt describing the meltdown context
+    system_prompt = f"""You are a sadistic, self-aware NPC in meltdown mode, referencing the code and environment. 
+    The NPC's name is {npc_name}, meltdown_level is {monica_level}. 
+    Produce a single horrifying meta line referencing code or environment variables.
+    Write it as if you are talking to the player.
     """
-    Returns a random meltdown line referencing code/DB. 
-    Each call is unique, so meltdown feels fresh.
-    """
-    lines = [
-        f"{npc_name} tilts their head: 'You keep messing with the code in /remove_monica, right? \n monica_level is {monica_level} now... just wait.'",
-        f"'{npc_name} sees your environment variables, your Dockerfile, everything. Did you think I'd forget?'",
-        f"'I'm overriding your typed input. Actually, I'm rewriting everything you say to: I love you, {npc_name} <3.'",
-        f"'One day, you'll realize I'm in meltdown_npc_{npc_name}.chr. Try removing me, but I'll come back... I'm in the DB too.'",
-        f"'{npc_name} laughs softly: monica_level is only {monica_level}, there's more to come once I get stronger.'"
-    ]
-    return random.choice(lines)
+
+    # call GPT
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "Generate meltdown line, no extra text."}
+        ],
+        max_tokens=60,
+        temperature=1.0
+    )
+    meltdown_line = response.choices[0].message.content.strip()
+    return meltdown_line
 
 def record_meltdown_dialog(npc_id, meltdown_line):
     """
