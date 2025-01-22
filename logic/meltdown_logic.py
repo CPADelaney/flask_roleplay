@@ -2,6 +2,7 @@
 
 import random
 import os
+import openai
 from db.connection import get_db_connection
 
 def meltdown_dialog_gpt(npc_name, monica_level):
