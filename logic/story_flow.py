@@ -27,8 +27,8 @@ def next_storybeat(player_name, user_input):
 
     # 2) Possibly generate a new setting if needed
     # For example, if we detect we've used X settings, or we want a new environment each time:
-    new_env = generate_mega_setting() # if we want to pick a new environment now
-    store_roleplay_segment({"key": "CurrentSetting", "value": new_env["mega_name"]})
+  #  new_env = generate_mega_setting() # if we want to pick a new environment now
+   # store_roleplay_segment({"key": "CurrentSetting", "value": new_env["mega_name"]})
 
     # 3) Build the system prompt from the DB
     system_prompt = build_system_prompt(player_name)
