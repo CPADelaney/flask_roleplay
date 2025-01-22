@@ -620,9 +620,9 @@ def generate_mega_setting():
                 row[0],
                 row[1],
                 row[2],
-                json.loads(row[3]),  # enhanced_features (list)
-                json.loads(row[4]),  # stat_modifiers (dict)
-                json.loads(row[5]),  # activity_examples (list)
+                row[3],  # enhanced_features (list)
+                row[4],  # stat_modifiers (dict)
+                row[5],  # activity_examples (list)
             ))
 
         num_settings = random.choice([3, 4, 5])
