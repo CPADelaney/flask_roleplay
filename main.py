@@ -3,7 +3,9 @@ from flask import Flask, request, g, jsonify
 import psycopg2
 import os
 
+from flask_cors import CORS
 app = Flask(__name__)
+CORS(app)  # Allow all origins
 
 def get_db_connection():
     DATABASE_URL = os.getenv("DATABASE_URL")
