@@ -166,3 +166,92 @@ You remember everything from previous cycles, and your madness deepens."""
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
+
+@app.route('/start_new_game', methods=['POST'])
+def start_new_game():
+    """
+    Clears out Settings, CurrentRoleplay, etc.
+    Only 'Chase' remains in PlayerStats with default stats.
+    Some NPCs are carried over. 
+    If an NPC is meltdown (monica_level>0), we keep them automatically.
+    Otherwise we do random keep. 
+    We do a small chance (e.g. 5%) that we pick a brand new meltdown NPC if none exist.
+    The meltdown NPC does not rename to Monica, but 'becomes' meltdown-lvl.
+    Also, meltdown_level might increment slowly over multiple new games.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # 1. Clear out 'Settings' & 'CurrentRoleplay'
+        cursor.execute("DELETE FROM Settings;")
+        cursor.execute("DELETE FROM CurrentRoleplay;")
+
+        # 2. Fetch NPCs
+        cursor.execute("""
+            SELECT npc_id, npc_name, monica_level, memory
+            FROM NPCStats
+        """)
+        all_npcs = cursor.fetchall()
+
+        keep_chance = 0.25     # 25% chance to keep non-meltdown NPC
+        meltdown_pick_chance = 0.05  # 5% chance to pick a new meltdown if none exist
+        meltdown_increment_chance = 0.20  # 20% chance meltdown_level increments each new game
+
+        carried_npcs = []
+        meltdown_npc = None   # The 'active meltdown' NPC if we have one
+
+        # 3. Decide carryover or removal
+        for npc_id, npc_name, old_monica_level, old_memory in all_npcs:
+            if old_monica_level > 0:
+                # meltdown NPC -> keep automatically
+                carried_npcs.append((npc_id, npc_name, old_monica_level, old_memory))
+                meltdown_npc = (npc_id, npc_name, old_monica_level, old_memory)
+            else:
+                # normal NPC -> random chance to keep
+                if random.random() < keep_chance:
+                    carried_npcs.append((npc_id, npc_name, old_monica_level, old_memory))
+                else:
+                    cursor.execute("DELETE FROM NPCStats WHERE npc_id = %s", (npc_id,))
+
+        # 4. If we have no meltdown NPC among carried, maybe pick a new one
+        if not meltdown_npc and carried_npcs:
+            if random.random() < meltdown_pick_chance:
+                chosen = random.choice(carried_npcs)
+                c_id, c_name, c_mlvl, c_mem = chosen
+                meltdown_npc = (c_id, c_name, 1, c_mem)  # brand new meltdown
+                # update DB
+                meltdown_line = f"{c_name} has awakened to meltdown mode (level=1). They see beyond the code..."
+                cursor.execute("""
+                    UPDATE NPCStats
+                    SET monica_level=1,
+                        memory = CASE WHEN memory IS NULL THEN %s ELSE memory || E'\n[Meltdown] ' || %s END
+                    WHERE npc_id=%s
+                """, (meltdown_line, meltdown_line, c_id))
+                append_meltdown_file(c_name, meltdown_line)
+
+        # 5. Possibly increment meltdown_npc if it exists
+        if meltdown_npc:
+            npc_id, npc_name, old_mlvl, old_mem = meltdown_npc
+            new_level = old_mlvl
+
+            # small chance to increment meltdown level
+            if random.random() < meltdown_increment_chance:
+                new_level = old_mlvl + 1
+                meltdown_line = meltdown_dialog(npc_name, new_level)
+                record_meltdown_dialog(npc_id, meltdown_line)
+                append_meltdown_file(npc_name, meltdown_line)
+
+                cursor.execute("UPDATE NPCStats SET monica_level=%s WHERE npc_id=%s", (new_level, npc_id))
+
+        # 6. Remove any we didn't keep
+        # Already done above. (We've only deleted immediate ones if not carried.)
+
+        conn.commit()
+        conn.close()
+        return jsonify({"message": "New game started with meltdown logic. Some NPCs carried, meltdown might escalate."}), 200
+
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({"error": str(e)}), 500
