@@ -2,7 +2,8 @@
 
 from flask import Blueprint, request, jsonify
 from db.connection import get_db_connection
-import random, json
+import random
+import json
 
 stats_bp = Blueprint('stats_bp', __name__)
 
@@ -317,6 +318,10 @@ def insert_default_player_stats_chase():
 
     conn.close()
 
+############################
+# 4. Player Stats Route
+############################
+
 @stats_bp.route('/player/<player_name>', methods=['GET', 'PUT'])
 def handle_player_stats(player_name):
     conn = get_db_connection()
@@ -329,60 +334,192 @@ def handle_player_stats(player_name):
             FROM PlayerStats
             WHERE player_name = %s
         """, (player_name,))
-        # ... implementation ...
+        row = cursor.fetchone()
+
+        if not row:
+            conn.close()
+            return jsonify({"error": f"Player '{player_name}' not found"}), 404
+
+        # Construct response
+        stats_response = {
+            "corruption": row[0],
+            "confidence": row[1],
+            "willpower": row[2],
+            "obedience": row[3],
+            "dependency": row[4],
+            "lust": row[5],
+            "mental_resilience": row[6],
+            "physical_endurance": row[7]
+        }
+        conn.close()
+        return jsonify(stats_response), 200
 
     elif request.method == 'PUT':
-        stats = request.get_json()
-        cursor.execute("""
-            UPDATE PlayerStats
-            SET corruption = %s,
-                confidence = %s,
-                willpower = %s,
-                obedience = %s,
-                dependency = %s,
-                lust = %s,
-                mental_resilience = %s,
-                physical_endurance = %s
-            WHERE player_name = %s
-            RETURNING *
-        """, (
-            stats['corruption'], stats['confidence'],
-            stats['willpower'], stats['obedience'],
-            stats['dependency'], stats['lust'],
-            stats['mental_resilience'], stats['physical_endurance'],
-            player_name
-        ))
-        # ... implementation ...
+        stats = request.get_json() or {}
+        try:
+            cursor.execute("""
+                UPDATE PlayerStats
+                SET corruption = %s,
+                    confidence = %s,
+                    willpower = %s,
+                    obedience = %s,
+                    dependency = %s,
+                    lust = %s,
+                    mental_resilience = %s,
+                    physical_endurance = %s
+                WHERE player_name = %s
+                RETURNING corruption, confidence, willpower, obedience,
+                          dependency, lust, mental_resilience, physical_endurance
+            """, (
+                stats.get('corruption', 0),
+                stats.get('confidence', 0),
+                stats.get('willpower', 0),
+                stats.get('obedience', 0),
+                stats.get('dependency', 0),
+                stats.get('lust', 0),
+                stats.get('mental_resilience', 0),
+                stats.get('physical_endurance', 0),
+                player_name
+            ))
+            updated_row = cursor.fetchone()
+            if not updated_row:
+                conn.rollback()
+                conn.close()
+                return jsonify({"error": f"Player '{player_name}' not found"}), 404
+
+            conn.commit()
+            conn.close()
+
+            updated_stats = {
+                "corruption": updated_row[0],
+                "confidence": updated_row[1],
+                "willpower": updated_row[2],
+                "obedience": updated_row[3],
+                "dependency": updated_row[4],
+                "lust": updated_row[5],
+                "mental_resilience": updated_row[6],
+                "physical_endurance": updated_row[7]
+            }
+            return jsonify({
+                "message": f"Player '{player_name}' stats updated successfully.",
+                "new_stats": updated_stats
+            }), 200
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            return jsonify({"error": str(e)}), 500
+
+
+############################
+# 5. NPC Stats Route
+############################
 
 @stats_bp.route('/npc/<int:npc_id>', methods=['GET', 'PUT'])
 def handle_npc_stats(npc_id):
-    # Similar implementation to player stats
-    # ... code ...
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if request.method == 'GET':
+        cursor.execute("""
+            SELECT dominance, cruelty, closeness, trust, respect, intensity
+            FROM NPCStats
+            WHERE npc_id = %s
+        """, (npc_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            conn.close()
+            return jsonify({"error": f"NPC with id={npc_id} not found"}), 404
+
+        npc_response = {
+            "dominance": row[0],
+            "cruelty": row[1],
+            "closeness": row[2],
+            "trust": row[3],
+            "respect": row[4],
+            "intensity": row[5]
+        }
+        conn.close()
+        return jsonify(npc_response), 200
+
+    elif request.method == 'PUT':
+        npc_updates = request.get_json() or {}
+        try:
+            cursor.execute("""
+                UPDATE NPCStats
+                SET dominance = %s,
+                    cruelty = %s,
+                    closeness = %s,
+                    trust = %s,
+                    respect = %s,
+                    intensity = %s
+                WHERE npc_id = %s
+                RETURNING dominance, cruelty, closeness, trust, respect, intensity
+            """, (
+                npc_updates.get('dominance', 0),
+                npc_updates.get('cruelty', 0),
+                npc_updates.get('closeness', 0),
+                npc_updates.get('trust', 0),
+                npc_updates.get('respect', 0),
+                npc_updates.get('intensity', 0),
+                npc_id
+            ))
+            updated_npc = cursor.fetchone()
+            if not updated_npc:
+                conn.rollback()
+                conn.close()
+                return jsonify({"error": f"NPC with id={npc_id} not found"}), 404
+
+            conn.commit()
+            conn.close()
+
+            updated_stats = {
+                "dominance": updated_npc[0],
+                "cruelty": updated_npc[1],
+                "closeness": updated_npc[2],
+                "trust": updated_npc[3],
+                "respect": updated_npc[4],
+                "intensity": updated_npc[5]
+            }
+            return jsonify({
+                "message": f"NPC with id={npc_id} updated successfully.",
+                "new_stats": updated_stats
+            }), 200
+        except Exception as e:
+            conn.rollback()
+            conn.close()
+            return jsonify({"error": str(e)}), 500
+
+
+############################
+# 6. Combined Init Endpoints
+############################
 
 @stats_bp.route('/init_stats_and_rules', methods=['POST'])
 def init_stats_system():
+    """
+    An endpoint to insert stat definitions and game rules in one go.
+    Returns a simple JSON with 'stat_definitions' and 'game_rules' counts if needed.
+    """
     try:
         insert_stat_definitions()
         insert_or_update_game_rules()
         return jsonify({
             "message": "Stat system initialized",
-            "stat_definitions": 8,  # Actual count from DB
-            "game_rules": 4
+            "stat_definitions": 8,  # Or dynamically count from DB if you wish
+            "game_rules": 4         # Same here
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-############################
-# 4. (OPTIONAL) Example route to manually call these inserts
-############################
 
 @stats_bp.route("/init_stats_and_rules", methods=["POST"])
 def init_stats_and_rules():
     """
-    Example route to run all insert/update logic at once:
-    1) Insert game rules
-    2) Insert stat definitions
-    3) Insert default stats for Chase
+    Another endpoint to run all insert/update logic at once:
+      1) Insert game rules
+      2) Insert stat definitions
+      3) Insert default stats for Chase
     """
     try:
         insert_or_update_game_rules()
