@@ -6,13 +6,20 @@ import random, json
 
 stats_bp = Blueprint('stats_bp', __name__)
 
-def insert_game_rules():
+############################
+# 1. Inserting & Updating Game Rules
+############################
+
+def insert_or_update_game_rules():
     """
     Inserts or updates game rules into the GameRules table.
+    If a rule_name already exists, we update the condition/effect.
+    Otherwise we insert a new record.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    # Example rules:
     rules_data = [
         {
             "rule_name": "Agency Override: Lust or Dependency",
@@ -41,26 +48,28 @@ def insert_game_rules():
             INSERT INTO GameRules (rule_name, condition, effect)
             VALUES (%s, %s, %s)
             ON CONFLICT (rule_name)
-            DO UPDATE SET condition = EXCLUDED.condition, effect = EXCLUDED.effect
+            DO UPDATE SET condition = EXCLUDED.condition,
+                          effect = EXCLUDED.effect
         """, (rule["rule_name"], rule["condition"], rule["effect"]))
 
     conn.commit()
     conn.close()
     print("Game rules inserted or updated successfully.")
 
+
+############################
+# 2. Insert Stat Definitions (NPC & Player)
+############################
+
 def insert_stat_definitions():
     """
-    Inserts all NPC and Player stat definitions from the 'Stat Dynamics Knowledge Document'
-    into the StatDefinitions table.
+    Inserts all NPC and Player stat definitions (from your 'Stat Dynamics Knowledge Document')
+    into the StatDefinitions table, if they don't already exist.
     """
-
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1. NPC Stats Data
-    # scope='NPC'
-    # For 'Trust' and 'Respect', doc says -100 to 100, but let's keep them at 0–100 if you prefer uniformity.
-    # If you want actual -100 to 100, set range_min=-100, range_max=100 as needed.
+    # NPC Stats
     npc_stats_data = [
         {
             "stat_name": "Dominance",
@@ -128,8 +137,7 @@ Decreases: Defiance or mercy."""
         }
     ]
 
-    # 2. Player Stats Data
-    # scope='Player'
+    # Player Stats
     player_stats_data = [
         {
             "stat_name": "Corruption",
@@ -219,45 +227,48 @@ Decreases: Failing endurance-based tasks."""
         }
     ]
 
-    # -- Insert the NPC stats
-    for stat in npc_stats_data:
-        cursor.execute('''
+    # Insert NPC stat definitions
+    for npc_stat in npc_stats_data:
+        cursor.execute("""
             INSERT INTO StatDefinitions
               (scope, stat_name, range_min, range_max, definition, effects, progression_triggers)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (stat_name) DO NOTHING
-        ''',
-        (
+        """, (
             "NPC",
-            stat["stat_name"],
-            stat["range_min"],
-            stat["range_max"],
-            stat["definition"],
-            stat["effects"],
-            stat["progression"]
+            npc_stat["stat_name"],
+            npc_stat["range_min"],
+            npc_stat["range_max"],
+            npc_stat["definition"],
+            npc_stat["effects"],
+            npc_stat["progression"]
         ))
 
-    # -- Insert the Player stats
-    for stat in player_stats_data:
-        cursor.execute('''
+    # Insert Player stat definitions
+    for p_stat in player_stats_data:
+        cursor.execute("""
             INSERT INTO StatDefinitions
               (scope, stat_name, range_min, range_max, definition, effects, progression_triggers)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (stat_name) DO NOTHING
-        ''',
-        (
+        """, (
             "Player",
-            stat["stat_name"],
-            stat["range_min"],
-            stat["range_max"],
-            stat["definition"],
-            stat["effects"],
-            stat["progression"]
+            p_stat["stat_name"],
+            p_stat["range_min"],
+            p_stat["range_max"],
+            p_stat["definition"],
+            p_stat["effects"],
+            p_stat["progression"]
         ))
 
     conn.commit()
     conn.close()
     print("All stat definitions inserted or skipped if already present.")
+
+
+############################
+# 3. Default Player Stats
+############################
 
 def insert_default_player_stats_chase():
     """
@@ -267,7 +278,6 @@ def insert_default_player_stats_chase():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Define Chase's default starting stats (you can tweak these numbers)
     chase_stats = {
         "player_name": "Chase",
         "corruption": 10,
@@ -280,14 +290,12 @@ def insert_default_player_stats_chase():
         "physical_endurance": 40
     }
 
-    # We'll do a quick check if a row for "Chase" already exists
     cursor.execute("SELECT id FROM PlayerStats WHERE player_name = %s", (chase_stats["player_name"],))
     row = cursor.fetchone()
 
     if row:
         print("Default stats for Chase already exist. Skipping insert.")
     else:
-        # Insert the row
         cursor.execute('''
             INSERT INTO PlayerStats
               (player_name, corruption, confidence, willpower, obedience,
@@ -309,17 +317,23 @@ def insert_default_player_stats_chase():
 
     conn.close()
 
-def enforce_conditions():
-    """
-    Parses and enforces conditions from the GameRules table programmatically.
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT condition, effect FROM GameRules")
-    rules = cursor.fetchall()
-    conn.close()
 
-    # You would parse and apply these rules in your game logic
-    for condition, effect in rules:
-        print(f"Rule: IF {condition}, THEN {effect}")
-        # Logic to evaluate conditions programmatically goes here.
+############################
+# 4. (OPTIONAL) Example route to manually call these inserts
+############################
+
+@stats_bp.route("/init_stats_and_rules", methods=["POST"])
+def init_stats_and_rules():
+    """
+    Example route to run all insert/update logic at once:
+    1) Insert game rules
+    2) Insert stat definitions
+    3) Insert default stats for Chase
+    """
+    try:
+        insert_or_update_game_rules()
+        insert_stat_definitions()
+        insert_default_player_stats_chase()
+        return jsonify({"message": "Stats & Rules initialized successfully."}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
