@@ -317,6 +317,60 @@ def insert_default_player_stats_chase():
 
     conn.close()
 
+@stats_bp.route('/player/<player_name>', methods=['GET', 'PUT'])
+def handle_player_stats(player_name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    if request.method == 'GET':
+        cursor.execute("""
+            SELECT corruption, confidence, willpower, obedience, 
+                   dependency, lust, mental_resilience, physical_endurance
+            FROM PlayerStats
+            WHERE player_name = %s
+        """, (player_name,))
+        # ... implementation ...
+
+    elif request.method == 'PUT':
+        stats = request.get_json()
+        cursor.execute("""
+            UPDATE PlayerStats
+            SET corruption = %s,
+                confidence = %s,
+                willpower = %s,
+                obedience = %s,
+                dependency = %s,
+                lust = %s,
+                mental_resilience = %s,
+                physical_endurance = %s
+            WHERE player_name = %s
+            RETURNING *
+        """, (
+            stats['corruption'], stats['confidence'],
+            stats['willpower'], stats['obedience'],
+            stats['dependency'], stats['lust'],
+            stats['mental_resilience'], stats['physical_endurance'],
+            player_name
+        ))
+        # ... implementation ...
+
+@stats_bp.route('/npc/<int:npc_id>', methods=['GET', 'PUT'])
+def handle_npc_stats(npc_id):
+    # Similar implementation to player stats
+    # ... code ...
+
+@stats_bp.route('/init_stats_and_rules', methods=['POST'])
+def init_stats_system():
+    try:
+        insert_stat_definitions()
+        insert_or_update_game_rules()
+        return jsonify({
+            "message": "Stat system initialized",
+            "stat_definitions": 8,  # Actual count from DB
+            "game_rules": 4
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 ############################
 # 4. (OPTIONAL) Example route to manually call these inserts
