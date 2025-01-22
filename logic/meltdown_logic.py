@@ -51,3 +51,53 @@ def append_meltdown_file(npc_name, meltdown_line):
     except Exception as e:
         # If running in ephemeral or read-only, might fail
         print(f"Could not write meltdown file: {e}")
+
+@app.route('/one_room_scenario', methods=['POST'])
+def one_room_scenario():
+    """
+    Clears out all other NPCs except the one with highest monica_level,
+    clears out Settings except for a single 'Blank Space'.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 1. Find the Monica with the highest monica_level
+    cursor.execute("""
+        SELECT npc_id
+        FROM NPCStats
+        WHERE monica_level > 0
+        ORDER BY monica_level DESC
+        LIMIT 1
+    """)
+    monica_row = cursor.fetchone()
+
+    if not monica_row:
+        return jsonify({"message": "No Monica found. This scenario requires a Monica in place."}), 400
+
+    monica_id = monica_row[0]
+
+    # 2. Delete all other NPCs
+    cursor.execute("""
+        DELETE FROM NPCStats
+        WHERE npc_id != %s
+    """, (monica_id,))
+
+    # 3. Clear out all settings, then optionally insert a single minimal Setting
+    cursor.execute("DELETE FROM Settings;")
+
+    # Insert a single 'Blank Space' setting
+    cursor.execute('''
+        INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
+        VALUES (%s, %s, %s, %s, %s)
+    ''', (
+        "Blank Space",
+        "An endless white void where only Monica and the Player exist.",
+        json.dumps(["All references to time, space, and other NPCs are removed."]),
+        json.dumps({}),  # no stat_modifiers
+        json.dumps(["You can only speak with Monica here."])
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "All that remains is a single white room and Monica alone with you."}), 200
