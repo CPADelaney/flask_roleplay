@@ -7,6 +7,7 @@ from routes.settings_routes import settings_bp
 from routes.player_input import player_input_bp
 from logic.memory_logic import memory_bp
 from logic.stats_logic import stats_bp
+from logic.rule_enforcement import rule_enforcement_bp
 from routes.admin import admin_bp
 
 def create_app():
@@ -33,6 +34,7 @@ def create_app():
     app.register_blueprint(memory_bp, url_prefix="/memory")
     app.register_blueprint(stats_bp, url_prefix="/stats")
     app.register_blueprint(admin_bp, url_prefix="/admin")
+    app.register_blueprint(rule_enforcement_bp, url_prefix="/rules")
     return app
 
 if __name__ == "__main__":
