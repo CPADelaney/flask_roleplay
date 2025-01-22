@@ -37,6 +37,8 @@ def create_app():
     app.register_blueprint(rule_enforcement_bp, url_prefix="/rules")
     return app
 
+app = create_app()
+
 if __name__ == "__main__":
     my_app = create_app()
     # If you want, set host/port here or rely on environment variables
