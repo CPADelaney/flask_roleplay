@@ -1,13 +1,13 @@
 # main.py (or app.py)
 
 from flask import Flask
-from routes.new_game import new_game_bp
 from routes.meltdown import meltdown_bp
-from routes.settings_routes import settings_bp
+from routes.new_game import new_game_bp
 from routes.player_input import player_input_bp
-from logic.memory_logic import memory_bp
-from logic.stats_logic import stats_bp
+from routes.settings_routes import settings_bp
 from routes.knowledge_routes import knowledge_bp
+from routes.story_routes import story_bp
+from logic.memory_logic import memory_bp
 from logic.rule_enforcement import rule_enforcement_bp
 from db.admin import admin_bp
 
@@ -28,15 +28,15 @@ def create_app():
     #         conn.close()
 
     # Register your blueprint modules
-    app.register_blueprint(new_game_bp, url_prefix="/new_game")
     app.register_blueprint(meltdown_bp, url_prefix="/meltdown")
-    app.register_blueprint(settings_bp, url_prefix="/settings")
+    app.register_blueprint(new_game_bp, url_prefix="/new_game")
     app.register_blueprint(player_input_bp, url_prefix="/player")
+    app.register_blueprint(settings_bp, url_prefix="/settings")
     app.register_blueprint(memory_bp, url_prefix="/memory")
-    app.register_blueprint(stats_bp, url_prefix="/stats")
-    app.register_blueprint(admin_bp, url_prefix="/admin")
     app.register_blueprint(rule_enforcement_bp, url_prefix="/rules")
+    app.register_blueprint(admin_bp, url_prefix="/admin")
     app.register_blueprint(knowledge_bp, url_prefix="/knowledge")
+    app.register_blueprint(story_bp, url_prefix="/story")
     return app
 
 app = create_app()
