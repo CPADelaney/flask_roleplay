@@ -1,3 +1,11 @@
+# logic/stats_logic.py
+
+from flask import Blueprint, request, jsonify
+from db.connection import get_db_connection
+import random, json
+
+stats_bp = Blueprint('stats_bp', __name__)
+
 def insert_game_rules():
     conn = get_db_connection()
     cursor = conn.cursor()
