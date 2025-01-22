@@ -2,6 +2,7 @@ import random
 from flask import Flask, request, g, jsonify
 import psycopg2
 import os
+import json
 
 from flask_cors import CORS
 app = Flask(__name__)
@@ -35,30 +36,315 @@ def initialize_database():
             value TEXT NOT NULL
         );
     ''')
+        # -- New: Create StatDefinitions
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS StatDefinitions (
+          id SERIAL PRIMARY KEY,
+          scope TEXT NOT NULL,
+          stat_name TEXT UNIQUE NOT NULL,
+          range_min INT NOT NULL,
+          range_max INT NOT NULL,
+          definition TEXT NOT NULL,
+          effects TEXT NOT NULL,
+          progression_triggers TEXT NOT NULL
+        );
+        ''')
+    
+        # -- New: Create GameRules
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS GameRules (
+          id SERIAL PRIMARY KEY,
+          rule_name TEXT NOT NULL,
+          condition TEXT NOT NULL,
+          effect TEXT NOT NULL
+        );
+        ''')
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NPCStats (
+            npc_id SERIAL PRIMARY KEY,
+            npc_name TEXT NOT NULL,
+            dominance INT CHECK (dominance BETWEEN 0 AND 100),
+            cruelty INT CHECK (cruelty BETWEEN 0 AND 100),
+            closeness INT CHECK (closeness BETWEEN 0 AND 100),
+            trust INT CHECK (trust BETWEEN -100 AND 100),
+            respect INT CHECK (respect BETWEEN -100 AND 100),
+            intensity INT CHECK (intensity BETWEEN 0 AND 100)
+            devotion INT CHECK (devotion BETWEEN 0 AND 100)
+        );
+    ''')
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerStats (
+           id SERIAL PRIMARY KEY,
+           player_name TEXT NOT NULL,
+           corruption INT CHECK (corruption BETWEEN 0 AND 100),
+           confidence INT CHECK (confidence BETWEEN 0 AND 100),
+           willpower INT CHECK (willpower BETWEEN 0 AND 100),
+           obedience INT CHECK (obedience BETWEEN 0 AND 100),
+           dependency INT CHECK (dependency BETWEEN 0 AND 100),
+           lust INT CHECK (lust BETWEEN 0 AND 100),
+           mental_resilience INT CHECK (mental_resilience BETWEEN 0 AND 100),
+           physical_endurance INT CHECK (physical_endurance BETWEEN 0 AND 100)
+        );
+    ''')    
     conn.commit()
     conn.close()
+
+def insert_game_rules():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    rules_data = [
+      {
+        "rule_name": "Agency Override: Lust or Dependency",
+        "condition": "Lust > 90 or Dependency > 80",
+        "effect": "Locks independent choices"
+      },
+      {
+        "rule_name": "Agency Override: Corruption and Obedience",
+        "condition": "Corruption > 90 and Obedience > 80",
+        "effect": "Total compliance; no defiance possible"
+      },
+      {
+        "rule_name": "NPC Exploitation: Low Resilience",
+        "condition": "Mental Resilience < 30",
+        "effect": "NPC Cruelty intensifies to break you further"
+      },
+      {
+        "rule_name": "NPC Exploitation: Low Endurance",
+        "condition": "Physical Endurance < 30",
+        "effect": "Collaborative physical punishments among NPCs"
+      }
+    ]
+
+    for r in rules_data:
+        cursor.execute('''
+            INSERT INTO GameRules (rule_name, condition, effect)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (rule_name) DO NOTHING
+        ''', (r["rule_name"], r["condition"], r["effect"]))
+
+    conn.commit()
+    conn.close()
+    print("Game rules inserted or skipped if already present.")
+
+def insert_stat_definitions():
+    """
+    Inserts all NPC and Player stat definitions from the 'Stat Dynamics Knowledge Document'
+    into the StatDefinitions table.
+    """
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 1. NPC Stats Data
+    # scope='NPC'
+    # For 'Trust' and 'Respect', doc says -100 to 100, but let's keep them at 0–100 if you prefer uniformity.
+    # If you want actual -100 to 100, set range_min=-100, range_max=100 as needed.
+    npc_stats_data = [
+        {
+            "stat_name": "Dominance",
+            "range_min": 0,
+            "range_max": 100,
+            "definition": "Measures the NPC’s control over you.",
+            "effects": """50+: Regular, assertive commands.
+80+: Inescapable demands; defiance triggers severe punishment.
+90+: Absolute control; NPCs treat resistance as non-existent.""",
+            "progression": """Increases: Obedience, failed resistance, or public submission.
+Decreases: Rare defiance or external events undermining their authority."""
+        },
+        {
+            "stat_name": "Cruelty",
+            "range_min": 0,
+            "range_max": 100,
+            "definition": "Reflects the NPC’s sadism and creativity in tormenting you.",
+            "effects": """60–100: Elaborate, degrading punishments.
+30–60: Calculated cruelty.
+0–30: Minimal malice, favoring straightforward dominance.""",
+            "progression": """Increases: Enjoyment of your suffering, resistance, or failures.
+Decreases: Rare mercy or vulnerability."""
+        },
+        {
+            "stat_name": "Closeness",
+            "range_min": 0,
+            "range_max": 100,
+            "definition": "Tracks how frequently the NPC interacts with you.",
+            "effects": """90+: NPCs micromanage your life entirely.
+60–90: Frequent interactions dominate your day.
+<30: Minimal interaction or indirect influence.""",
+            "progression": """Increases: Repeated interactions, pursuit of attention.
+Decreases: Avoidance or neglect."""
+        },
+        {
+            "stat_name": "Trust",
+            "range_min": -100,
+            "range_max": 100,
+            "definition": "Indicates the NPC’s belief in your reliability or loyalty.",
+            "effects": """60+: Unlocks deeper, personal interactions.
+-50 or below: Triggers suspicion, manipulation, or sabotage.""",
+            "progression": """Increases: Obedience, loyalty, honesty.
+Decreases: Failure, betrayal, competing loyalties."""
+        },
+        {
+            "stat_name": "Respect",
+            "range_min": -100,
+            "range_max": 100,
+            "definition": "Reflects the NPC’s perception of your competence or value.",
+            "effects": """60+: Treated as a prized asset.
+-50 or below: Treated with disdain or open contempt.""",
+            "progression": """Increases: Successes, sacrifice, or loyalty.
+Decreases: Failures, incompetence, or reinforcing inferiority."""
+        },
+        {
+            "stat_name": "Intensity",
+            "range_min": 0,
+            "range_max": 100,
+            "definition": "Represents the severity of the NPC’s actions.",
+            "effects": """80+: Tasks and punishments reach maximum degradation.
+30–80: Gradual escalation.
+<30: Playful, teasing interactions.""",
+            "progression": """Increases: Rising Closeness, repeated failures.
+Decreases: Defiance or mercy."""
+        }
+    ]
+
+    # 2. Player Stats Data
+    # scope='Player'
+    player_stats_data = [
+        {
+            "stat_name": "Corruption",
+            "range_min": 0,
+            "range_max": 100,
+            "definition": "Tracks your descent into submission or depravity.",
+            "effects": """90+: Obedience becomes instinctive; defiance is impossible.
+50–90: Resistance weakens, with submissive options dominating.
+<30: Retains independent thought and defiance.""",
+            "progression": """Increases: Submission, degrading tasks, rewards.
+Decreases: Rare defiance, external validation."""
+        },
+        {
+            "stat_name": "Confidence",
+            "range_min": 0,
+            "range_max": 100,
+            "definition": "Reflects your ability to assert yourself.",
+            "effects": """<20: Submissive stammering dominates dialogue.
+<10: Bold actions locked.""",
+            "progression": """Increases: Successful defiance.
+Decreases: Public failure, ridicule."""
+        },
+        {
+            "stat_name": "Willpower",
+            "range_min": 0,
+            "range_max": 100,
+            "definition": "Measures your ability to resist commands.",
+            "effects": """<20: Rare resistance.
+<10: Automatic compliance.""",
+            "progression": """Increases: Successful defiance.
+Decreases: Submission, repeated obedience."""
+        },
+        {
+            "stat_name": "Obedience",
+            "range_min": 0,
+            "range_max": 100,
+            "definition": "Tracks reflexive compliance with NPC commands.",
+            "effects": """80+: Tasks are obeyed without hesitation.
+40–80: Hesitation is visible but fleeting.
+<40: Resistance remains possible.""",
+            "progression": """Increases: Submission, rewards, or repetition.
+Decreases: Defiance."""
+        },
+        {
+            "stat_name": "Dependency",
+            "range_min": 0,
+            "range_max": 100,
+            "definition": "Measures reliance on specific NPCs.",
+            "effects": """80+: NPCs become your sole focus.
+40–80: Conflict between dependence and independence.
+<40: Independence remains possible.""",
+            "progression": """Increases: Isolation, NPC rewards.
+Decreases: Neglect or betrayal."""
+        },
+        {
+            "stat_name": "Lust",
+            "range_min": 0,
+            "range_max": 100,
+            "definition": "Tracks arousal and its influence on submission.",
+            "effects": """90+: Obedience overrides reason during intimate tasks.
+40–80: Weakens resistance during sensual interactions.
+<40: Retains clarity.""",
+            "progression": """Increases: Sensual domination.
+Decreases: Coldness or lack of intimacy."""
+        },
+        {
+            "stat_name": "Mental Resilience",
+            "range_min": 0,
+            "range_max": 100,
+            "definition": "Represents your psychological endurance against domination.",
+            "effects": """<30: Broken will; mental collapse.
+30–70: Struggles against domination but falters.
+>70: Forces NPCs to escalate mind games.""",
+            "progression": """Increases: Resisting humiliation.
+Decreases: Public degradation."""
+        },
+        {
+            "stat_name": "Physical Endurance",
+            "range_min": 0,
+            "range_max": 100,
+            "definition": "Measures physical ability to endure tasks or punishments.",
+            "effects": """<30: Inability to complete grueling tasks.
+30–70: Struggles visibly but completes them.
+>70: Draws harsher physical demands.""",
+            "progression": """Increases: Surviving physical challenges.
+Decreases: Failing endurance-based tasks."""
+        }
+    ]
+
+    # -- Insert the NPC stats
+    for stat in npc_stats_data:
+        cursor.execute('''
+            INSERT INTO StatDefinitions
+              (scope, stat_name, range_min, range_max, definition, effects, progression_triggers)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (stat_name) DO NOTHING
+        ''',
+        (
+            "NPC",
+            stat["stat_name"],
+            stat["range_min"],
+            stat["range_max"],
+            stat["definition"],
+            stat["effects"],
+            stat["progression"]
+        ))
+
+    # -- Insert the Player stats
+    for stat in player_stats_data:
+        cursor.execute('''
+            INSERT INTO StatDefinitions
+              (scope, stat_name, range_min, range_max, definition, effects, progression_triggers)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (stat_name) DO NOTHING
+        ''',
+        (
+            "Player",
+            stat["stat_name"],
+            stat["range_min"],
+            stat["range_max"],
+            stat["definition"],
+            stat["effects"],
+            stat["progression"]
+        ))
+
+    conn.commit()
+    conn.close()
+    print("All stat definitions inserted or skipped if already present.")
+
     
 # @app.before_first_request
 def init_tables_and_settings():
     initialize_database()
+    insert_stat_definitions()
+    insert_game_rules()
     insert_missing_settings()
-
-import subprocess
-
-@app.route("/version")
-def version():
-    # Option A: Hardcode a version string or date
-    # return "Version 1.2.3 - Deployed on Feb 1, 2025"
-
-    # Option B: If you commit a file named COMMIT_SHA or something,
-    # you can read it from the repo:
-    try:
-        with open("COMMIT_SHA", "r") as f:
-            sha = f.read().strip()
-            return f"Current commit: {sha}"
-    except:
-        return "No commit SHA found"
-
 
 @app.route('/test_db_connection', methods=['GET'])
 def test_db_connection():
@@ -68,8 +354,6 @@ def test_db_connection():
         return jsonify({"message": "Connected to the database successfully!"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-import json
 
 def insert_missing_settings():
     """
@@ -686,6 +970,8 @@ def get_current_roleplay():
     
     return jsonify(data), 200
 
+
+
 @app.route('/store_roleplay_segment', methods=['POST'])
 def store_roleplay_segment():
     try:
@@ -713,6 +999,8 @@ def store_roleplay_segment():
 def init_db_manual():
     try:
         initialize_database()
+        insert_game_rules()
+        insert_stat_definitions()
         insert_missing_settings()
         return jsonify({"message": "DB initialized and settings inserted"}), 200
     except Exception as e:
@@ -729,5 +1017,7 @@ app.teardown_appcontext(close_db)  # <-- Add this line
 if __name__ == "__main__":
     with app.app_context():
         initialize_database()
+        insert_game_rules()
+        insert_stat_definitions()
         insert_missing_settings()
     app.run(debug=True)
