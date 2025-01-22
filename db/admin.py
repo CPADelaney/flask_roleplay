@@ -17,5 +17,16 @@ def init_db_manual():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@admin_bp.route('/test_db_connection', methods=['GET'])
+@admin_bp.route('/init_db_manual', methods=['POST'])
 def test_db_connection():
+    try:
+        conn = get_db_connection()
+        conn.close()
+        return jsonify({"message": "Connected to the database successfully!"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+def close_db(e=None):
+    conn = getattr(g, '_database', None)
+    if conn is not None:
+        conn.close()
