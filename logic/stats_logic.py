@@ -7,42 +7,46 @@ import random, json
 stats_bp = Blueprint('stats_bp', __name__)
 
 def insert_game_rules():
+    """
+    Inserts or updates game rules into the GameRules table.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
 
     rules_data = [
-      {
-        "rule_name": "Agency Override: Lust or Dependency",
-        "condition": "Lust > 90 or Dependency > 80",
-        "effect": "Locks independent choices"
-      },
-      {
-        "rule_name": "Agency Override: Corruption and Obedience",
-        "condition": "Corruption > 90 and Obedience > 80",
-        "effect": "Total compliance; no defiance possible"
-      },
-      {
-        "rule_name": "NPC Exploitation: Low Resilience",
-        "condition": "Mental Resilience < 30",
-        "effect": "NPC Cruelty intensifies to break you further"
-      },
-      {
-        "rule_name": "NPC Exploitation: Low Endurance",
-        "condition": "Physical Endurance < 30",
-        "effect": "Collaborative physical punishments among NPCs"
-      }
+        {
+            "rule_name": "Agency Override: Lust or Dependency",
+            "condition": "Lust > 90 or Dependency > 80",
+            "effect": "Locks independent choices"
+        },
+        {
+            "rule_name": "Agency Override: Corruption and Obedience",
+            "condition": "Corruption > 90 and Obedience > 80",
+            "effect": "Total compliance; no defiance possible"
+        },
+        {
+            "rule_name": "NPC Exploitation: Low Resilience",
+            "condition": "Mental Resilience < 30",
+            "effect": "NPC Cruelty intensifies to break you further"
+        },
+        {
+            "rule_name": "NPC Exploitation: Low Endurance",
+            "condition": "Physical Endurance < 30",
+            "effect": "Collaborative physical punishments among NPCs"
+        }
     ]
 
-    for r in rules_data:
-        cursor.execute('''
+    for rule in rules_data:
+        cursor.execute("""
             INSERT INTO GameRules (rule_name, condition, effect)
             VALUES (%s, %s, %s)
-            ON CONFLICT (rule_name) DO NOTHING
-        ''', (r["rule_name"], r["condition"], r["effect"]))
+            ON CONFLICT (rule_name)
+            DO UPDATE SET condition = EXCLUDED.condition, effect = EXCLUDED.effect
+        """, (rule["rule_name"], rule["condition"], rule["effect"]))
 
     conn.commit()
     conn.close()
-    print("Game rules inserted or skipped if already present.")
+    print("Game rules inserted or updated successfully.")
 
 def insert_stat_definitions():
     """
@@ -304,3 +308,18 @@ def insert_default_player_stats_chase():
         print("Inserted default stats for Chase.")
 
     conn.close()
+
+def enforce_conditions():
+    """
+    Parses and enforces conditions from the GameRules table programmatically.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT condition, effect FROM GameRules")
+    rules = cursor.fetchall()
+    conn.close()
+
+    # You would parse and apply these rules in your game logic
+    for condition, effect in rules:
+        print(f"Rule: IF {condition}, THEN {effect}")
+        # Logic to evaluate conditions programmatically goes here.
