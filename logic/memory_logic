@@ -1,0 +1,68 @@
+# logic/memory_logic.py
+
+from flask import Blueprint, request, jsonify
+from db.connection import get_db_connection
+import random, json
+
+memory_bp = Blueprint('memory_bp', __name__)
+
+@app.route('/get_current_roleplay', methods=['GET'])
+def get_current_roleplay():
+    """
+    Returns an array of {key, value} objects from the currentroleplay table.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT key, value FROM currentroleplay")
+    rows = cursor.fetchall()
+    conn.close()
+
+    data = []
+    for r in rows:
+        data.append({"key": r[0], "value": r[1]})
+    
+    return jsonify(data), 200
+
+def record_npc_event(npc_id, event_description):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT memory FROM NPCStats WHERE npc_id = %s", (npc_id,))
+    row = cursor.fetchone()
+
+    if row:
+        old_memory_json = row[0] or "[]"
+        old_events = json.loads(old_memory_json)
+        old_events.append(event_description)
+        new_memory_json = json.dumps(old_events)
+        cursor.execute("""
+            UPDATE NPCStats
+            SET memory = %s
+            WHERE npc_id = %s
+        """, (new_memory_json, npc_id))
+        conn.commit()
+
+    conn.close()
+
+@app.route('/store_roleplay_segment', methods=['POST'])
+def store_roleplay_segment():
+    try:
+        payload = request.get_json()
+        segment_key = payload.get("key")
+        segment_value = payload.get("value")
+
+        if not segment_key or segment_value is None:
+            return jsonify({"error": "Missing key or value"}), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM currentroleplay WHERE key = %s", (segment_key,))
+        cursor.execute("INSERT INTO currentroleplay (key, value) VALUES (%s, %s)", (segment_key, segment_value))
+        conn.commit()
+        return jsonify({"message": "Stored successfully"}), 200
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
