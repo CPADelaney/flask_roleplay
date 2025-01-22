@@ -3,7 +3,7 @@
 from flask import Blueprint, jsonify
 from db.connection import get_db_connection
 from db.initialization import initialize_database
-from logic.stats_logic import insert_stat_definitions, insert_game_rules, insert_missing_settings
+from logic.stats_logic import insert_stat_definitions, insert_or_update_game_rules, insert_missing_settings
 
 admin_bp = Blueprint('admin_bp', __name__)
 
