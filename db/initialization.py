@@ -85,29 +85,5 @@ def init_tables_and_settings():
     insert_game_rules()
     insert_missing_settings()
 
-@app.route('/init_db_manual', methods=['POST'])
-def init_db_manual():
-    try:
-        initialize_database()
-        insert_game_rules()
-        insert_stat_definitions()
-        insert_missing_settings()
-        return jsonify({"message": "DB initialized and settings inserted"}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
-@app.route('/test_db_connection', methods=['GET'])
-def test_db_connection():
-    try:
-        conn = get_db_connection()
-        conn.close()
-        return jsonify({"message": "Connected to the database successfully!"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-def close_db(e=None):
-    conn = getattr(g, '_database', None)
-    if conn is not None:
-        conn.close()
-
-app.teardown_appcontext(close_db)  # <-- Add this line
+app.teardown_appcontext(close_db) 
