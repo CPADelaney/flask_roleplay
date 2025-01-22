@@ -30,3 +30,7 @@ def close_db(e=None):
     conn = getattr(g, '_database', None)
     if conn is not None:
         conn.close()
+
+@app.teardown_appcontext
+def teardown_db(exception):
+    close_db(exception)
