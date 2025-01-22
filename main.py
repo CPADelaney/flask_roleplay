@@ -603,9 +603,67 @@ def insert_missing_settings():
 
 @app.route('/generate_mega_setting', methods=['POST'])
 def generate_mega_setting():
-    return jsonify({
-      "message": "Here is a simple result"
-    })
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples FROM settings')
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            return jsonify({"error": "No settings found"}), 404
+
+        # Parse JSONB fields
+        parsed_rows = []
+        for row in rows:
+            parsed_rows.append((
+                row[0],
+                row[1],
+                row[2],
+                row[3],  # enhanced_features
+                row[4],  # stat_modifiers
+                row[5],  # activity_examples
+            ))
+
+        num_settings = random.choice([3, 4, 5])
+        selected = random.sample(parsed_rows, min(num_settings, len(parsed_rows)))
+        picked_names = [s[1] for s in selected]
+
+        # Merge name, mood tone
+        mega_name = " + ".join([s[1] for s in selected])
+        mood_tones = [s[2] for s in selected]
+        mega_description = (
+            f"The settings intertwine: {', '.join(mood_tones[:-1])}, and finally, {mood_tones[-1]}. "
+            "Together, they form a grand vision, unexpected and brilliant."
+        )
+
+        # Merge JSON data
+        combined_enhanced_features = []
+        combined_stat_modifiers = {}
+        combined_activity_examples = []
+
+        for s in selected:
+            ef = s[3]  # enhanced_features
+            sm = s[4]  # stat_modifiers
+            ae = s[5]  # activity_examples
+
+            combined_enhanced_features.extend(ef)
+            for key, val in sm.items():
+                if key not in combined_stat_modifiers:
+                    combined_stat_modifiers[key] = val
+                else:
+                    combined_stat_modifiers[key] = f"{combined_stat_modifiers[key]}, {val}"
+            combined_activity_examples.extend(ae)
+
+        return jsonify({
+            "selected_settings": picked_names,
+            "mega_name": mega_name,
+            "mega_description": mega_description,
+            "enhanced_features": combined_enhanced_features,
+            "stat_modifiers": combined_stat_modifiers,
+            "activity_examples": combined_activity_examples,
+            "message": "Mega setting generated and stored successfully."
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500  
 
