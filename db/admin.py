@@ -1,4 +1,4 @@
-# routes/admin.py
+# db/admin.py
 
 from flask import Blueprint, jsonify
 from db.connection import get_db_connection
