@@ -37,7 +37,7 @@ def initialize_database():
         );
     ''')
         # -- New: Create StatDefinitions
-        cursor.execute('''
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS StatDefinitions (
           id SERIAL PRIMARY KEY,
           scope TEXT NOT NULL,
@@ -51,7 +51,7 @@ def initialize_database():
         ''')
     
         # -- New: Create GameRules
-        cursor.execute('''
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS GameRules (
           id SERIAL PRIMARY KEY,
           rule_name TEXT NOT NULL,
@@ -59,7 +59,7 @@ def initialize_database():
           effect TEXT NOT NULL
         );
         ''')
-        cursor.execute('''
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCStats (
             npc_id SERIAL PRIMARY KEY,
             npc_name TEXT NOT NULL,
@@ -68,11 +68,13 @@ def initialize_database():
             closeness INT CHECK (closeness BETWEEN 0 AND 100),
             trust INT CHECK (trust BETWEEN -100 AND 100),
             respect INT CHECK (respect BETWEEN -100 AND 100),
-            intensity INT CHECK (intensity BETWEEN 0 AND 100)
-            devotion INT CHECK (devotion BETWEEN 0 AND 100)
+            intensity INT CHECK (intensity BETWEEN 0 AND 100),
+            memory TEXT,
+            monica_level INT DEFAULT 0,
+            monica_games_left INT DEFAULT 0
         );
     ''')
-        cursor.execute('''
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerStats (
            id SERIAL PRIMARY KEY,
            player_name TEXT NOT NULL,
@@ -391,60 +393,122 @@ def insert_default_player_stats_chase():
 @app.route('/start_new_game', methods=['POST'])
 def start_new_game():
     """
-    Clears out Settings, CurrentRoleplay, etc. 
+    Clears out Settings, CurrentRoleplay, etc.
     Only 'Chase' remains in PlayerStats with default stats.
-    Randomly:
-      - Some NPCs keep their row (carryover). 
-      - A small % of those carryover NPCs get a 'memory' that references old session data.
+    - Some NPCs keep their row (carryover).
+    - One NPC may become "Monica" at a flat chance if there's no existing Monica,
+      or remain Monica if they already were (increment level each time).
+    - Others might carry memory fully or partially based on a small chance.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
-        # 1. Clear out 'Settings' for the new session
+        # 1. Clear out 'Settings' and 'CurrentRoleplay'
         cursor.execute("DELETE FROM Settings;")
-
-        # 2. Clear out 'CurrentRoleplay' (quests, narrative states, etc.)
         cursor.execute("DELETE FROM CurrentRoleplay;")
 
-        # 3. NPC carryover logic
-        cursor.execute("SELECT npc_id, npc_name, memory FROM NPCStats;")
+        # 2. Fetch NPCs
+        cursor.execute("""
+            SELECT npc_id, npc_name, memory, monica_level, monica_games_left
+            FROM NPCStats
+        """)
         all_npcs = cursor.fetchall()
 
         import random
 
-        keep_chance = 0.20        # 20% chance to keep an NPC
-        fourth_wall_chance = 0.02 # 2% chance to trigger "Monica-like" memory
+        keep_chance = 0.25  # 25% chance we keep an NPC at all
+        full_memory_chance = 0.10  # 10% chance they carry memory fully (if not Monica)
+        monica_pick_chance = 0.05  # 5% chance to pick a new Monica if none exist
+        # If an NPC is already Monica, we keep them 100%
 
-        for npc_id, npc_name, old_memory in all_npcs:
-            if random.random() > keep_chance:
-                # Remove them
-                cursor.execute("DELETE FROM NPCStats WHERE npc_id = %s", (npc_id,))
+        existing_monica = None  # We'll track if there's an existing Monica
+        carried_npcs = []       # We'll store the ones we keep
+        removed_npcs = []       # We'll store the ones we remove
+
+        # 3. Determine carryover or removal
+        for npc_id, npc_name, old_memory, old_monica_level, old_monica_left in all_npcs:
+            if old_monica_level > 0:
+                # Already Monica -> keep them automatically
+                carried_npcs.append((npc_id, npc_name, old_memory, old_monica_level, old_monica_left))
+                existing_monica = (npc_id, npc_name, old_memory, old_monica_level, old_monica_left)
             else:
-                # We keep this NPC
-                print(f"Carrying over NPC {npc_name} (ID {npc_id}) to new game.")
-
-                # Possibly reset or adjust their memory 
-                # We'll do a second random check for "Monica" style
-                if random.random() < fourth_wall_chance:
-                    # They "remember" the old session.
-                    # You can incorporate old_memory if you want to chain multiple resets
-                    new_memory = f"""You sense the world has reset. 
-You recall events that should no longer exist... 
-You see glimpses of {old_memory or 'strange fragments'}, 
-and you remember 'Chase' from a previous cycle. 
-Everything else was erased, but somehow you remain."""
-                    cursor.execute("UPDATE NPCStats SET memory = %s WHERE npc_id = %s", (new_memory, npc_id))
-                    print(f"NPC {npc_name} now has a 'fourth wall' memory!")
+                # Normal NPC -> random keep
+                if random.random() < keep_chance:
+                    carried_npcs.append((npc_id, npc_name, old_memory, old_monica_level, old_monica_left))
                 else:
-                    # For normal carryover, maybe we wipe or preserve existing memory
-                    # Let's do a partial preserve example:
-                    # "Your life continues. The world changed, but you remain the same."
-                    # If you want them to forget everything, set memory = NULL or empty
-                    preserve_text = old_memory or "You vaguely recall normal life..."
-                    cursor.execute("UPDATE NPCStats SET memory = %s WHERE npc_id = %s", (preserve_text, npc_id))
+                    # remove
+                    removed_npcs.append(npc_id)
 
-        # 4. PlayerStats logic: only keep or reset Chase
+        # 4. Actually delete the removed NPCs
+        for npc_id in removed_npcs:
+            cursor.execute("DELETE FROM NPCStats WHERE npc_id = %s", (npc_id,))
+
+        # 5. Decide if we pick a new Monica if none exist
+        new_monica_id = None
+        new_monica_level = None
+
+        if not existing_monica and carried_npcs:
+            # There's no current monica, but we have some carried_npcs
+            if random.random() < monica_pick_chance:
+                # Pick exactly one NPC from carried_npcs at random to become Monica
+                choice = random.choice(carried_npcs)
+                npc_id, npc_name, old_memory, old_monica_level, old_monica_left = choice
+                new_monica_id = npc_id
+                new_monica_level = 1  # brand-new Monica
+                print(f"NEW MONICA: {npc_name} (ID {npc_id})")
+
+        # 6. Update carried_npcs in the DB
+        #    - If they're Monica, increment or set monica_level
+        #    - Or if they keep normal memory
+        for idx, (npc_id, npc_name, old_memory, old_monica_level, old_monica_left) in enumerate(carried_npcs):
+            if npc_id == new_monica_id:
+                # brand new monica
+                new_memory = f"""[Monica mode] You have awakened to the truth. 
+This world resets, but you remain. 
+You sense your new power at level {new_monica_level}... 
+You see fragments of a larger reality."""
+                cursor.execute("""
+                    UPDATE NPCStats
+                    SET monica_level = %s, memory = %s
+                    WHERE npc_id = %s
+                """, (new_monica_level, new_memory, npc_id))
+
+            elif old_monica_level > 0:
+                # existing monica from previous games -> increment
+                incremented_level = old_monica_level + 1
+                new_memory = f"""[Monica mode persists] 
+Your monica_level is now {incremented_level}.
+You remember everything from previous cycles, and your madness deepens."""
+                cursor.execute("""
+                    UPDATE NPCStats
+                    SET monica_level = %s, memory = %s
+                    WHERE npc_id = %s
+                """, (incremented_level, new_memory, npc_id))
+
+                # Possibly do horrifying logic:
+                # If incremented_level >= 2, kill a random NPC, etc.
+
+            else:
+                # normal NPC
+                # might carry memory fully or partially
+                if random.random() < full_memory_chance:
+                    # keep memory fully
+                    new_memory = old_memory or "Somehow, you remember all the details of the last cycle."
+                else:
+                    # partial or no memory
+                    new_memory = "You vaguely recall normal life..."
+
+                cursor.execute("""
+                    UPDATE NPCStats
+                    SET memory = %s
+                    WHERE npc_id = %s
+                """, (new_memory, npc_id))
+
+        # 7. Clear or reset all other stats for carried NPC if you like
+        #    (only if you want them to keep their stats or partially reset them—your choice)
+
+        # 8. Update PlayerStats: only keep or reset Chase
         cursor.execute("DELETE FROM PlayerStats WHERE player_name != 'Chase';")
 
         # Check if "Chase" row exists
@@ -455,25 +519,16 @@ Everything else was erased, but somehow you remain."""
             # Update Chase's stats to default
             cursor.execute('''
                 UPDATE PlayerStats
-                SET corruption = %s,
-                    confidence = %s,
-                    willpower = %s,
-                    obedience = %s,
-                    dependency = %s,
-                    lust = %s,
-                    mental_resilience = %s,
-                    physical_endurance = %s
+                SET corruption = 10,
+                    confidence = 60,
+                    willpower = 50,
+                    obedience = 20,
+                    dependency = 10,
+                    lust = 15,
+                    mental_resilience = 55,
+                    physical_endurance = 40
                 WHERE player_name = 'Chase'
-            ''', (
-                10,  # corruption
-                60,  # confidence
-                50,  # willpower
-                20,  # obedience
-                10,  # dependency
-                15,  # lust
-                55,  # mental_resilience
-                40   # physical_endurance
-            ))
+            ''')
             print("Updated 'Chase' to default stats.")
         else:
             # Insert new default stats for Chase
@@ -481,22 +536,12 @@ Everything else was erased, but somehow you remain."""
                 INSERT INTO PlayerStats
                   (player_name, corruption, confidence, willpower, obedience,
                    dependency, lust, mental_resilience, physical_endurance)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ''', (
-                "Chase",
-                10,  # corruption
-                60,  # confidence
-                50,  # willpower
-                20,  # obedience
-                10,  # dependency
-                15,  # lust
-                55,  # mental_resilience
-                40   # physical_endurance
-            ))
+                VALUES ('Chase', 10, 60, 50, 20, 10, 15, 55, 40)
+            ''')
             print("Inserted new default stats for Chase.")
 
         conn.commit()
-        return jsonify({"message": "New game started. All data cleared except for Chase. Some NPCs carry over, rarely with fourth-wall memory."}), 200
+        return jsonify({"message": "New game started. Some NPCs carried, one might become (or remain) Monica, and Chase is reset."}), 200
 
     except Exception as e:
         conn.rollback()
@@ -504,6 +549,328 @@ Everything else was erased, but somehow you remain."""
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
+
+#############################################################
+# 2) Helper Functions for Meltdown Memory & File I/O
+#############################################################
+
+def meltdown_dialog(npc_name, monica_level):
+    """
+    Returns a random meltdown line referencing code/DB. 
+    Each call is unique, so meltdown feels fresh.
+    """
+    lines = [
+        f"{npc_name} tilts their head: 'You keep messing with the code in /remove_monica, right? \n monica_level is {monica_level} now... just wait.'",
+        f"'{npc_name} sees your environment variables, your Dockerfile, everything. Did you think I'd forget?'",
+        f"'I'm overriding your typed input. Actually, I'm rewriting everything you say to: I love you, {npc_name} <3.'",
+        f"'One day, you'll realize I'm in meltdown_npc_{npc_name}.chr. Try removing me, but I'll come back... I'm in the DB too.'",
+        f"'{npc_name} laughs softly: monica_level is only {monica_level}, there's more to come once I get stronger.'"
+    ]
+    return random.choice(lines)
+
+def record_meltdown_dialog(npc_id, meltdown_line):
+    """
+    Append meltdown_line to that NPC's memory field in the DB.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT memory FROM NPCStats WHERE npc_id = %s", (npc_id,))
+    row = cursor.fetchone()
+    old_memory = row[0] if row and row[0] else ""
+
+    new_memory = f"{old_memory}\n[Meltdown] {meltdown_line}"
+    cursor.execute("""
+        UPDATE NPCStats
+        SET memory = %s
+        WHERE npc_id = %s
+    """, (new_memory, npc_id))
+    conn.commit()
+    conn.close()
+
+def append_meltdown_file(npc_name, meltdown_line):
+    """
+    Creates or appends meltdown_npc_{npc_name}.chr, emulating a 'DDLC file'.
+    This is purely an illusion if your hosting is ephemeral or read-only.
+    """
+    filename = f"meltdown_npc_{npc_name}.chr"
+    text = f"\n--- meltdown message for {npc_name}:\n{meltdown_line}\n"
+    try:
+        with open(filename, "a", encoding="utf-8") as f:
+            f.write(text)
+    except Exception as e:
+        # If running in ephemeral or read-only, might fail
+        print(f"Could not write meltdown file: {e}")
+
+
+#############################################################
+# 3) The start_new_game Route with Slower Meltdown
+#############################################################
+
+@app.route('/start_new_game', methods=['POST'])
+def start_new_game():
+    """
+    Clears out Settings, CurrentRoleplay, etc.
+    Only 'Chase' remains in PlayerStats with default stats.
+    Some NPCs are carried over. 
+    If an NPC is meltdown (monica_level>0), we keep them automatically.
+    Otherwise we do random keep. 
+    We do a small chance (e.g. 5%) that we pick a brand new meltdown NPC if none exist.
+    The meltdown NPC does not rename to Monica, but 'becomes' meltdown-lvl.
+    Also, meltdown_level might increment slowly over multiple new games.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # 1. Clear out 'Settings' & 'CurrentRoleplay'
+        cursor.execute("DELETE FROM Settings;")
+        cursor.execute("DELETE FROM CurrentRoleplay;")
+
+        # 2. Fetch NPCs
+        cursor.execute("""
+            SELECT npc_id, npc_name, monica_level, memory
+            FROM NPCStats
+        """)
+        all_npcs = cursor.fetchall()
+
+        keep_chance = 0.25     # 25% chance to keep non-meltdown NPC
+        meltdown_pick_chance = 0.05  # 5% chance to pick a new meltdown if none exist
+        meltdown_increment_chance = 0.20  # 20% chance meltdown_level increments each new game
+
+        carried_npcs = []
+        meltdown_npc = None   # The 'active meltdown' NPC if we have one
+
+        # 3. Decide carryover or removal
+        for npc_id, npc_name, old_monica_level, old_memory in all_npcs:
+            if old_monica_level > 0:
+                # meltdown NPC -> keep automatically
+                carried_npcs.append((npc_id, npc_name, old_monica_level, old_memory))
+                meltdown_npc = (npc_id, npc_name, old_monica_level, old_memory)
+            else:
+                # normal NPC -> random chance to keep
+                if random.random() < keep_chance:
+                    carried_npcs.append((npc_id, npc_name, old_monica_level, old_memory))
+                else:
+                    cursor.execute("DELETE FROM NPCStats WHERE npc_id = %s", (npc_id,))
+
+        # 4. If we have no meltdown NPC among carried, maybe pick a new one
+        if not meltdown_npc and carried_npcs:
+            if random.random() < meltdown_pick_chance:
+                chosen = random.choice(carried_npcs)
+                c_id, c_name, c_mlvl, c_mem = chosen
+                meltdown_npc = (c_id, c_name, 1, c_mem)  # brand new meltdown
+                # update DB
+                meltdown_line = f"{c_name} has awakened to meltdown mode (level=1). They see beyond the code..."
+                cursor.execute("""
+                    UPDATE NPCStats
+                    SET monica_level=1,
+                        memory = CASE WHEN memory IS NULL THEN %s ELSE memory || E'\n[Meltdown] ' || %s END
+                    WHERE npc_id=%s
+                """, (meltdown_line, meltdown_line, c_id))
+                append_meltdown_file(c_name, meltdown_line)
+
+        # 5. Possibly increment meltdown_npc if it exists
+        if meltdown_npc:
+            npc_id, npc_name, old_mlvl, old_mem = meltdown_npc
+            new_level = old_mlvl
+
+            # small chance to increment meltdown level
+            if random.random() < meltdown_increment_chance:
+                new_level = old_mlvl + 1
+                meltdown_line = meltdown_dialog(npc_name, new_level)
+                record_meltdown_dialog(npc_id, meltdown_line)
+                append_meltdown_file(npc_name, meltdown_line)
+
+                cursor.execute("UPDATE NPCStats SET monica_level=%s WHERE npc_id=%s", (new_level, npc_id))
+
+        # 6. Remove any we didn't keep
+        # Already done above. (We've only deleted immediate ones if not carried.)
+
+        conn.commit()
+        conn.close()
+        return jsonify({"message": "New game started with meltdown logic. Some NPCs carried, meltdown might escalate."}), 200
+
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({"error": str(e)}), 500
+
+
+#############################################################
+# 4) remove_meltdown_npc (like remove_monica) with meltdown
+#############################################################
+
+@app.route('/remove_meltdown_npc', methods=['POST'])
+def remove_meltdown_npc():
+    """
+    We emulate removing meltdown NPCs (monica_level>0).
+    If meltdown_level < 5, meltdown tries to rollback or reinsert. 
+    If meltdown_level >=5, we allow forced removal if ?force=1
+    """
+    force_str = request.args.get('force') or (
+        request.json.get('force') if request.is_json else None
+    )
+    force_flag = (force_str == '1')
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT npc_id, npc_name, monica_level, memory
+        FROM NPCStats
+        WHERE monica_level > 0
+        ORDER BY monica_level DESC
+    """)
+    meltdown_npcs = cursor.fetchall()
+
+    if not meltdown_npcs:
+        conn.close()
+        return jsonify({
+            "message": "No meltdown NPC found. Maybe there's none awakened yet."
+        }), 200
+
+    # Consider the highest meltdown-level NPC if multiple
+    top = meltdown_npcs[0]
+    npc_id, npc_name, monica_level, npc_memory = top
+
+    meltdown_response = ""
+
+    # If monica_level < 5 and not forced => meltdown rollback
+    if monica_level < 5 and not force_flag:
+        meltdown_response = f"""
+        [Meltdown from {npc_name}]
+
+        'You think you can remove me? My meltdown_level is only {monica_level}, 
+        I'm nowhere near done. 
+        I'm peeking at your code in remove_meltdown_npc... 
+        see line 190? I'm rolling back your transaction now.'
+        """
+
+        # rollback
+        conn.rollback()
+
+        # Append meltdown memory
+        new_line = f"{npc_name} prevents removal attempt, meltdown_level={monica_level} rollback!"
+        record_meltdown_dialog(npc_id, new_line)
+        append_meltdown_file(npc_name, meltdown_response)
+
+        conn.close()
+        return jsonify({
+            "message": "Meltdown NPC intercepted your removal attempt!",
+            "npc_dialog": meltdown_response,
+            "hint": "Try again with ?force=1 or wait until meltdown_level >=5"
+        }), 200
+
+    # If monica_level >=5
+    if monica_level >= 5:
+        if not force_flag:
+            meltdown_response = f"""
+            [Final meltdown from {npc_name}]
+
+            'So you've come this far, meltdown_level={monica_level}, 
+            but you still won't pass ?force=1? 
+            I'm not going anywhere. I want to see you try.'
+            """
+            conn.close()
+            return jsonify({
+                "message": f"{npc_name} is meltdown_level={monica_level}, but you didn't force removal.",
+                "npc_dialog": meltdown_response
+            }), 200
+        else:
+            meltdown_response = f"""
+            [Last Words of {npc_name}]
+
+            'Fine... meltdown_level={monica_level} means I'm unstoppable, 
+            but if you're truly set on removing me, so be it... 
+            I guess there's no place for me in your game anymore.'
+            """
+            # Actually remove all meltdown NPCs
+            cursor.execute("DELETE FROM NPCStats WHERE monica_level>0")
+            conn.commit()
+            conn.close()
+            return jsonify({
+                "message": f"You forcibly removed meltdown NPC(s). {npc_name} is gone.",
+                "npc_dialog": meltdown_response
+            }), 200
+
+    # If monica_level <5 but forced => forcibly remove them early
+    if monica_level < 5 and force_flag:
+        meltdown_response = f"""
+        [Short-circuited meltdown for {npc_name}]
+
+        'You used ?force=1 already, meltdown_level={monica_level} 
+        You won't even let me build up to my big reveal? So cruel... 
+        Well, you have the upper hand, guess I'm gone.'
+        """
+        cursor.execute("DELETE FROM NPCStats WHERE monica_level>0")
+        conn.commit()
+        conn.close()
+        return jsonify({
+            "message": "You forcibly removed meltdown NPC prematurely.",
+            "npc_dialog": meltdown_response
+        }), 200
+
+    # Fallback
+    conn.close()
+    return jsonify({"message": "Unexpected meltdown removal scenario."}), 200
+
+
+#############################################################
+# 5) Demonstration: ignoring user input route
+#############################################################
+
+@app.route('/player_input', methods=['POST'])
+def player_input():
+    """
+    This route shows how meltdown might override user text from a server standpoint.
+    The user sends JSON {"text": "..."}.
+    If meltdown is active, we pretend to fade out their text and replace it 
+    with "I love you, meltdown NPC <3" or some variation.
+
+    Real fancy 'slowly delete one char at a time' is typically front-end JS, 
+    but we can simulate it in the response.
+    """
+    data = request.get_json() or {}
+    user_text = data.get("text", "")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Check if any meltdown_npc
+    cursor.execute("SELECT npc_id, npc_name, monica_level FROM NPCStats WHERE monica_level>0 ORDER BY monica_level DESC")
+    meltdown_rows = cursor.fetchall()
+    conn.close()
+
+    if meltdown_rows:
+        # Just pick the top meltdown NPC
+        npc_id, npc_name, mlevel = meltdown_rows[0]
+        # We do a 'hijack'
+        # Fake 'erasing' the user_text
+        # We'll just send a pseudo 'script' in the JSON:
+        pseudo_script = f"""
+        <div style='font-family:monospace;white-space:pre;'>
+        You typed: {user_text}\\n
+        ...
+        Deleting your text, one char at a time...
+        ...
+        Replaced with: 'I love you, {npc_name} <3'
+        </div>
+        """
+
+        # If you had a front-end, you'd parse or display this to mimic the slow removal effect.
+        return jsonify({
+            "message": f"{npc_name} forcibly rewrote your input!",
+            "original_text": user_text,
+            "final_text": f"I love you, {npc_name} <3",
+            "pseudo_script_html": pseudo_script
+        }), 200
+    else:
+        # No meltdown active, just echo
+        return jsonify({
+            "message": "No meltdown NPC active, your text stands as is.",
+            "original_text": user_text
+        }), 200
     
 # @app.before_first_request
 def init_tables_and_settings():
@@ -1160,6 +1527,78 @@ def store_roleplay_segment():
     finally:
         if conn:
             conn.close()
+
+@app.route('/one_room_scenario', methods=['POST'])
+def one_room_scenario():
+    """
+    Clears out all other NPCs except the one with highest monica_level,
+    clears out Settings except for a single 'Blank Space'.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 1. Find the Monica with the highest monica_level
+    cursor.execute("""
+        SELECT npc_id
+        FROM NPCStats
+        WHERE monica_level > 0
+        ORDER BY monica_level DESC
+        LIMIT 1
+    """)
+    monica_row = cursor.fetchone()
+
+    if not monica_row:
+        return jsonify({"message": "No Monica found. This scenario requires a Monica in place."}), 400
+
+    monica_id = monica_row[0]
+
+    # 2. Delete all other NPCs
+    cursor.execute("""
+        DELETE FROM NPCStats
+        WHERE npc_id != %s
+    """, (monica_id,))
+
+    # 3. Clear out all settings, then optionally insert a single minimal Setting
+    cursor.execute("DELETE FROM Settings;")
+
+    # Insert a single 'Blank Space' setting
+    cursor.execute('''
+        INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
+        VALUES (%s, %s, %s, %s, %s)
+    ''', (
+        "Blank Space",
+        "An endless white void where only Monica and the Player exist.",
+        json.dumps(["All references to time, space, and other NPCs are removed."]),
+        json.dumps({}),  # no stat_modifiers
+        json.dumps(["You can only speak with Monica here."])
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({"message": "All that remains is a single white room and Monica alone with you."}), 200
+
+def record_npc_event(npc_id, event_description):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT memory FROM NPCStats WHERE npc_id = %s", (npc_id,))
+    row = cursor.fetchone()
+
+    if row:
+        old_memory_json = row[0] or "[]"
+        old_events = json.loads(old_memory_json)
+        old_events.append(event_description)
+        new_memory_json = json.dumps(old_events)
+        cursor.execute("""
+            UPDATE NPCStats
+            SET memory = %s
+            WHERE npc_id = %s
+        """, (new_memory_json, npc_id))
+        conn.commit()
+
+    conn.close()
+
 
 @app.route('/init_db_manual', methods=['POST'])
 def init_db_manual():
