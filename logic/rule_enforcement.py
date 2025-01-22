@@ -188,60 +188,220 @@ def evaluate_condition(logic_op, parsed_conditions, stats_dict):
 # 3. Applying Effects
 ############################
 
-def apply_effect(effect_str, player_stats, npc_stats):
+def apply_effect(effect_str, player_name, npc_id=None):
     """
-    If a rule's condition is True, do something
-    like locking player choices or pulling an event from PlotTriggers.
+    Applies a rule effect or punishment scenario, integrating:
+      - Stats DB updates (Obedience, Cruelty, etc.)
+      - Intensity tier lookups (based on relevant stats)
+      - Optionally a brand-new GPT-generated punishment scenario
+      - PlotTriggers references if we detect "endgame" or major conditions
+      - Light meltdown synergy if meltdown is triggered
+      - Logging in CurrentRoleplay or NPC memory
+
+    Parameters:
+      effect_str (str): The textual effect from a triggered rule (e.g., "Total compliance; no defiance possible").
+      player_name (str): Which player is affected.
+      npc_id (int or None): If an NPC is specifically involved, pass their ID.
+
+    Returns:
+      dict: Contains keys describing what happened, e.g.:
+        {
+          "appliedEffect": "...",
+          "statUpdates": {...},
+          "intensityTier": "High Intensity (60-90)",
+          "punishmentScenario": "...some text...",
+          "plotTriggerEvent": "...some endgame scenario text...",
+          "meltdownLine": "... meltdown text ...",
+          "memoryLog": "...",
+        }
     """
-    # Basic logic examples
-    if effect_str.lower().startswith("locks independent choices"):
-        print("Effect: Locking player's independent choices...")
+    result = {
+        "appliedEffect": effect_str,
+        "statUpdates": {},
+        "intensityTier": None,
+        "punishmentScenario": None,
+        "plotTriggerEvent": None,
+        "meltdownLine": None,
+        "memoryLog": None,
+    }
 
-    elif effect_str.lower().startswith("total compliance"):
-        print("Effect: Player forced to total compliance (Obedience=100).")
-        # Actually set Obedience=100 in DB if you want:
-        # conn = get_db_connection()
-        # c = conn.cursor()
-        # c.execute("UPDATE PlayerStats SET obedience=100 WHERE player_name=%s", (player_name,))
-        # conn.commit()
-        # conn.close()
+    conn = get_db_connection()
+    cursor = conn.cursor()
 
-    elif effect_str.lower().startswith("npc cruelty intensifies"):
-        print("Effect: NPC cruelty intensifies, might escalate punishments...")
+    try:
+        # 1) Basic checks on effect_str → do DB updates
+        effect_lower = effect_str.lower()
 
-    elif effect_str.lower().startswith("collaborative physical punishments"):
-        print("Effect: multiple NPCs collaborating to punish the player...")
+        if effect_lower.startswith("locks independent choices"):
+            # Example: raise Obedience to at least 80
+            cursor.execute("""
+                UPDATE PlayerStats
+                SET obedience = GREATEST(obedience, 80)
+                WHERE player_name=%s
+                RETURNING obedience
+            """, (player_name,))
+            row = cursor.fetchone()
+            if row:
+                result["statUpdates"]["obedience"] = row[0]
 
-    # Now we do the "no defiance" check:
-    if "no defiance possible" in effect_str.lower():
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("""
-            SELECT title, examples
-            FROM PlotTriggers
-            WHERE stage='Endgame'
-        """)
-        rows = c.fetchall()
+        elif effect_lower.startswith("total compliance"):
+            # Force Obedience=100, remove defiance
+            cursor.execute("""
+                UPDATE PlayerStats
+                SET obedience=100
+                WHERE player_name=%s
+                RETURNING obedience
+            """, (player_name,))
+            row = cursor.fetchone()
+            if row:
+                result["statUpdates"]["obedience"] = row[0]
+
+        elif effect_lower.startswith("npc cruelty intensifies") and npc_id is not None:
+            # Raise cruelty by 10
+            cursor.execute("""
+                UPDATE NPCStats
+                SET cruelty = LEAST(cruelty + 10, 100)
+                WHERE npc_id=%s
+                RETURNING cruelty
+            """, (npc_id,))
+            row = cursor.fetchone()
+            if row:
+                result["statUpdates"]["npc_cruelty"] = row[0]
+
+        elif effect_lower.startswith("collaborative physical punishments"):
+            # Possibly do closeness or intensity bumps on multiple NPCs
+            # We'll keep it minimal here
+            pass
+
+        # 2) Check relevant stats to determine an "intensity" for this punishment
+        #    We'll default to using either the player's stats or the NPC's intensity.
+        #    Let's pick the player's stats for an overall read.
+        cursor.execute("""
+            SELECT corruption, obedience, willpower, confidence, dependency, lust
+            FROM PlayerStats
+            WHERE player_name = %s
+        """, (player_name,))
+        player_row = cursor.fetchone()
+
+        chosen_intensity_tier = None
+        if player_row:
+            (corr, obed, willp, conf, dep, lust) = player_row
+            # A naive approach: if Obedience > 80 or Corruption > 70 => high intensity
+            # If either is near 100 => max intensity
+            # else moderate/low
+            # Real logic can be more advanced.
+            if corr >= 90 or obed >= 90:
+                intensity_range = (90, 100)
+            elif corr >= 60 or obed >= 60:
+                intensity_range = (60, 90)
+            elif corr >= 30 or obed >= 30:
+                intensity_range = (30, 60)
+            else:
+                intensity_range = (0, 30)
+
+            # Query IntensityTiers
+            cursor.execute("""
+                SELECT tier_name, key_features, activity_examples, permanent_effects
+                FROM IntensityTiers
+                WHERE range_min = %s AND range_max = %s
+            """, (intensity_range[0], intensity_range[1]))
+            row = cursor.fetchone()
+            if row:
+                tier_name, key_features, activity_examples, permanent_effects = row
+                result["intensityTier"] = tier_name
+            else:
+                # fallback if not found
+                tier_name = "Unknown Intensity"
+                key_features, activity_examples, permanent_effects = "[]", "[]", "{}"
+
+            # Possibly pick an example from activity_examples
+            if activity_examples and isinstance(activity_examples, str):
+                # It's probably a JSON string
+                try:
+                    ex_list = json.loads(activity_examples)
+                    if ex_list:
+                        chosen_intensity_tier = random.choice(ex_list)
+                except:
+                    chosen_intensity_tier = None
+
+        # 3) If effect_str implies "no defiance possible," treat it like endgame
+        if "no defiance possible" in effect_lower:
+            cursor.execute("""
+                SELECT title, examples
+                FROM PlotTriggers
+                WHERE stage='Endgame'
+            """)
+            rows = cursor.fetchall()
+            if rows:
+                chosen = random.choice(rows)
+                title, ex_json = chosen
+                ex_list = json.loads(ex_json) if ex_json else []
+                picked_example = random.choice(ex_list) if ex_list else "No example found"
+                endgame_line = f"[ENDGAME TRIGGER] {title}: {picked_example}"
+                result["plotTriggerEvent"] = endgame_line
+
+                # store in memory
+                store_roleplay_segment({
+                    "key": "EndgameTrigger",
+                    "value": endgame_line
+                })
+
+        # 4) Optionally call GPT for a brand-new scenario
+        #    We'll only do this if "punishment" is in the effect text, just as an example
+        punishment_scenario = None
+        if "punishment" in effect_lower:
+            # A quick GPT call
+            # Provide context about intensity or stats so GPT can generate something new
+            # (Replace with your actual GPT config)
+            system_prompt = f"""
+            You are a punishment scenario generator. 
+            The player's stats suggest intensity tier: {result['intensityTier']}.
+            Provide a short brand-new humiliating scenario for effect: '{effect_str}'.
+            """
+            try:
+                gpt_response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": "Generate a unique punishment scenario."}
+                    ],
+                    max_tokens=200,
+                    temperature=1.0
+                )
+                punishment_scenario = gpt_response.choices[0].message.content.strip()
+            except Exception as e:
+                punishment_scenario = f"(GPT error: {e})"
+
+            result["punishmentScenario"] = punishment_scenario
+
+        # 5) If meltdown is triggered as an easter egg
+        if "meltdown" in effect_lower:
+            meltdown_line = meltdown_dialog_gpt("EasterEggNPC", 2)
+            record_meltdown_dialog(npc_id or 999, meltdown_line)  # or a dummy ID
+            result["meltdownLine"] = meltdown_line
+
+        # 6) Combine chosen_intensity_tier (if we got one from the DB) with the new scenario
+        #    If not overshadowed by GPT scenario, we might incorporate it
+        if chosen_intensity_tier and not punishment_scenario:
+            result["punishmentScenario"] = f"(From IntensityTier) {chosen_intensity_tier}"
+
+        # 7) Write a final memory log
+        memory_text = f"Effect triggered: {effect_str}. (Intensity: {result['intensityTier']})"
+        store_roleplay_segment({
+            "key": f"Effect_{player_name}",
+            "value": memory_text
+        })
+        result["memoryLog"] = memory_text
+
+        conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        result["error"] = str(e)
+    finally:
         conn.close()
 
-        if rows:
-            chosen = random.choice(rows)  # (title, examples)
-            title, examples_json = chosen
-            event_list = json.loads(examples_json)
-            if event_list:
-                picked_example = random.choice(event_list)
-            else:
-                picked_example = "No examples found."
-
-            # Build a narrative snippet from the DB event
-            narrative_line = (
-                f"[Endgame Trigger] {title}:\n"
-                f"Example scenario: {picked_example}"
-            )
-            print(narrative_line)  # or log it somewhere
-            # You could also incorporate meltdown or do a meltdown_dialog_gpt call.
-
-    return f"Applied effect: {effect_str}"
+    return result
 
 
 ############################
