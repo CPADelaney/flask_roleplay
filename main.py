@@ -338,6 +338,55 @@ Decreases: Failing endurance-based tasks."""
     conn.close()
     print("All stat definitions inserted or skipped if already present.")
 
+def insert_default_player_stats_chase():
+    """
+    Inserts a default row for player_name='Chase' into PlayerStats, if it doesn't exist yet.
+    Adjust the numeric stats as desired.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Define Chase's default starting stats (you can tweak these numbers)
+    chase_stats = {
+        "player_name": "Chase",
+        "corruption": 10,
+        "confidence": 60,
+        "willpower": 50,
+        "obedience": 20,
+        "dependency": 10,
+        "lust": 15,
+        "mental_resilience": 55,
+        "physical_endurance": 40
+    }
+
+    # We'll do a quick check if a row for "Chase" already exists
+    cursor.execute("SELECT id FROM PlayerStats WHERE player_name = %s", (chase_stats["player_name"],))
+    row = cursor.fetchone()
+
+    if row:
+        print("Default stats for Chase already exist. Skipping insert.")
+    else:
+        # Insert the row
+        cursor.execute('''
+            INSERT INTO PlayerStats
+              (player_name, corruption, confidence, willpower, obedience,
+               dependency, lust, mental_resilience, physical_endurance)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (
+            chase_stats["player_name"],
+            chase_stats["corruption"],
+            chase_stats["confidence"],
+            chase_stats["willpower"],
+            chase_stats["obedience"],
+            chase_stats["dependency"],
+            chase_stats["lust"],
+            chase_stats["mental_resilience"],
+            chase_stats["physical_endurance"]
+        ))
+        conn.commit()
+        print("Inserted default stats for Chase.")
+
+    conn.close()
     
 # @app.before_first_request
 def init_tables_and_settings():
