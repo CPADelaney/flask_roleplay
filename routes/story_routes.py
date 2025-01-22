@@ -1,22 +1,16 @@
 # routes/story_routes.py
 
-from flask import Blueprint, request, jsonify
-from logic.story_flow import next_storybeat  # We'll create this orchestrator
+from flask import Blueprint, jsonify, request
+from logic.aggregator import get_aggregated_roleplay_context
 
 story_bp = Blueprint("story_bp", __name__)
 
-@story_bp.route("/next_storybeat", methods=["POST"])
-def next_storybeat_route():
+@story_bp.route("/aggregated_context", methods=["GET"])
+def aggregated_context():
     """
-    Orchestrates the entire behind-the-scenes logic, calls GPT, returns the next narrative chunk.
-    JSON: {"player_name": "...", "user_input": "..."}
+    Returns a single JSON object containing all roleplay data:
+    Player stats, NPC stats, meltdown states, environment from CurrentRoleplay, etc.
     """
-    data = request.get_json() or {}
-    player_name = data.get("player_name", "Chase")
-    user_input = data.get("user_input", "")
-
-    try:
-        story_output = next_storybeat(player_name, user_input)
-        return jsonify({"story_output": story_output}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    player_name = request.args.get("player_name", "Chase")  # or parse differently
+    data = get_aggregated_roleplay_context(player_name)
+    return jsonify(data), 200
