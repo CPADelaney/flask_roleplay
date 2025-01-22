@@ -5,7 +5,8 @@ from db.connection import get_db_connection
 def initialize_database():
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Existing table creation
+
+    # 1) Settings table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Settings (
             id SERIAL PRIMARY KEY,
@@ -16,14 +17,16 @@ def initialize_database():
             activity_examples JSONB NOT NULL
         );
     ''')
-    # New or existing table
+
+    # 2) CurrentRoleplay table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS CurrentRoleplay (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
     ''')
-        # -- New: Create StatDefinitions
+
+    # 3) StatDefinitions
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS StatDefinitions (
           id SERIAL PRIMARY KEY,
@@ -35,9 +38,9 @@ def initialize_database():
           effects TEXT NOT NULL,
           progression_triggers TEXT NOT NULL
         );
-        ''')
-    
-        # -- New: Create GameRules
+    ''')
+
+    # 4) GameRules
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS GameRules (
           id SERIAL PRIMARY KEY,
@@ -45,7 +48,9 @@ def initialize_database():
           condition TEXT NOT NULL,
           effect TEXT NOT NULL
         );
-        ''')
+    ''')
+
+    # 5) NPCStats
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCStats (
             npc_id SERIAL PRIMARY KEY,
@@ -61,6 +66,8 @@ def initialize_database():
             monica_games_left INT DEFAULT 0
         );
     ''')
+
+    # 6) PlayerStats
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerStats (
            id SERIAL PRIMARY KEY,
@@ -74,16 +81,7 @@ def initialize_database():
            mental_resilience INT CHECK (mental_resilience BETWEEN 0 AND 100),
            physical_endurance INT CHECK (physical_endurance BETWEEN 0 AND 100)
         );
-    ''')    
+    ''')
+
     conn.commit()
     conn.close()
-    
-# @app.before_first_request
-def init_tables_and_settings():
-    initialize_database()
-    insert_stat_definitions()
-    insert_game_rules()
-    insert_missing_settings()
-
-
-app.teardown_appcontext(close_db) 
