@@ -190,40 +190,57 @@ def evaluate_condition(logic_op, parsed_conditions, stats_dict):
 
 def apply_effect(effect_str, player_stats, npc_stats):
     """
-    This is a placeholder function that does something
-    if a rule's condition is True. You can expand this logic:
-      - Lock the player's choices
-      - Update stats in DB
-      - Return an event describing the punishment, etc.
+    If a rule's condition is True, do something
+    like locking player choices or pulling an event from PlotTriggers.
     """
-    # Some examples:
+    # Basic logic examples
     if effect_str.lower().startswith("locks independent choices"):
-        # Potentially set a session flag or mark the player's
-        # "can_defy" as false in DB
         print("Effect: Locking player's independent choices...")
 
     elif effect_str.lower().startswith("total compliance"):
-        # Could forcibly set Obedience=100 or something
         print("Effect: Player forced to total compliance (Obedience=100).")
+        # Actually set Obedience=100 in DB if you want:
+        # conn = get_db_connection()
+        # c = conn.cursor()
+        # c.execute("UPDATE PlayerStats SET obedience=100 WHERE player_name=%s", (player_name,))
+        # conn.commit()
+        # conn.close()
 
     elif effect_str.lower().startswith("npc cruelty intensifies"):
-        # If we had an NPC in question, we might raise its cruelty stat
-        # or trigger a punishment scene
         print("Effect: NPC cruelty intensifies, might escalate punishments...")
 
     elif effect_str.lower().startswith("collaborative physical punishments"):
-        # Another special effect
         print("Effect: multiple NPCs collaborating to punish the player...")
 
-    # This is just textual. If you want to do an actual DB update, do it here:
-    # e.g. "Obedience=100" code snippet:
-    #   conn = get_db_connection()
-    #   c = conn.cursor()
-    #   c.execute("UPDATE PlayerStats SET obedience=100 WHERE player_name=%s", ("Chase",))
-    #   conn.commit()
-    #   conn.close()
+    # Now we do the "no defiance" check:
+    if "no defiance possible" in effect_str.lower():
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("""
+            SELECT title, examples
+            FROM PlotTriggers
+            WHERE stage='Endgame'
+        """)
+        rows = c.fetchall()
+        conn.close()
 
-    # etc.
+        if rows:
+            chosen = random.choice(rows)  # (title, examples)
+            title, examples_json = chosen
+            event_list = json.loads(examples_json)
+            if event_list:
+                picked_example = random.choice(event_list)
+            else:
+                picked_example = "No examples found."
+
+            # Build a narrative snippet from the DB event
+            narrative_line = (
+                f"[Endgame Trigger] {title}:\n"
+                f"Example scenario: {picked_example}"
+            )
+            print(narrative_line)  # or log it somewhere
+            # You could also incorporate meltdown or do a meltdown_dialog_gpt call.
+
     return f"Applied effect: {effect_str}"
 
 
