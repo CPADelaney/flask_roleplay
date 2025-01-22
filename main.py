@@ -8,7 +8,7 @@ from routes.player_input import player_input_bp
 from logic.memory_logic import memory_bp
 from logic.stats_logic import stats_bp
 from logic.rule_enforcement import rule_enforcement_bp
-from routes.admin import admin_bp
+from db.admin import admin_bp
 
 def create_app():
     app = Flask(__name__)
