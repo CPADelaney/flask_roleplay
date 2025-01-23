@@ -140,9 +140,9 @@ def generate_mega_setting_route():
     Return the newly created environment name or summary.
     """
     # If you have a direct function from `routes.settings_routes`:
-response = generate_mega_setting_route()  # typically returns JSON
+    response = generate_mega_setting_route()  # typically returns JSON
     #   ...
-return response["mega_name"]
+    return response["mega_name"]
 
     # Or if it's purely internal logic, do something like:
     #   new_env = "All-Girls College + Space Station"
