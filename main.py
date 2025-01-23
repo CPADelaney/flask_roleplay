@@ -10,9 +10,11 @@ from routes.story_routes import story_bp
 from logic.memory_logic import memory_bp
 from logic.rule_enforcement import rule_enforcement_bp
 from db.admin import admin_bp
+from flask_cors import CORS
 
 def create_app():
     app = Flask(__name__)
+    CORS(app)  # Allow cross-origin requests globally
 
     # If you want a single connection per request:
     # from db.connection import get_db_connection
