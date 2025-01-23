@@ -512,6 +512,25 @@ def init_stats_system():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+def update_player_stats(player_name, stat_key, value):
+    """
+    Updates a specific stat for a given player in the PlayerStats table.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(f"""
+            UPDATE PlayerStats
+            SET {stat_key} = %s
+            WHERE player_name = %s
+        """, (value, player_name))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
 
 @stats_bp.route("/init_stats_and_rules", methods=["POST"])
 def init_stats_and_rules():
