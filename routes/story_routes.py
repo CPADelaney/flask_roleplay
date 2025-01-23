@@ -8,7 +8,7 @@ from logic.aggregator import get_aggregated_roleplay_context
 from routes.meltdown import remove_meltdown_npc
 from db.connection import get_db_connection
 # If you have a "generate_mega_setting_route" or a direct function:
-# from routes.settings_routes import generate_mega_setting_route
+from routes.settings_routes import generate_mega_setting_route
 # or if you have a direct function:
 # from .some_logic_module import generate_mega_setting_logic
 
