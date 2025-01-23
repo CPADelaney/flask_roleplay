@@ -132,7 +132,7 @@ def force_obedience_to_100(player_name):
         conn.close()
 
 
-def generate_mega_setting():
+def generate_mega_setting_route():
     """
     Example stub that calls your /settings/generate_mega_setting route internally
     or directly runs the code to create a 'mega setting.'
