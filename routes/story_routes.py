@@ -3,8 +3,9 @@ from flask import Blueprint, request, jsonify
 # Import your logic pieces here:
 #
 from logic.stats_logic import update_player_stats  # if you want direct calls
-from logic.meltdown_logic import remove_meltdown_npc, meltdown_dialog_gpt, record_meltdown_dialog
+from logic.meltdown_logic import meltdown_dialog_gpt, record_meltdown_dialog
 from logic.aggregator import get_aggregated_roleplay_context
+from route.meltdown import remove_meltdown_npc
 from db.connection import get_db_connection
 # If you have a "generate_mega_setting_route" or a direct function:
 # from routes.settings_routes import generate_mega_setting_route
