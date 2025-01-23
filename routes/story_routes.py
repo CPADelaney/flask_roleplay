@@ -26,7 +26,8 @@ def next_storybeat():
       3) Build aggregator context from DB (the big dict).
       4) (Optional) Add meltdown flavor if meltdown NPCs are present.
       5) Convert aggregator_data into final story_output text.
-      6) Return JSON {"story_output": "..."}.
+      6) Construct an updates_dict to reflect any changes.
+      7) Return JSON with {"story_output": story_output, "updates": updates_dict}.
     """
     data = request.get_json() or {}
     player_name = data.get("player_name", "Chase")
@@ -37,21 +38,31 @@ def next_storybeat():
     # -----------------------------------------------------------------
     # 1) Check meltdown removal, forced obedience, or other triggers
     # -----------------------------------------------------------------
+    meltdown_forced_removal = False
     if "obedience=100" in user_lower:
         # Example: directly set the player's obedience to 100
         force_obedience_to_100(player_name)
 
     if "remove meltdown" in user_lower:
         # meltdown removal attempt
-        remove_meltdown_npc(force=True) 
-        # (In meltdown.py, remove_meltdown_npc can look at ?force=1 or force=True)
+        remove_meltdown_npc(force=True)
+        meltdown_forced_removal = True
 
     # -----------------------------------------------------------------
     # 2) Possibly generate a new environment if user_input asks for it
     # -----------------------------------------------------------------
+    mega_setting_name_if_generated = None
     if "generate environment" in user_lower or "mega setting" in user_lower:
         # Example function call that merges random settings from DB
-        generate_mega_setting_logic()
+        mega_setting_name_if_generated = generate_mega_setting_logic()
+        # e.g. "All-Girls College + Space Station"
+    
+    # (If you introduced a meltdown_newly_triggered somewhere, track it)
+    meltdown_newly_triggered = False  # or compute from stat thresholds
+
+    # Suppose we also track removed NPC IDs and new NPC
+    removed_npcs_list = []
+    new_npc_data = None  # depends on your logic
 
     # -----------------------------------------------------------------
     # 3) Fetch the aggregated context from DB
@@ -75,9 +86,29 @@ def next_storybeat():
     story_output = build_aggregator_text(aggregator_data, meltdown_flavor)
 
     # -----------------------------------------------------------------
-    # 6) Return final scenario text
+    # 6) Build the updates object
     # -----------------------------------------------------------------
-    return jsonify({"story_output": story_output}), 200
+    # You can pick any keys you want to return
+    # For demonstration:
+    changed_stats = {"obedience": 100} if "obedience=100" in user_lower else {}
+
+    updates_dict = {
+        "meltdown_triggered": meltdown_newly_triggered,
+        "meltdown_removed": meltdown_forced_removal,
+        "new_mega_setting": mega_setting_name_if_generated,
+        "updated_player_stats": changed_stats,
+        "removed_npc_ids": removed_npcs_list,
+        "added_npc": new_npc_data,
+        "plot_event": None,  # or "Some meltdown event"
+    }
+
+    # -----------------------------------------------------------------
+    # 7) Return final scenario text plus updates
+    # -----------------------------------------------------------------
+    return jsonify({
+        "story_output": story_output,
+        "updates": updates_dict
+    }), 200
 
 
 def force_obedience_to_100(player_name):
@@ -104,11 +135,19 @@ def generate_mega_setting_logic():
     """
     Example stub that calls your /settings/generate_mega_setting route internally
     or directly runs the code to create a 'mega setting.'
+    
+    Return the newly created environment name or summary.
     """
     # If you have a direct function from `routes.settings_routes`:
-    #   generate_mega_setting_route()
-    # Or you can replicate that logic here.
-    pass
+    #   response = generate_mega_setting_route()  # typically returns JSON
+    #   ...
+    #   return response["mega_name"]
+
+    # Or if it's purely internal logic, do something like:
+    #   new_env = "All-Girls College + Space Station"
+    #   store it in CurrentRoleplay ...
+    #   return new_env
+    return "All-Girls College + Space Station"  # placeholder
 
 
 def check_for_meltdown_flavor():
