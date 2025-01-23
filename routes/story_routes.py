@@ -14,102 +14,104 @@ from routes.settings_routes import generate_mega_setting_route
 
 story_bp = Blueprint("story_bp", __name__)
 
+import logging
+
 @story_bp.route("/next_storybeat", methods=["POST"])
 def next_storybeat():
     """
-    POST /story/next_storybeat
-    --------------------------
-    Expects JSON body: {"player_name": "...", "user_input": "..."}.
-    
-    Steps:
-      1) Parse user_input for meltdown removal or stat changes.
-      2) Possibly update DB or generate new environment.
-      3) Build aggregator context from DB (the big dict).
-      4) (Optional) Add meltdown flavor if meltdown NPCs are present.
-      5) Convert aggregator_data into final story_output text.
-      6) Construct an updates_dict to reflect any changes.
-      7) Return JSON with {"story_output": story_output, "updates": updates_dict}.
+    Handles the main story logic, processes user input, and returns story context.
+    Debugging and error handling are included to capture any issues.
     """
-    data = request.get_json() or {}
-    player_name = data.get("player_name", "Chase")
-    user_input = data.get("user_input", "")
+    try:
+        # Get and log request data
+        data = request.get_json() or {}
+        logging.info(f"Request Data: {data}")
 
-    user_lower = user_input.lower()
+        player_name = data.get("player_name", "Chase")
+        user_input = data.get("user_input", "")
+        logging.info(f"Player: {player_name}, User Input: {user_input}")
 
-    # -----------------------------------------------------------------
-    # 1) Check meltdown removal, forced obedience, or other triggers
-    # -----------------------------------------------------------------
-    meltdown_forced_removal = False
-    if "obedience=100" in user_lower:
-        # Example: directly set the player's obedience to 100
-        force_obedience_to_100(player_name)
+        user_lower = user_input.lower()
 
-    if "remove meltdown" in user_lower:
-        # meltdown removal attempt
-        remove_meltdown_npc(force=True)
-        meltdown_forced_removal = True
+        # -----------------------------------------------------------------
+        # 1) Check meltdown removal, forced obedience, or other triggers
+        # -----------------------------------------------------------------
+        meltdown_forced_removal = False
+        if "obedience=100" in user_lower:
+            logging.info("Setting obedience to 100")
+            force_obedience_to_100(player_name)
 
-    # -----------------------------------------------------------------
-    # 2) Possibly generate a new environment if user_input asks for it
-    # -----------------------------------------------------------------
-    mega_setting_name_if_generated = None
-    if "generate environment" in user_lower or "mega setting" in user_lower:
-        # Example function call that merges random settings from DB
-        mega_setting_name_if_generated = generate_mega_setting_logic()
-        # e.g. "All-Girls College + Space Station"
-    
-    # (If you introduced a meltdown_newly_triggered somewhere, track it)
-    meltdown_newly_triggered = False  # or compute from stat thresholds
+        if "remove meltdown" in user_lower:
+            logging.info("Attempting to remove meltdown NPCs")
+            remove_meltdown_npc(force=True)
+            meltdown_forced_removal = True
 
-    # Suppose we also track removed NPC IDs and new NPC
-    removed_npcs_list = []
-    new_npc_data = None  # depends on your logic
+        # -----------------------------------------------------------------
+        # 2) Possibly generate a new environment if user_input asks for it
+        # -----------------------------------------------------------------
+        mega_setting_name_if_generated = None
+        if "generate environment" in user_lower or "mega setting" in user_lower:
+            logging.info("Generating new mega setting")
+            mega_setting_name_if_generated = generate_mega_setting_logic()
+            logging.info(f"New Mega Setting: {mega_setting_name_if_generated}")
+        
+        # Track meltdown triggering
+        meltdown_newly_triggered = False  # Example placeholder
 
-    # -----------------------------------------------------------------
-    # 3) Fetch the aggregated context from DB
-    # -----------------------------------------------------------------
-    aggregator_data = get_aggregated_roleplay_context(player_name)
-    # aggregator_data is typically a dict:
-    # {
-    #   "playerStats": {...},
-    #   "npcStats": [...],
-    #   "currentRoleplay": {...}
-    # }
+        # Track removed NPC IDs and any new NPCs
+        removed_npcs_list = []
+        new_npc_data = None  # Example placeholder
 
-    # -----------------------------------------------------------------
-    # 4) (Optional) If meltdown NPCs exist, add meltdown flavor
-    # -----------------------------------------------------------------
-    meltdown_flavor = check_for_meltdown_flavor()
+        # -----------------------------------------------------------------
+        # 3) Fetch the aggregated context from DB
+        # -----------------------------------------------------------------
+        logging.info("Fetching aggregated roleplay context")
+        aggregator_data = get_aggregated_roleplay_context(player_name)
+        logging.info(f"Aggregator Data: {aggregator_data}")
 
-    # -----------------------------------------------------------------
-    # 5) Convert aggregator_data into final "story_output" text
-    # -----------------------------------------------------------------
-    story_output = build_aggregator_text(aggregator_data, meltdown_flavor)
+        # -----------------------------------------------------------------
+        # 4) (Optional) If meltdown NPCs exist, add meltdown flavor
+        # -----------------------------------------------------------------
+        logging.info("Checking for meltdown flavor")
+        meltdown_flavor = check_for_meltdown_flavor()
+        logging.info(f"Meltdown Flavor: {meltdown_flavor}")
 
-    # -----------------------------------------------------------------
-    # 6) Build the updates object
-    # -----------------------------------------------------------------
-    # You can pick any keys you want to return
-    # For demonstration:
-    changed_stats = {"obedience": 100} if "obedience=100" in user_lower else {}
+        # -----------------------------------------------------------------
+        # 5) Convert aggregator_data into final "story_output" text
+        # -----------------------------------------------------------------
+        logging.info("Building story output")
+        story_output = build_aggregator_text(aggregator_data, meltdown_flavor)
+        logging.info(f"Story Output: {story_output}")
 
-    updates_dict = {
-        "meltdown_triggered": meltdown_newly_triggered,
-        "meltdown_removed": meltdown_forced_removal,
-        "new_mega_setting": mega_setting_name_if_generated,
-        "updated_player_stats": changed_stats,
-        "removed_npc_ids": removed_npcs_list,
-        "added_npc": new_npc_data,
-        "plot_event": None,  # or "Some meltdown event"
-    }
+        # -----------------------------------------------------------------
+        # 6) Build the updates object
+        # -----------------------------------------------------------------
+        changed_stats = {"obedience": 100} if "obedience=100" in user_lower else {}
 
-    # -----------------------------------------------------------------
-    # 7) Return final scenario text plus updates
-    # -----------------------------------------------------------------
-    return jsonify({
-        "story_output": story_output,
-        "updates": updates_dict
-    }), 200
+        updates_dict = {
+            "meltdown_triggered": meltdown_newly_triggered,
+            "meltdown_removed": meltdown_forced_removal,
+            "new_mega_setting": mega_setting_name_if_generated,
+            "updated_player_stats": changed_stats,
+            "removed_npc_ids": removed_npcs_list,
+            "added_npc": new_npc_data,
+            "plot_event": None,  # or other meaningful value
+        }
+        logging.info(f"Updates Dict: {updates_dict}")
+
+        # -----------------------------------------------------------------
+        # 7) Return final scenario text plus updates
+        # -----------------------------------------------------------------
+        return jsonify({
+            "story_output": story_output,
+            "updates": updates_dict
+        }), 200
+
+    except Exception as e:
+        # Log the error with a traceback
+        logging.exception("An error occurred in /story/next_storybeat")
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+
 
 
 def force_obedience_to_100(player_name):
