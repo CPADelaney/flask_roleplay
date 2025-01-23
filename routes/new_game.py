@@ -4,6 +4,7 @@ from flask import Blueprint, request, jsonify
 import random
 from db.connection import get_db_connection
 from logic.meltdown_logic import meltdown_dialog_gpt, record_meltdown_dialog, append_meltdown_file
+from routes.settings_routes import generate_mega_setting_route  
 
 new_game_bp = Blueprint('new_game', __name__)
 
@@ -146,12 +147,32 @@ def start_new_game():
                    dependency, lust, mental_resilience, physical_endurance)
                 VALUES ('Chase', 10, 60, 50, 20, 10, 15, 55, 40)
             ''')
+        mega_data = generate_mega_setting_route()  # or your direct function
+        # `mega_data` might be a dict like:
+        # {
+        #   "mega_name": "All-Girls College + Space Station",
+        #   "mega_description": "The settings intertwine: ...",
+        #   "enhanced_features": [...],
+        #   "stat_modifiers": {...},
+        #   "activity_examples": [...]
+        # }
 
-        conn.commit()
+        # 5. Store the new environment in CurrentRoleplay
+        #    for aggregator or future reference
+        c2 = get_db_connection()
+        cur2 = c2.cursor()
+        cur2.execute("""
+            INSERT INTO CurrentRoleplay (key, value)
+            VALUES ('CurrentSetting', %s)
+        """, (mega_data["mega_name"],))
+        c2.commit()
+        c2.close()
+
         return jsonify({
             "message": (
-                "New game started. Some NPCs carried. There's a chance one became meltdown NPC "
-                "(aka 'Monica'), and Chase is reset."
+                "New game started. Some NPCs carried or removed. "
+                "Chase is reset, meltdown logic handled. "
+                f"New environment = {mega_data['mega_name']}"
             )
         }), 200
 
