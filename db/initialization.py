@@ -63,7 +63,12 @@ def initialize_database():
             intensity INT CHECK (intensity BETWEEN 0 AND 100),
             memory TEXT,
             monica_level INT DEFAULT 0,
-            monica_games_left INT DEFAULT 0
+            monica_games_left INT DEFAULT 0,
+            occupation TEXT,
+            hobbies JSONB,
+            personality_traits JSONB,
+            likes JSONB,
+            dislikes JSONB
         );
     ''')
 
