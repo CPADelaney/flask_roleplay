@@ -95,5 +95,17 @@ def initialize_database():
         );
     ''')
 
+    # 8) Activities
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Activities (
+          id SERIAL PRIMARY KEY,
+          name TEXT UNIQUE NOT NULL,
+          purpose JSONB NOT NULL,
+          stat_integration JSONB,
+          intensity_tiers JSONB,
+          setting_variants JSONB
+        );
+    ''')
+
     conn.commit()
     conn.close()
