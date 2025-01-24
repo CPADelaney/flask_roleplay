@@ -105,13 +105,28 @@ def build_system_prompt(player_name):
     setting_history_summary = f"Current Setting: {current_setting}\nUsed Settings: {used_settings}"
 
     # Summarize NPCs
+    cursor.execute("""
+        SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity,
+               occupation, hobbies, personality_traits, likes, dislikes
+        FROM NPCStats
+        WHERE introduced = TRUE
+        ORDER BY npc_id ASC
+    """)
+    npc_rows = cursor.fetchall()
+    
     npc_lines = []
-    for info in npc_info_list:
-        line = (f"- {info['name']}: Dom={info['dominance']}, Cru={info['cruelty']}, "
-                f"Close={info['closeness']}, Trust={info['trust']}, "
-                f"Respect={info['respect']}, Int={info['intensity']}")
+    for row in npc_rows:
+        (n_name, dom, cru, clos, tru, resp, inten, occ, hbs, pers, lks, dlks) = row
+        # Build a string summarizing those:
+        line = f"- {n_name}: Dom={dom}, Cru={cru}, Close={clos}, Trust={tru}, Respect={resp}, Int={inten}\n"
+        line += f"  Occupation: {occ}\n"
+        line += f"  Hobbies: {hbs if hbs else []}\n"
+        line += f"  Personality: {pers if pers else []}\n"
+        line += f"  Likes: {lks if lks else []} | Dislikes: {dlks if dlks else []}"
         npc_lines.append(line)
-    npc_summary = "\n".join(npc_lines) if npc_lines else "(No introduced NPCs)"
+    
+    npc_summary = "\n\n".join(npc_lines) if npc_lines else "(No introduced NPCs)"
+
 
     recent_event_text = "\n".join([f"- {evt}" for evt in recent_events]) or "No recent events"
 
