@@ -4,19 +4,18 @@ from flask import Blueprint, request, jsonify
 import logging
 import json
 
+from db.connection import get_db_connection
 from logic.activities_logic import filter_activities_for_npc, build_short_summary
 from logic.stats_logic import update_player_stats
-from logic.meltdown_logic import meltdown_dialog_gpt, record_meltdown_dialog
+from logic.meltdown_logic import check_and_inject_meltdown  # Central meltdown synergy
 from logic.aggregator import get_aggregated_roleplay_context
-from routes.meltdown import remove_meltdown_npc
-from db.connection import get_db_connection
-from routes.settings_routes import generate_mega_setting_route
-from logic.time_cycle import advance_time_and_update, get_current_daytime
+from routes.meltdown import remove_meltdown_npc  # If you keep that route
+from routes.settings_routes import generate_mega_setting_logic  # if you want to generate new environment
+from logic.universal_updater import apply_universal_updates  # Single universal update
+from logic.time_cycle import advance_time_and_update
 from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory, get_player_inventory
 
-
 story_bp = Blueprint("story_bp", __name__)
-
 
 @story_bp.route("/next_storybeat", methods=["POST"])
 def next_storybeat():
@@ -29,16 +28,18 @@ def next_storybeat():
         data = request.get_json() or {}
         logging.info(f"Request Data: {data}")
 
-        # (1) FIRST: If we have a 'universal_update' key in the incoming JSON,
-        #    we apply it to the database
+        # 1) If there's a 'universal_update' block, apply it
         universal_data = data.get("universal_update", {})
         if universal_data:
             logging.info("Applying universal update from payload.")
-            apply_universal_updates(universal_data)
+            update_result = apply_universal_updates(universal_data)
+            if "error" in update_result:
+                # Log or handle error from universal update
+                logging.warning(f"Universal update error: {update_result['error']}")
         else:
             logging.info("No universal update data found, skipping DB updates aside from meltdown or user triggers.")
 
-        # (2) Now handle meltdown removal, forced obedience, environment generation, etc.
+        # 2) Handle user input triggers (like meltdown removal, forced obedience, environment generation)
         player_name = data.get("player_name", "Chase")
         user_input = data.get("user_input", "")
         logging.info(f"Player: {player_name}, User Input: {user_input}")
@@ -52,24 +53,26 @@ def next_storybeat():
 
         if "remove meltdown" in user_lower:
             logging.info("Attempting to remove meltdown NPCs")
-            remove_meltdown_npc(force=True)
+            remove_meltdown_npc(force=True)  # calls meltdown removal route logic
             meltdown_forced_removal = True
 
         mega_setting_name_if_generated = None
         if "generate environment" in user_lower or "mega setting" in user_lower:
             logging.info("Generating new mega setting")
-            mega_setting_name_if_generated = generate_mega_setting_logic()
+            mega_data = generate_mega_setting_logic()
+            mega_setting_name_if_generated = mega_data.get("mega_name", "No environment")
             logging.info(f"New Mega Setting: {mega_setting_name_if_generated}")
 
-        meltdown_newly_triggered = False  # placeholder
+        # We'll track meltdown or new NPC data, etc.
+        meltdown_newly_triggered = False
         removed_npcs_list = []
         new_npc_data = None
 
-        # (3) Fetch aggregator data again after universal updates
+        # 3) Fetch aggregator data after universal updates
         aggregator_data = get_aggregated_roleplay_context(player_name)
         logging.info(f"Aggregator Data: {aggregator_data}")
 
-        # Possibly pick meltdown level or npc_archetypes from aggregator
+        # Possibly parse meltdown level or NPC archetypes from aggregator
         npc_archetypes = []
         meltdown_level = 0
         setting_str = None
@@ -80,13 +83,14 @@ def next_storybeat():
 
         npc_list = aggregator_data.get("npcStats", [])
         if npc_list:
-            # Example: if first NPC name contains 'giant', assume 'Giantess' archetype
-            npc_archetypes = ["Giantess"] if "giant" in npc_list[0].get("npc_name", "").lower() else []
-            meltdown_level = 0
+            # Example: if first NPC name has "giant", assume "Giantess" archetype
+            if "giant" in npc_list[0].get("npc_name", "").lower():
+                npc_archetypes = ["Giantess"]
+            meltdown_level = 0  # or do something else if meltdown is relevant
 
         user_stats = aggregator_data.get("playerStats", {})
 
-        # (4) Get possible activity suggestions
+        # 4) Suggest possible activities based on current stats, meltdown, setting, etc.
         chosen_activities = filter_activities_for_npc(
             npc_archetypes=npc_archetypes,
             meltdown_level=meltdown_level,
@@ -96,8 +100,9 @@ def next_storybeat():
         lines_for_gpt = [build_short_summary(act) for act in chosen_activities]
         aggregator_data["activitySuggestions"] = lines_for_gpt
 
-        # Check meltdown flavor
-        meltdown_flavor = check_for_meltdown_flavor()
+        # 4b) Now we do meltdown synergy with the centralized meltdown check
+        meltdown_flavor = check_and_inject_meltdown()
+        meltdown_newly_triggered = bool(meltdown_flavor)
 
         changed_stats = {"obedience": 100} if "obedience=100" in user_lower else {}
 
@@ -112,21 +117,22 @@ def next_storybeat():
         }
         logging.info(f"Updates Dict: {updates_dict}")
 
-        # (5) Possibly advance the time one step if that's your design
-        # (If user input doesn't mention time skip, do 1 increment, etc.)
+        # 5) Possibly advance the time
         time_spent = 1
         new_day, new_phase = advance_time_and_update(increment=time_spent)
 
-        # (6) Re-fetch aggregator in case anything changed again
+        # 6) Re-fetch aggregator in case anything changed again
         aggregator_data = get_aggregated_roleplay_context(player_name)
+        # Build final textual summary
         story_output = build_aggregator_text(aggregator_data, meltdown_flavor)
 
-        # Return final scenario text + updates
+        # Return final scenario text + some updates
         return jsonify({
             "story_output": story_output,
             "updates": {
                 "current_day": new_day,
-                "time_of_day": new_phase
+                "time_of_day": new_phase,
+                "internal_changes": updates_dict
             }
         }), 200
 
@@ -135,216 +141,18 @@ def next_storybeat():
         return jsonify({"error": str(e)}), 500
 
 
-def apply_universal_updates(universal_data):
-    """
-    Applies the "universal" style database updates in-line, so that
-    any GPT or user-provided changes are immediately reflected.
-
-    This is effectively the same logic as a universal update endpoint,
-    but in a function here so we can call it from next_storybeat.
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # 1) roleplay_updates (timeOfDay, CurrentSetting, UsedSettings, etc.)
-    roleplay_updates = universal_data.get("roleplay_updates", {})
-    for key, value in roleplay_updates.items():
-        cursor.execute("""
-            INSERT INTO CurrentRoleplay (key, value)
-            VALUES (%s, %s)
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-        """, (key, json.dumps(value) if isinstance(value, dict) else str(value)))
-
-    # 2) npc_creations
-    npc_creations = universal_data.get("npc_creations", [])
-    for npc_data in npc_creations:
-        name = npc_data.get("npc_name", "Unnamed NPC")
-        dom = npc_data.get("dominance", 0)
-        cru = npc_data.get("cruelty", 0)
-        clos = npc_data.get("closeness", 0)
-        tru = npc_data.get("trust", 0)
-        resp = npc_data.get("respect", 0)
-        inten = npc_data.get("intensity", 0)
-        occ = npc_data.get("occupation", "")
-        hbs = npc_data.get("hobbies", [])
-        pers = npc_data.get("personality_traits", [])
-        lks = npc_data.get("likes", [])
-        dlks = npc_data.get("dislikes", [])
-        affil = npc_data.get("affiliations", [])
-        sched = npc_data.get("schedule", {})
-        mem = npc_data.get("memory", "")
-        monica_lvl = npc_data.get("monica_level", 0)
-        introduced = npc_data.get("introduced", False)
-
-        cursor.execute("""
-            INSERT INTO NPCStats (
-                npc_name, introduced, dominance, cruelty, closeness, trust, respect, intensity,
-                occupation, hobbies, personality_traits, likes, dislikes,
-                affiliations, schedule, memory, monica_level
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s)
-        """, (
-            name, introduced, dom, cru, clos, tru, resp, inten,
-            occ, json.dumps(hbs), json.dumps(pers), json.dumps(lks), json.dumps(dlks),
-            json.dumps(affil), json.dumps(sched), mem, monica_lvl
-        ))
-
-    # 3) npc_updates
-    npc_updates = universal_data.get("npc_updates", [])
-    for up in npc_updates:
-        npc_id = up.get("npc_id")
-        if not npc_id:
-            continue
-        set_clauses = []
-        set_values = []
-        fields_map = {
-            "dominance": "dominance",
-            "cruelty": "cruelty",
-            "closeness": "closeness",
-            "trust": "trust",
-            "respect": "respect",
-            "intensity": "intensity",
-            "memory": "memory",
-            "monica_level": "monica_level"
-        }
-        for k, col in fields_map.items():
-            if k in up:
-                set_clauses.append(f"{col} = %s")
-                set_values.append(up[k])
-
-        if set_clauses:
-            set_str = ", ".join(set_clauses)
-            set_values.append(npc_id)
-            query = f"UPDATE NPCStats SET {set_str} WHERE npc_id=%s"
-            cursor.execute(query, tuple(set_values))
-
-    # 4) character_stat_updates
-    char_update = universal_data.get("character_stat_updates", {})
-    if char_update:
-        p_name = char_update.get("player_name", "Chase")
-        stats = char_update.get("stats", {})
-        stat_map = {
-            "corruption": "corruption",
-            "confidence": "confidence",
-            "willpower": "willpower",
-            "obedience": "obedience",
-            "dependency": "dependency",
-            "lust": "lust",
-            "mental_resilience": "mental_resilience",
-            "physical_endurance": "physical_endurance"
-        }
-        set_clauses = []
-        set_vals = []
-        for k, col in stat_map.items():
-            if k in stats:
-                set_clauses.append(f"{col} = %s")
-                set_vals.append(stats[k])
-        if set_clauses:
-            set_str = ", ".join(set_clauses)
-            set_vals.append(p_name)
-            cursor.execute(
-                f"UPDATE PlayerStats SET {set_str} WHERE player_name=%s",
-                tuple(set_vals)
-            )
-
-    # 5) relationship_updates
-    rel_updates = universal_data.get("relationship_updates", [])
-    for r in rel_updates:
-        npc_id = r.get("npc_id")
-        if not npc_id:
-            continue
-        # e.g. affiliations
-        aff_list = r.get("affiliations", None)
-        if aff_list is not None:
-            cursor.execute("""
-                UPDATE NPCStats
-                SET affiliations = %s
-                WHERE npc_id = %s
-            """, (json.dumps(aff_list), npc_id))
-
-    # 6) npc_introductions
-    npc_intros = universal_data.get("npc_introductions", [])
-    for intro in npc_intros:
-        npc_id = intro.get("npc_id")
-        if npc_id:
-            cursor.execute("""
-                UPDATE NPCStats
-                SET introduced = TRUE
-                WHERE npc_id=%s
-            """, (npc_id,))
-
-    # 7) location_creations
-    location_creations = universal_data.get("location_creations", [])
-    for loc in location_creations:
-        loc_name = loc.get("location_name", "Unnamed")
-        desc = loc.get("description", "")
-        open_hours = loc.get("open_hours", [])
-        # you need a Locations table: (id, name, description, open_hours JSON, etc.)
-        cursor.execute("""
-            INSERT INTO Locations (name, description, open_hours)
-            VALUES (%s, %s, %s)
-        """, (loc_name, desc, json.dumps(open_hours)))
-
-    # 8) event_list_updates
-    event_updates = universal_data.get("event_list_updates", [])
-    for ev in event_updates:
-        ev_name = ev.get("event_name", "UnnamedEvent")
-        ev_desc = ev.get("description", "")
-        # you need an Events table
-        cursor.execute("""
-            INSERT INTO Events (event_name, description)
-            VALUES (%s, %s)
-        """, (ev_name, ev_desc))
-
-    # 9) inventory_updates
-    inv_updates = universal_data.get("inventory_updates", {})
-    if inv_updates:
-        p_n = inv_updates.get("player_name", "Chase")
-        added = inv_updates.get("added_items", [])
-        removed = inv_updates.get("removed_items", [])
-        for item in added:
-            cursor.execute("""
-                INSERT INTO PlayerInventory (player_name, item_name)
-                VALUES (%s, %s)
-            """, (p_n, item))
-        for item in removed:
-            cursor.execute("""
-                DELETE FROM PlayerInventory
-                WHERE player_name=%s AND item_name=%s
-                LIMIT 1
-            """, (p_n, item))
-
-    # 10) quest_updates
-    quest_updates = universal_data.get("quest_updates", [])
-    for qu in quest_updates:
-        quest_id = qu.get("quest_id")
-        status = qu.get("status", "In Progress")
-        detail = qu.get("progress_detail", "")
-        # you need a Quests table: (quest_id PK, status, progress_detail, etc.)
-        cursor.execute("""
-            UPDATE Quests
-            SET status=%s, progress_detail=%s
-            WHERE quest_id=%s
-        """, (status, detail, quest_id))
-
-    conn.commit()
-    conn.close()
-
-
 def force_obedience_to_100(player_name):
     """
-    Simple example that updates the player's obedience to 100
-    through your stats logic or direct DB logic.
+    Simple direct approach to set player's Obedience=100.
+    Alternatively, you could place this in stats_logic.py or use update_player_stats.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute("""
             UPDATE PlayerStats
-            SET obedience=100
-            WHERE player_name=%s
+            SET obedience = 100
+            WHERE player_name = %s
         """, (player_name,))
         conn.commit()
     except:
@@ -353,37 +161,12 @@ def force_obedience_to_100(player_name):
         conn.close()
 
 
-def check_for_meltdown_flavor():
-    """
-    Fetch meltdown NPCs from the DB. If any meltdown NPC is present,
-    generate meltdown line or add special text.
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT npc_id, npc_name, monica_level
-        FROM NPCStats
-        WHERE monica_level > 0
-        ORDER BY monica_level DESC
-    """)
-    meltdown_npcs = cursor.fetchall()
-    conn.close()
-
-    if not meltdown_npcs:
-        return ""
-
-    # Take the top meltdown NPC
-    npc_id, npc_name, meltdown_level = meltdown_npcs[0]
-    meltdown_line = meltdown_dialog_gpt(npc_name, meltdown_level)
-    record_meltdown_dialog(npc_id, meltdown_line)
-
-    return f"[Meltdown NPC {npc_name} - meltdown_level={meltdown_level}]: {meltdown_line}"
-
-
 def build_aggregator_text(aggregator_data, meltdown_flavor=""):
     """
-    Merges aggregator_data into user-friendly text for the front-end GPT to use.
+    Merges aggregator_data into user-friendly text for your front-end or GPT usage.
+    If meltdown_flavor is non-empty, append it at the end.
     """
+
     lines = []
     day = aggregator_data.get("day", "1")
     tod = aggregator_data.get("timeOfDay", "Morning")
@@ -432,35 +215,7 @@ def build_aggregator_text(aggregator_data, meltdown_flavor=""):
     else:
         lines.append("(No NPCs found)")
 
-    universal_update = data.get("universal_update", {})
-    
-    inventory_updates = universal_update.get("inventory_updates", {})
-    
-    if inventory_updates:
-        # Suppose "inventory_updates" is something like:
-        # {
-        #   "player_name": "Chase",
-        #   "added_items": ["Potion", "Rope"],
-        #   "removed_items": ["Expired Key"]
-        # }
-        p_name = inventory_updates.get("player_name", "Chase")
-    
-        added = inventory_updates.get("added_items", [])
-        removed = inventory_updates.get("removed_items", [])
-    
-        # For each item to add
-        for item_name in added:
-            add_item_to_inventory(p_name, item_name, 
-                                  description="???",   # or fetch from a reference table
-                                  effect="???", 
-                                  category="misc", 
-                                  quantity=1)
-    
-        # For each item to remove
-        for item_name in removed:
-            remove_item_from_inventory(p_name, item_name, quantity=1)
-
-    # Current Roleplay
+    # CurrentRoleplay
     lines.append("\n=== CURRENT ROLEPLAY ===")
     if current_rp:
         for k, v in current_rp.items():
@@ -468,14 +223,14 @@ def build_aggregator_text(aggregator_data, meltdown_flavor=""):
     else:
         lines.append("(No current roleplay data)")
 
-    # Potential Activities
+    # If aggregator_data has "activitySuggestions" from filter_activities_for_npc
     if "activitySuggestions" in aggregator_data:
         lines.append("\n=== NPC POTENTIAL ACTIVITIES ===")
         for suggestion in aggregator_data["activitySuggestions"]:
             lines.append(f"- {suggestion}")
-        lines.append("NPC can adopt, combine, or ignore these ideas in line with her personality.\n")
+        lines.append("NPC can adopt, combine, or ignore these ideas in line with their personality.\n")
 
-    # Meltdown flavor
+    # meltdown flavor if present
     if meltdown_flavor:
         lines.append("\n=== MELTDOWN NPC MESSAGE ===")
         lines.append(meltdown_flavor)
