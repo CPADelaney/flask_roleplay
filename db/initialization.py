@@ -69,7 +69,7 @@ def initialize_database():
             intensity INT CHECK (intensity BETWEEN 0 AND 100),
 
             -- MISC
-            memory TEXT,
+            memory JSONB,
             monica_level INT DEFAULT 0,
             monica_games_left INT DEFAULT 0,
 
