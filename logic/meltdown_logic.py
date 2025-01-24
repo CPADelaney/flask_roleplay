@@ -5,22 +5,21 @@ from db.connection import get_db_connection
 
 def record_meltdown_dialog(npc_id: int, meltdown_line: str):
     """
-    Appends meltdown_line to the NPC's memory in the DB.
+    Appends meltdown_line as a new element in the NPC's memory JSON array.
+    E.g. memory = ["Old Entry", "[Meltdown] new line", ... ]
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT memory FROM NPCStats WHERE npc_id = %s", (npc_id,))
-    row = cursor.fetchone()
-    old_memory = row[0] if row and row[0] else ""
-
-    new_memory = f"{old_memory}\n[Meltdown] {meltdown_line}"
+    # We use the Postgres approach: memory = COALESCE(memory, '[]'::jsonb) || to_jsonb('the line')
+    # That appends the meltdown_line to the existing JSON array.
     cursor.execute("""
         UPDATE NPCStats
-        SET memory = %s
+        SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s)
         WHERE npc_id = %s
-    """, (new_memory, npc_id))
+    """, (f"[Meltdown] {meltdown_line}", npc_id))
     conn.commit()
     conn.close()
+
 
 def append_meltdown_file(npc_name: str, meltdown_line: str):
     """
