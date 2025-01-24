@@ -5,6 +5,38 @@ import openai
 import json
 from db.connection import get_db_connection
 
+def check_and_inject_meltdown() -> str:
+    """
+    Central meltdown synergy function:
+    - Looks for meltdown NPC(s).
+    - If meltdown is active, generate meltdown line & store it.
+    - Returns meltdown_line or empty string if no meltdown NPC is found.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    meltdown_line = ""
+
+    try:
+        cursor.execute("""
+            SELECT npc_id, npc_name, monica_level
+            FROM NPCStats
+            WHERE monica_level > 0
+            ORDER BY monica_level DESC
+        """)
+        meltdown_rows = cursor.fetchall()
+
+        if meltdown_rows:
+            npc_id, npc_name, mlevel = meltdown_rows[0]
+            meltdown_line = meltdown_dialog_gpt(npc_name, mlevel)
+            record_meltdown_dialog(npc_id, meltdown_line)
+            # Optionally call append_meltdown_file if you still want it
+            # append_meltdown_file(npc_name, meltdown_line)
+    finally:
+        conn.close()
+
+    return meltdown_line
+
+
 def meltdown_dialog_gpt(npc_name: str, meltdown_level: int) -> str:
     """
     Calls OpenAI to generate a meltdown line referencing code 
