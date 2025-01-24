@@ -6,114 +6,113 @@ import random, json
 
 settings_bp = Blueprint('settings', __name__)
 
+def generate_mega_setting_logic():
+    """
+    This function does the actual merging of random settings 
+    and returns a Python dict (NOT a Flask response).
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 1) Fetch all Settings
+    cursor.execute("""
+        SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples
+        FROM Settings
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        # Return a dict with an "error" field or default fallback
+        return {
+            "error": "No settings found in DB",
+            "mega_name": "Empty Settings Table",
+            "mega_description": "No environment generated",
+            "enhanced_features": [],
+            "stat_modifiers": {},
+            "activity_examples": []
+        }
+
+    # 2) Convert rows
+    all_settings = []
+    for row_id, row_name, row_mood, row_ef, row_sm, row_ae in rows:
+        all_settings.append({
+            "id": row_id,
+            "name": row_name,
+            "mood_tone": row_mood,
+            "enhanced_features": row_ef,  # list
+            "stat_modifiers": row_sm,     # dict
+            "activity_examples": row_ae   # list
+        })
+
+    # 3) Randomly pick 3–5
+    num_settings = random.choice([3, 4, 5])
+    selected = random.sample(all_settings, min(num_settings, len(all_settings)))
+    picked_names = [s["name"] for s in selected]
+
+    # 4) Build mega_name
+    mega_name = " + ".join(picked_names)
+
+    # 5) Merge mood_tones
+    all_mood_tones = [s["mood_tone"] for s in selected]
+    if len(all_mood_tones) == 1:
+        mega_description = f"The setting is just {all_mood_tones[0]}, forming a single thematic environment."
+    else:
+        mega_description = (
+            f"The settings intertwine: {', '.join(all_mood_tones[:-1])}, "
+            f"and finally, {all_mood_tones[-1]}. "
+            "Together, they form a grand vision, unexpected and brilliant."
+        )
+
+    # 6) Merge features, stat modifiers, activities
+    combined_enhanced_features = []
+    combined_stat_modifiers = {}
+    combined_activity_examples = []
+
+    for s_obj in selected:
+        ef_list = s_obj["enhanced_features"]
+        sm_dict = s_obj["stat_modifiers"]
+        ae_list = s_obj["activity_examples"]
+
+        # Merge features
+        combined_enhanced_features.extend(ef_list)
+
+        # Merge stat_modifiers
+        for key, val in sm_dict.items():
+            if key not in combined_stat_modifiers:
+                combined_stat_modifiers[key] = val
+            else:
+                # If you want to chain them
+                combined_stat_modifiers[key] = f"{combined_stat_modifiers[key]}, {val}"
+
+        # Merge activities
+        combined_activity_examples.extend(ae_list)
+
+    # 7) Return the final dictionary
+    return {
+        "selected_settings": picked_names,
+        "mega_name": mega_name,
+        "mega_description": mega_description,
+        "enhanced_features": combined_enhanced_features,
+        "stat_modifiers": combined_stat_modifiers,
+        "activity_examples": combined_activity_examples,
+        "message": "Mega setting generated successfully via logic function."
+    }
+
 @settings_bp.route('/generate_mega_setting', methods=['POST'])
 def generate_mega_setting_route():
     """
-    POST /generate_mega_setting
-    ---------------------------
-    Randomly selects several Settings from the database, merges them
-    into a "mega setting," and returns the combined data as JSON.
-    
-    Returns JSON structure of:
-      {
-        "selected_settings": [...],
-        "mega_name": "...",
-        "mega_description": "...",
-        "enhanced_features": [...],
-        "stat_modifiers": { ... },
-        "activity_examples": [...],
-        "message": "Mega setting generated and stored successfully."
-      }
+    A route that calls the above logic function,
+    then jsonify(...)'s the result to return a Flask Response.
     """
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT id, 
-                   name, 
-                   mood_tone, 
-                   enhanced_features, 
-                   stat_modifiers, 
-                   activity_examples
-            FROM Settings
-        """)
-        rows = cursor.fetchall()
-        conn.close()
-
-        if not rows:
-            return jsonify({"error": "No settings found"}), 404
-
-        # Convert DB rows into a convenient structure
-        all_settings = []
-        for row_id, row_name, row_mood, row_ef, row_sm, row_ae in rows:
-            all_settings.append({
-                "id": row_id,
-                "name": row_name,
-                "mood_tone": row_mood,
-                "enhanced_features": row_ef,       # JSONB from DB
-                "stat_modifiers": row_sm,         # JSONB from DB
-                "activity_examples": row_ae       # JSONB from DB
-            })
-
-        # Randomly pick 3-5 settings to combine
-        num_settings = random.choice([3, 4, 5])
-        selected = random.sample(all_settings, min(num_settings, len(all_settings)))
-        picked_names = [s["name"] for s in selected]
-
-        # Merge name, mood tone, etc.
-        mega_name = " + ".join(picked_names)
-        all_mood_tones = [s["mood_tone"] for s in selected]
-        if len(all_mood_tones) == 1:
-            # If only 1 setting for some reason
-            mega_description = f"The setting is just {all_mood_tones[0]}, forming a single thematic environment."
-        else:
-            # Normal multi-merge
-            mega_description = (
-                f"The settings intertwine: {', '.join(all_mood_tones[:-1])}, and finally, {all_mood_tones[-1]}. "
-                "Together, they form a grand vision, unexpected and brilliant."
-            )
-
-        # Merge JSON data
-        combined_enhanced_features = []
-        combined_stat_modifiers = {}
-        combined_activity_examples = []
-
-        for setting_obj in selected:
-            # enhanced_features: list
-            ef_list = setting_obj["enhanced_features"]
-            # stat_modifiers: dict
-            sm_dict = setting_obj["stat_modifiers"]
-            # activity_examples: list
-            ae_list = setting_obj["activity_examples"]
-
-            # Extend the big list
-            combined_enhanced_features.extend(ef_list)
-
-            # Merge the dict
-            for key, val in sm_dict.items():
-                if key not in combined_stat_modifiers:
-                    combined_stat_modifiers[key] = val
-                else:
-                    # Merge or append
-                    combined_stat_modifiers[key] = f"{combined_stat_modifiers[key]}, {val}"
-
-            # Extend activity examples
-            combined_activity_examples.extend(ae_list)
-
-        # Return final JSON
-        return jsonify({
-            "selected_settings": picked_names,
-            "mega_name": mega_name,
-            "mega_description": mega_description,
-            "enhanced_features": combined_enhanced_features,
-            "stat_modifiers": combined_stat_modifiers,
-            "activity_examples": combined_activity_examples,
-            "message": "Mega setting generated and stored successfully."
-        })
-
+        data = generate_mega_setting_logic()
+        if "error" in data:
+            return jsonify(data), 404  # or 200 if you prefer
+        return jsonify(data), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 def insert_missing_settings():
     """
