@@ -40,10 +40,11 @@ def get_aggregated_roleplay_context(player_name="Chase"):
     cursor.execute("""
         SELECT npc_id, npc_name, dominance, cruelty, closeness, trust, respect, intensity
         FROM NPCStats
+        WHERE introduced = TRUE
         ORDER BY npc_id
     """)
     npc_rows = cursor.fetchall()
-
+    
     npc_list = []
     for (nid, nname, dom, cru, clos, tru, resp, inten) in npc_rows:
         npc_list.append({
