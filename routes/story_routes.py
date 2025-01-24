@@ -10,7 +10,6 @@ from db.connection import get_db_connection
 # If you have a "generate_mega_setting_route" or a direct function:
 from routes.settings_routes import generate_mega_setting_route
 # or if you have a direct function:
-# from .some_logic_module import generate_mega_setting_logic
 
 story_bp = Blueprint("story_bp", __name__)
 
@@ -132,26 +131,6 @@ def force_obedience_to_100(player_name):
         conn.rollback()
     finally:
         conn.close()
-
-
-def generate_mega_setting_route():
-    """
-    Example stub that calls your /settings/generate_mega_setting route internally
-    or directly runs the code to create a 'mega setting.'
-    
-    Return the newly created environment name or summary.
-    """
-    # If you have a direct function from `routes.settings_routes`:
-    response = generate_mega_setting_route()  # typically returns JSON
-    #   ...
-    return response["mega_name"]
-
-    # Or if it's purely internal logic, do something like:
-    #   new_env = "All-Girls College + Space Station"
-    #   store it in CurrentRoleplay ...
-    #   return new_env
-    #   return "All-Girls College + Space Station"  # placeholder
-
 
 def check_for_meltdown_flavor():
     """
