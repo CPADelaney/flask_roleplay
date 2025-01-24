@@ -3,15 +3,14 @@
 from flask import Blueprint, request, jsonify
 import logging
 
-# (A) NEW: import your activities logic
 from logic.activities_logic import filter_activities_for_npc, build_short_summary
-
 from logic.stats_logic import update_player_stats  # if you want direct calls
 from logic.meltdown_logic import meltdown_dialog_gpt, record_meltdown_dialog
 from logic.aggregator import get_aggregated_roleplay_context
 from routes.meltdown import remove_meltdown_npc
 from db.connection import get_db_connection
-from routes.settings_routes import generate_mega_setting_route  # or your logic version
+from routes.settings_routes import generate_mega_setting_route  
+from logic.time_cycle import advance_time_and_update, get_current_daytime
 
 story_bp = Blueprint("story_bp", __name__)
 
@@ -117,15 +116,9 @@ def next_storybeat():
         meltdown_flavor = check_for_meltdown_flavor()
         logging.info(f"Meltdown Flavor: {meltdown_flavor}")
 
-        # -----------------------------------------------------------------
-        # 5) Convert aggregator_data into final "story_output" text
-        # -----------------------------------------------------------------
-        logging.info("Building story output")
-        story_output = build_aggregator_text(aggregator_data, meltdown_flavor)
-        logging.info(f"Story Output: {story_output}")
 
         # -----------------------------------------------------------------
-        # 6) Build the updates object
+        # 5) Build the updates object
         # -----------------------------------------------------------------
         changed_stats = {"obedience": 100} if "obedience=100" in user_lower else {}
 
@@ -141,17 +134,33 @@ def next_storybeat():
         logging.info(f"Updates Dict: {updates_dict}")
 
         # -----------------------------------------------------------------
-        # 7) Return final scenario text plus updates
+        # 6) Return final scenario text plus updates
         # -----------------------------------------------------------------
+        # e.g. if user input does not mention skipping time, we only do 1 time phase
+        # or if user input specifically says "advance the day," do more increments
+        time_spent = 1
+
+        # 2) Advance time + update NPC schedules
+        new_day, new_phase = advance_time_and_update(increment=time_spent)
+
+        # 3) aggregator_data to build story output
+        aggregator_data = get_aggregated_roleplay_context(player_name)
+
+        # ... meltdown flavor, aggregator build, etc. ...
+        story_output = build_aggregator_text(aggregator_data)
+
+        # return JSON
         return jsonify({
             "story_output": story_output,
-            "updates": updates_dict
+            "updates": {
+                "current_day": new_day,
+                "time_of_day": new_phase
+            }
         }), 200
 
     except Exception as e:
-        # Log the error with a traceback
-        logging.exception("An error occurred in /story/next_storybeat")
-        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+        # handle error
+        return jsonify({"error": str(e)}), 500
 
 
 def force_obedience_to_100(player_name):
