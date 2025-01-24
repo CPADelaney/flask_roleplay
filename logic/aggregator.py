@@ -35,15 +35,6 @@ def get_aggregated_roleplay_context(player_name="Chase"):
         }
     else:
         player_stats = {}
-
-    # 2) NPC stats
-    cursor.execute("""
-        SELECT npc_id, npc_name, dominance, cruelty, closeness, trust, respect, intensity
-        FROM NPCStats
-        WHERE introduced = TRUE
-        ORDER BY npc_id
-    """)
-    npc_rows = cursor.fetchall()
     
     # 2) NPC stats: add your new columns: occupation, hobbies, personality_traits, likes, dislikes
     cursor.execute("""
