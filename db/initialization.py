@@ -68,7 +68,8 @@ def initialize_database():
             hobbies JSONB,
             personality_traits JSONB,
             likes JSONB,
-            dislikes JSONB
+            dislikes JSONB,
+            affiliations JSONB
         );
     ''')
 
