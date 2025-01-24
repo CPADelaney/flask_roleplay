@@ -4,7 +4,8 @@ from flask import Blueprint, request, jsonify
 import random
 from db.connection import get_db_connection
 from logic.meltdown_logic import meltdown_dialog_gpt, record_meltdown_dialog, append_meltdown_file
-from routes.settings_routes import insert_missing_settings, generate_mega_setting_route 
+from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
+
 
 new_game_bp = Blueprint('new_game', __name__)
 
@@ -137,19 +138,23 @@ def start_new_game():
 
         # 8. Generate new environment
         insert_missing_settings()
-        mega_data = generate_mega_setting_route()  # returns dict of environment info
+         # Now call the pure logic function
+        mega_data = generate_mega_setting_logic()
 
-        # 9. Store the new environment in CurrentRoleplay
+        # If there's an error
+        if "error" in mega_data:
+            mega_data["mega_name"] = "No environment available"  # fallback
+
+        # Insert environment into CurrentRoleplay
         cursor.execute("""
             INSERT INTO CurrentRoleplay (key, value)
             VALUES ('CurrentSetting', %s)
         """, (mega_data["mega_name"],))
-        conn.commit()  # commit new environment
+        conn.commit()
 
         return jsonify({
             "message": (
-                "New game started. Some NPCs carried or removed. "
-                "Chase reset. Meltdown logic handled. "
+                f"New game started. "
                 f"New environment = {mega_data['mega_name']}"
             )
         }), 200
