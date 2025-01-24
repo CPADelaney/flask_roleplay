@@ -1,7 +1,6 @@
 # logic/time_cycle.py
 
 from db.connection import get_db_connection
-import random
 
 TIME_PHASES = ["Morning", "Afternoon", "Evening", "Night"]
 
@@ -82,23 +81,6 @@ def update_npc_schedules_for_time(day, time_of_day):
 
     conn.commit()
     conn.close()
-
-def update_npc_schedules_for_time(day, time_of_day):
-    for (npc_id, schedule_json) in rows:
-        if not schedule_json:
-            continue
-        # Normal location:
-        location = schedule_json.get(time_of_day, "Unknown")
-        
-        # 10% chance to deviate from schedule
-        if random.random() < 0.1:
-            location = f"[DEVIATION] Possibly on a random errand or 'vacation'"
-
-        cursor.execute("""
-            UPDATE NPCStats
-            SET current_location = %s
-            WHERE npc_id = %s
-        """, (location, npc_id))
 
 def advance_time_and_update(increment=1):
     new_day, new_phase = advance_time(increment)
