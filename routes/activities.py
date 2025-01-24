@@ -1,3 +1,5 @@
+# routes/activities.py
+
 from flask import Blueprint, jsonify
 import json
 from db.connection import get_db_connection
