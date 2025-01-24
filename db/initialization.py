@@ -83,5 +83,17 @@ def initialize_database():
         );
     ''')
 
+    CREATE TABLE IF NOT EXISTS Archetypes (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+
+    -- Example columns for your doc content:
+    baseline_stats JSONB NOT NULL,  -- e.g. { "dominance": "80–100", "cruelty": "60–90", ... }
+    progression_rules TEXT,         -- or JSONB if you want structured bullet points
+    setting_examples TEXT,          -- or JSONB if you want a list
+    unique_traits TEXT              -- or JSONB if you want to store a list
+);
+
+
     conn.commit()
     conn.close()
