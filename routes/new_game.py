@@ -1,5 +1,3 @@
-# routes/new_game.py
-
 from flask import Blueprint, request, jsonify
 import random
 from db.connection import get_db_connection
@@ -14,24 +12,23 @@ def start_new_game():
     """
     Clears out Settings, CurrentRoleplay, etc.
     Only 'Chase' remains in PlayerStats with default stats.
-
-    Then inserts missing settings, and generates a new environment to store in CurrentRoleplay.
-    
-    NPC Logic (meltdown carryover) also included.
+    Then inserts missing settings, spawns 10 unintroduced NPCs,
+    and generates a new environment stored in CurrentRoleplay.
+    Handles meltdown carryover logic.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
-        # 1. Clear out 'Settings' and 'CurrentRoleplay'
+        # 1) Clear out 'Settings' and 'CurrentRoleplay'
         cursor.execute("DELETE FROM Settings;")
         cursor.execute("DELETE FROM CurrentRoleplay;")
-        conn.commit()  # commit the delete so we have a clean slate
+        conn.commit()  # commit so we have a clean slate
 
-        # 1b. Re-insert the default 1–30 settings
+        # 1b) Re-insert the default settings
         insert_missing_settings()
 
-        # 2. Gather all NPCs
+        # 2) Gather all NPCs
         cursor.execute("""
             SELECT npc_id, npc_name, monica_level, memory
             FROM NPCStats
@@ -39,15 +36,15 @@ def start_new_game():
         all_npcs = cursor.fetchall()
 
         # Probability tunables
-        keep_chance = 0.025             # 2.5% chance a normal NPC is kept
-        meltdown_pick_chance = 0.0005   # 0.05% chance to spawn meltdown if none
-        meltdown_increment_chance = 0.20  # 20% chance meltdown NPC's level increments
-        full_memory_chance = 0.50       # 50% chance a normal NPC keeps full memory
+        keep_chance = 0.025
+        meltdown_pick_chance = 0.0005
+        meltdown_increment_chance = 0.20
+        full_memory_chance = 0.50
 
         carried_npcs = []
         meltdown_npc = None
 
-        # 3. Decide carryover or removal
+        # 3) Decide carryover or removal
         for npc_id, npc_name, old_monica_level, old_memory in all_npcs:
             if old_monica_level > 0:
                 # meltdown NPC -> automatically keep
@@ -60,14 +57,14 @@ def start_new_game():
                 else:
                     cursor.execute("DELETE FROM NPCStats WHERE npc_id = %s", (npc_id,))
 
-        # 4. If no meltdown NPC among survivors, maybe pick one
+        # 4) Possibly pick meltdown among survivors
         if not meltdown_npc and carried_npcs:
             if random.random() < meltdown_pick_chance:
                 chosen = random.choice(carried_npcs)
                 c_id, c_name, c_mlvl, c_mem = chosen
-                meltdown_npc = (c_id, c_name, 1, c_mem)  # brand new meltdown
+                meltdown_npc = (c_id, c_name, 1, c_mem)
                 meltdown_line = f"{c_name} has awakened to meltdown mode (level=1). They see beyond the code..."
-                
+
                 cursor.execute("""
                     UPDATE NPCStats
                     SET monica_level = 1,
@@ -75,14 +72,11 @@ def start_new_game():
                                       ELSE memory || E'\n[Meltdown] ' || %s END
                     WHERE npc_id = %s
                 """, (meltdown_line, meltdown_line, c_id))
-                # optional meltdown file logging:
-                # append_meltdown_file(c_name, meltdown_line)
 
-        # 5. Possibly increment meltdown NPC if it exists
+        # 5) Possibly increment meltdown
         if meltdown_npc:
             npc_id, npc_name, old_mlvl, old_mem = meltdown_npc
             new_level = old_mlvl
-            # meltdown_increment_chance
             if random.random() < meltdown_increment_chance:
                 new_level += 1
                 meltdown_line = f"{npc_name} meltdown level incremented to {new_level}, madness grows."
@@ -91,13 +85,10 @@ def start_new_game():
                     SET monica_level = %s
                     WHERE npc_id = %s
                 """, (new_level, npc_id))
-                # optional meltdown logs
-                # record_meltdown_dialog(npc_id, meltdown_line)
-                # append_meltdown_file(npc_name, meltdown_line)
 
-        # 6. For carried normal NPCs, handle memory (partial or full)
+        # 6) For carried normal NPCs, partial memory
         for npc_id, npc_name, old_monica_level, old_memory in carried_npcs:
-            if old_monica_level == 0:  # normal NPC
+            if old_monica_level == 0:
                 if random.random() < full_memory_chance:
                     new_memory = old_memory or "Somehow, you remember everything from the last cycle."
                 else:
@@ -108,7 +99,7 @@ def start_new_game():
                     WHERE npc_id = %s
                 """, (new_memory, npc_id))
 
-        # 7. Reset PlayerStats to keep only 'Chase'
+        # 7) Reset PlayerStats to keep only 'Chase'
         cursor.execute("DELETE FROM PlayerStats WHERE player_name != 'Chase';")
         cursor.execute("SELECT id FROM PlayerStats WHERE player_name = 'Chase';")
         chase_row = cursor.fetchone()
@@ -133,31 +124,19 @@ def start_new_game():
                 VALUES ('Chase', 10, 60, 50, 20, 10, 15, 55, 40)
             ''')
 
-        # Commit all meltdown / player changes
         conn.commit()
 
-        # 3) Spawn a bank of 10 NPCs that are unintroduced
+        # 8) Spawn a bank of 10 NPCs with introduced=False
         for _ in range(10):
             new_id = create_npc(introduced=False)
             print(f"Created new unintroduced NPC, ID={new_id}")
 
-        return jsonify({
-            "message": "New game started with 10 unintroduced NPCs ready in the DB."
-        }), 200
-
-    except Exception as e:
-        conn.rollback()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
-
-        # 9. Generate new environment
+        # 9) Generate environment
         insert_missing_settings()  # ensure we have data for mega_setting
         mega_data = generate_mega_setting_logic()
         if "error" in mega_data:
             mega_data["mega_name"] = "No environment available"
 
-        # Insert environment into CurrentRoleplay
         cursor.execute("""
             INSERT INTO CurrentRoleplay (key, value)
             VALUES ('CurrentSetting', %s)
@@ -166,8 +145,7 @@ def start_new_game():
 
         return jsonify({
             "message": (
-                "New game started. "
-                f"Spawned {num_new_npcs} new NPCs. "
+                "New game started with 10 unintroduced NPCs. "
                 f"New environment = {mega_data['mega_name']}"
             )
         }), 200
