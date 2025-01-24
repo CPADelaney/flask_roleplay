@@ -218,15 +218,18 @@ def build_aggregator_text(aggregator_data, meltdown_flavor=""):
     Merges aggregator_data into user-friendly text for the front-end GPT to use.
     This is the 'final scenario text' or 'context block' your custom GPT can fetch.
     """
-
+    
+    lines = []
+    day = aggregator_data.get("day","1")
+    tod = aggregator_data.get("timeOfDay","Morning")
     player_stats = aggregator_data.get("playerStats", {})
     npc_stats = aggregator_data.get("npcStats", [])
     current_rp = aggregator_data.get("currentRoleplay", {})
 
-    lines = []
-
     # 1) Summarize Player Stats
+
     lines.append("=== PLAYER STATS ===")
+    lines.append(f"=== DAY {day}, {tod.upper()} ===")
     if player_stats:
         lines.append(
             f"Name: {player_stats.get('name', 'Unknown')}\n"
