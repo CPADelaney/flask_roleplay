@@ -82,6 +82,46 @@ def update_npc_schedules_for_time(day, time_of_day):
     conn.commit()
     conn.close()
 
+def update_npc_schedules_for_time(day, time_of_day):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # fetch events for this day/time
+    cursor.execute("""
+        SELECT npc_id, override_location 
+        FROM PlannedEvents
+        WHERE day = %s AND time_of_day = %s
+    """, (day, time_of_day))
+    event_rows = cursor.fetchall()
+    event_dict = {r[0]: r[1] for r in event_rows}  # {npc_id: override_loc}
+
+    # fetch all NPC schedules
+    cursor.execute("""
+        SELECT npc_id, schedule FROM NPCStats
+    """)
+    npc_rows = cursor.fetchall()
+
+    for (npc_id, schedule_json) in npc_rows:
+        if npc_id in event_dict:
+            # override
+            new_location = event_dict[npc_id]
+        else:
+            if schedule_json:
+                new_location = schedule_json.get(time_of_day, "Unknown")
+            else:
+                new_location = "No schedule"
+
+        # store
+        cursor.execute("""
+            UPDATE NPCStats
+            SET current_location = %s
+            WHERE npc_id = %s
+        """, (new_location, npc_id))
+
+    conn.commit()
+    conn.close()
+
+
 def advance_time_and_update(increment=1):
     new_day, new_phase = advance_time(increment)
     update_npc_schedules_for_time(new_day, new_phase)
