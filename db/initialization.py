@@ -53,6 +53,7 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS NPCStats (
             npc_id SERIAL PRIMARY KEY,
             npc_name TEXT NOT NULL,
+            introduced BOOLEAN default FALSE,
             archetypes JSONB,
             dominance INT CHECK (dominance BETWEEN 0 AND 100),
             cruelty INT CHECK (cruelty BETWEEN 0 AND 100),
