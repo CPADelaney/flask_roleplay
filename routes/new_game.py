@@ -1,3 +1,5 @@
+# routes/new_game.py
+
 from flask import Blueprint, request, jsonify
 import random
 from db.connection import get_db_connection
