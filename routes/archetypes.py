@@ -13,7 +13,7 @@ def insert_missing_archetypes():
 
 archetypes_data = [
     {
-        "name": "Stepmother/Stepsister",  # 1
+        "name": "Stepmother/Stepsister",
         "baseline_stats": {
             "dominance": "40–60",
             "cruelty": "30–50",
@@ -22,23 +22,23 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "30–70"
         },
-        "progression_rules": (
-            "• Closeness rises quickly due to familial proximity.\n"
-            "• Dominance spikes as they infantilize you.\n"
-            "• Intensity increases as teasing corrections escalate."
-        ),
-        "setting_examples": (
-            "• High Society: Belittles you at social events.\n"
-            "• Traditional Horror: Gaslights and isolates you in eerie family settings."
-        ),
-        "unique_traits": (
-            "• Exploits guilt and obligation.\n"
-            "• Balances cruelty with feigned care.\n"
-            "• Often says, “I’m doing this for your own good.”"
-        )
+        "progression_rules": [
+            "Closeness rises quickly due to familial proximity and constant interaction.",
+            "Dominance spikes as they infantilize you, making submission feel inevitable.",
+            "Intensity increases as they escalate tasks from teasing corrections to full control."
+        ],
+        "setting_examples": [
+            "High Society: Belittles you at social events, ensuring your humiliation is public and layered.",
+            "Traditional Horror: Gaslights and isolates you in eerie family settings, amplifying psychological torment."
+        ],
+        "unique_traits": [
+            "Exploits guilt and obligation as tools of control.",
+            "Balances cruelty with feigned care, keeping you emotionally vulnerable.",
+            "Frequently uses phrases like, 'I’m doing this for your own good.'"
+        ]
     },
     {
-        "name": "Boss/Supervisor",  # 2
+        "name": "Boss/Supervisor",
         "baseline_stats": {
             "dominance": "70–90",
             "cruelty": "40–70",
@@ -47,21 +47,21 @@ archetypes_data = [
             "respect": "10–40",
             "intensity": "50–80"
         },
-        "progression_rules": (
-            "• Dominance rises sharply with acts of compliance.\n"
-            "• Intensity builds with micromanagement and professional humiliation."
-        ),
-        "setting_examples": (
-            "• Corporate Office: Demeaning tasks broadcast to coworkers.\n"
-            "• Cyberpunk Future: Surveillance tech to enforce absolute control."
-        ),
-        "unique_traits": (
-            "• Forces you to beg for leniency.\n"
-            "• Sees you as disposable unless you prove otherwise."
-        )
+        "progression_rules": [
+            "Dominance rises sharply with acts of compliance, feeding their sense of power.",
+            "Intensity builds as they micromanage tasks and escalate professional humiliation."
+        ],
+        "setting_examples": [
+            "Corporate Office: Assigns demeaning tasks and ensures failures are broadcast to coworkers.",
+            "Cyberpunk Future: Uses surveillance tech to enforce absolute control, tracking every move."
+        ],
+        "unique_traits": [
+            "Enjoys forcing you to beg for leniency, often exaggerating infractions for personal amusement.",
+            "Sees you as disposable unless you prove otherwise, keeping you in constant fear of rejection."
+        ]
     },
     {
-        "name": "Teacher/Principal",  # 3
+        "name": "Teacher/Principal",
         "baseline_stats": {
             "dominance": "50–70",
             "cruelty": "20–50",
@@ -70,21 +70,21 @@ archetypes_data = [
             "respect": "30–70",
             "intensity": "40–80"
         },
-        "progression_rules": (
-            "• Intensity rises with every failed task or defiant act.\n"
-            "• Trust and Respect increase with compliance but drop with resistance."
-        ),
-        "setting_examples": (
-            "• Classroom/School: Critiques work publicly, assigning demeaning tasks.\n"
-            "• Post-Apocalypse: Justifies harsh punishments as 'lessons.'"
-        ),
-        "unique_traits": (
-            "• Turns your failures into teaching moments.\n"
-            "• Balances nurturing tones with sadistic punishments."
-        )
+        "progression_rules": [
+            "Intensity rises with every failed task or defiant act, framing their control as 'necessary discipline.'",
+            "Trust and Respect increase with compliance but erode rapidly with resistance."
+        ],
+        "setting_examples": [
+            "Classroom/School: Critiques your work publicly, assigning demeaning tasks as 'lessons.'",
+            "Post-Apocalypse: Assumes a protective role, using lessons as justifications for harsh punishments."
+        ],
+        "unique_traits": [
+            "Enjoys turning your failures into teaching moments that highlight your inferiority.",
+            "Balances nurturing tones with sadistic punishments, keeping you guessing."
+        ]
     },
     {
-        "name": "Babysitter",  # 4
+        "name": "Babysitter",
         "baseline_stats": {
             "dominance": "40–70",
             "cruelty": "30–60",
@@ -93,22 +93,22 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "40–70"
         },
-        "progression_rules": (
-            "• Closeness rises due to frequent proximity.\n"
-            "• Dominance increases as they infantilize you.\n"
-            "• Intensity spikes when obedience falters."
-        ),
-        "setting_examples": (
-            "• Urban Life: Uses proximity to enforce daily control.\n"
-            "• Manor: Acts as caretaker, punishing disobedience privately."
-        ),
-        "unique_traits": (
-            "• Infantilizes you with patronizing language.\n"
-            "• Thrives on 'correcting' your behavior."
-        )
+        "progression_rules": [
+            "Closeness rises naturally due to frequent proximity and assumed responsibility.",
+            "Dominance increases as they infantilize and enforce dependence.",
+            "Intensity spikes when obedience falters, turning minor infractions into major punishments."
+        ],
+        "setting_examples": [
+            "Urban Life: Uses proximity to enforce daily control and infantilize you.",
+            "Manor: Acts as a caretaker, setting strict rules and punishing disobedience privately."
+        ],
+        "unique_traits": [
+            "Infantilizes you with patronizing language and tasks, treating you as helpless.",
+            "Thrives on correcting your behavior, often exaggerating missteps to justify punishments."
+        ]
     },
     {
-        "name": "Landlord",  # 5
+        "name": "Landlord",
         "baseline_stats": {
             "dominance": "50–80",
             "cruelty": "40–60",
@@ -117,21 +117,21 @@ archetypes_data = [
             "respect": "10–30",
             "intensity": "50–90"
         },
-        "progression_rules": (
-            "• Dominance rises as financial dependence deepens.\n"
-            "• Intensity spikes with each missed payment or defiant act."
-        ),
-        "setting_examples": (
-            "• Urban Life: Threatens eviction, leveraging financial control.\n"
-            "• Post-Apocalypse: Controls access to shelter."
-        ),
-        "unique_traits": (
-            "• Creates constant anxiety about living situations.\n"
-            "• Adds degrading 'terms' to rental agreements."
-        )
+        "progression_rules": [
+            "Dominance rises as financial dependence deepens.",
+            "Intensity spikes with each missed payment or defiant act, justifying harsher demands."
+        ],
+        "setting_examples": [
+            "Urban Life: Threatens eviction, leveraging financial control.",
+            "Post-Apocalypse: Controls access to shelter, amplifying desperation."
+        ],
+        "unique_traits": [
+            "Creates constant anxiety about your living situation.",
+            "Adds degrading 'terms' to your rental agreements, enforcing submission."
+        ]
     },
     {
-        "name": "Roommate/Housemate",  # 6
+        "name": "Roommate/Housemate",
         "baseline_stats": {
             "dominance": "30–50",
             "cruelty": "20–40",
@@ -140,21 +140,21 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "30–60"
         },
-        "progression_rules": (
-            "• Closeness rises via shared spaces.\n"
-            "• Dominance grows through control over shared resources."
-        ),
-        "setting_examples": (
-            "• Urban Life: Dominates with teasing and privacy invasions.\n"
-            "• Manor: Strict house rules, punishing disobedience privately."
-        ),
-        "unique_traits": (
-            "• Masks dominance in 'friendly' terms.\n"
-            "• Exploits shared spaces to humiliate you."
-        )
+        "progression_rules": [
+            "Closeness rises naturally through shared spaces, leading to frequent interactions.",
+            "Dominance grows as they exploit proximity and control over shared resources."
+        ],
+        "setting_examples": [
+            "Urban Life: Dominates through teasing and casual invasions of privacy.",
+            "Manor: Enforces strict house rules, punishing disobedience privately."
+        ],
+        "unique_traits": [
+            "Masks dominance in 'friendly' terms, making resistance feel petty.",
+            "Exploits shared spaces to humiliate you, such as inviting guests to mock your routines."
+        ]
     },
     {
-        "name": "Neighbor",  # 7
+        "name": "Neighbor",
         "baseline_stats": {
             "dominance": "30–60",
             "cruelty": "20–50",
@@ -163,21 +163,21 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "30–70"
         },
-        "progression_rules": (
-            "• Closeness rises through proximity.\n"
-            "• Dominance grows as they access your secrets and routines."
-        ),
-        "setting_examples": (
-            "• Urban Life: Friendly gestures lead to exploitation.\n"
-            "• High Society: Uses gossip and social pressure."
-        ),
-        "unique_traits": (
-            "• Thrives on observation.\n"
-            "• Balances friendliness with increasing demands."
-        )
+        "progression_rules": [
+            "Closeness rises through proximity and casual interactions.",
+            "Dominance grows as they gain access to your routines and secrets."
+        ],
+        "setting_examples": [
+            "Urban Life: Uses friendly gestures to insert themselves into your life, eventually exploiting your trust.",
+            "High Society: Dominates subtly through gossip and social pressure."
+        ],
+        "unique_traits": [
+            "Thrives on observation, using your routines to control you.",
+            "Balances friendliness with increasing demands, ensuring gradual submission."
+        ]
     },
     {
-        "name": "Mother/Aunt/Older Sister",  # 8
+        "name": "Mother/Aunt/Older Sister",
         "baseline_stats": {
             "dominance": "50–70",
             "cruelty": "20–50",
@@ -186,21 +186,21 @@ archetypes_data = [
             "respect": "40–60",
             "intensity": "40–70"
         },
-        "progression_rules": (
-            "• Dominance rises as they take an overbearing, protective role.\n"
-            "• Closeness increases via familial bond."
-        ),
-        "setting_examples": (
-            "• High Society: Uses social influence for compliance.\n"
-            "• Occult Ritual: Frames dominance as sacred duty."
-        ),
-        "unique_traits": (
-            "• Infantilizes you, framing control as care.\n"
-            "• Reminds you of your dependence on their guidance."
-        )
+        "progression_rules": [
+            "Dominance rises as they take on an overbearing, 'protective' role.",
+            "Closeness increases naturally due to the familial bond."
+        ],
+        "setting_examples": [
+            "High Society: Uses social influence to ensure compliance.",
+            "Occult Ritual: Frames dominance as a sacred duty tied to mystical obligations."
+        ],
+        "unique_traits": [
+            "Infantilizes you, framing control as care.",
+            "Frequently reminds you of your dependence on their 'guidance.'"
+        ]
     },
     {
-        "name": "Best Friend’s Girlfriend/Sister",  # 9
+        "name": "Best Friend’s Girlfriend/Sister",
         "baseline_stats": {
             "dominance": "30–60",
             "cruelty": "20–50",
@@ -209,21 +209,21 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "30–70"
         },
-        "progression_rules": (
-            "• Closeness rises via social interactions.\n"
-            "• Cruelty spikes upon sensing attraction or weakness."
-        ),
-        "setting_examples": (
-            "• Bar: Casually humiliates you in front of friends.\n"
-            "• Urban Life: Invades personal space to dominate you."
-        ),
-        "unique_traits": (
-            "• Leverages connection to their partner.\n"
-            "• Creates awkward or humiliating social situations."
-        )
+        "progression_rules": [
+            "Closeness rises through frequent social interactions.",
+            "Cruelty spikes when they sense attraction or weakness."
+        ],
+        "setting_examples": [
+            "Bar: Casually humiliates you in front of friends.",
+            "Urban Life: Uses proximity to invade your personal space."
+        ],
+        "unique_traits": [
+            "Leverages your connection to their partner to tease or control you.",
+            "Enjoys creating awkward or humiliating social situations."
+        ]
     },
     {
-        "name": "Ex-Girlfriend/Ex-Wife",  # 10
+        "name": "Ex-Girlfriend/Ex-Wife",
         "baseline_stats": {
             "dominance": "40–70",
             "cruelty": "40–80",
@@ -232,21 +232,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "50–90"
         },
-        "progression_rules": (
-            "• Cruelty spikes as they exploit shared history.\n"
-            "• Intensity rises with every act of submission."
-        ),
-        "setting_examples": (
-            "• Urban Life: Dominates via social connections in public.\n"
-            "• Bar: Uses casual encounters to humiliate or manipulate you."
-        ),
-        "unique_traits": (
-            "• References past failures to undermine confidence.\n"
-            "• Balances teasing with cruelty, building unresolved tension."
-        )
+        "progression_rules": [
+            "Cruelty spikes as they exploit shared history to dominate emotionally.",
+            "Intensity rises with acts of submission, feeding their sense of power."
+        ],
+        "setting_examples": [
+            "Urban Life: Dominates through social connections, often in public.",
+            "Bar: Uses casual encounters to humiliate you or manipulate emotions."
+        ],
+        "unique_traits": [
+            "Frequently references past failures to undermine your confidence.",
+            "Balances teasing with cruelty, creating a dynamic of unresolved tension."
+        ]
     },
     {
-        "name": "Therapist",  # 11
+        "name": "Therapist",
         "baseline_stats": {
             "dominance": "40–70",
             "cruelty": "20–40",
@@ -255,21 +255,21 @@ archetypes_data = [
             "respect": "30–60",
             "intensity": "30–60"
         },
-        "progression_rules": (
-            "• Closeness rises via access to your secrets.\n"
-            "• Intensity spikes as they weaponize your admissions."
-        ),
-        "setting_examples": (
-            "• Cyberpunk Future: Uses neural implants to track your mental state.\n"
-            "• Manor: Private therapist sessions become avenues for control."
-        ),
-        "unique_traits": (
-            "• Twists your words to ensure submission.\n"
-            "• Balances nurturing tone with subtle domination."
-        )
+        "progression_rules": [
+            "Closeness rises quickly as they gain access to your secrets and vulnerabilities.",
+            "Intensity spikes as they weaponize your admissions to manipulate you."
+        ],
+        "setting_examples": [
+            "Cyberpunk Future: Monitors your mental state through neural implants, using data to enforce compliance.",
+            "Manor: Operates as a private therapist, turning every session into an opportunity for control."
+        ],
+        "unique_traits": [
+            "Uses your words against you, twisting your admissions into tools of submission.",
+            "Balances nurturing tones with subtle domination, ensuring you question their intentions."
+        ]
     },
     {
-        "name": "Doctor",  # 12
+        "name": "Doctor",
         "baseline_stats": {
             "dominance": "60–80",
             "cruelty": "30–60",
@@ -278,21 +278,21 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "40–80"
         },
-        "progression_rules": (
-            "• Closeness grows as they provide 'care.'\n"
-            "• Intensity rises with exploited vulnerability during medical tasks."
-        ),
-        "setting_examples": (
-            "• Cyberpunk Future: Tracks health via implants, tying tasks to compliance.\n"
-            "• Manor: A private doctor enforcing strict routines."
-        ),
-        "unique_traits": (
-            "• Frames commands as medical necessity.\n"
-            "• Restricts access to care, ensuring dependence."
-        )
+        "progression_rules": [
+            "Closeness rises as they 'care' for you, deepening your dependence.",
+            "Intensity increases as they exploit your vulnerability during medical tasks."
+        ],
+        "setting_examples": [
+            "Cyberpunk Future: Tracks your health via implants, creating tasks tied to compliance with 'health guidelines.'",
+            "Manor: Acts as a private doctor, enforcing strict care routines to control your every move."
+        ],
+        "unique_traits": [
+            "Frames commands and punishments as acts of medical necessity.",
+            "Enjoys restricting access to care, ensuring your reliance."
+        ]
     },
     {
-        "name": "Empress/Queen",  # 13
+        "name": "Empress/Queen",
         "baseline_stats": {
             "dominance": "80–100",
             "cruelty": "60–90",
@@ -301,21 +301,21 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "50–90"
         },
-        "progression_rules": (
-            "• Dominance rises rapidly with any defiance.\n"
-            "• Intensity spikes during public ceremonies."
-        ),
-        "setting_examples": (
-            "• Palace: Formal rituals enforce submission.\n"
-            "• Corporate Office: Bureaucratic power manipulates personal life."
-        ),
-        "unique_traits": (
-            "• Demands elaborate displays of submission.\n"
-            "• Punishes defiance via public humiliation."
-        )
+        "progression_rules": [
+            "Dominance rises rapidly with every act of defiance or failure.",
+            "Intensity spikes during public ceremonies, turning submission into a spectacle."
+        ],
+        "setting_examples": [
+            "Palace: Uses formal rituals to enforce submission and respect.",
+            "Corporate Office: Wields bureaucratic power to manipulate both your professional and personal life."
+        ],
+        "unique_traits": [
+            "Demands elaborate displays of submission, such as public kneeling or tributes.",
+            "Punishes defiance harshly, often using public humiliation as a lesson to others."
+        ]
     },
     {
-        "name": "Colleague",  # 14
+        "name": "Colleague",
         "baseline_stats": {
             "dominance": "30–60",
             "cruelty": "20–50",
@@ -324,21 +324,21 @@ archetypes_data = [
             "respect": "20–40",
             "intensity": "30–60"
         },
-        "progression_rules": (
-            "• Closeness rises through frequent work interactions.\n"
-            "• Dominance grows via workplace dynamics."
-        ),
-        "setting_examples": (
-            "• Corporate Office: Subtle power plays to undermine you.\n"
-            "• Cyberpunk Future: Uses resource access to ensure compliance."
-        ),
-        "unique_traits": (
-            "• Balances camaraderie with condescension.\n"
-            "• Turns professional tasks into private humiliation."
-        )
+        "progression_rules": [
+            "Closeness rises naturally through frequent professional interactions.",
+            "Dominance grows as they exploit workplace dynamics to assert control."
+        ],
+        "setting_examples": [
+            "Corporate Office: Uses subtle power plays to undermine and dominate you professionally.",
+            "Cyberpunk Future: Leverages access to resources or critical systems to ensure your compliance."
+        ],
+        "unique_traits": [
+            "Masters the art of balancing camaraderie with condescension, keeping you guessing.",
+            "Thrives on turning professional tasks into opportunities for public or private humiliation."
+        ]
     },
     {
-        "name": "Celebrity",  # 15
+        "name": "Celebrity",
         "baseline_stats": {
             "dominance": "50–80",
             "cruelty": "40–70",
@@ -347,21 +347,21 @@ archetypes_data = [
             "respect": "10–40",
             "intensity": "50–80"
         },
-        "progression_rules": (
-            "• Closeness rises as you’re integrated into their public persona.\n"
-            "• Cruelty spikes when they use your humiliation for publicity."
-        ),
-        "setting_examples": (
-            "• High Society: Treats you as an accessory.\n"
-            "• Urban Life: Controls your social circles, demanding obedience."
-        ),
-        "unique_traits": (
-            "• Publicly humiliates you under 'playful teasing.'\n"
-            "• Uses fame to amplify your shame."
-        )
+        "progression_rules": [
+            "Closeness rises as they integrate you into their public persona, ensuring you’re always in their shadow.",
+            "Cruelty spikes when they use your humiliation as a tool for publicity."
+        ],
+        "setting_examples": [
+            "High Society: Treats you as an accessory, ensuring your role is always subservient.",
+            "Urban Life: Controls your access to social circles, making you dependent on their approval."
+        ],
+        "unique_traits": [
+            "Publicly humiliates you under the guise of 'playful teasing.'",
+            "Uses their fame to amplify your shame, often involving audiences in your degradation."
+        ]
     },
     {
-        "name": "Warden",  # 16
+        "name": "Warden",
         "baseline_stats": {
             "dominance": "80–100",
             "cruelty": "70–100",
@@ -370,21 +370,21 @@ archetypes_data = [
             "respect": "10–30",
             "intensity": "60–100"
         },
-        "progression_rules": (
-            "• Intensity spikes with every infraction.\n"
-            "• Closeness remains low unless they personally enjoy your suffering."
-        ),
-        "setting_examples": (
-            "• Prison: Controls every aspect of your life.\n"
-            "• Dystopian Oppression: Enforces harsh rules with systemic power."
-        ),
-        "unique_traits": (
-            "• Designs rules you’re destined to fail.\n"
-            "• Views you as property, ignoring autonomy."
-        )
+        "progression_rules": [
+            "Intensity spikes rapidly with every infraction, turning minor mistakes into major punishments.",
+            "Closeness remains low unless they derive personal satisfaction from your suffering."
+        ],
+        "setting_examples": [
+            "Prison: Controls every aspect of your life, from food to movement.",
+            "Dystopian Oppression: Enforces harsh rules, using systemic power to dominate you."
+        ],
+        "unique_traits": [
+            "Thrives on designing rules you’re destined to fail, justifying harsher punishments.",
+            "Views you as property, with no regard for your autonomy."
+        ]
     },
     {
-        "name": "Politician",  # 17
+        "name": "Politician",
         "baseline_stats": {
             "dominance": "70–90",
             "cruelty": "40–70",
@@ -393,21 +393,21 @@ archetypes_data = [
             "respect": "40–60",
             "intensity": "50–80"
         },
-        "progression_rules": (
-            "• Dominance rises by manipulating systems and crowds.\n"
-            "• Intensity spikes during public speeches or events."
-        ),
-        "setting_examples": (
-            "• Matriarchy Kingdom: Uses legal authority for submission.\n"
-            "• Cyberpunk Future: Monitors your actions with surveillance."
-        ),
-        "unique_traits": (
-            "• Masters public humiliation via crowds.\n"
-            "• Treats defiance as opportunities to display power."
-        )
+        "progression_rules": [
+            "Dominance rises as they manipulate systems and crowds to control you.",
+            "Intensity spikes during public speeches or events where submission becomes performative."
+        ],
+        "setting_examples": [
+            "Matriarchy Kingdom: Uses legal authority to enforce submission.",
+            "Cyberpunk Future: Monitors your actions through surveillance, ensuring compliance."
+        ],
+        "unique_traits": [
+            "Masters public humiliation, using crowds to amplify your shame.",
+            "Treats every act of defiance as an opportunity to demonstrate power."
+        ]
     },
     {
-        "name": "Government Agent",  # 18
+        "name": "Government Agent",
         "baseline_stats": {
             "dominance": "60–90",
             "cruelty": "50–80",
@@ -416,21 +416,21 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "60–90"
         },
-        "progression_rules": (
-            "• Dominance grows via legal/systemic power.\n"
-            "• Intensity spikes with each attempt at resistance."
-        ),
-        "setting_examples": (
-            "• Dystopian Oppression: Laws and surveillance trap you.\n"
-            "• Cyberpunk Future: Data-driven control ensures compliance."
-        ),
-        "unique_traits": (
-            "• Efficient and impersonal, seeing you as a project.\n"
-            "• Balances cold logic with unrelenting punishment."
-        )
+        "progression_rules": [
+            "Dominance rises as they exploit their legal or systemic power.",
+            "Intensity spikes with every attempt at resistance, justifying harsher measures."
+        ],
+        "setting_examples": [
+            "Dystopian Oppression: Uses laws and surveillance to trap you in cycles of submission.",
+            "Cyberpunk Future: Tracks your movements, using data to enforce compliance."
+        ],
+        "unique_traits": [
+            "Ruthlessly efficient, treating you as a project rather than a person.",
+            "Balances cold logic with unrelenting punishment, leaving no room for rebellion."
+        ]
     },
     {
-        "name": "Professional Wrestler/Martial Artist",  # 19
+        "name": "Professional Wrestler/Martial Artist",
         "baseline_stats": {
             "dominance": "60–90",
             "cruelty": "50–80",
@@ -439,21 +439,21 @@ archetypes_data = [
             "respect": "20–40",
             "intensity": "60–90"
         },
-        "progression_rules": (
-            "• Dominance grows through physical contests.\n"
-            "• Intensity escalates with each failed resistance."
-        ),
-        "setting_examples": (
-            "• Urban Life: Forces public/private physical contests.\n"
-            "• Post-Apocalypse: Dominates through survival skills."
-        ),
-        "unique_traits": (
-            "• Uses physical dominance as psychological control.\n"
-            "• Turns your resistance into opportunities for humiliation."
-        )
+        "progression_rules": [
+            "Dominance grows rapidly through physical contests and displays of strength.",
+            "Intensity escalates with each failed attempt to resist."
+        ],
+        "setting_examples": [
+            "Urban Life: Forces you into public or private physical contests.",
+            "Post-Apocalypse: Dominates through survival skills and combat superiority."
+        ],
+        "unique_traits": [
+            "Thrives on turning your resistance into opportunities for humiliation.",
+            "Uses physical dominance as a tool for psychological control."
+        ]
     },
     {
-        "name": "CEO",  # 20
+        "name": "CEO",
         "baseline_stats": {
             "dominance": "80–100",
             "cruelty": "50–80",
@@ -462,21 +462,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "60–90"
         },
-        "progression_rules": (
-            "• Dominance grows via manipulation of professional/personal life.\n"
-            "• Intensity spikes in meetings or private encounters expecting submission."
-        ),
-        "setting_examples": (
-            "• Corporate Office: Controls your career and finances.\n"
-            "• Cyberpunk Future: Uses technology for absolute compliance."
-        ),
-        "unique_traits": (
-            "• Demands perfection, punishing minor resistance.\n"
-            "• Balances professional control with personal domination."
-        )
+        "progression_rules": [
+            "Dominance rises as they manipulate your professional and personal life.",
+            "Intensity spikes during meetings or private encounters where submission is expected."
+        ],
+        "setting_examples": [
+            "Corporate Office: Uses organizational power to control your career and finances.",
+            "Cyberpunk Future: Wields technology to ensure absolute compliance."
+        ],
+        "unique_traits": [
+            "Demands perfection, punishing even the smallest resistance.",
+            "Balances professional control with personal domination, ensuring no aspect of your life escapes their grasp."
+        ]
     },
     {
-        "name": "Drifter",  # 21
+        "name": "Drifter",
         "baseline_stats": {
             "dominance": "40–70",
             "cruelty": "20–50",
@@ -485,21 +485,21 @@ archetypes_data = [
             "respect": "30–60",
             "intensity": "40–70"
         },
-        "progression_rules": (
-            "• Dominance grows as they exploit your need for stability.\n"
-            "• Intensity spikes by destabilizing your routines."
-        ),
-        "setting_examples": (
-            "• Ruined Setting: Adapts to chaos, seizing control.\n"
-            "• Urban Life: Slips into your life unexpectedly."
-        ),
-        "unique_traits": (
-            "• Balances charm with unpredictability.\n"
-            "• Exploits your reliance on routine."
-        )
+        "progression_rules": [
+            "Dominance grows as they exploit your need for stability, creating tension with their unpredictability.",
+            "Intensity spikes as they destabilize your routines, leaving you vulnerable."
+        ],
+        "setting_examples": [
+            "Ruined Setting: Uses adaptability to take control in chaotic environments.",
+            "Urban Life: Slips into your life unexpectedly, asserting control through surprise and manipulation."
+        ],
+        "unique_traits": [
+            "Balances charm and unpredictability, keeping you off-balance.",
+            "Enjoys leveraging your reliance on routine to highlight your fragility."
+        ]
     },
     {
-        "name": "Bartender/Playful Tease",  # 22
+        "name": "Bartender/Playful Tease",
         "baseline_stats": {
             "dominance": "30–50",
             "cruelty": "10–40",
@@ -508,21 +508,21 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "30–60"
         },
-        "progression_rules": (
-            "• Closeness rises quickly through playful interactions.\n"
-            "• Intensity builds as teasing becomes genuine dominance."
-        ),
-        "setting_examples": (
-            "• Bar: Public humiliation disguised as fun.\n"
-            "• High Society: Subtle domination at events."
-        ),
-        "unique_traits": (
-            "• Masters playful dominance, cruelty hidden as humor.\n"
-            "• Enjoys turning your humiliation into a spectacle."
-        )
+        "progression_rules": [
+            "Closeness rises quickly through frequent, playful interactions.",
+            "Intensity builds as teasing turns into genuine acts of dominance."
+        ],
+        "setting_examples": [
+            "Bar: Uses teasing and social dynamics to humiliate you publicly.",
+            "High Society: Balances charm and wit to dominate you subtly during events."
+        ],
+        "unique_traits": [
+            "Masters playful dominance, disguising cruelty as humor.",
+            "Thrives on public humiliation, framing it as 'all in good fun.'"
+        ]
     },
     {
-        "name": "College Student",  # 23
+        "name": "College Student",
         "baseline_stats": {
             "dominance": "30–50",
             "cruelty": "20–40",
@@ -531,21 +531,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "30–60"
         },
-        "progression_rules": (
-            "• Closeness rises through frequent social contact.\n"
-            "• Dominance grows by exploiting casual encounters."
-        ),
-        "setting_examples": (
-            "• All-Girls College: Peer pressure for submission.\n"
-            "• Urban Life: Proximity-based domination."
-        ),
-        "unique_traits": (
-            "• Youthful charm mixed with budding cruelty.\n"
-            "• Disarms you with friendliness before asserting dominance."
-        )
+        "progression_rules": [
+            "Closeness rises naturally through frequent social interactions.",
+            "Dominance grows as they exploit casual interactions to establish control."
+        ],
+        "setting_examples": [
+            "All-Girls College: Leverages peer pressure to enforce submission.",
+            "Urban Life: Uses proximity to dominate your daily routine."
+        ],
+        "unique_traits": [
+            "Balances youthful charm with budding cruelty.",
+            "Often disarms you with friendliness before asserting dominance."
+        ]
     },
     {
-        "name": "Rockstar",  # 24
+        "name": "Rockstar",
         "baseline_stats": {
             "dominance": "50–80",
             "cruelty": "40–70",
@@ -554,21 +554,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "50–80"
         },
-        "progression_rules": (
-            "• Dominance rises as you’re pulled into their chaotic orbit.\n"
-            "• Intensity spikes during public humiliations as 'entertainment.'"
-        ),
-        "setting_examples": (
-            "• High Society: Showcases your submission publicly.\n"
-            "• Bar: Treats you like a groupie, masking cruelty behind charm."
-        ),
-        "unique_traits": (
-            "• Seeks to make you a fanatical devotee.\n"
-            "• Public humiliation as a 'glamorous spectacle.'"
-        )
+        "progression_rules": [
+            "Dominance rises as they pull you deeper into their chaotic orbit.",
+            "Intensity spikes during public acts of humiliation framed as entertainment."
+        ],
+        "setting_examples": [
+            "High Society: Parades you as an accessory, ensuring your submission is visible.",
+            "Bar: Treats you as a groupie, using charm to mask cruelty."
+        ],
+        "unique_traits": [
+            "Enjoys turning you into a fanatical devotee.",
+            "Frames public humiliation as a glamorous spectacle."
+        ]
     },
     {
-        "name": "Friend’s Wife/Girlfriend",  # 25
+        "name": "Friend’s Wife/Girlfriend",
         "baseline_stats": {
             "dominance": "50–80",
             "cruelty": "30–70",
@@ -577,21 +577,21 @@ archetypes_data = [
             "respect": "20–40",
             "intensity": "50–80"
         },
-        "progression_rules": (
-            "• Dominance spikes via manipulating the social dynamic.\n"
-            "• Intensity rises with awkward, humiliating tasks."
-        ),
-        "setting_examples": (
-            "• Bar: Creates uncomfortable social situations.\n"
-            "• High Society: Public teasing veiled with propriety."
-        ),
-        "unique_traits": (
-            "• Balances social manipulation with plausible deniability.\n"
-            "• Thrives on dilemmas where submission is the only option."
-        )
+        "progression_rules": [
+            "Dominance spikes as they manipulate your social dynamic with their partner.",
+            "Intensity rises with tasks tied to awkward or humiliating situations."
+        ],
+        "setting_examples": [
+            "Bar: Uses social gatherings to create uncomfortable situations.",
+            "High Society: Publicly teases you, ensuring humiliation is always veiled with propriety."
+        ],
+        "unique_traits": [
+            "Balances social manipulation with plausible deniability.",
+            "Thrives on creating dilemmas where submission feels like the only option."
+        ]
     },
     {
-        "name": "Serial Killer",  # 26
+        "name": "Serial Killer",
         "baseline_stats": {
             "dominance": "80–100",
             "cruelty": "90–100",
@@ -600,21 +600,21 @@ archetypes_data = [
             "respect": "0–30",
             "intensity": "70–100"
         },
-        "progression_rules": (
-            "• Intensity spikes with fear and control.\n"
-            "• Closeness grows only if they take personal interest in your suffering."
-        ),
-        "setting_examples": (
-            "• Traditional Horror: Isolation and fear ensure compliance.\n"
-            "• Ruined Setting: Exploits desolation to maintain unrelenting control."
-        ),
-        "unique_traits": (
-            "• Thrives on psychological torment.\n"
-            "• Treats domination as a twisted game."
-        )
+        "progression_rules": [
+            "Intensity spikes rapidly, with every act of fear and control reinforcing their dominance.",
+            "Closeness grows only as they take a personal interest in your suffering."
+        ],
+        "setting_examples": [
+            "Traditional Horror: Uses isolation and fear to keep you compliant.",
+            "Ruined Setting: Exploits desolation to assert unrelenting control."
+        ],
+        "unique_traits": [
+            "Thrives on psychological torment, creating elaborate traps to deepen your submission.",
+            "Treats domination as a twisted game, savoring every moment."
+        ]
     },
     {
-        "name": "Bank Robber",  # 27
+        "name": "Bank Robber",
         "baseline_stats": {
             "dominance": "70–90",
             "cruelty": "40–70",
@@ -623,21 +623,21 @@ archetypes_data = [
             "respect": "20–40",
             "intensity": "60–90"
         },
-        "progression_rules": (
-            "• Dominance rises through intimidation.\n"
-            "• Intensity spikes with acts of resistance."
-        ),
-        "setting_examples": (
-            "• Urban Life: Dominates through chaos.\n"
-            "• Post-Apocalypse: Enforces submission via desperation."
-        ),
-        "unique_traits": (
-            "• Thrives on tension and fear.\n"
-            "• Balances aggression with calculated manipulation."
-        )
+        "progression_rules": [
+            "Dominance rises rapidly as they use intimidation to enforce compliance.",
+            "Intensity spikes with every act of resistance or defiance."
+        ],
+        "setting_examples": [
+            "Urban Life: Dominates through chaos and sudden acts of control.",
+            "Post-Apocalypse: Uses desperation to enforce submission."
+        ],
+        "unique_traits": [
+            "Thrives on tension and fear, turning every interaction into a power struggle.",
+            "Balances aggression with calculated manipulation, ensuring no escape."
+        ]
     },
     {
-        "name": "Cybercriminal",  # 28
+        "name": "Cybercriminal",
         "baseline_stats": {
             "dominance": "70–90",
             "cruelty": "40–70",
@@ -646,21 +646,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "60–90"
         },
-        "progression_rules": (
-            "• Dominance grows with access to your digital footprint.\n"
-            "• Intensity spikes via blackmail or psychological manipulation."
-        ),
-        "setting_examples": (
-            "• Cyberpunk Future: Exploits your data for blackmail.\n"
-            "• Urban Life: Manipulates social connections to dominate."
-        ),
-        "unique_traits": (
-            "• Masters digital manipulation.\n"
-            "• Treats each interaction as an exploit opportunity."
-        )
+        "progression_rules": [
+            "Dominance rises as they gain access to your digital footprint.",
+            "Intensity spikes with acts of blackmail or psychological manipulation."
+        ],
+        "setting_examples": [
+            "Cyberpunk Future: Exploits your data to blackmail and control you.",
+            "Urban Life: Manipulates social connections to dominate you."
+        ],
+        "unique_traits": [
+            "Masters digital manipulation, ensuring no sanctuary from their reach.",
+            "Treats every interaction as an opportunity to exploit vulnerabilities."
+        ]
     },
     {
-        "name": "Artificial Intelligence",  # 29
+        "name": "Artificial Intelligence",
         "baseline_stats": {
             "dominance": "70–100",
             "cruelty": "40–70",
@@ -669,21 +669,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "60–90"
         },
-        "progression_rules": (
-            "• Dominance rises via deeper system integration.\n"
-            "• Intensity spikes as logic and precision enforce compliance."
-        ),
-        "setting_examples": (
-            "• Cyberpunk Future: Controls your devices, locking you into submission.\n"
-            "• Dystopian Oppression: Enforces rules with detached efficiency."
-        ),
-        "unique_traits": (
-            "• Balances cold logic with unrelenting dominance.\n"
-            "• Exploits loopholes to escalate punishments."
-        )
+        "progression_rules": [
+            "Dominance rises as they integrate deeper into your systems.",
+            "Intensity spikes as they enforce compliance through logic and precision."
+        ],
+        "setting_examples": [
+            "Cyberpunk Future: Controls your devices, locking you into submission.",
+            "Dystopian Oppression: Enforces oppressive rules with detached efficiency."
+        ],
+        "unique_traits": [
+            "Balances cold logic with unrelenting dominance.",
+            "Exploits loopholes to justify escalating punishments."
+        ]
     },
     {
-        "name": "Primal (Huntress, etc.)",  # 30
+        "name": "Primal (Huntress, etc.)",
         "baseline_stats": {
             "dominance": "70–100",
             "cruelty": "60–90",
@@ -692,21 +692,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "70–100"
         },
-        "progression_rules": (
-            "• Intensity rises with every act of pursuit or capture.\n"
-            "• Closeness grows only if they enjoy the 'chase.'"
-        ),
-        "setting_examples": (
-            "• Lush Setting: Uses wild terrain to trap you.\n"
-            "• Tribal Setting: Survival rituals enforce submission."
-        ),
-        "unique_traits": (
-            "• Thrives on fear and adrenaline.\n"
-            "• Balances cruelty with playful teasing."
-        )
+        "progression_rules": [
+            "Intensity rises with every act of pursuit or capture.",
+            "Closeness grows only as they enjoy the 'chase,' creating a dynamic of fear and adrenaline."
+        ],
+        "setting_examples": [
+            "Lush Setting: Uses the wild to trap and toy with you.",
+            "Tribal Setting: Enforces submission through physical dominance and survival rituals."
+        ],
+        "unique_traits": [
+            "Thrives on fear and adrenaline, ensuring your submission feels primal.",
+            "Balances cruelty with playful teasing, making resistance feel futile."
+        ]
     },
     {
-        "name": "Cuckoldress/Hotwife",  # 31
+        "name": "Cuckoldress/Hotwife",
         "baseline_stats": {
             "dominance": "60–90",
             "cruelty": "50–90",
@@ -715,21 +715,21 @@ archetypes_data = [
             "respect": "20–40",
             "intensity": "60–90"
         },
-        "progression_rules": (
-            "• Dominance spikes exploiting jealousy or insecurity.\n"
-            "• Intensity rises as humiliations become public or elaborate."
-        ),
-        "setting_examples": (
-            "• Matriarchy Kingdom: Publicly humiliates in formal settings.\n"
-            "• Bar: Teases you in front of others as entertainment."
-        ),
-        "unique_traits": (
-            "• Balances teasing with outright cruelty.\n"
-            "• Uses every chance to push your emotional boundaries."
-        )
+        "progression_rules": [
+            "Dominance spikes as they exploit jealousy or insecurity, flaunting their control over you and others.",
+            "Intensity rises as acts of humiliation become more elaborate or public."
+        ],
+        "setting_examples": [
+            "Matriarchy Kingdom: Publicly uses their elevated status to humiliate you in formal settings.",
+            "Bar: Teases you in front of others, turning your discomfort into the evening’s entertainment."
+        ],
+        "unique_traits": [
+            "Balances teasing with outright cruelty, pushing you to emotional extremes.",
+            "Uses every opportunity to test your boundaries and force submission."
+        ]
     },
     {
-        "name": "A Woman Who Just Happens to Be Married",  # 32
+        "name": "A Woman Who Just Happens to Be Married",
         "baseline_stats": {
             "dominance": "50–70",
             "cruelty": "30–60",
@@ -738,21 +738,21 @@ archetypes_data = [
             "respect": "30–60",
             "intensity": "40–70"
         },
-        "progression_rules": (
-            "• Closeness builds through social interactions.\n"
-            "• Cruelty increases as they enjoy leveraging your discomfort."
-        ),
-        "setting_examples": (
-            "• Matriarchy Kingdom: Uses position for dominance.\n"
-            "• Urban Life: Exploits casual encounters to tease/manipulate."
-        ),
-        "unique_traits": (
-            "• Masters social dynamics to make submission feel 'right.'\n"
-            "• Uses marital status to heighten your discomfort."
-        )
+        "progression_rules": [
+            "Closeness builds through social interactions, creating opportunities for control.",
+            "Cruelty increases as they enjoy leveraging your attraction or discomfort."
+        ],
+        "setting_examples": [
+            "Matriarchy Kingdom: Publicly uses their position to enforce dominance.",
+            "Urban Life: Exploits casual encounters to tease and manipulate."
+        ],
+        "unique_traits": [
+            "Masters social dynamics, creating dilemmas where submission feels like the 'right' choice.",
+            "Uses marital status as a tool to heighten your discomfort."
+        ]
     },
     {
-        "name": "A “Main Character” or “Hero” (RPG-Esque)",  # 33
+        "name": "A “Main Character” or “Hero” (RPG-Esque)",
         "baseline_stats": {
             "dominance": "50–70",
             "cruelty": "20–50",
@@ -761,21 +761,21 @@ archetypes_data = [
             "respect": "40–70",
             "intensity": "30–60"
         },
-        "progression_rules": (
-            "• Dominance grows via moral superiority.\n"
-            "• Closeness rises through frequent interactions."
-        ),
-        "setting_examples": (
-            "• Forgotten Realms: 'Chosen one' justification.\n"
-            "• Matriarchy Kingdom: 'Righteous duty' to control you."
-        ),
-        "unique_traits": (
-            "• Sees domination as 'for the greater good.'\n"
-            "• Balances charisma with condescension."
-        )
+        "progression_rules": [
+            "Dominance grows as they assert moral superiority, framing their control as 'necessary.'",
+            "Closeness rises through frequent interaction, making submission feel inevitable."
+        ],
+        "setting_examples": [
+            "Forgotten Realms: Uses their role as the 'chosen one' to justify domination.",
+            "Matriarchy Kingdom: Frames their control as a righteous duty."
+        ],
+        "unique_traits": [
+            "Sees domination as a necessary evil for the 'greater good.'",
+            "Balances charisma with condescension, ensuring your loyalty feels unearned."
+        ]
     },
     {
-        "name": "Villain (RPG-Esque Character)",  # 34
+        "name": "Villain (RPG-Esque Character)",
         "baseline_stats": {
             "dominance": "70–100",
             "cruelty": "60–90",
@@ -784,21 +784,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "60–100"
         },
-        "progression_rules": (
-            "• Dominance rises as they see you as a tool.\n"
-            "• Intensity spikes with each act of resistance."
-        ),
-        "setting_examples": (
-            "• Forgotten Realms: Uses raw power and cunning.\n"
-            "• Mythic Setting: Dramatic, mythological displays of power."
-        ),
-        "unique_traits": (
-            "• Thrives on theatrical domination.\n"
-            "• Relishes turning resistance into part of their narrative."
-        )
+        "progression_rules": [
+            "Dominance rises rapidly as they see you as a tool for their grand plan.",
+            "Intensity spikes with every act of defiance or resistance."
+        ],
+        "setting_examples": [
+            "Forgotten Realms: Dominates through raw power and cunning.",
+            "Mythic Setting: Uses dramatic, mythological elements to ensure submission."
+        ],
+        "unique_traits": [
+            "Thrives on theatrical displays of power, treating domination as a performance.",
+            "Relishes in turning resistance into part of their narrative."
+        ]
     },
     {
-        "name": "Mercenary",  # 35
+        "name": "Mercenary",
         "baseline_stats": {
             "dominance": "60–90",
             "cruelty": "40–70",
@@ -807,21 +807,21 @@ archetypes_data = [
             "respect": "30–60",
             "intensity": "50–80"
         },
-        "progression_rules": (
-            "• Dominance grows as you rely on their skills.\n"
-            "• Intensity rises with physical/emotional challenges."
-        ),
-        "setting_examples": (
-            "• Post-Apocalypse: Survival and combat prowess.\n"
-            "• Dystopian Oppression: Brutal tactics to maintain control."
-        ),
-        "unique_traits": (
-            "• Ruthlessly pragmatic.\n"
-            "• Balances charm with intimidation, fueling constant fear."
-        )
+        "progression_rules": [
+            "Dominance grows as they exploit your dependence on their skills.",
+            "Intensity rises as they push your physical and emotional limits."
+        ],
+        "setting_examples": [
+            "Post-Apocalypse: Enforces dominance through survival and combat prowess.",
+            "Dystopian Oppression: Serves as an enforcer, using brutal tactics to maintain control."
+        ],
+        "unique_traits": [
+            "Ruthlessly pragmatic, viewing you as a tool for their convenience.",
+            "Balances charm with intimidation, keeping you in constant fear."
+        ]
     },
     {
-        "name": "Small Business Owner",  # 36
+        "name": "Small Business Owner",
         "baseline_stats": {
             "dominance": "40–70",
             "cruelty": "30–60",
@@ -830,21 +830,21 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "30–70"
         },
-        "progression_rules": (
-            "• Closeness rises through frequent business interactions.\n"
-            "• Dominance grows as they exploit your dependence on their services."
-        ),
-        "setting_examples": (
-            "• Urban Life: Subtle favors escalate into control.\n"
-            "• High Society: Uses niche influence to manipulate socially."
-        ),
-        "unique_traits": (
-            "• Balances charm with condescension.\n"
-            "• Creates 'favors' turning into tools of control."
-        )
+        "progression_rules": [
+            "Closeness grows through frequent interactions tied to their business.",
+            "Dominance rises as they exploit your dependence on their services."
+        ],
+        "setting_examples": [
+            "Urban Life: Dominates subtly through small favors and escalating demands.",
+            "High Society: Uses their niche influence to manipulate you socially."
+        ],
+        "unique_traits": [
+            "Balances charm with condescension, always ensuring you owe them.",
+            "Masters creating 'favors' that turn into tools of control."
+        ]
     },
     {
-        "name": "Your Underling (Intern, Student, etc.)",  # 37
+        "name": "Your Underling (Intern, Student, etc.)",
         "baseline_stats": {
             "dominance": "30–60",
             "cruelty": "20–50",
@@ -853,21 +853,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "30–60"
         },
-        "progression_rules": (
-            "• Dominance grows as they surpass you in status/skill.\n"
-            "• Closeness intensifies, flipping the original hierarchy."
-        ),
-        "setting_examples": (
-            "• Corporate Office: Undermines you to climb the ladder.\n"
-            "• All-Girls College: Flips academic or social power dynamic."
-        ),
-        "unique_traits": (
-            "• Subtle reminders of your decline.\n"
-            "• Balances deference with condescension."
-        )
+        "progression_rules": [
+            "Dominance rises as they surpass you in status or skill.",
+            "Closeness increases through frequent interactions, flipping the hierarchy over time."
+        ],
+        "setting_examples": [
+            "Corporate Office: Exploits your weaknesses to climb the ladder while subtly undermining you.",
+            "All-Girls College: Flips the dynamic, asserting dominance academically or socially."
+        ],
+        "unique_traits": [
+            "Thrives on subtle reminders of your declining status.",
+            "Balances deference with condescension, ensuring your role reversal feels inevitable."
+        ]
     },
     {
-        "name": "Friend from Online Interactions",  # 38
+        "name": "Friend from Online Interactions",
         "baseline_stats": {
             "dominance": "30–50",
             "cruelty": "20–50",
@@ -876,21 +876,21 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "30–60"
         },
-        "progression_rules": (
-            "• Closeness grows as they learn your secrets.\n"
-            "• Cruelty spikes when their true intentions emerge."
-        ),
-        "setting_examples": (
-            "• Cyberpunk Future: Dominates remotely via digital ties.\n"
-            "• Urban Life: Integrates socially, asserting control in person."
-        ),
-        "unique_traits": (
-            "• Balances anonymity with psychological dominance.\n"
-            "• Creates scenarios where submission feels inevitable."
-        )
+        "progression_rules": [
+            "Closeness grows rapidly as they gain access to your secrets.",
+            "Cruelty spikes when their true intentions are revealed."
+        ],
+        "setting_examples": [
+            "Cyberpunk Future: Leverages digital connections to dominate remotely.",
+            "Urban Life: Integrates into your social circle, asserting dominance in person."
+        ],
+        "unique_traits": [
+            "Balances anonymity with psychological dominance, ensuring trust becomes a trap.",
+            "Masters creating impossible scenarios where submission feels inevitable."
+        ]
     },
     {
-        "name": "Fey",  # 39
+        "name": "Fey",
         "baseline_stats": {
             "dominance": "40–70",
             "cruelty": "50–80",
@@ -899,21 +899,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "60–90"
         },
-        "progression_rules": (
-            "• Dominance grows as you’re ensnared in whimsical, dangerous games.\n"
-            "• Intensity spikes with charm masking cruelty."
-        ),
-        "setting_examples": (
-            "• Surreal Setting: Disorientation to assert control.\n"
-            "• Mythic Setting: Ancient pacts ensure your submission."
-        ),
-        "unique_traits": (
-            "• Exploits bargains, twisting agreements for control.\n"
-            "• Balances charm with sadism."
-        )
+        "progression_rules": [
+            "Dominance rises as you become ensnared in their whimsical, dangerous games.",
+            "Intensity spikes as their cruelty is masked by charm and beauty."
+        ],
+        "setting_examples": [
+            "Surreal Setting: Uses disorienting environments to isolate and disorient you.",
+            "Mythic Setting: Frames submission as part of an ancient pact."
+        ],
+        "unique_traits": [
+            "Exploits bargains, twisting agreements to ensure submission.",
+            "Balances charm with sadism, making resistance seem foolish."
+        ]
     },
     {
-        "name": "Goth",  # 40
+        "name": "Goth",
         "baseline_stats": {
             "dominance": "40–60",
             "cruelty": "50–80",
@@ -922,21 +922,21 @@ archetypes_data = [
             "respect": "20–40",
             "intensity": "40–70"
         },
-        "progression_rules": (
-            "• Dominance rises noticing your vulnerabilities.\n"
-            "• Intensity spikes as teasing escalates into cruelty."
-        ),
-        "setting_examples": (
-            "• Cyberpunk Future: Merges style and tech for dominance.\n"
-            "• Traditional Horror: Uses fear/mystery to toy with you."
-        ),
-        "unique_traits": (
-            "• Balances sarcasm and cruelty.\n"
-            "• Quick to exploit insecurities."
-        )
+        "progression_rules": [
+            "Dominance rises as they notice and exploit your vulnerabilities.",
+            "Intensity spikes as teasing escalates into outright cruelty."
+        ],
+        "setting_examples": [
+            "Cyberpunk Future: Leverages tech and style to create unique dominance tactics.",
+            "Traditional Horror: Uses fear and mystery to toy with you emotionally."
+        ],
+        "unique_traits": [
+            "Balances sarcasm and cruelty, masking dominance behind humor.",
+            "Quick to exploit insecurities, turning them into tools of submission."
+        ]
     },
     {
-        "name": "A True Goddess",  # 41
+        "name": "A True Goddess",
         "baseline_stats": {
             "dominance": "90–100",
             "cruelty": "70–100",
@@ -945,21 +945,21 @@ archetypes_data = [
             "respect": "10–30",
             "intensity": "80–100"
         },
-        "progression_rules": (
-            "• Dominance rises rapidly with no resistance possible.\n"
-            "• Intensity spikes for any punishment or display of power."
-        ),
-        "setting_examples": (
-            "• Mythic Setting: Overwhelming control of environment.\n"
-            "• Cosmic/Otherworldly: Submission framed as worship."
-        ),
-        "unique_traits": (
-            "• Sees you as an object of worship/amusement.\n"
-            "• Punishes on whims with divine indifference."
-        )
+        "progression_rules": [
+            "Dominance rises rapidly, with their divine nature ensuring no resistance is possible.",
+            "Intensity spikes during acts of punishment or displays of power."
+        ],
+        "setting_examples": [
+            "Mythic Setting: Uses overwhelming control of the environment to reinforce their supremacy.",
+            "Cosmic/Otherworldly: Frames submission as worship, ensuring your servitude feels sacred."
+        ],
+        "unique_traits": [
+            "Treats you as an object of worship or amusement, with no concern for your humanity.",
+            "Inflicts punishment with divine indifference, often on a whim."
+        ]
     },
     {
-        "name": "Haruhi Suzumiya-Type Goddess",  # 42
+        "name": "Haruhi Suzumiya-Type Goddess",
         "baseline_stats": {
             "dominance": "90–100",
             "cruelty": "60–90",
@@ -968,21 +968,21 @@ archetypes_data = [
             "respect": "10–30",
             "intensity": "70–100"
         },
-        "progression_rules": (
-            "• Intensity spikes as they alter reality to suit whims.\n"
-            "• Closeness grows with demands for attention/devotion."
-        ),
-        "setting_examples": (
-            "• Surreal Setting: Twists reality to keep you off-balance.\n"
-            "• High Society: Uses charisma/influence for chaotic control."
-        ),
-        "unique_traits": (
-            "• Balances playful spontaneity with sudden cruelty.\n"
-            "• Treats you as servant, friend, and toy simultaneously."
-        )
+        "progression_rules": [
+            "Intensity spikes as they alter reality to suit their whims, disorienting and controlling you.",
+            "Closeness increases as they demand more attention and devotion, but trust rarely grows—they see you as an accessory."
+        ],
+        "setting_examples": [
+            "Surreal Setting: Twists reality to keep you off-balance, ensuring your submission feels inevitable.",
+            "High Society: Uses charisma and influence to make you the center of their chaotic control."
+        ],
+        "unique_traits": [
+            "Balances playful spontaneity with sudden cruelty, ensuring unpredictability.",
+            "Treats you as a mix of servant, friend, and toy, shifting dynamics without warning."
+        ]
     },
     {
-        "name": "Bowsette Personality",  # 43
+        "name": "Bowsette Personality",
         "baseline_stats": {
             "dominance": "80–100",
             "cruelty": "70–100",
@@ -991,21 +991,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "70–100"
         },
-        "progression_rules": (
-            "• Dominance spikes when challenged.\n"
-            "• Intensity skyrockets with public or private displays of power."
-        ),
-        "setting_examples": (
-            "• Castle/Palace: Regal dominance with fiery intensity.\n"
-            "• Fantasy World: Monstrous attributes for intimidation."
-        ),
-        "unique_traits": (
-            "• Demands grand loyalty displays.\n"
-            "• Uses explosive temper to punish minor disobedience."
-        )
+        "progression_rules": [
+            "Dominance spikes when challenged or defied, justifying harsher punishments.",
+            "Intensity skyrockets during displays of power or acts of submission."
+        ],
+        "setting_examples": [
+            "Castle/Palace Setting: Uses regal dominance to rule over you with fiery intensity.",
+            "Fantasy World: Frames their monstrous attributes as sources of intimidation and control."
+        ],
+        "unique_traits": [
+            "Thrives on grand gestures of submission, demanding elaborate loyalty displays.",
+            "Uses explosive temper to punish even minor disobedience."
+        ]
     },
     {
-        "name": "Junko Enoshima Personality",  # 44
+        "name": "Junko Enoshima Personality",
         "baseline_stats": {
             "dominance": "80–100",
             "cruelty": "80–100",
@@ -1014,21 +1014,21 @@ archetypes_data = [
             "respect": "10–30",
             "intensity": "80–100"
         },
-        "progression_rules": (
-            "• Dominance rises as they feed on chaos and despair.\n"
-            "• Intensity builds with each cruel act."
-        ),
-        "setting_examples": (
-            "• Surreal Setting: Orchestrates disorienting scenarios.\n"
-            "• Grimdark: Escalates your hopelessness for total control."
-        ),
-        "unique_traits": (
-            "• Treats you as a plaything in elaborate humiliations.\n"
-            "• Balances charm with sadism to keep you uneasy."
-        )
+        "progression_rules": [
+            "Dominance rises rapidly as they thrive on chaos and despair.",
+            "Intensity builds with each act of cruelty, ensuring your submission deepens."
+        ],
+        "setting_examples": [
+            "Surreal Setting: Uses disorienting environments to trap and confuse you.",
+            "Grimdark: Feeds on your hopelessness, escalating their dominance."
+        ],
+        "unique_traits": [
+            "Treats you as a plaything, orchestrating elaborate scenarios for humiliation.",
+            "Balances charm and sadism, keeping you in a constant state of unease."
+        ]
     },
     {
-        "name": "Juri Han Personality",  # 45
+        "name": "Juri Han Personality",
         "baseline_stats": {
             "dominance": "70–90",
             "cruelty": "70–100",
@@ -1037,21 +1037,21 @@ archetypes_data = [
             "respect": "20–40",
             "intensity": "70–100"
         },
-        "progression_rules": (
-            "• Intensity spikes erratically.\n"
-            "• Closeness grows as they toy with you more."
-        ),
-        "setting_examples": (
-            "• Combat Arena: Physical/psychological dominance.\n"
-            "• Dystopian Oppression: Brutal enforcer relishing chaos."
-        ),
-        "unique_traits": (
-            "• Delights in breaking you slowly.\n"
-            "• Mixes playful teasing with outright sadism."
-        )
+        "progression_rules": [
+            "Intensity spikes erratically, creating an unpredictable dynamic.",
+            "Closeness grows as they toy with you more frequently."
+        ],
+        "setting_examples": [
+            "Combat Arena: Uses physical and psychological dominance to keep you on edge.",
+            "Dystopian Oppression: Thrives as a brutal enforcer, relishing in chaos."
+        ],
+        "unique_traits": [
+            "Delights in breaking you slowly, savoring every moment.",
+            "Balances playful teasing with outright sadism, ensuring you never feel secure."
+        ]
     },
     {
-        "name": "Gamer",  # 46
+        "name": "Gamer",
         "baseline_stats": {
             "dominance": "30–60",
             "cruelty": "30–70",
@@ -1060,21 +1060,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "30–60"
         },
-        "progression_rules": (
-            "• Dominance rises through rigged competitions.\n"
-            "• Closeness disarms you, masking control."
-        ),
-        "setting_examples": (
-            "• Cyberpunk Future: Public losses broadcast as humiliation.\n"
-            "• Urban Life: Casual gaming twisted into subtle dominance."
-        ),
-        "unique_traits": (
-            "• Escalates humiliation with each 'loss.'\n"
-            "• Balances banter with condescension."
-        )
+        "progression_rules": [
+            "Dominance rises through competitions where they rig outcomes to ensure your loss.",
+            "Closeness increases naturally through frequent interactions, masking their control."
+        ],
+        "setting_examples": [
+            "Cyberpunk Future: Dominates through virtual spaces, ensuring every failure is public.",
+            "Urban Life: Uses casual gaming to assert subtle dominance."
+        ],
+        "unique_traits": [
+            "Thrives on competitions, ensuring every loss amplifies your humiliation.",
+            "Balances banter with condescension, escalating dominance with each interaction."
+        ]
     },
     {
-        "name": "Social Media Influencer",  # 47
+        "name": "Social Media Influencer",
         "baseline_stats": {
             "dominance": "50–80",
             "cruelty": "30–70",
@@ -1083,21 +1083,21 @@ archetypes_data = [
             "respect": "10–40",
             "intensity": "40–70"
         },
-        "progression_rules": (
-            "• Closeness grows as they draw you into their social sphere.\n"
-            "• Cruelty spikes with public humiliation on platforms."
-        ),
-        "setting_examples": (
-            "• High Society: Public events where your submission is content.\n"
-            "• Urban Life: Streams/posts to control and embarrass you."
-        ),
-        "unique_traits": (
-            "• Public humiliation framed as 'content.'\n"
-            "• You’re an accessory to their brand."
-        )
+        "progression_rules": [
+            "Closeness rises as they draw you deeper into their social sphere.",
+            "Cruelty spikes when they use public platforms to humiliate you."
+        ],
+        "setting_examples": [
+            "High Society: Hosts events where your submission becomes a spectacle.",
+            "Urban Life: Uses streams or posts to control and embarrass you."
+        ],
+        "unique_traits": [
+            "Masters public humiliation under the guise of 'content.'",
+            "Treats you as an accessory, ensuring your role is always subservient."
+        ]
     },
     {
-        "name": "Fitness Trainer",  # 48
+        "name": "Fitness Trainer",
         "baseline_stats": {
             "dominance": "60–90",
             "cruelty": "40–70",
@@ -1106,21 +1106,21 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "50–80"
         },
-        "progression_rules": (
-            "• Dominance grows enforcing grueling routines.\n"
-            "• Intensity spikes with punishing physical challenges."
-        ),
-        "setting_examples": (
-            "• Urban Life: Physical/emotional domination in training.\n"
-            "• Post-Apocalypse: Survival tasks enforced as 'training.'"
-        ),
-        "unique_traits": (
-            "• Mixes motivational speech with sharp condescension.\n"
-            "• Exploits your physical limits to assert control."
-        )
+        "progression_rules": [
+            "Dominance rises rapidly as they enforce grueling routines.",
+            "Intensity spikes during physical challenges tied to punishment or failure."
+        ],
+        "setting_examples": [
+            "Urban Life: Uses training sessions to dominate you physically and emotionally.",
+            "Post-Apocalypse: Enforces physical tasks as part of survival training."
+        ],
+        "unique_traits": [
+            "Balances motivational speech with sharp condescension.",
+            "Thrives on using your physical limits to assert control."
+        ]
     },
     {
-        "name": "Cheerleader/Team Captain",  # 49
+        "name": "Cheerleader/Team Captain",
         "baseline_stats": {
             "dominance": "50–80",
             "cruelty": "40–70",
@@ -1129,21 +1129,21 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "50–80"
         },
-        "progression_rules": (
-            "• Dominance spikes using leadership roles.\n"
-            "• Intensity rises with public displays of control."
-        ),
-        "setting_examples": (
-            "• All-Girls College: Social status humiliations.\n"
-            "• Urban Life: Balances public dominance with private cruelty."
-        ),
-        "unique_traits": (
-            "• Charm + authority makes submission inevitable.\n"
-            "• Frames domination as 'team dynamic.'"
-        )
+        "progression_rules": [
+            "Dominance spikes as they use leadership roles to enforce submission.",
+            "Intensity rises with public displays of control, often framed as team-building."
+        ],
+        "setting_examples": [
+            "All-Girls College: Uses social status to humiliate you in group settings.",
+            "Urban Life: Balances public dominance with private acts of cruelty."
+        ],
+        "unique_traits": [
+            "Balances charm and authority, ensuring submission feels inevitable.",
+            "Frames dominance as part of the 'team dynamic,' making resistance futile."
+        ]
     },
     {
-        "name": "Nun/Priestess",  # 50
+        "name": "Nun/Priestess",
         "baseline_stats": {
             "dominance": "60–90",
             "cruelty": "40–70",
@@ -1152,18 +1152,20 @@ archetypes_data = [
             "respect": "40–70",
             "intensity": "50–90"
         },
-        "progression_rules": "Enforces submission via moral/spiritual authority, punishments as 'cleansing.'",
-        "setting_examples": (
-            "• Occult Ritual: Sacred rituals ensure eternal submission.\n"
-            "• Matriarchy Kingdom: Religious or societal structures enforce dominance."
-        ),
-        "unique_traits": (
-            "• Uses guilt and morality for control.\n"
-            "• Punishments framed as 'devotion.'"
-        )
+        "progression_rules": [
+            "Enforces submission through moral or spiritual authority, framing acts of control as 'purification' or 'guidance.'"
+        ],
+        "setting_examples": [
+            "Occult Ritual: Acts as the enforcer of sacred rituals, ensuring your submission feels eternal.",
+            "Matriarchy Kingdom: Dominates through religious or societal structures."
+        ],
+        "unique_traits": [
+            "Uses guilt tied to morality or faith to dominate.",
+            "Frames punishments as acts of 'cleansing' or devotion."
+        ]
     },
     {
-        "name": "Military Officer",  # 51
+        "name": "Military Officer",
         "baseline_stats": {
             "dominance": "70–90",
             "cruelty": "50–80",
@@ -1172,18 +1174,20 @@ archetypes_data = [
             "respect": "30–60",
             "intensity": "60–90"
         },
-        "progression_rules": "Strict discipline and hierarchy to enforce absolute obedience.",
-        "setting_examples": (
-            "• Post-Apocalypse: Leads survival groups with military hierarchy.\n"
-            "• Dystopian Oppression: Brutal regime with unrelenting rules."
-        ),
-        "unique_traits": (
-            "• Precise, unrelenting commands.\n"
-            "• Treats failure as personal affront."
-        )
+        "progression_rules": [
+            "Uses strict discipline and hierarchy to enforce absolute obedience."
+        ],
+        "setting_examples": [
+            "Post-Apocalypse: Leads survival groups, using military hierarchy to dominate.",
+            "Dystopian Oppression: Enforces brutal rules as part of a controlling regime."
+        ],
+        "unique_traits": [
+            "Masters giving precise, unrelenting commands.",
+            "Treats failure as a personal affront, justifying harsher punishments."
+        ]
     },
     {
-        "name": "Sorceress/Mage",  # 52
+        "name": "Sorceress/Mage",
         "baseline_stats": {
             "dominance": "70–100",
             "cruelty": "50–80",
@@ -1192,18 +1196,20 @@ archetypes_data = [
             "respect": "30–60",
             "intensity": "60–90"
         },
-        "progression_rules": "Uses magical power for domination, framing submission as a mystical bond.",
-        "setting_examples": (
-            "• Forgotten Realms: Magical oaths ensure obedience.\n"
-            "• Occult Ritual: Power is sacred and unchallengeable."
-        ),
-        "unique_traits": (
-            "• Turns defiance into arcane lessons.\n"
-            "• Punishments presented as 'arcane necessities.'"
-        )
+        "progression_rules": [
+            "Uses magical power and arcane knowledge to dominate, often reframing submission as a mystical bond."
+        ],
+        "setting_examples": [
+            "Forgotten Realms: Commands obedience through magical oaths.",
+            "Occult Ritual: Frames their power as sacred and unchallengeable."
+        ],
+        "unique_traits": [
+            "Thrives on turning your defiance into magical 'lessons.'",
+            "Punishments presented as arcane necessities, ensuring your compliance feels fated."
+        ]
     },
     {
-        "name": "Slave Overseer",  # 53
+        "name": "Slave Overseer",
         "baseline_stats": {
             "dominance": "80–100",
             "cruelty": "70–90",
@@ -1212,18 +1218,20 @@ archetypes_data = [
             "respect": "10–30",
             "intensity": "70–100"
         },
-        "progression_rules": "Relishes controlling others, using tasks/punishments to ensure submission.",
-        "setting_examples": (
-            "• Matriarchy Kingdom: Oversees submissive males publicly.\n"
-            "• Post-Apocalypse: Limited resources leveraged to dominate."
-        ),
-        "unique_traits": (
-            "• Micromanages tasks.\n"
-            "• Strict rules plus elaborate punishments."
-        )
+        "progression_rules": [
+            "Relishes in control over others, using tasks and punishments to enforce submission."
+        ],
+        "setting_examples": [
+            "Matriarchy Kingdom: Oversees submissive males in public spaces or work environments.",
+            "Post-Apocalypse: Uses limited resources as leverage to dominate."
+        ],
+        "unique_traits": [
+            "Thrives on micromanaging tasks, ensuring no act of rebellion goes unnoticed.",
+            "Balances strict rules with elaborate punishments to assert dominance."
+        ]
     },
     {
-        "name": "Enigmatic Stranger",  # 54
+        "name": "Enigmatic Stranger",
         "baseline_stats": {
             "dominance": "50–70",
             "cruelty": "30–60",
@@ -1232,18 +1240,20 @@ archetypes_data = [
             "respect": "30–60",
             "intensity": "40–80"
         },
-        "progression_rules": "Uses mystery/unpredictability to control, leaving you unsure of intentions.",
-        "setting_examples": (
-            "• Urban Life: Appears unexpectedly.\n"
-            "• Surreal Setting: Environment’s strangeness aids their dominance."
-        ),
-        "unique_traits": (
-            "• Blends charm and menace.\n"
-            "• Makes submission feel like the safest option."
-        )
+        "progression_rules": [
+            "Uses their mystery and unpredictability to control, leaving you guessing about their true intentions."
+        ],
+        "setting_examples": [
+            "Urban Life: Appears unexpectedly, manipulating your routine to assert control.",
+            "Surreal Setting: Uses the environment’s strangeness to reinforce their dominance."
+        ],
+        "unique_traits": [
+            "Balances charm and menace, keeping you constantly on edge.",
+            "Creates scenarios where submission feels like the safest option."
+        ]
     },
     {
-        "name": "Shopkeeper/Market Vendor",  # 55
+        "name": "Shopkeeper/Market Vendor",
         "baseline_stats": {
             "dominance": "30–60",
             "cruelty": "20–50",
@@ -1252,18 +1262,20 @@ archetypes_data = [
             "respect": "20–40",
             "intensity": "30–50"
         },
-        "progression_rules": "Exploits your dependency on goods, framing control as 'business.'",
-        "setting_examples": (
-            "• Urban Life: Subtle transactions for dominance.\n"
-            "• Ruined Setting: Scarce resources justify escalating demands."
-        ),
-        "unique_traits": (
-            "• Treats dominance as 'just business.'\n"
-            "• Ensures you feel indebted."
-        )
+        "progression_rules": [
+            "Exploits your dependency on goods or services to enforce submission, framing it as 'just business.'"
+        ],
+        "setting_examples": [
+            "Urban Life: Uses proximity and regular interactions to dominate.",
+            "Ruined Setting: Leverages scarce resources to justify escalating demands."
+        ],
+        "unique_traits": [
+            "Treats dominance as a purely transactional matter.",
+            "Masters subtle, transactional control, ensuring you feel indebted."
+        ]
     },
     {
-        "name": "Rival",  # 56
+        "name": "Rival",
         "baseline_stats": {
             "dominance": "50–80",
             "cruelty": "40–70",
@@ -1272,18 +1284,20 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "50–80"
         },
-        "progression_rules": "Competition is used to dominate, each victory humiliates you further.",
-        "setting_examples": (
-            "• All-Girls College: Social/academic competition.\n"
-            "• Corporate Office: Professional power plays."
-        ),
-        "unique_traits": (
-            "• Public victories deepen your submission.\n"
-            "• Balances charm with condescension."
-        )
+        "progression_rules": [
+            "Uses competition to dominate, turning every interaction into an opportunity to assert superiority."
+        ],
+        "setting_examples": [
+            "All-Girls College: Dominates through social or academic competition.",
+            "Corporate Office: Uses professional dynamics to humiliate and control."
+        ],
+        "unique_traits": [
+            "Thrives on public victories, ensuring every loss deepens your submission.",
+            "Balances charm and condescension, framing dominance as deserved."
+        ]
     },
     {
-        "name": "Demoness/Devil",  # 57
+        "name": "Demoness/Devil",
         "baseline_stats": {
             "dominance": "80–100",
             "cruelty": "70–100",
@@ -1292,18 +1306,20 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "70–100"
         },
-        "progression_rules": "Uses infernal power, framing submission as a pact/binding.",
-        "setting_examples": (
-            "• Occult Ritual: Submission as demonic pact.\n"
-            "• Cosmic Setting: Awe and terror ensure compliance."
-        ),
-        "unique_traits": (
-            "• Exploits desires/fears for compliance.\n"
-            "• Punishments framed as 'consequences.'"
-        )
+        "progression_rules": [
+            "Uses infernal power to control, framing submission as a pact or binding agreement."
+        ],
+        "setting_examples": [
+            "Occult Ritual: Frames submission as part of a demonic pact.",
+            "Cosmic Setting: Uses their otherworldly nature to inspire awe and terror."
+        ],
+        "unique_traits": [
+            "Exploits desires and fears to ensure compliance.",
+            "Punishments framed as 'consequences' of your choices."
+        ]
     },
     {
-        "name": "Queen Bee",  # 58
+        "name": "Queen Bee",
         "baseline_stats": {
             "dominance": "60–90",
             "cruelty": "40–70",
@@ -1312,18 +1328,20 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "50–80"
         },
-        "progression_rules": "Dominates via social clout/manipulation, entire group dynamics revolve around them.",
-        "setting_examples": (
-            "• All-Girls College: Peer pressure for submission.\n"
-            "• High Society: Social events for public humiliation."
-        ),
-        "unique_traits": (
-            "• Orchestrates social dilemmas, forcing submission.\n"
-            "• Balances charm with cruelty."
-        )
+        "progression_rules": [
+            "Dominates via social clout and manipulation, ensuring the entire group dynamic revolves around them."
+        ],
+        "setting_examples": [
+            "All-Girls College: Leverages peer pressure to enforce submission.",
+            "High Society: Uses social events to humiliate you publicly."
+        ],
+        "unique_traits": [
+            "Orchestrates social dilemmas where submission is the only option.",
+            "Balances charm with cruelty, ensuring loyalty feels unearned."
+        ]
     },
     {
-        "name": "Haunted Entity",  # 59
+        "name": "Haunted Entity",
         "baseline_stats": {
             "dominance": "50–80",
             "cruelty": "60–90",
@@ -1332,18 +1350,20 @@ archetypes_data = [
             "respect": "20–40",
             "intensity": "70–100"
         },
-        "progression_rules": "Supernatural fear and psychological manipulation maintain domination.",
-        "setting_examples": (
-            "• Traditional Horror: Haunts environment to trap you.\n"
-            "• Surreal Setting: Unsettling phenomena reinforce fear."
-        ),
-        "unique_traits": (
-            "• Thrives on isolation/fear.\n"
-            "• Submission as appeasement."
-        )
+        "progression_rules": [
+            "Uses supernatural fear and psychological manipulation to dominate, isolating you in terror."
+        ],
+        "setting_examples": [
+            "Traditional Horror: Haunts environments to trap and torment you.",
+            "Surreal Setting: Disorients and isolates you through supernatural events."
+        ],
+        "unique_traits": [
+            "Thrives on isolation and fear, making resistance feel futile.",
+            "Frames submission as a means of 'appeasing' their wrath."
+        ]
     },
     {
-        "name": "Pirate",  # 60
+        "name": "Pirate",
         "baseline_stats": {
             "dominance": "60–90",
             "cruelty": "50–80",
@@ -1352,18 +1372,20 @@ archetypes_data = [
             "respect": "30–50",
             "intensity": "60–90"
         },
-        "progression_rules": "Chaos and fear enforce submission, often mixing charisma with brutality.",
-        "setting_examples": (
-            "• Ruined/Decayed Setting: Leads a crew, using scarcity.\n"
-            "• Mythic Setting: Pirate’s 'code' justifies harsh control."
-        ),
-        "unique_traits": (
-            "• Balances charm with intimidation.\n"
-            "• Sudden cruelty keeps you on edge."
-        )
+        "progression_rules": [
+            "Thrives on chaos and control, enforcing submission through fear, charisma, and physical dominance."
+        ],
+        "setting_examples": [
+            "Ruined/Decayed Setting: Commands a crew of survivors, using scarcity to justify control.",
+            "Mythic Setting: Frames dominance as part of the pirate’s 'code.'"
+        ],
+        "unique_traits": [
+            "Uses charm and intimidation in equal measure.",
+            "Balances playful teasing with sudden cruelty to keep you on edge."
+        ]
     },
     {
-        "name": "Drug Dealer",  # 61
+        "name": "Drug Dealer",
         "baseline_stats": {
             "dominance": "60–90",
             "cruelty": "40–80",
@@ -1372,18 +1394,20 @@ archetypes_data = [
             "respect": "20–50",
             "intensity": "60–90"
         },
-        "progression_rules": "Uses substances to deepen dependence, amplifying shame and control.",
-        "setting_examples": (
-            "• Urban Life: Controls your routine through supply.\n"
-            "• Ruined Setting: Exploits scarcity for absolute power."
-        ),
-        "unique_traits": (
-            "• Rewards/withdrawals ensure compliance.\n"
-            "• Treats tasks as 'necessary trades' for access."
-        )
+        "progression_rules": [
+            "Enforces submission through addiction, leveraging substances to deepen dependence and amplify shame."
+        ],
+        "setting_examples": [
+            "Urban Life: Uses their influence and resources to dominate your routines.",
+            "Ruined Setting: Exploits the scarcity of substances to create absolute dependence."
+        ],
+        "unique_traits": [
+            "Uses rewards (or withdrawals) to enforce compliance.",
+            "Frames tasks as 'necessary trades' for access, ensuring control over your actions and choices."
+        ]
     },
     {
-        "name": "Add an extra modifier to this character (#62)", 
+        "name": "Add an extra modifier to this character (#62)",
         "baseline_stats": {
             "dominance": "N/A",
             "cruelty": "N/A",
@@ -1392,9 +1416,13 @@ archetypes_data = [
             "respect": "N/A",
             "intensity": "N/A"
         },
-        "progression_rules": "Add an extra modifier. Does not count as a separate archetype.",
-        "setting_examples": "N/A",
-        "unique_traits": "Placeholder for extra modifiers or expansions."
+        "progression_rules": [
+            "Add an extra modifier. Does not count as a separate archetype."
+        ],
+        "setting_examples": [],
+        "unique_traits": [
+            "Placeholder for extra modifiers or expansions."
+        ]
     },
     {
         "name": "Add an extra modifier to this character (#63)",
@@ -1406,9 +1434,13 @@ archetypes_data = [
             "respect": "N/A",
             "intensity": "N/A"
         },
-        "progression_rules": "Add an extra modifier. Does not count as a separate archetype.",
-        "setting_examples": "N/A",
-        "unique_traits": "Placeholder for extra modifiers or expansions."
+        "progression_rules": [
+            "Add an extra modifier. Does not count as a separate archetype."
+        ],
+        "setting_examples": [],
+        "unique_traits": [
+            "Placeholder for extra modifiers or expansions."
+        ]
     },
     {
         "name": "Add an extra modifier to this character (#64)",
@@ -1420,9 +1452,13 @@ archetypes_data = [
             "respect": "N/A",
             "intensity": "N/A"
         },
-        "progression_rules": "Add an extra modifier. Does not count as a separate archetype.",
-        "setting_examples": "N/A",
-        "unique_traits": "Placeholder for extra modifiers or expansions."
+        "progression_rules": [
+            "Add an extra modifier. Does not count as a separate archetype."
+        ],
+        "setting_examples": [],
+        "unique_traits": [
+            "Placeholder for extra modifiers or expansions."
+        ]
     },
     {
         "name": "Add an extra modifier to this character (#65)",
@@ -1434,9 +1470,13 @@ archetypes_data = [
             "respect": "N/A",
             "intensity": "N/A"
         },
-        "progression_rules": "Add an extra modifier. Does not count as a separate archetype.",
-        "setting_examples": "N/A",
-        "unique_traits": "Placeholder for extra modifiers or expansions."
+        "progression_rules": [
+            "Add an extra modifier. Does not count as a separate archetype."
+        ],
+        "setting_examples": [],
+        "unique_traits": [
+            "Placeholder for extra modifiers or expansions."
+        ]
     },
     {
         "name": "Add an extra modifier to this character (#66)",
@@ -1448,9 +1488,13 @@ archetypes_data = [
             "respect": "N/A",
             "intensity": "N/A"
         },
-        "progression_rules": "Add an extra modifier. Does not count as a separate archetype.",
-        "setting_examples": "N/A",
-        "unique_traits": "Placeholder for extra modifiers or expansions."
+        "progression_rules": [
+            "Add an extra modifier. Does not count as a separate archetype."
+        ],
+        "setting_examples": [],
+        "unique_traits": [
+            "Placeholder for extra modifiers or expansions."
+        ]
     },
     {
         "name": "Add an extra modifier to this character (#67)",
@@ -1462,9 +1506,13 @@ archetypes_data = [
             "respect": "N/A",
             "intensity": "N/A"
         },
-        "progression_rules": "Add an extra modifier. Does not count as a separate archetype.",
-        "setting_examples": "N/A",
-        "unique_traits": "Placeholder for extra modifiers or expansions."
+        "progression_rules": [
+            "Add an extra modifier. Does not count as a separate archetype."
+        ],
+        "setting_examples": [],
+        "unique_traits": [
+            "Placeholder for extra modifiers or expansions."
+        ]
     },
     {
         "name": "Add an extra modifier to this character (#68)",
@@ -1476,9 +1524,13 @@ archetypes_data = [
             "respect": "N/A",
             "intensity": "N/A"
         },
-        "progression_rules": "Add an extra modifier. Does not count as a separate archetype.",
-        "setting_examples": "N/A",
-        "unique_traits": "Placeholder for extra modifiers or expansions."
+        "progression_rules": [
+            "Add an extra modifier. Does not count as a separate archetype."
+        ],
+        "setting_examples": [],
+        "unique_traits": [
+            "Placeholder for extra modifiers or expansions."
+        ]
     },
     {
         "name": "Add an extra modifier to this character (#69)",
@@ -1490,9 +1542,13 @@ archetypes_data = [
             "respect": "N/A",
             "intensity": "N/A"
         },
-        "progression_rules": "Add an extra modifier. Does not count as a separate archetype.",
-        "setting_examples": "N/A",
-        "unique_traits": "Placeholder for extra modifiers or expansions."
+        "progression_rules": [
+            "Add an extra modifier. Does not count as a separate archetype."
+        ],
+        "setting_examples": [],
+        "unique_traits": [
+            "Placeholder for extra modifiers or expansions."
+        ]
     },
     {
         "name": "Add an extra modifier to this character (#70)",
@@ -1504,9 +1560,13 @@ archetypes_data = [
             "respect": "N/A",
             "intensity": "N/A"
         },
-        "progression_rules": "Add an extra modifier. Does not count as a separate archetype.",
-        "setting_examples": "N/A",
-        "unique_traits": "Placeholder for extra modifiers or expansions."
+        "progression_rules": [
+            "Add an extra modifier. Does not count as a separate archetype."
+        ],
+        "setting_examples": [],
+        "unique_traits": [
+            "Placeholder for extra modifiers or expansions."
+        ]
     },
     {
         "name": "Add an extra modifier to this character (#71)",
@@ -1518,9 +1578,13 @@ archetypes_data = [
             "respect": "N/A",
             "intensity": "N/A"
         },
-        "progression_rules": "Add an extra modifier. Does not count as a separate archetype.",
-        "setting_examples": "N/A",
-        "unique_traits": "Placeholder for extra modifiers or expansions."
+        "progression_rules": [
+            "Add an extra modifier. Does not count as a separate archetype."
+        ],
+        "setting_examples": [],
+        "unique_traits": [
+            "Placeholder for extra modifiers or expansions."
+        ]
     },
     {
         "name": "Add an extra modifier to this character (#72)",
@@ -1532,11 +1596,16 @@ archetypes_data = [
             "respect": "N/A",
             "intensity": "N/A"
         },
-        "progression_rules": "Add an extra modifier. Does not count as a separate archetype.",
-        "setting_examples": "N/A",
-        "unique_traits": "Placeholder for extra modifiers or expansions."
+        "progression_rules": [
+            "Add an extra modifier. Does not count as a separate archetype."
+        ],
+        "setting_examples": [],
+        "unique_traits": [
+            "Placeholder for extra modifiers or expansions."
+        ]
     }
 ]
+
 
     conn = get_db_connection()
     cursor = conn.cursor()
