@@ -56,3 +56,31 @@ def create_npc(npc_name=None, introduced=False):
         raise e
     finally:
         conn.close()
+
+def introduce_random_npc():
+    """
+    Finds an unintroduced NPC in NPCStats (introduced=FALSE), 
+    flips introduced=TRUE, and returns the npc_id.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT npc_id
+        FROM NPCStats
+        WHERE introduced = FALSE
+        LIMIT 1
+    """)
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return None
+
+    npc_id = row[0]
+    cursor.execute("""
+        UPDATE NPCStats
+        SET introduced = TRUE
+        WHERE npc_id = %s
+    """, (npc_id,))
+    conn.commit()
+    conn.close()
+    return npc_id
