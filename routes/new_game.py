@@ -136,11 +136,20 @@ def start_new_game():
         # Commit all meltdown / player changes
         conn.commit()
 
-        # 8. Spawn 3–6 new NPCs
-        num_new_npcs = random.randint(3, 6)
-        for _ in range(num_new_npcs):
-            new_id = create_npc()
-            print(f"Created new NPC with ID={new_id}")  # debug log
+        # 3) Spawn a bank of 10 NPCs that are unintroduced
+        for _ in range(10):
+            new_id = create_npc(introduced=False)
+            print(f"Created new unintroduced NPC, ID={new_id}")
+
+        return jsonify({
+            "message": "New game started with 10 unintroduced NPCs ready in the DB."
+        }), 200
+
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
 
         # 9. Generate new environment
         insert_missing_settings()  # ensure we have data for mega_setting
