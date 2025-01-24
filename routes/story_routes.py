@@ -243,8 +243,22 @@ def build_aggregator_text(aggregator_data, meltdown_flavor=""):
                 f"Close={npc.get('closeness',0)}, Trust={npc.get('trust',0)}, "
                 f"Respect={npc.get('respect',0)}, Int={npc.get('intensity',0)}"
             )
+            
+            # Now add occupation, hobbies, personality, etc.
+            occupation = npc.get("occupation", "Unemployed?")
+            hobbies = npc.get("hobbies", [])
+            personality = npc.get("personality_traits", [])
+            likes = npc.get("likes", [])
+            dislikes = npc.get("dislikes", [])
+
+            lines.append(f"  Occupation: {occupation}")
+            lines.append(f"  Hobbies: {', '.join(hobbies)}" if hobbies else "  Hobbies: None")
+            lines.append(f"  Personality: {', '.join(personality)}" if personality else "  Personality: None")
+            lines.append(f"  Likes: {', '.join(likes)} | Dislikes: {', '.join(dislikes)}")
+            lines.append("")  # blank line for spacing
     else:
         lines.append("(No NPCs found)")
+
 
     # 3) Current Roleplay Data
     lines.append("\n=== CURRENT ROLEPLAY ===")
