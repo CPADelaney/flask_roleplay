@@ -141,5 +141,37 @@ def initialize_database():
         );
     ''') 
 
+    # 10) Locations
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Locations (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            open_hours JSONB
+        );
+    ''')
+
+    # 11) Events
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Events (
+            id SERIAL PRIMARY KEY,
+            event_name TEXT NOT NULL,
+            description TEXT
+            -- Possibly add: start_time, end_time, location_id, etc. 
+        );
+    ''')
+
+    # 12) Quests
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Quests (
+            quest_id SERIAL PRIMARY KEY,
+            quest_name TEXT,
+            status TEXT NOT NULL DEFAULT 'In Progress',
+            progress_detail TEXT,
+            quest_giver TEXT,
+            reward TEXT
+        );
+    ''')
+
     conn.commit()
     conn.close()
