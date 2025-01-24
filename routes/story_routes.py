@@ -1,19 +1,17 @@
 from flask import Blueprint, request, jsonify
-#
-# Import your logic pieces here:
-#
+import logging
+
+# (A) NEW: import your activities logic
+from logic.activities_logic import filter_activities_for_npc, build_short_summary
+
 from logic.stats_logic import update_player_stats  # if you want direct calls
 from logic.meltdown_logic import meltdown_dialog_gpt, record_meltdown_dialog
 from logic.aggregator import get_aggregated_roleplay_context
 from routes.meltdown import remove_meltdown_npc
 from db.connection import get_db_connection
-# If you have a "generate_mega_setting_route" or a direct function:
-from routes.settings_routes import generate_mega_setting_route
-# or if you have a direct function:
+from routes.settings_routes import generate_mega_setting_route  # or your logic version
 
 story_bp = Blueprint("story_bp", __name__)
-
-import logging
 
 @story_bp.route("/next_storybeat", methods=["POST"])
 def next_storybeat():
@@ -56,7 +54,6 @@ def next_storybeat():
         
         # Track meltdown triggering
         meltdown_newly_triggered = False  # Example placeholder
-
         # Track removed NPC IDs and any new NPCs
         removed_npcs_list = []
         new_npc_data = None  # Example placeholder
@@ -67,6 +64,49 @@ def next_storybeat():
         logging.info("Fetching aggregated roleplay context")
         aggregator_data = get_aggregated_roleplay_context(player_name)
         logging.info(f"Aggregator Data: {aggregator_data}")
+
+        # (A) NEW: Decide how to gather NPC archetype + meltdown level, setting, user stats
+        # In your aggregator_data, you might have something like aggregator_data["npcStats"]
+        # We'll do a naive example:
+
+        npc_archetypes = []
+        meltdown_level = 0
+        setting_str = None
+
+        # Possibly read from aggregator_data's currentRoleplay
+        current_rp = aggregator_data.get("currentRoleplay", {})
+        if "CurrentSetting" in current_rp:
+            setting_str = current_rp["CurrentSetting"]  # e.g. "Urban Life" or "High Society"
+
+        # If we have multiple NPC stats, we might pick the "dominant" NPC or top meltdown
+        # This is up to you to define; here's just a sample:
+        npc_list = aggregator_data.get("npcStats", [])
+        if npc_list:
+            # For demonstration, let's just look at the first NPC:
+            # If you actually store .archetypes in the DB or in aggregator_data, we can read it.
+            # We'll just assume no archetypes for now or a placeholder:
+            npc_archetypes = ["Giantess"] if "giant" in npc_list[0].get("npc_name","").lower() else []
+
+            # meltdown_level is if we store it in aggregator_data or from meltdown_npc
+            # We'll guess monica_level is stored in aggregator_data somewhere
+            meltdown_level = 0  # or aggregator_data["someKey"]
+
+        # For user_stats, we do:
+        user_stats = aggregator_data.get("playerStats", {})
+
+        # (A) NEW: Actually fetch activity suggestions
+        chosen_activities = filter_activities_for_npc(
+            npc_archetypes=npc_archetypes,
+            meltdown_level=meltdown_level,
+            user_stats=user_stats,
+            setting=setting_str or ""
+        )
+
+        # Summarize them
+        lines_for_gpt = [build_short_summary(act) for act in chosen_activities]
+
+        # We'll store them in aggregator_data so that build_aggregator_text can display them
+        aggregator_data["activitySuggestions"] = lines_for_gpt
 
         # -----------------------------------------------------------------
         # 4) (Optional) If meltdown NPCs exist, add meltdown flavor
@@ -112,7 +152,6 @@ def next_storybeat():
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 
-
 def force_obedience_to_100(player_name):
     """
     Simple example that updates the player's obedience to 100
@@ -131,6 +170,7 @@ def force_obedience_to_100(player_name):
         conn.rollback()
     finally:
         conn.close()
+
 
 def check_for_meltdown_flavor():
     """
@@ -156,7 +196,6 @@ def check_for_meltdown_flavor():
     # Take the top meltdown NPC
     npc_id, npc_name, meltdown_level = meltdown_npcs[0]
     meltdown_line = meltdown_dialog_gpt(npc_name, meltdown_level)
-    # Optionally record it:
     record_meltdown_dialog(npc_id, meltdown_line)
 
     # Return meltdown flavor text to be appended or embedded in aggregator text
@@ -173,8 +212,6 @@ def build_aggregator_text(aggregator_data, meltdown_flavor=""):
     npc_stats = aggregator_data.get("npcStats", [])
     current_rp = aggregator_data.get("currentRoleplay", {})
 
-    # Build something plain-text or structured; your call.
-    # Below is a straightforward, readable example:
     lines = []
 
     # 1) Summarize Player Stats
@@ -215,7 +252,15 @@ def build_aggregator_text(aggregator_data, meltdown_flavor=""):
     else:
         lines.append("(No current roleplay data)")
 
-    # 4) If meltdown flavor is present, append it
+    # (A) NEW: If we have activity suggestions
+    if "activitySuggestions" in aggregator_data:
+        lines.append("\n=== NPC POTENTIAL ACTIVITIES ===")
+        for suggestion in aggregator_data["activitySuggestions"]:
+            lines.append(f"- {suggestion}")
+        # Tiny instruction so GPT can spontaneously use them or not
+        lines.append("NPC can adopt, combine, or ignore these ideas in line with her personality.\n")
+
+    # 4) meltdown flavor
     if meltdown_flavor:
         lines.append("\n=== MELTDOWN NPC MESSAGE ===")
         lines.append(meltdown_flavor)
