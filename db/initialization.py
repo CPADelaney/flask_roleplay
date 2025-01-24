@@ -156,8 +156,10 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS Events (
             id SERIAL PRIMARY KEY,
             event_name TEXT NOT NULL,
-            description TEXT
-            -- Possibly add: start_time, end_time, location_id, etc. 
+            description TEXT,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            location TEXT NOT NULL
         );
     ''')
 
