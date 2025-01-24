@@ -12,6 +12,8 @@ from routes.meltdown import remove_meltdown_npc
 from db.connection import get_db_connection
 from routes.settings_routes import generate_mega_setting_route
 from logic.time_cycle import advance_time_and_update, get_current_daytime
+from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory, get_player_inventory
+
 
 story_bp = Blueprint("story_bp", __name__)
 
@@ -429,6 +431,34 @@ def build_aggregator_text(aggregator_data, meltdown_flavor=""):
             lines.append(f"  Likes: {', '.join(likes)} | Dislikes: {', '.join(dislikes)}\n")
     else:
         lines.append("(No NPCs found)")
+
+    universal_update = data.get("universal_update", {})
+    
+    inventory_updates = universal_update.get("inventory_updates", {})
+    
+    if inventory_updates:
+        # Suppose "inventory_updates" is something like:
+        # {
+        #   "player_name": "Chase",
+        #   "added_items": ["Potion", "Rope"],
+        #   "removed_items": ["Expired Key"]
+        # }
+        p_name = inventory_updates.get("player_name", "Chase")
+    
+        added = inventory_updates.get("added_items", [])
+        removed = inventory_updates.get("removed_items", [])
+    
+        # For each item to add
+        for item_name in added:
+            add_item_to_inventory(p_name, item_name, 
+                                  description="???",   # or fetch from a reference table
+                                  effect="???", 
+                                  category="misc", 
+                                  quantity=1)
+    
+        # For each item to remove
+        for item_name in removed:
+            remove_item_from_inventory(p_name, item_name, quantity=1)
 
     # Current Roleplay
     lines.append("\n=== CURRENT ROLEPLAY ===")
