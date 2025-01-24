@@ -5,7 +5,7 @@ import random
 from db.connection import get_db_connection
 from logic.meltdown_logic import meltdown_dialog_gpt, record_meltdown_dialog, append_meltdown_file
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
-
+from logic.npc_creation import create_npc
 
 new_game_bp = Blueprint('new_game', __name__)
 
@@ -136,14 +136,17 @@ def start_new_game():
         # Commit all meltdown / player changes
         conn.commit()
 
-        # 8. Generate new environment
-        insert_missing_settings()
-         # Now call the pure logic function
-        mega_data = generate_mega_setting_logic()
+        # 8. Spawn 3–6 new NPCs
+        num_new_npcs = random.randint(3, 6)
+        for _ in range(num_new_npcs):
+            new_id = create_npc()
+            print(f"Created new NPC with ID={new_id}")  # debug log
 
-        # If there's an error
+        # 9. Generate new environment
+        insert_missing_settings()  # ensure we have data for mega_setting
+        mega_data = generate_mega_setting_logic()
         if "error" in mega_data:
-            mega_data["mega_name"] = "No environment available"  # fallback
+            mega_data["mega_name"] = "No environment available"
 
         # Insert environment into CurrentRoleplay
         cursor.execute("""
@@ -154,7 +157,8 @@ def start_new_game():
 
         return jsonify({
             "message": (
-                f"New game started. "
+                "New game started. "
+                f"Spawned {num_new_npcs} new NPCs. "
                 f"New environment = {mega_data['mega_name']}"
             )
         }), 200
