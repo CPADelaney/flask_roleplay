@@ -57,61 +57,48 @@ def advance_time(increment=1):
     set_current_daytime(new_day, new_phase)
     return new_day, new_phase
 
+def advance_time_and_update(increment=1):
+    new_day, new_phase = advance_time(increment)
+    update_npc_schedules_for_time(new_day, new_phase)
+    return new_day, new_phase
+
 def update_npc_schedules_for_time(day, time_of_day):
+    """
+    SINGLE unified function that:
+    - Looks for any 'PlannedEvents' overrides for this day/time
+    - Otherwise uses the npc's default schedule
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    # fetch planned events for overrides
     cursor.execute("""
-        SELECT npc_id, schedule
-        FROM NPCStats
-        WHERE schedule IS NOT NULL
-    """)
-    rows = cursor.fetchall()
-
-    for (npc_id, schedule_json) in rows:
-        if not schedule_json:
-            continue
-        location = schedule_json.get(time_of_day, "Unknown")
-        # We'll store in a column "current_location" for demonstration.
-        cursor.execute("""
-            UPDATE NPCStats
-            SET current_location = %s
-            WHERE npc_id = %s
-        """, (location, npc_id))
-
-    conn.commit()
-    conn.close()
-
-def update_npc_schedules_for_time(day, time_of_day):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # fetch events for this day/time
-    cursor.execute("""
-        SELECT npc_id, override_location 
+        SELECT npc_id, override_location
         FROM PlannedEvents
         WHERE day = %s AND time_of_day = %s
     """, (day, time_of_day))
-    event_rows = cursor.fetchall()
-    event_dict = {r[0]: r[1] for r in event_rows}  # {npc_id: override_loc}
+    override_rows = cursor.fetchall()
+    override_dict = {r[0]: r[1] for r in override_rows}
 
-    # fetch all NPC schedules
+    # fetch all npc schedules
     cursor.execute("""
-        SELECT npc_id, schedule FROM NPCStats
+        SELECT npc_id, schedule
+        FROM NPCStats
     """)
     npc_rows = cursor.fetchall()
 
     for (npc_id, schedule_json) in npc_rows:
-        if npc_id in event_dict:
-            # override
-            new_location = event_dict[npc_id]
+        if npc_id in override_dict:
+            # use override
+            new_location = override_dict[npc_id]
         else:
+            # fallback to default schedule
             if schedule_json:
+                # schedule_json is e.g. { "Morning": "Cafe", "Afternoon": "Park", ... }
                 new_location = schedule_json.get(time_of_day, "Unknown")
             else:
                 new_location = "No schedule"
 
-        # store
         cursor.execute("""
             UPDATE NPCStats
             SET current_location = %s
@@ -120,9 +107,3 @@ def update_npc_schedules_for_time(day, time_of_day):
 
     conn.commit()
     conn.close()
-
-
-def advance_time_and_update(increment=1):
-    new_day, new_phase = advance_time(increment)
-    update_npc_schedules_for_time(new_day, new_phase)
-    return new_day, new_phase
