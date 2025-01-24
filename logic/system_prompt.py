@@ -1,4 +1,4 @@
-# logic/system_prompt.py 
+# logic/system_prompt.py
 
 from db.connection import get_db_connection
 import json
@@ -31,11 +31,11 @@ def build_system_prompt(player_name):
     """, (player_name,))
     row = cursor.fetchone()
     if row:
-        (corr, conf, willp, obed, dep, lust, mres, pend) = row
+        (corr, conf, wlp, obed, dep, lust, mres, pend) = row
     else:
-        (corr, conf, willp, obed, dep, lust, mres, pend) = (0,0,0,0,0,0,0,0)
+        (corr, conf, wlp, obed, dep, lust, mres, pend) = (0,0,0,0,0,0,0,0)
 
-    # 3) Current Setting (if you store it in CurrentRoleplay, for example)
+    # 3) Current Setting
     cursor.execute("SELECT value FROM CurrentRoleplay WHERE key='CurrentSetting'")
     row = cursor.fetchone()
     current_setting = row[0] if row else "Unknown"
@@ -44,7 +44,6 @@ def build_system_prompt(player_name):
     cursor.execute("SELECT value FROM CurrentRoleplay WHERE key='UsedSettings'")
     row = cursor.fetchone()
     if row:
-        # might be a JSON array
         try:
             used_settings = json.loads(row[0])
         except:
@@ -53,17 +52,17 @@ def build_system_prompt(player_name):
         used_settings = []
 
     # 5) NPC relationships/stats
-    # For example, fetch all NPCStats for major NPCs
+    # --> Only fetch introduced NPCs
     cursor.execute("""
         SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity
         FROM NPCStats
+        WHERE introduced = TRUE
         ORDER BY npc_id ASC
     """)
     npc_rows = cursor.fetchall()
 
     npc_info_list = []
-    for r in npc_rows:
-        (n_name, dom, cru, clos, tru, resp, inten) = r
+    for (n_name, dom, cru, clos, tru, resp, inten) in npc_rows:
         npc_info_list.append({
             "name": n_name,
             "dominance": dom,
@@ -74,8 +73,7 @@ def build_system_prompt(player_name):
             "intensity": inten
         })
 
-    # 6) Recent events from memory (e.g., last 5 roleplay segments or so)
-    # We'll pick those with keys like "Effect_..."
+    # 6) Recent events
     cursor.execute("""
         SELECT key, value
         FROM CurrentRoleplay
@@ -91,7 +89,7 @@ def build_system_prompt(player_name):
 
     conn.close()
 
-    # Build a textual summary
+    # Build textual summaries
     advanced_flags_summary = f"""
     - defianceLocked={defiance_locked}
     - cravingHumiliation={craving}
@@ -99,7 +97,7 @@ def build_system_prompt(player_name):
 
     stats_summary = f"""
     [Player Stats: {player_name}]
-      Corruption={corr}, Confidence={conf}, Willpower={willp},
+      Corruption={corr}, Confidence={conf}, Willpower={wlp},
       Obedience={obed}, Dependency={dep}, Lust={lust},
       MentalResilience={mres}, PhysicalEndurance={pend}
     """
@@ -113,11 +111,10 @@ def build_system_prompt(player_name):
                 f"Close={info['closeness']}, Trust={info['trust']}, "
                 f"Respect={info['respect']}, Int={info['intensity']}")
         npc_lines.append(line)
-    npc_summary = "\n".join(npc_lines)
+    npc_summary = "\n".join(npc_lines) if npc_lines else "(No introduced NPCs)"
 
     recent_event_text = "\n".join([f"- {evt}" for evt in recent_events]) or "No recent events"
 
-    # Final prompt
     prompt = f"""
     You are the DM and creative engine for a stat-driven roleplaying scenario.
     You must maintain consistency with the following data from the database:
@@ -146,5 +143,4 @@ def build_system_prompt(player_name):
     referencing the relevant intensity tiers or advanced rules as needed. 
     Maintain continuity with the stats and events provided.
     """
-
     return prompt
