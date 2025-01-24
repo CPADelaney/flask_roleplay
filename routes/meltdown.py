@@ -29,6 +29,7 @@ def remove_meltdown_npc():
         SELECT npc_id, npc_name, monica_level, memory
         FROM NPCStats
         WHERE monica_level > 0
+            AND introduced = TRUE
         ORDER BY monica_level DESC
     """)
     meltdown_npcs = cursor.fetchall()
