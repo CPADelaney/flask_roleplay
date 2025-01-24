@@ -1,4 +1,4 @@
-# main.py (or app.py)
+# main.py 
 
 from flask import Flask
 from routes.meltdown import meltdown_bp
