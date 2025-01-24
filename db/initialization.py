@@ -1,3 +1,5 @@
+# db/initialization.py
+
 from db.connection import get_db_connection
 
 def initialize_database():
@@ -54,23 +56,34 @@ def initialize_database():
             npc_id SERIAL PRIMARY KEY,
             npc_name TEXT NOT NULL,
             introduced BOOLEAN default FALSE,
+
+            -- ARCHETYPES
             archetypes JSONB,
+
+            -- CORE STATS
             dominance INT CHECK (dominance BETWEEN 0 AND 100),
             cruelty INT CHECK (cruelty BETWEEN 0 AND 100),
             closeness INT CHECK (closeness BETWEEN 0 AND 100),
             trust INT CHECK (trust BETWEEN -100 AND 100),
             respect INT CHECK (respect BETWEEN -100 AND 100),
             intensity INT CHECK (intensity BETWEEN 0 AND 100),
+
+            -- MISC
             memory TEXT,
             monica_level INT DEFAULT 0,
             monica_games_left INT DEFAULT 0,
+
+            -- OCCUPATION & PERSONAL DETAILS
             occupation TEXT,
             hobbies JSONB,
             personality_traits JSONB,
             likes JSONB,
             dislikes JSONB,
             affiliations JSONB,
-            schedule JSONB
+
+            -- SCHEDULE
+            schedule JSONB,
+            current_location TEXT
         );
     ''')
 
