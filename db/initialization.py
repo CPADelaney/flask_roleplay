@@ -69,7 +69,8 @@ def initialize_database():
             personality_traits JSONB,
             likes JSONB,
             dislikes JSONB,
-            affiliations JSONB
+            affiliations JSONB,
+            schedule JSONB
         );
     ''')
 
