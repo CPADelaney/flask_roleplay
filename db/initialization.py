@@ -127,5 +127,19 @@ def initialize_database():
         );
     ''')
 
+    # 9) PlayerInventory
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerInventory (
+            id SERIAL PRIMARY KEY,
+            player_name TEXT NOT NULL,            
+            item_name TEXT NOT NULL,            
+            item_description TEXT,             
+            item_effect TEXT,                  
+            quantity INT DEFAULT 1,           
+            category TEXT,                      
+            UNIQUE (player_name, item_name)      
+        );
+    ''') 
+
     conn.commit()
     conn.close()
