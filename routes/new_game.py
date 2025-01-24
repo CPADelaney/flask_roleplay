@@ -13,10 +13,10 @@ new_game_bp = Blueprint('new_game', __name__)
 def start_new_game():
     """
     Clears out Settings, CurrentRoleplay, etc.
-    Only 'Chase' remains in PlayerStats with default stats.
-    Then inserts missing settings, spawns 10 unintroduced NPCs,
-    and generates a new environment stored in CurrentRoleplay.
-    Handles meltdown carryover logic.
+    Only 'Chase' remains in PlayerStats (default stats).
+    Then re-inserts missing settings, spawns 10 unintroduced NPCs,
+    and sets a new environment in CurrentRoleplay.
+    Also handles meltdown carryover logic in case there's an existing meltdown NPC.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -25,12 +25,12 @@ def start_new_game():
         # 1) Clear out 'Settings' and 'CurrentRoleplay'
         cursor.execute("DELETE FROM Settings;")
         cursor.execute("DELETE FROM CurrentRoleplay;")
-        conn.commit()  # commit so we have a clean slate
+        conn.commit()  # ensures we have a clean slate
 
-        # 1b) Re-insert the default settings
+        # 1b) Re-insert the default settings (the minimal approach)
         insert_missing_settings()
 
-        # 2) Gather all NPCs
+        # 2) Gather all existing NPCs (in case meltdown logic or partial keep)
         cursor.execute("""
             SELECT npc_id, npc_name, monica_level, memory
             FROM NPCStats
@@ -53,13 +53,13 @@ def start_new_game():
                 carried_npcs.append((npc_id, npc_name, old_monica_level, old_memory))
                 meltdown_npc = (npc_id, npc_name, old_monica_level, old_memory)
             else:
-                # normal NPC -> keep_chance
+                # normal NPC -> keep based on probability
                 if random.random() < keep_chance:
                     carried_npcs.append((npc_id, npc_name, old_monica_level, old_memory))
                 else:
                     cursor.execute("DELETE FROM NPCStats WHERE npc_id = %s", (npc_id,))
 
-        # 4) Possibly pick meltdown among survivors
+        # 4) Possibly pick meltdown among survivors if none was meltdown before
         if not meltdown_npc and carried_npcs:
             if random.random() < meltdown_pick_chance:
                 chosen = random.choice(carried_npcs)
@@ -70,12 +70,12 @@ def start_new_game():
                 cursor.execute("""
                     UPDATE NPCStats
                     SET monica_level = 1,
-                        memory = CASE WHEN memory IS NULL THEN %s 
+                        memory = CASE WHEN memory IS NULL THEN %s
                                       ELSE memory || E'\n[Meltdown] ' || %s END
                     WHERE npc_id = %s
                 """, (meltdown_line, meltdown_line, c_id))
 
-        # 5) Possibly increment meltdown
+        # 5) Possibly increment meltdown if meltdown NPC still around
         if meltdown_npc:
             npc_id, npc_name, old_mlvl, old_mem = meltdown_npc
             new_level = old_mlvl
@@ -91,6 +91,7 @@ def start_new_game():
         # 6) For carried normal NPCs, partial memory
         for npc_id, npc_name, old_monica_level, old_memory in carried_npcs:
             if old_monica_level == 0:
+                # 50% chance to fully keep memory, else "vague"
                 if random.random() < full_memory_chance:
                     new_memory = old_memory or "Somehow, you remember everything from the last cycle."
                 else:
@@ -119,6 +120,7 @@ def start_new_game():
                 WHERE player_name = 'Chase'
             ''')
         else:
+            # Insert a fresh row if 'Chase' wasn't found
             cursor.execute('''
                 INSERT INTO PlayerStats
                   (player_name, corruption, confidence, willpower, obedience,
@@ -128,13 +130,14 @@ def start_new_game():
 
         conn.commit()
 
-        # 8) Spawn a bank of 10 NPCs with introduced=False
+        # 8) Spawn 10 new unintroduced NPCs
         for _ in range(10):
             new_id = create_npc(introduced=False)
             print(f"Created new unintroduced NPC, ID={new_id}")
 
         # 9) Generate environment
-        insert_missing_settings()  # ensure we have data for mega_setting
+        # re-insert missing settings if needed again (just to ensure no corners missed)
+        insert_missing_settings()
         mega_data = generate_mega_setting_logic()
         if "error" in mega_data:
             mega_data["mega_name"] = "No environment available"
@@ -142,6 +145,7 @@ def start_new_game():
         cursor.execute("""
             INSERT INTO CurrentRoleplay (key, value)
             VALUES ('CurrentSetting', %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
         """, (mega_data["mega_name"],))
         conn.commit()
 
