@@ -1,12 +1,10 @@
-# db/initialization.py
-
 from db.connection import get_db_connection
 
 def initialize_database():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1) Settings table
+    # 1) Settings
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Settings (
             id SERIAL PRIMARY KEY,
@@ -18,7 +16,7 @@ def initialize_database():
         );
     ''')
 
-    # 2) CurrentRoleplay table
+    # 2) CurrentRoleplay
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS CurrentRoleplay (
             key TEXT PRIMARY KEY,
@@ -55,6 +53,7 @@ def initialize_database():
         CREATE TABLE IF NOT EXISTS NPCStats (
             npc_id SERIAL PRIMARY KEY,
             npc_name TEXT NOT NULL,
+            archetypes JSONB,
             dominance INT CHECK (dominance BETWEEN 0 AND 100),
             cruelty INT CHECK (cruelty BETWEEN 0 AND 100),
             closeness INT CHECK (closeness BETWEEN 0 AND 100),
@@ -83,17 +82,17 @@ def initialize_database():
         );
     ''')
 
-    CREATE TABLE IF NOT EXISTS Archetypes (
-    id SERIAL PRIMARY KEY,
-    name TEXT UNIQUE NOT NULL,
-
-    -- Example columns for your doc content:
-    baseline_stats JSONB NOT NULL,  -- e.g. { "dominance": "80–100", "cruelty": "60–90", ... }
-    progression_rules TEXT,         -- or JSONB if you want structured bullet points
-    setting_examples TEXT,          -- or JSONB if you want a list
-    unique_traits TEXT              -- or JSONB if you want to store a list
-);
-
+    # 7) Archetypes
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Archetypes (
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            baseline_stats JSONB NOT NULL,
+            progression_rules JSONB NOT NULL,
+            setting_examples JSONB NOT NULL,
+            unique_traits JSONB NOT NULL
+        );
+    ''')
 
     conn.commit()
     conn.close()
