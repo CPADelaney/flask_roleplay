@@ -12,6 +12,16 @@ def get_aggregated_roleplay_context(player_name="Chase"):
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    # 1) get day/time
+    cursor.execute("SELECT value FROM CurrentRoleplay WHERE key='CurrentDay'")
+    row = cursor.fetchone()
+    current_day = row[0] if row else "1"
+
+    cursor.execute("SELECT value FROM CurrentRoleplay WHERE key='TimeOfDay'")
+    row = cursor.fetchone()
+    time_of_day = row[0] if row else "Morning"
+  
+    
     # 1) Player stats
     cursor.execute("""
         SELECT corruption, confidence, willpower, obedience, dependency,
@@ -93,7 +103,9 @@ def get_aggregated_roleplay_context(player_name="Chase"):
     aggregated = {
         "playerStats": player_stats,
         "npcStats": npc_list,
-        "currentRoleplay": currentroleplay_data
+        "currentRoleplay": currentroleplay_data,
+        "day": current_day,
+        "timeOfDay": time_of_day
     }
 
     # Optionally add meltdown if you store meltdown level or meltdown events in a separate table
