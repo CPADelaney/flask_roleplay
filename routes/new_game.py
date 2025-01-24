@@ -92,15 +92,17 @@ def start_new_game():
         for npc_id, npc_name, old_monica_level, old_memory in carried_npcs:
             if old_monica_level == 0:
                 # 50% chance to fully keep memory, else "vague"
-                if random.random() < full_memory_chance:
-                    new_memory = old_memory or "Somehow, you remember everything from the last cycle."
-                else:
-                    new_memory = "You vaguely recall normal life, but details are blurry..."
-                cursor.execute("""
-                    UPDATE NPCStats
-                    SET memory = %s
-                    WHERE npc_id = %s
-                """, (new_memory, npc_id))
+                    if random.random() < full_memory_chance:
+                        new_entry = "Somehow, you remember everything from the last cycle."
+                    else:
+                        new_entry = "You vaguely recall normal life, but details are blurry..."
+                    
+                    # Instead of overwriting memory, we append this new entry as one item.
+                    cursor.execute("""
+                        UPDATE NPCStats
+                        SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s)
+                        WHERE npc_id = %s
+                    """, (new_entry, npc_id))
 
         # 7) Reset PlayerStats to keep only 'Chase'
         cursor.execute("DELETE FROM PlayerStats WHERE player_name != 'Chase';")
