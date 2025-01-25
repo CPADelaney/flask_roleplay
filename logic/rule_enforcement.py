@@ -343,13 +343,13 @@ def apply_effect(effect_str, player_name, npc_id=None):
                 result["punishmentScenario"] = scenario
             except Exception as e:
                 result["punishmentScenario"] = f"(GPT error: {e})"
-    """
+"""
         # 5) meltdown synergy if meltdown triggered
         if "meltdown" in effect_lower:
             meltdown_line = meltdown_dialog_gpt("EasterEggNPC", 2)
             record_meltdown_dialog(npc_id or 999, meltdown_line)
             result["meltdownLine"] = meltdown_line
-        """
+"""
         # 6) If we found an intensity tier example but didn't do GPT scenario, use it
         if chosen_intensity_tier and not result["punishmentScenario"]:
             result["punishmentScenario"] = f"(From IntensityTier) {chosen_intensity_tier}"
