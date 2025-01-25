@@ -14,11 +14,11 @@ from flask import Blueprint, request, jsonify
 from db.connection import get_db_connection
 import json, random
 import openai  # Only needed if you're calling GPT from here
-    """
+"""
 # If meltdown logic or memory logic are used
 from logic.meltdown_logic import meltdown_dialog_gpt, record_meltdown_dialog
 from logic.memory_logic import store_roleplay_segment
-    """
+"""
 rule_enforcement_bp = Blueprint("rule_enforcement_bp", __name__)
 
 ############################
