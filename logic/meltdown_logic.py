@@ -1,5 +1,5 @@
 # logic/meltdown_logic.py
-
+    """
 import openai
 from db.connection import get_db_connection
 
@@ -54,10 +54,11 @@ def check_and_inject_meltdown() -> str:
         meltdown_rows = cursor.fetchall()
         if meltdown_rows:
             npc_id, npc_name, mlevel = meltdown_rows[0]
-            meltdown_line = meltdown_dialog_gpt(npc_name, mlevel)
-            record_meltdown_dialog(npc_id, meltdown_line)
+         #   meltdown_line = meltdown_dialog_gpt(npc_name, mlevel)
+          #  record_meltdown_dialog(npc_id, meltdown_line)
             # optionally also call append_meltdown_file(npc_name, meltdown_line)
-    finally:
-        conn.close()
+   # finally:
+  #      conn.close()
 
-    return meltdown_line
+   # return meltdown_line
+    """
