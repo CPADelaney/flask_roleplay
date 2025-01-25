@@ -189,7 +189,6 @@ def apply_universal_updates(data: dict):
                 cursor.execute("""
                     DELETE FROM PlayerInventory
                     WHERE player_name=%s AND item_name=%s
-                    LIMIT 1
                 """, (p_n, item))
 
         # 10) quest_updates
