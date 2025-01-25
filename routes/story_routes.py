@@ -7,9 +7,9 @@ import json
 from db.connection import get_db_connection
 from logic.activities_logic import filter_activities_for_npc, build_short_summary
 from logic.stats_logic import update_player_stats
-from logic.meltdown_logic import check_and_inject_meltdown  # Central meltdown synergy
+# from logic.meltdown_logic import check_and_inject_meltdown  # Central meltdown synergy
 from logic.aggregator import get_aggregated_roleplay_context
-from routes.meltdown import remove_meltdown_npc  # If you keep that route
+# from routes.meltdown import remove_meltdown_npc  # If you keep that route
 from routes.settings_routes import generate_mega_setting_logic  # if you want to generate new environment
 from logic.universal_updater import apply_universal_updates  # Single universal update
 from logic.time_cycle import advance_time_and_update
@@ -51,10 +51,10 @@ def next_storybeat():
             logging.info("Setting obedience to 100 for player.")
             force_obedience_to_100(player_name)
 
-        if "remove meltdown" in user_lower:
-            logging.info("Attempting to remove meltdown NPCs")
-            remove_meltdown_npc(force=True)  # calls meltdown removal route logic
-            meltdown_forced_removal = True
+ #       if "remove meltdown" in user_lower:
+ #           logging.info("Attempting to remove meltdown NPCs")
+#            remove_meltdown_npc(force=True)  # calls meltdown removal route logic
+  #          meltdown_forced_removal = True
 
         mega_setting_name_if_generated = None
         if "generate environment" in user_lower or "mega setting" in user_lower:
@@ -64,7 +64,7 @@ def next_storybeat():
             logging.info(f"New Mega Setting: {mega_setting_name_if_generated}")
 
         # We'll track meltdown or new NPC data, etc.
-        meltdown_newly_triggered = False
+     #   meltdown_newly_triggered = False
         removed_npcs_list = []
         new_npc_data = None
 
@@ -230,9 +230,9 @@ def build_aggregator_text(aggregator_data, meltdown_flavor=""):
             lines.append(f"- {suggestion}")
         lines.append("NPC can adopt, combine, or ignore these ideas in line with their personality.\n")
 
-    # meltdown flavor if present
-    if meltdown_flavor:
-        lines.append("\n=== MELTDOWN NPC MESSAGE ===")
-        lines.append(meltdown_flavor)
+  #  # meltdown flavor if present
+ #   if meltdown_flavor:
+  #      lines.append("\n=== MELTDOWN NPC MESSAGE ===")
+   #     lines.append(meltdown_flavor)
 
     return "\n".join(lines)
