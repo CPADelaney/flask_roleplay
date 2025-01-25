@@ -56,7 +56,7 @@ def create_all_tables():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS GameRules (
           id SERIAL PRIMARY KEY,
-          rule_name TEXT NOT NULL,
+          rule_name TEXT UNIQUE NOT NULL,
           condition TEXT NOT NULL,
           effect TEXT NOT NULL
         );
