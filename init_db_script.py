@@ -1,8 +1,6 @@
 # init_db_script.py
-from db.initialization import initialize_database
-from routes.settings_routes import insert_missing_settings
+from db.schema_and_seed import initialize_all_data
 
 if __name__ == "__main__":
-    initialize_database()
-    insert_missing_settings()
-    print("Database and settings inserted (or already exist).")
+    initialize_all_data()
+    print("Database created and default data seeded.")
