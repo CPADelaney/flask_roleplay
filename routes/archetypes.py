@@ -1586,28 +1586,29 @@ archetypes_data = [
             "Placeholder for extra modifiers or expansions."
         ]
     },
-    {
-        "name": "Add an extra modifier to this character (#72)",
-        "baseline_stats": {
-            "dominance": "N/A",
-            "cruelty": "N/A",
-            "closeness": "N/A",
-            "trust": "N/A",
-            "respect": "N/A",
-            "intensity": "N/A"
-        },
-        "progression_rules": [
-            "Add an extra modifier. Does not count as a separate archetype."
-        ],
-        "setting_examples": [],
-        "unique_traits": [
-            "Placeholder for extra modifiers or expansions."
+        {
+            "name": "Add an extra modifier to this character (#72)",
+            "baseline_stats": {
+                "dominance": "N/A",
+                "cruelty": "N/A",
+                "closeness": "N/A",
+                "trust": "N/A",
+                "respect": "N/A",
+                "intensity": "N/A"
+            },
+            "progression_rules": [
+                "Add an extra modifier. Does not count as a separate archetype."
+            ],
+            "setting_examples": [],
+            "unique_traits": [
+                "Placeholder for extra modifiers or expansions."
             ]
         }
     ]
 
+    # IMPORTANT: The closing bracket above lines up with the 'archetypes_data = [' line.
+    # Everything below is at the same indent as 'archetypes_data'.
 
-    # Make sure this bracket and lines below it are aligned inside the function
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -1622,7 +1623,7 @@ archetypes_data = [
                 VALUES (%s, %s, %s, %s, %s)
             """, (
                 arc["name"],
-                json.dumps(arc["baseline_stats"]),     # store baseline_stats as JSONB
+                json.dumps(arc["baseline_stats"]),
                 arc.get("progression_rules", ""),
                 arc.get("setting_examples", ""),
                 arc.get("unique_traits", "")
@@ -1667,15 +1668,9 @@ def assign_archetypes_to_npc(npc_id):
 
     import random
     four = random.sample(archetype_rows, min(4, len(archetype_rows)))
-    # e.g. four = [(1, "Empress/Queen"), (5, "Tsundere"), ( ... )]
-
-    # We'll store them in a JSON array in NPCStats. 
-    # So let's get the names or IDs
-    # Example storing just the ID or name. Let's store {id, name} for clarity.
     assigned_list = [{"id": row[0], "name": row[1]} for row in four]
 
-    # 2) Update the NPCStats table. 
-    # We'll assume we have a column "archetypes" of type JSONB in NPCStats.
+    # 2) Update the NPCStats table
     cursor.execute("""
         UPDATE NPCStats
         SET archetypes = %s
@@ -1685,5 +1680,4 @@ def assign_archetypes_to_npc(npc_id):
     conn.commit()
     conn.close()
 
-    return assigned_list  # for debugging
-
+    return assigned_list
