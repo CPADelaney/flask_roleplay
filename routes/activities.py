@@ -13,44 +13,6 @@ def insert_missing_activities():
     """
 
     activities_data = [
-
-        {
-            "name": "Preface: Core Notes for Context",
-            "purpose": [
-                "This document is a non-comprehensive framework designed to inspire and adapt dynamically to various settings, NPCs, and narrative arcs.",
-                "It provides a wealth of ideas for humiliating, degrading, and controlling tasks, tailored to your preferences.",
-                "Activities adapt to stats (Shame, Obedience, Corruption, etc.), settings, and NPC personalities, combining them into layered scenarios.",
-                "All items are flexible: combine, modify, or expand to fit your ongoing story."
-            ],
-            "stat_integration": [
-                "Dynamic Integration: Activities exploit relevant stats like Shame, Obedience, or Corruption.",
-                "NPC Personalities: Each task can incorporate specific quirks, dominance styles, or goals.",
-                "Group Context: Many tasks can be escalated with multiple NPCs, intensifying the submissive dynamic."
-            ],
-            "intensity_tiers": [
-                "These are guidelines: tasks can be mild, moderate, high, or maximum intensity, depending on your scenario.",
-                "Public vs. private, ritual vs. casual, or humiliating vs. playful—any activity can shift intensity."
-            ],
-            "setting_variants": [
-                "High Society, Corporate Office, Post-Apocalypse, Surreal, etc. The environment shapes how tasks play out.",
-                "Use the details from your Setting or Archetype references to adapt each activity’s flavor."
-            ]
-        },
-    
-        {
-            "name": "Index: Quick Reference",
-            "purpose": [
-                "A quick list of categories: Physical Tasks, Psychological Manipulation, Sensory/Intimate, Public Displays, Extreme Humiliation.",
-                "Example sub-topics: Foot Worship, Forced Confessions, Brainwashing, JOI, Ass Worship, Shrinking, Cucksitter, etc."
-            ],
-            "stat_integration": [
-                "This index is not an activity per se, but a reference for overarching categories.",
-                "Feel free to combine or cross-reference them to generate unique tasks."
-            ],
-            "intensity_tiers": [],
-            "setting_variants": []
-        },
-    
         {
             "name": "Ass Worship",
             "purpose": [
