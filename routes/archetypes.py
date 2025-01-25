@@ -1630,6 +1630,12 @@ def insert_missing_archetypes():
         else:
             print(f"Skipped existing archetype: {arc['name']}")
 
+    # IMPORTANT: commit the transaction so the data is actually saved
+    conn.commit()
+
+    # Then close the connection
+    conn.close()
+
 @archetypes_bp.route('/insert_archetypes', methods=['POST'])
 def insert_archetypes_route():
     """
