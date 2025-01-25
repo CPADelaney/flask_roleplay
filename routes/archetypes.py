@@ -1607,32 +1607,32 @@ def insert_missing_archetypes():
         # IMPORTANT: The closing bracket above lines up with the 'archetypes_data = [' line.
         # Everything below is at the same indent as 'archetypes_data'.
     
-        conn = get_db_connection()
-        cursor = conn.cursor()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     
         # Check existing archetype names
-        cursor.execute("SELECT name FROM Archetypes")
-        existing = {row[0] for row in cursor.fetchall()}
+    cursor.execute("SELECT name FROM Archetypes")
+    existing = {row[0] for row in cursor.fetchall()}
     
-        for arc in archetypes_data:
-            if arc["name"] not in existing:
-                cursor.execute("""
-                    INSERT INTO Archetypes (name, baseline_stats, progression_rules, setting_examples, unique_traits)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (
-                    arc["name"],
-                    json.dumps(arc["baseline_stats"]),
-                    arc.get("progression_rules", ""),
-                    arc.get("setting_examples", ""),
-                    arc.get("unique_traits", "")
-                ))
-                print(f"Inserted archetype: {arc['name']}")
-            else:
-                print(f"Skipped existing archetype: {arc['name']}")
+    for arc in archetypes_data:
+        if arc["name"] not in existing:
+            cursor.execute("""
+                INSERT INTO Archetypes (name, baseline_stats, progression_rules, setting_examples, unique_traits)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                arc["name"],
+                json.dumps(arc["baseline_stats"]),
+                arc.get("progression_rules", ""),
+                arc.get("setting_examples", ""),
+                arc.get("unique_traits", "")
+            ))
+            print(f"Inserted archetype: {arc['name']}")
+        else:
+            print(f"Skipped existing archetype: {arc['name']}")
     
-        conn.commit()
-        conn.close()
-        print("All archetypes processed or skipped (already existed).")
+    conn.commit()
+    conn.close()
+    print("All archetypes processed or skipped (already existed).")
 
 
 @archetypes_bp.route('/insert_archetypes', methods=['POST'])
