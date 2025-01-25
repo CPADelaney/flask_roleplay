@@ -1622,18 +1622,13 @@ def insert_missing_archetypes():
             """, (
                 arc["name"],
                 json.dumps(arc["baseline_stats"]),
-                arc.get("progression_rules", ""),
-                arc.get("setting_examples", ""),
-                arc.get("unique_traits", "")
+                json.dumps(arc.get("progression_rules", [])),
+                json.dumps(arc.get("setting_examples", [])),
+                json.dumps(arc.get("unique_traits", []))
             ))
             print(f"Inserted archetype: {arc['name']}")
         else:
             print(f"Skipped existing archetype: {arc['name']}")
-    
-    conn.commit()
-    conn.close()
-    print("All archetypes processed or skipped (already existed).")
-
 
 @archetypes_bp.route('/insert_archetypes', methods=['POST'])
 def insert_archetypes_route():
