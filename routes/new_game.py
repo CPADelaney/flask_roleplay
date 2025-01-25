@@ -70,8 +70,7 @@ def start_new_game():
                 cursor.execute("""
                     UPDATE NPCStats
                     SET monica_level = 1,
-                        memory = CASE WHEN memory IS NULL THEN %s
-                                      ELSE memory || E'\n[Meltdown] ' || %s END
+                        memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s)
                     WHERE npc_id = %s
                 """, (meltdown_line, meltdown_line, c_id))
 
