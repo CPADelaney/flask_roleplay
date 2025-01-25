@@ -3,7 +3,7 @@
 from flask import Blueprint, request, jsonify
 import random
 from db.connection import get_db_connection
-from logic.meltdown_logic import meltdown_dialog_gpt, record_meltdown_dialog, append_meltdown_file
+# from logic.meltdown_logic import meltdown_dialog_gpt, record_meltdown_dialog, append_meltdown_file
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
 from logic.npc_creation import create_npc
 
