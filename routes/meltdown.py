@@ -3,7 +3,7 @@
 from flask import Blueprint, request, jsonify
 from db.connection import get_db_connection
 from logic.meltdown_logic import (
-    meltdown_dialog_gpt, record_meltdown_dialog, 
+    record_meltdown_dialog, 
     append_meltdown_file, glitchify_text
 )
 
@@ -183,20 +183,20 @@ def generate_meltdown_line(npc_id):
 
     npc_name, meltdown_level = row
     # call GPT
-    meltdown_line = meltdown_dialog_gpt(npc_name, meltdown_level)
+ #   meltdown_line = meltdown_dialog_gpt(npc_name, meltdown_level)
 
     # optional glitch if meltdown_level >= 4:
-    if meltdown_level >= 4:
-        meltdown_line = glitchify_text(meltdown_line)
+  #  if meltdown_level >= 4:
+  #      meltdown_line = glitchify_text(meltdown_line)
 
     # record in memory
-    record_meltdown_dialog(npc_id, meltdown_line)
-    append_meltdown_file(npc_name, meltdown_line)
+  #  record_meltdown_dialog(npc_id, meltdown_line)
+  #  append_meltdown_file(npc_name, meltdown_line)
 
     conn.close()
     return jsonify({
         "npc_id": npc_id,
         "npc_name": npc_name,
         "meltdown_level": meltdown_level,
-        "meltdown_line": meltdown_line
+    #    "meltdown_line": meltdown_line
     }), 200
