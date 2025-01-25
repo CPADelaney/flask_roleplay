@@ -3,7 +3,7 @@
 import random
 import json
 from db.connection import get_db_connection
-from logic.meltdown_logic import meltdown_dialog_gpt  # If needed
+# from logic.meltdown_logic import meltdown_dialog_gpt  # If needed
 from routes.archetypes import assign_archetypes_to_npc
 
 def create_npc(npc_name=None, introduced=False):
