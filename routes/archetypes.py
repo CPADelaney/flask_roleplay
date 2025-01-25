@@ -1602,11 +1602,12 @@ archetypes_data = [
         "setting_examples": [],
         "unique_traits": [
             "Placeholder for extra modifiers or expansions."
-        ]
-    }
-]
+            ]
+        }
+    ]
 
 
+    # Make sure this bracket and lines below it are aligned inside the function
     conn = get_db_connection()
     cursor = conn.cursor()
 
