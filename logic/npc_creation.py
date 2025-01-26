@@ -6,14 +6,16 @@ from db.connection import get_db_connection
 # from logic.meltdown_logic import meltdown_dialog_gpt  # If needed
 from routes.archetypes import assign_archetypes_to_npc
 
-def create_npc(npc_name=None, introduced=False):
+logging.basicConfig(level=logging.DEBUG)  # or configure differently
+
+def create_npc_logic(npc_name=None, introduced=False):
     """
-    Creates a new NPC in NPCStats, with random baseline stats/archetypes.
-    Then optionally calls assign_npc_flavor(...) to fill out 
-    occupation, hobbies, personality, likes, and dislikes.
+    Core function that creates a new NPC in NPCStats.
     """
     if not npc_name:
         npc_name = f"NPC_{random.randint(1000,9999)}"
+
+    logging.debug(f"[create_npc_logic] Starting with npc_name={npc_name}, introduced={introduced}")
 
     dominance = random.randint(10, 40)
     cruelty = random.randint(10, 40)
@@ -21,6 +23,9 @@ def create_npc(npc_name=None, introduced=False):
     trust = random.randint(-20, 20)
     respect = random.randint(-20, 20)
     intensity = random.randint(0, 40)
+
+    logging.debug(f"[create_npc_logic] Random stats => dom={dominance}, cru={cruelty}, clos={closeness}, "
+                  f"trust={trust}, respect={respect}, intensity={intensity}")
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -36,22 +41,26 @@ def create_npc(npc_name=None, introduced=False):
         """, (
             npc_name,
             dominance, cruelty, closeness, trust, respect, intensity,
-            "",     # memory
-            0,      # monica_level
-            0,      # monica_games_left
+            "",  # memory
+            0,   # monica_level
+            0,   # monica_games_left
             introduced
         ))
         new_npc_id = cursor.fetchone()[0]
         conn.commit()
 
-        # (A) Now assign additional flavor to this new NPC
+        logging.debug(f"[create_npc_logic] Inserted new NPC: npc_id={new_npc_id}")
+
+        # Assign random flavor
         assign_npc_flavor(new_npc_id)
+        logging.debug(f"[create_npc_logic] Flavor assigned for npc_id={new_npc_id}")
 
         return new_npc_id
 
     except Exception as e:
         conn.rollback()
-        raise e
+        logging.error(f"[create_npc_logic] ERROR: {e}", exc_info=True)
+        raise  # re-raise so calling code can handle the exception
     finally:
         conn.close()
 
