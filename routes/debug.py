@@ -1,4 +1,7 @@
-# debug.py
+# routes/debug.py
+from flask import Blueprint, jsonify
+from logic.npc_creation import create_npc
+from routes.settings_routes import generate_mega_setting_logic
 
 debug_bp = Blueprint('debug_bp', __name__)
 
