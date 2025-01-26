@@ -2,6 +2,7 @@
 
 import random
 import json
+import logging
 from db.connection import get_db_connection
 # from logic.meltdown_logic import meltdown_dialog_gpt  # If needed
 from routes.archetypes import assign_archetypes_to_npc
