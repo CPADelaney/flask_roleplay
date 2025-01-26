@@ -11,6 +11,7 @@ from logic.memory_logic import memory_bp
 from logic.rule_enforcement import rule_enforcement_bp
 from db.admin import admin_bp
 from flask_cors import CORS
+from routes.debug import debug_create_npc, debug_generate_setting
 
 def create_app():
     app = Flask(__name__)
@@ -39,6 +40,7 @@ def create_app():
     app.register_blueprint(admin_bp, url_prefix="/admin")
     app.register_blueprint(knowledge_bp, url_prefix="/knowledge")
     app.register_blueprint(story_bp, url_prefix="/story")
+    app.register_blueprint(debug_bp, url_prefix='/debug')
     return app
 
 app = create_app()
