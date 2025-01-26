@@ -89,18 +89,20 @@ def create_npc(npc_name=None, introduced=False):
     )
 
     try:
-        # 3) Insert new NPC with final stats
+        # 3) Insert new NPC with final stats - FIXED JSON FIELD
         cursor.execute("""
             INSERT INTO NPCStats (
                 npc_name,
                 dominance, cruelty, closeness, trust, respect, intensity,
                 memory, monica_level, monica_games_left, introduced
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, '', 0, 0, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)  <!-- Added parameter placeholder
             RETURNING npc_id
         """, (
             npc_name,
             dominance, cruelty, closeness, trust, respect, intensity,
+            '{}',  # Changed from '' to proper empty JSON object
+            0, 0,  # monica_level and monica_games_left
             introduced
         ))
         new_npc_id = cursor.fetchone()[0]
@@ -168,10 +170,10 @@ def assign_npc_flavor(npc_id: int):
             WHERE npc_id = %s
         """, (
             occupation,
-            json.dumps(hobbies),
-            json.dumps(personality_traits),
-            json.dumps(likes),
-            json.dumps(dislikes),
+            json.dumps(hobbies) if hobbies else '[]',  # Ensure empty array instead of null
+            json.dumps(personality_traits) if personality_traits else '[]',
+            json.dumps(likes) if likes else '[]',
+            json.dumps(dislikes) if dislikes else '[]',
             npc_id
         ))
         conn.commit()
