@@ -9,14 +9,14 @@ from routes.archetypes import assign_archetypes_to_npc
 
 logging.basicConfig(level=logging.DEBUG)  # or configure differently
 
-def create_npc_logic(npc_name=None, introduced=False):
+def create_npc(npc_name=None, introduced=False):
     """
     Core function that creates a new NPC in NPCStats.
     """
     if not npc_name:
         npc_name = f"NPC_{random.randint(1000,9999)}"
 
-    logging.debug(f"[create_npc_logic] Starting with npc_name={npc_name}, introduced={introduced}")
+    logging.debug(f"[create_npc] Starting with npc_name={npc_name}, introduced={introduced}")
 
     dominance = random.randint(10, 40)
     cruelty = random.randint(10, 40)
@@ -25,7 +25,7 @@ def create_npc_logic(npc_name=None, introduced=False):
     respect = random.randint(-20, 20)
     intensity = random.randint(0, 40)
 
-    logging.debug(f"[create_npc_logic] Random stats => dom={dominance}, cru={cruelty}, clos={closeness}, "
+    logging.debug(f"[create_npc] Random stats => dom={dominance}, cru={cruelty}, clos={closeness}, "
                   f"trust={trust}, respect={respect}, intensity={intensity}")
 
     conn = get_db_connection()
@@ -50,17 +50,17 @@ def create_npc_logic(npc_name=None, introduced=False):
         new_npc_id = cursor.fetchone()[0]
         conn.commit()
 
-        logging.debug(f"[create_npc_logic] Inserted new NPC: npc_id={new_npc_id}")
+        logging.debug(f"[create_npc] Inserted new NPC: npc_id={new_npc_id}")
 
         # Assign random flavor
         assign_npc_flavor(new_npc_id)
-        logging.debug(f"[create_npc_logic] Flavor assigned for npc_id={new_npc_id}")
+        logging.debug(f"[create_npc] Flavor assigned for npc_id={new_npc_id}")
 
         return new_npc_id
 
     except Exception as e:
         conn.rollback()
-        logging.error(f"[create_npc_logic] ERROR: {e}", exc_info=True)
+        logging.error(f"[create_npc] ERROR: {e}", exc_info=True)
         raise  # re-raise so calling code can handle the exception
     finally:
         conn.close()
