@@ -1,24 +1,27 @@
 from flask import Blueprint, jsonify
 import json
+import random
 from db.connection import get_db_connection
 
 archetypes_bp = Blueprint('archetypes', __name__)
 
 def insert_missing_archetypes():
     """
-    Similar to how you did for settings. Insert ~60 archetypes if not present.
-    We'll show a partial example using the 'Empress/Queen' archetype you described.
+    Inserts or updates Archetypes with final "range + modifier" style baseline_stats.
+    No string parsing needed, because each archetype is already in the new format:
+      e.g. "dominance_range": [40, 60], "dominance_modifier": 0
     """
+
     archetypes_data = [
         {
             "name": "Stepmother/Stepsister",
             "baseline_stats": {
-                "dominance": "40–60",
-                "cruelty": "30–50",
-                "closeness": "60–90",
-                "trust": "40–70",
-                "respect": "20–50",
-                "intensity": "30–70"
+                "dominance_range": [40, 60], "dominance_modifier": 0,
+                "cruelty_range": [30, 50],   "cruelty_modifier": 0,
+                "closeness_range": [60, 90], "closeness_modifier": 0,
+                "trust_range": [40, 70],     "trust_modifier": 0,
+                "respect_range": [20, 50],   "respect_modifier": 0,
+                "intensity_range": [30, 70], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness rises quickly due to familial proximity and constant interaction.",
@@ -38,12 +41,12 @@ def insert_missing_archetypes():
         {
             "name": "Boss/Supervisor",
             "baseline_stats": {
-                "dominance": "70–90",
-                "cruelty": "40–70",
-                "closeness": "30–50",
-                "trust": "30–50",
-                "respect": "10–40",
-                "intensity": "50–80"
+                "dominance_range": [70, 90], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [30, 50],     "trust_modifier": 0,
+                "respect_range": [10, 40],   "respect_modifier": 0,
+                "intensity_range": [50, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises sharply with acts of compliance, feeding their sense of power.",
@@ -61,12 +64,12 @@ def insert_missing_archetypes():
         {
             "name": "Teacher/Principal",
             "baseline_stats": {
-                "dominance": "50–70",
-                "cruelty": "20–50",
-                "closeness": "50–70",
-                "trust": "40–60",
-                "respect": "30–70",
-                "intensity": "40–80"
+                "dominance_range": [50, 70], "dominance_modifier": 0,
+                "cruelty_range": [20, 50],   "cruelty_modifier": 0,
+                "closeness_range": [50, 70], "closeness_modifier": 0,
+                "trust_range": [40, 60],     "trust_modifier": 0,
+                "respect_range": [30, 70],   "respect_modifier": 0,
+                "intensity_range": [40, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Intensity rises with every failed task or defiant act, framing their control as 'necessary discipline.'",
@@ -84,12 +87,12 @@ def insert_missing_archetypes():
         {
             "name": "Babysitter",
             "baseline_stats": {
-                "dominance": "40–70",
-                "cruelty": "30–60",
-                "closeness": "60–90",
-                "trust": "40–70",
-                "respect": "20–50",
-                "intensity": "40–70"
+                "dominance_range": [40, 70], "dominance_modifier": 0,
+                "cruelty_range": [30, 60],   "cruelty_modifier": 0,
+                "closeness_range": [60, 90], "closeness_modifier": 0,
+                "trust_range": [40, 70],     "trust_modifier": 0,
+                "respect_range": [20, 50],   "respect_modifier": 0,
+                "intensity_range": [40, 70], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness rises naturally due to frequent proximity and assumed responsibility.",
@@ -108,12 +111,12 @@ def insert_missing_archetypes():
         {
             "name": "Landlord",
             "baseline_stats": {
-                "dominance": "50–80",
-                "cruelty": "40–60",
-                "closeness": "30–60",
-                "trust": "20–40",
-                "respect": "10–30",
-                "intensity": "50–90"
+                "dominance_range": [50, 80], "dominance_modifier": 0,
+                "cruelty_range": [40, 60],   "cruelty_modifier": 0,
+                "closeness_range": [30, 60], "closeness_modifier": 0,
+                "trust_range": [20, 40],     "trust_modifier": 0,
+                "respect_range": [10, 30],   "respect_modifier": 0,
+                "intensity_range": [50, 90], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises as financial dependence deepens.",
