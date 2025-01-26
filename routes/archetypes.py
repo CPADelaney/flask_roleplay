@@ -134,12 +134,12 @@ def insert_missing_archetypes():
         {
             "name": "Roommate/Housemate",
             "baseline_stats": {
-                "dominance": "30–50",
-                "cruelty": "20–40",
-                "closeness": "60–90",
-                "trust": "40–70",
-                "respect": "30–50",
-                "intensity": "30–60"
+                "dominance_range": [30, 50], "dominance_modifier": 0,
+                "cruelty_range": [20, 40],   "cruelty_modifier": 0,
+                "closeness_range": [60, 90], "closeness_modifier": 0,
+                "trust_range": [40, 70],     "trust_modifier": 0,
+                "respect_range": [30, 50],   "respect_modifier": 0,
+                "intensity_range": [30, 60], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness rises naturally through shared spaces, leading to frequent interactions.",
@@ -157,12 +157,12 @@ def insert_missing_archetypes():
         {
             "name": "Neighbor",
             "baseline_stats": {
-                "dominance": "30–60",
-                "cruelty": "20–50",
-                "closeness": "50–90",
-                "trust": "40–70",
-                "respect": "30–50",
-                "intensity": "30–70"
+                "dominance_range": [30, 60], "dominance_modifier": 0,
+                "cruelty_range": [20, 50],   "cruelty_modifier": 0,
+                "closeness_range": [50, 90], "closeness_modifier": 0,
+                "trust_range": [40, 70],     "trust_modifier": 0,
+                "respect_range": [30, 50],   "respect_modifier": 0,
+                "intensity_range": [30, 70], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness rises through proximity and casual interactions.",
@@ -180,12 +180,12 @@ def insert_missing_archetypes():
         {
             "name": "Mother/Aunt/Older Sister",
             "baseline_stats": {
-                "dominance": "50–70",
-                "cruelty": "20–50",
-                "closeness": "60–90",
-                "trust": "40–70",
-                "respect": "40–60",
-                "intensity": "40–70"
+                "dominance_range": [50, 70], "dominance_modifier": 0,
+                "cruelty_range": [20, 50],   "cruelty_modifier": 0,
+                "closeness_range": [60, 90], "closeness_modifier": 0,
+                "trust_range": [40, 70],     "trust_modifier": 0,
+                "respect_range": [40, 60],   "respect_modifier": 0,
+                "intensity_range": [40, 70], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises as they take on an overbearing, 'protective' role.",
@@ -203,12 +203,12 @@ def insert_missing_archetypes():
         {
             "name": "Best Friend’s Girlfriend/Sister",
             "baseline_stats": {
-                "dominance": "30–60",
-                "cruelty": "20–50",
-                "closeness": "50–80",
-                "trust": "40–70",
-                "respect": "30–50",
-                "intensity": "30–70"
+                "dominance_range": [30, 60], "dominance_modifier": 0,
+                "cruelty_range": [20, 50],   "cruelty_modifier": 0,
+                "closeness_range": [50, 80], "closeness_modifier": 0,
+                "trust_range": [40, 70],     "trust_modifier": 0,
+                "respect_range": [30, 50],   "respect_modifier": 0,
+                "intensity_range": [30, 70], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness rises through frequent social interactions.",
@@ -226,12 +226,12 @@ def insert_missing_archetypes():
         {
             "name": "Ex-Girlfriend/Ex-Wife",
             "baseline_stats": {
-                "dominance": "40–70",
-                "cruelty": "40–80",
-                "closeness": "30–50",
-                "trust": "20–50",
-                "respect": "20–50",
-                "intensity": "50–90"
+                "dominance_range": [40, 70], "dominance_modifier": 0,
+                "cruelty_range": [40, 80],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [20, 50],     "trust_modifier": 0,
+                "respect_range": [20, 50],   "respect_modifier": 0,
+                "intensity_range": [50, 90], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Cruelty spikes as they exploit shared history to dominate emotionally.",
@@ -249,12 +249,12 @@ def insert_missing_archetypes():
         {
             "name": "Therapist",
             "baseline_stats": {
-                "dominance": "40–70",
-                "cruelty": "20–40",
-                "closeness": "50–80",
-                "trust": "50–80",
-                "respect": "30–60",
-                "intensity": "30–60"
+                "dominance_range": [40, 70], "dominance_modifier": 0,
+                "cruelty_range": [20, 40],   "cruelty_modifier": 0,
+                "closeness_range": [50, 80], "closeness_modifier": 0,
+                "trust_range": [50, 80],     "trust_modifier": 0,
+                "respect_range": [30, 60],   "respect_modifier": 0,
+                "intensity_range": [30, 60], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness rises quickly as they gain access to your secrets and vulnerabilities.",
@@ -272,12 +272,12 @@ def insert_missing_archetypes():
         {
             "name": "Doctor",
             "baseline_stats": {
-                "dominance": "60–80",
-                "cruelty": "30–60",
-                "closeness": "50–70",
-                "trust": "40–70",
-                "respect": "30–50",
-                "intensity": "40–80"
+                "dominance_range": [60, 80], "dominance_modifier": 0,
+                "cruelty_range": [30, 60],   "cruelty_modifier": 0,
+                "closeness_range": [50, 70], "closeness_modifier": 0,
+                "trust_range": [40, 70],     "trust_modifier": 0,
+                "respect_range": [30, 50],   "respect_modifier": 0,
+                "intensity_range": [40, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness rises as they 'care' for you, deepening your dependence.",
@@ -295,12 +295,12 @@ def insert_missing_archetypes():
         {
             "name": "Empress/Queen",
             "baseline_stats": {
-                "dominance": "80–100",
-                "cruelty": "60–90",
-                "closeness": "40–60",
-                "trust": "20–40",
-                "respect": "30–50",
-                "intensity": "50–90"
+                "dominance_range": [80, 100], "dominance_modifier": 0,
+                "cruelty_range": [60, 90],    "cruelty_modifier": 0,
+                "closeness_range": [40, 60],  "closeness_modifier": 0,
+                "trust_range": [20, 40],      "trust_modifier": 0,
+                "respect_range": [30, 50],    "respect_modifier": 0,
+                "intensity_range": [50, 90],  "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises rapidly with every act of defiance or failure.",
@@ -318,12 +318,12 @@ def insert_missing_archetypes():
         {
             "name": "Colleague",
             "baseline_stats": {
-                "dominance": "30–60",
-                "cruelty": "20–50",
-                "closeness": "50–80",
-                "trust": "40–60",
-                "respect": "20–40",
-                "intensity": "30–60"
+                "dominance_range": [30, 60], "dominance_modifier": 0,
+                "cruelty_range": [20, 50],   "cruelty_modifier": 0,
+                "closeness_range": [50, 80], "closeness_modifier": 0,
+                "trust_range": [40, 60],     "trust_modifier": 0,
+                "respect_range": [20, 40],   "respect_modifier": 0,
+                "intensity_range": [30, 60], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness rises naturally through frequent professional interactions.",
@@ -341,12 +341,12 @@ def insert_missing_archetypes():
         {
             "name": "Celebrity",
             "baseline_stats": {
-                "dominance": "50–80",
-                "cruelty": "40–70",
-                "closeness": "50–70",
-                "trust": "20–50",
-                "respect": "10–40",
-                "intensity": "50–80"
+                "dominance_range": [50, 80], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],   "cruelty_modifier": 0,
+                "closeness_range": [50, 70], "closeness_modifier": 0,
+                "trust_range": [20, 50],     "trust_modifier": 0,
+                "respect_range": [10, 40],   "respect_modifier": 0,
+                "intensity_range": [50, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness rises as they integrate you into their public persona, ensuring you’re always in their shadow.",
@@ -364,12 +364,12 @@ def insert_missing_archetypes():
         {
             "name": "Warden",
             "baseline_stats": {
-                "dominance": "80–100",
-                "cruelty": "70–100",
-                "closeness": "30–50",
-                "trust": "20–40",
-                "respect": "10–30",
-                "intensity": "60–100"
+                "dominance_range": [80, 100], "dominance_modifier": 0,
+                "cruelty_range": [70, 100],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50],  "closeness_modifier": 0,
+                "trust_range": [20, 40],      "trust_modifier": 0,
+                "respect_range": [10, 30],    "respect_modifier": 0,
+                "intensity_range": [60, 100], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Intensity spikes rapidly with every infraction, turning minor mistakes into major punishments.",
@@ -387,12 +387,12 @@ def insert_missing_archetypes():
         {
             "name": "Politician",
             "baseline_stats": {
-                "dominance": "70–90",
-                "cruelty": "40–70",
-                "closeness": "30–50",
-                "trust": "30–50",
-                "respect": "40–60",
-                "intensity": "50–80"
+                "dominance_range": [70, 90], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [30, 50],     "trust_modifier": 0,
+                "respect_range": [40, 60],   "respect_modifier": 0,
+                "intensity_range": [50, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises as they manipulate systems and crowds to control you.",
@@ -410,12 +410,12 @@ def insert_missing_archetypes():
         {
             "name": "Government Agent",
             "baseline_stats": {
-                "dominance": "60–90",
-                "cruelty": "50–80",
-                "closeness": "30–50",
-                "trust": "20–50",
-                "respect": "30–50",
-                "intensity": "60–90"
+                "dominance_range": [60, 90], "dominance_modifier": 0,
+                "cruelty_range": [50, 80],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [20, 50],     "trust_modifier": 0,
+                "respect_range": [30, 50],   "respect_modifier": 0,
+                "intensity_range": [60, 90], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises as they exploit their legal or systemic power.",
@@ -433,12 +433,12 @@ def insert_missing_archetypes():
         {
             "name": "Professional Wrestler/Martial Artist",
             "baseline_stats": {
-                "dominance": "60–90",
-                "cruelty": "50–80",
-                "closeness": "30–50",
-                "trust": "20–50",
-                "respect": "20–40",
-                "intensity": "60–90"
+                "dominance_range": [60, 90], "dominance_modifier": 0,
+                "cruelty_range": [50, 80],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [20, 50],     "trust_modifier": 0,
+                "respect_range": [20, 40],   "respect_modifier": 0,
+                "intensity_range": [60, 90], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance grows rapidly through physical contests and displays of strength.",
@@ -456,12 +456,12 @@ def insert_missing_archetypes():
         {
             "name": "CEO",
             "baseline_stats": {
-                "dominance": "80–100",
-                "cruelty": "50–80",
-                "closeness": "30–50",
-                "trust": "30–50",
-                "respect": "20–50",
-                "intensity": "60–90"
+                "dominance_range": [80, 100], "dominance_modifier": 0,
+                "cruelty_range": [50, 80],    "cruelty_modifier": 0,
+                "closeness_range": [30, 50],  "closeness_modifier": 0,
+                "trust_range": [30, 50],      "trust_modifier": 0,
+                "respect_range": [20, 50],    "respect_modifier": 0,
+                "intensity_range": [60, 90],  "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises as they manipulate your professional and personal life.",
@@ -479,12 +479,12 @@ def insert_missing_archetypes():
         {
             "name": "Drifter",
             "baseline_stats": {
-                "dominance": "40–70",
-                "cruelty": "20–50",
-                "closeness": "30–50",
-                "trust": "20–40",
-                "respect": "30–60",
-                "intensity": "40–70"
+                "dominance_range": [40, 70], "dominance_modifier": 0,
+                "cruelty_range": [20, 50],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [20, 40],     "trust_modifier": 0,
+                "respect_range": [30, 60],   "respect_modifier": 0,
+                "intensity_range": [40, 70], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance grows as they exploit your need for stability, creating tension with their unpredictability.",
@@ -502,12 +502,12 @@ def insert_missing_archetypes():
         {
             "name": "Bartender/Playful Tease",
             "baseline_stats": {
-                "dominance": "30–50",
-                "cruelty": "10–40",
-                "closeness": "60–90",
-                "trust": "40–60",
-                "respect": "30–50",
-                "intensity": "30–60"
+                "dominance_range": [30, 50], "dominance_modifier": 0,
+                "cruelty_range": [10, 40],   "cruelty_modifier": 0,
+                "closeness_range": [60, 90], "closeness_modifier": 0,
+                "trust_range": [40, 60],     "trust_modifier": 0,
+                "respect_range": [30, 50],   "respect_modifier": 0,
+                "intensity_range": [30, 60], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness rises quickly through frequent, playful interactions.",
@@ -525,12 +525,12 @@ def insert_missing_archetypes():
         {
             "name": "College Student",
             "baseline_stats": {
-                "dominance": "30–50",
-                "cruelty": "20–40",
-                "closeness": "60–80",
-                "trust": "30–60",
-                "respect": "20–50",
-                "intensity": "30–60"
+                "dominance_range": [30, 50], "dominance_modifier": 0,
+                "cruelty_range": [20, 40],   "cruelty_modifier": 0,
+                "closeness_range": [60, 80], "closeness_modifier": 0,
+                "trust_range": [30, 60],     "trust_modifier": 0,
+                "respect_range": [20, 50],   "respect_modifier": 0,
+                "intensity_range": [30, 60], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness rises naturally through frequent social interactions.",
@@ -548,12 +548,12 @@ def insert_missing_archetypes():
         {
             "name": "Rockstar",
             "baseline_stats": {
-                "dominance": "50–80",
-                "cruelty": "40–70",
-                "closeness": "60–80",
-                "trust": "20–40",
-                "respect": "20–50",
-                "intensity": "50–80"
+                "dominance_range": [50, 80], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],   "cruelty_modifier": 0,
+                "closeness_range": [60, 80], "closeness_modifier": 0,
+                "trust_range": [20, 40],     "trust_modifier": 0,
+                "respect_range": [20, 50],   "respect_modifier": 0,
+                "intensity_range": [50, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises as they pull you deeper into their chaotic orbit.",
@@ -571,12 +571,12 @@ def insert_missing_archetypes():
         {
             "name": "Friend’s Wife/Girlfriend",
             "baseline_stats": {
-                "dominance": "50–80",
-                "cruelty": "30–70",
-                "closeness": "40–60",
-                "trust": "30–50",
-                "respect": "20–40",
-                "intensity": "50–80"
+                "dominance_range": [50, 80], "dominance_modifier": 0,
+                "cruelty_range": [30, 70],   "cruelty_modifier": 0,
+                "closeness_range": [40, 60], "closeness_modifier": 0,
+                "trust_range": [30, 50],     "trust_modifier": 0,
+                "respect_range": [20, 40],   "respect_modifier": 0,
+                "intensity_range": [50, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance spikes as they manipulate your social dynamic with their partner.",
@@ -594,12 +594,12 @@ def insert_missing_archetypes():
         {
             "name": "Serial Killer",
             "baseline_stats": {
-                "dominance": "80–100",
-                "cruelty": "90–100",
-                "closeness": "10–30",
-                "trust": "-50 to 10",
-                "respect": "0–30",
-                "intensity": "70–100"
+                "dominance_range": [80, 100], "dominance_modifier": 0,
+                "cruelty_range": [90, 100],   "cruelty_modifier": 0,
+                "closeness_range": [10, 30],  "closeness_modifier": 0,
+                "trust_range": [-50, 10],     "trust_modifier": 0,
+                "respect_range": [0, 30],     "respect_modifier": 0,
+                "intensity_range": [70, 100], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Intensity spikes rapidly, with every act of fear and control reinforcing their dominance.",
@@ -617,12 +617,12 @@ def insert_missing_archetypes():
         {
             "name": "Bank Robber",
             "baseline_stats": {
-                "dominance": "70–90",
-                "cruelty": "40–70",
-                "closeness": "30–50",
-                "trust": "20–40",
-                "respect": "20–40",
-                "intensity": "60–90"
+                "dominance_range": [70, 90], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [20, 40],     "trust_modifier": 0,
+                "respect_range": [20, 40],   "respect_modifier": 0,
+                "intensity_range": [60, 90], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises rapidly as they use intimidation to enforce compliance.",
@@ -640,12 +640,12 @@ def insert_missing_archetypes():
         {
             "name": "Cybercriminal",
             "baseline_stats": {
-                "dominance": "70–90",
-                "cruelty": "40–70",
-                "closeness": "30–50",
-                "trust": "20–50",
-                "respect": "20–50",
-                "intensity": "60–90"
+                "dominance_range": [70, 90], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [20, 50],     "trust_modifier": 0,
+                "respect_range": [20, 50],   "respect_modifier": 0,
+                "intensity_range": [60, 90], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises as they gain access to your digital footprint.",
@@ -663,12 +663,12 @@ def insert_missing_archetypes():
         {
             "name": "Artificial Intelligence",
             "baseline_stats": {
-                "dominance": "70–100",
-                "cruelty": "40–70",
-                "closeness": "50–80",
-                "trust": "30–50",
-                "respect": "20–50",
-                "intensity": "60–90"
+                "dominance_range": [70, 100], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],    "cruelty_modifier": 0,
+                "closeness_range": [50, 80],  "closeness_modifier": 0,
+                "trust_range": [30, 50],      "trust_modifier": 0,
+                "respect_range": [20, 50],    "respect_modifier": 0,
+                "intensity_range": [60, 90],  "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises as they integrate deeper into your systems.",
@@ -686,12 +686,12 @@ def insert_missing_archetypes():
         {
             "name": "Primal (Huntress, etc.)",
             "baseline_stats": {
-                "dominance": "70–100",
-                "cruelty": "60–90",
-                "closeness": "40–60",
-                "trust": "20–40",
-                "respect": "20–50",
-                "intensity": "70–100"
+                "dominance_range": [70, 100], "dominance_modifier": 0,
+                "cruelty_range": [60, 90],    "cruelty_modifier": 0,
+                "closeness_range": [40, 60],  "closeness_modifier": 0,
+                "trust_range": [20, 40],      "trust_modifier": 0,
+                "respect_range": [20, 50],    "respect_modifier": 0,
+                "intensity_range": [70, 100], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Intensity rises with every act of pursuit or capture.",
@@ -709,12 +709,12 @@ def insert_missing_archetypes():
         {
             "name": "Cuckoldress/Hotwife",
             "baseline_stats": {
-                "dominance": "60–90",
-                "cruelty": "50–90",
-                "closeness": "50–70",
-                "trust": "30–50",
-                "respect": "20–40",
-                "intensity": "60–90"
+                "dominance_range": [60, 90], "dominance_modifier": 0,
+                "cruelty_range": [50, 90],   "cruelty_modifier": 0,
+                "closeness_range": [50, 70], "closeness_modifier": 0,
+                "trust_range": [30, 50],     "trust_modifier": 0,
+                "respect_range": [20, 40],   "respect_modifier": 0,
+                "intensity_range": [60, 90], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance spikes as they exploit jealousy or insecurity, flaunting their control over you and others.",
@@ -732,12 +732,12 @@ def insert_missing_archetypes():
         {
             "name": "A Woman Who Just Happens to Be Married",
             "baseline_stats": {
-                "dominance": "50–70",
-                "cruelty": "30–60",
-                "closeness": "40–70",
-                "trust": "30–50",
-                "respect": "30–60",
-                "intensity": "40–70"
+                "dominance_range": [50, 70], "dominance_modifier": 0,
+                "cruelty_range": [30, 60],   "cruelty_modifier": 0,
+                "closeness_range": [40, 70], "closeness_modifier": 0,
+                "trust_range": [30, 50],     "trust_modifier": 0,
+                "respect_range": [30, 60],   "respect_modifier": 0,
+                "intensity_range": [40, 70], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness builds through social interactions, creating opportunities for control.",
@@ -755,12 +755,12 @@ def insert_missing_archetypes():
         {
             "name": "A “Main Character” or “Hero” (RPG-Esque)",
             "baseline_stats": {
-                "dominance": "50–70",
-                "cruelty": "20–50",
-                "closeness": "50–80",
-                "trust": "40–60",
-                "respect": "40–70",
-                "intensity": "30–60"
+                "dominance_range": [50, 70], "dominance_modifier": 0,
+                "cruelty_range": [20, 50],   "cruelty_modifier": 0,
+                "closeness_range": [50, 80], "closeness_modifier": 0,
+                "trust_range": [40, 60],     "trust_modifier": 0,
+                "respect_range": [40, 70],   "respect_modifier": 0,
+                "intensity_range": [30, 60], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance grows as they assert moral superiority, framing their control as 'necessary.'",
@@ -778,12 +778,12 @@ def insert_missing_archetypes():
         {
             "name": "Villain (RPG-Esque Character)",
             "baseline_stats": {
-                "dominance": "70–100",
-                "cruelty": "60–90",
-                "closeness": "30–50",
-                "trust": "20–40",
-                "respect": "20–50",
-                "intensity": "60–100"
+                "dominance_range": [70, 100], "dominance_modifier": 0,
+                "cruelty_range": [60, 90],    "cruelty_modifier": 0,
+                "closeness_range": [30, 50],  "closeness_modifier": 0,
+                "trust_range": [20, 40],      "trust_modifier": 0,
+                "respect_range": [20, 50],    "respect_modifier": 0,
+                "intensity_range": [60, 100], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises rapidly as they see you as a tool for their grand plan.",
@@ -801,12 +801,12 @@ def insert_missing_archetypes():
         {
             "name": "Mercenary",
             "baseline_stats": {
-                "dominance": "60–90",
-                "cruelty": "40–70",
-                "closeness": "30–50",
-                "trust": "20–50",
-                "respect": "30–60",
-                "intensity": "50–80"
+                "dominance_range": [60, 90], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [20, 50],     "trust_modifier": 0,
+                "respect_range": [30, 60],   "respect_modifier": 0,
+                "intensity_range": [50, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance grows as they exploit your dependence on their skills.",
@@ -824,12 +824,12 @@ def insert_missing_archetypes():
         {
             "name": "Small Business Owner",
             "baseline_stats": {
-                "dominance": "40–70",
-                "cruelty": "30–60",
-                "closeness": "50–70",
-                "trust": "40–60",
-                "respect": "30–50",
-                "intensity": "30–70"
+                "dominance_range": [40, 70], "dominance_modifier": 0,
+                "cruelty_range": [30, 60],   "cruelty_modifier": 0,
+                "closeness_range": [50, 70], "closeness_modifier": 0,
+                "trust_range": [40, 60],     "trust_modifier": 0,
+                "respect_range": [30, 50],   "respect_modifier": 0,
+                "intensity_range": [30, 70], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness grows through frequent interactions tied to their business.",
@@ -847,12 +847,12 @@ def insert_missing_archetypes():
         {
             "name": "Your Underling (Intern, Student, etc.)",
             "baseline_stats": {
-                "dominance": "30–60",
-                "cruelty": "20–50",
-                "closeness": "50–80",
-                "trust": "40–60",
-                "respect": "20–50",
-                "intensity": "30–60"
+                "dominance_range": [30, 60], "dominance_modifier": 0,
+                "cruelty_range": [20, 50],   "cruelty_modifier": 0,
+                "closeness_range": [50, 80], "closeness_modifier": 0,
+                "trust_range": [40, 60],     "trust_modifier": 0,
+                "respect_range": [20, 50],   "respect_modifier": 0,
+                "intensity_range": [30, 60], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises as they surpass you in status or skill.",
@@ -870,12 +870,12 @@ def insert_missing_archetypes():
         {
             "name": "Friend from Online Interactions",
             "baseline_stats": {
-                "dominance": "30–50",
-                "cruelty": "20–50",
-                "closeness": "50–80",
-                "trust": "40–60",
-                "respect": "30–50",
-                "intensity": "30–60"
+                "dominance_range": [30, 50], "dominance_modifier": 0,
+                "cruelty_range": [20, 50],   "cruelty_modifier": 0,
+                "closeness_range": [50, 80], "closeness_modifier": 0,
+                "trust_range": [40, 60],     "trust_modifier": 0,
+                "respect_range": [30, 50],   "respect_modifier": 0,
+                "intensity_range": [30, 60], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness grows rapidly as they gain access to your secrets.",
@@ -893,12 +893,12 @@ def insert_missing_archetypes():
         {
             "name": "Fey",
             "baseline_stats": {
-                "dominance": "40–70",
-                "cruelty": "50–80",
-                "closeness": "50–80",
-                "trust": "30–60",
-                "respect": "20–50",
-                "intensity": "60–90"
+                "dominance_range": [40, 70], "dominance_modifier": 0,
+                "cruelty_range": [50, 80],   "cruelty_modifier": 0,
+                "closeness_range": [50, 80], "closeness_modifier": 0,
+                "trust_range": [30, 60],     "trust_modifier": 0,
+                "respect_range": [20, 50],   "respect_modifier": 0,
+                "intensity_range": [60, 90], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises as you become ensnared in their whimsical, dangerous games.",
@@ -916,12 +916,12 @@ def insert_missing_archetypes():
         {
             "name": "Goth",
             "baseline_stats": {
-                "dominance": "40–60",
-                "cruelty": "50–80",
-                "closeness": "50–80",
-                "trust": "20–50",
-                "respect": "20–40",
-                "intensity": "40–70"
+                "dominance_range": [40, 60], "dominance_modifier": 0,
+                "cruelty_range": [50, 80],   "cruelty_modifier": 0,
+                "closeness_range": [50, 80], "closeness_modifier": 0,
+                "trust_range": [20, 50],     "trust_modifier": 0,
+                "respect_range": [20, 40],   "respect_modifier": 0,
+                "intensity_range": [40, 70], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises as they notice and exploit your vulnerabilities.",
@@ -939,12 +939,12 @@ def insert_missing_archetypes():
         {
             "name": "A True Goddess",
             "baseline_stats": {
-                "dominance": "90–100",
-                "cruelty": "70–100",
-                "closeness": "30–50",
-                "trust": "20–40",
-                "respect": "10–30",
-                "intensity": "80–100"
+                "dominance_range": [90, 100], "dominance_modifier": 0,
+                "cruelty_range": [70, 100],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50],  "closeness_modifier": 0,
+                "trust_range": [20, 40],      "trust_modifier": 0,
+                "respect_range": [10, 30],    "respect_modifier": 0,
+                "intensity_range": [80, 100], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises rapidly, with their divine nature ensuring no resistance is possible.",
@@ -962,12 +962,12 @@ def insert_missing_archetypes():
         {
             "name": "Haruhi Suzumiya-Type Goddess",
             "baseline_stats": {
-                "dominance": "90–100",
-                "cruelty": "60–90",
-                "closeness": "50–80",
-                "trust": "20–50",
-                "respect": "10–30",
-                "intensity": "70–100"
+                "dominance_range": [90, 100], "dominance_modifier": 0,
+                "cruelty_range": [60, 90],    "cruelty_modifier": 0,
+                "closeness_range": [50, 80],  "closeness_modifier": 0,
+                "trust_range": [20, 50],      "trust_modifier": 0,
+                "respect_range": [10, 30],    "respect_modifier": 0,
+                "intensity_range": [70, 100], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Intensity spikes as they alter reality to suit their whims, disorienting and controlling you.",
@@ -985,12 +985,12 @@ def insert_missing_archetypes():
         {
             "name": "Bowsette Personality",
             "baseline_stats": {
-                "dominance": "80–100",
-                "cruelty": "70–100",
-                "closeness": "30–50",
-                "trust": "20–40",
-                "respect": "20–50",
-                "intensity": "70–100"
+                "dominance_range": [80, 100], "dominance_modifier": 0,
+                "cruelty_range": [70, 100],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50],  "closeness_modifier": 0,
+                "trust_range": [20, 40],      "trust_modifier": 0,
+                "respect_range": [20, 50],    "respect_modifier": 0,
+                "intensity_range": [70, 100], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance spikes when challenged or defied, justifying harsher punishments.",
@@ -1008,12 +1008,12 @@ def insert_missing_archetypes():
         {
             "name": "Junko Enoshima Personality",
             "baseline_stats": {
-                "dominance": "80–100",
-                "cruelty": "80–100",
-                "closeness": "30–50",
-                "trust": "10–30",
-                "respect": "10–30",
-                "intensity": "80–100"
+                "dominance_range": [80, 100], "dominance_modifier": 0,
+                "cruelty_range": [80, 100],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50],  "closeness_modifier": 0,
+                "trust_range": [10, 30],      "trust_modifier": 0,
+                "respect_range": [10, 30],    "respect_modifier": 0,
+                "intensity_range": [80, 100], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises rapidly as they thrive on chaos and despair.",
@@ -1031,12 +1031,12 @@ def insert_missing_archetypes():
         {
             "name": "Juri Han Personality",
             "baseline_stats": {
-                "dominance": "70–90",
-                "cruelty": "70–100",
-                "closeness": "50–70",
-                "trust": "20–40",
-                "respect": "20–40",
-                "intensity": "70–100"
+                "dominance_range": [70, 90],  "dominance_modifier": 0,
+                "cruelty_range": [70, 100],   "cruelty_modifier": 0,
+                "closeness_range": [50, 70],  "closeness_modifier": 0,
+                "trust_range": [20, 40],      "trust_modifier": 0,
+                "respect_range": [20, 40],    "respect_modifier": 0,
+                "intensity_range": [70, 100], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Intensity spikes erratically, creating an unpredictable dynamic.",
@@ -1054,12 +1054,12 @@ def insert_missing_archetypes():
         {
             "name": "Gamer",
             "baseline_stats": {
-                "dominance": "30–60",
-                "cruelty": "30–70",
-                "closeness": "60–90",
-                "trust": "40–70",
-                "respect": "20–50",
-                "intensity": "30–60"
+                "dominance_range": [30, 60], "dominance_modifier": 0,
+                "cruelty_range": [30, 70],   "cruelty_modifier": 0,
+                "closeness_range": [60, 90], "closeness_modifier": 0,
+                "trust_range": [40, 70],     "trust_modifier": 0,
+                "respect_range": [20, 50],   "respect_modifier": 0,
+                "intensity_range": [30, 60], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises through competitions where they rig outcomes to ensure your loss.",
@@ -1077,12 +1077,12 @@ def insert_missing_archetypes():
         {
             "name": "Social Media Influencer",
             "baseline_stats": {
-                "dominance": "50–80",
-                "cruelty": "30–70",
-                "closeness": "50–70",
-                "trust": "20–50",
-                "respect": "10–40",
-                "intensity": "40–70"
+                "dominance_range": [50, 80], "dominance_modifier": 0,
+                "cruelty_range": [30, 70],   "cruelty_modifier": 0,
+                "closeness_range": [50, 70], "closeness_modifier": 0,
+                "trust_range": [20, 50],     "trust_modifier": 0,
+                "respect_range": [10, 40],   "respect_modifier": 0,
+                "intensity_range": [40, 70], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Closeness rises as they draw you deeper into their social sphere.",
@@ -1100,12 +1100,12 @@ def insert_missing_archetypes():
         {
             "name": "Fitness Trainer",
             "baseline_stats": {
-                "dominance": "60–90",
-                "cruelty": "40–70",
-                "closeness": "50–70",
-                "trust": "40–60",
-                "respect": "30–50",
-                "intensity": "50–80"
+                "dominance_range": [60, 90], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],   "cruelty_modifier": 0,
+                "closeness_range": [50, 70], "closeness_modifier": 0,
+                "trust_range": [40, 60],     "trust_modifier": 0,
+                "respect_range": [30, 50],   "respect_modifier": 0,
+                "intensity_range": [50, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance rises rapidly as they enforce grueling routines.",
@@ -1123,12 +1123,12 @@ def insert_missing_archetypes():
         {
             "name": "Cheerleader/Team Captain",
             "baseline_stats": {
-                "dominance": "50–80",
-                "cruelty": "40–70",
-                "closeness": "60–90",
-                "trust": "30–50",
-                "respect": "20–50",
-                "intensity": "50–80"
+                "dominance_range": [50, 80], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],   "cruelty_modifier": 0,
+                "closeness_range": [60, 90], "closeness_modifier": 0,
+                "trust_range": [30, 50],     "trust_modifier": 0,
+                "respect_range": [20, 50],   "respect_modifier": 0,
+                "intensity_range": [50, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominance spikes as they use leadership roles to enforce submission.",
@@ -1146,12 +1146,12 @@ def insert_missing_archetypes():
         {
             "name": "Nun/Priestess",
             "baseline_stats": {
-                "dominance": "60–90",
-                "cruelty": "40–70",
-                "closeness": "50–70",
-                "trust": "30–60",
-                "respect": "40–70",
-                "intensity": "50–90"
+                "dominance_range": [60, 90], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],   "cruelty_modifier": 0,
+                "closeness_range": [50, 70], "closeness_modifier": 0,
+                "trust_range": [30, 60],     "trust_modifier": 0,
+                "respect_range": [40, 70],   "respect_modifier": 0,
+                "intensity_range": [50, 90], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Enforces submission through moral or spiritual authority, framing acts of control as 'purification' or 'guidance.'"
@@ -1168,12 +1168,12 @@ def insert_missing_archetypes():
         {
             "name": "Military Officer",
             "baseline_stats": {
-                "dominance": "70–90",
-                "cruelty": "50–80",
-                "closeness": "30–50",
-                "trust": "20–50",
-                "respect": "30–60",
-                "intensity": "60–90"
+                "dominance_range": [70, 90], "dominance_modifier": 0,
+                "cruelty_range": [50, 80],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [20, 50],     "trust_modifier": 0,
+                "respect_range": [30, 60],   "respect_modifier": 0,
+                "intensity_range": [60, 90], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Uses strict discipline and hierarchy to enforce absolute obedience."
@@ -1190,12 +1190,12 @@ def insert_missing_archetypes():
         {
             "name": "Sorceress/Mage",
             "baseline_stats": {
-                "dominance": "70–100",
-                "cruelty": "50–80",
-                "closeness": "30–60",
-                "trust": "20–50",
-                "respect": "30–60",
-                "intensity": "60–90"
+                "dominance_range": [70, 100], "dominance_modifier": 0,
+                "cruelty_range": [50, 80],    "cruelty_modifier": 0,
+                "closeness_range": [30, 60],  "closeness_modifier": 0,
+                "trust_range": [20, 50],      "trust_modifier": 0,
+                "respect_range": [30, 60],    "respect_modifier": 0,
+                "intensity_range": [60, 90],  "intensity_modifier": 0
             },
             "progression_rules": [
                 "Uses magical power and arcane knowledge to dominate, often reframing submission as a mystical bond."
@@ -1212,12 +1212,12 @@ def insert_missing_archetypes():
         {
             "name": "Slave Overseer",
             "baseline_stats": {
-                "dominance": "80–100",
-                "cruelty": "70–90",
-                "closeness": "30–50",
-                "trust": "20–40",
-                "respect": "10–30",
-                "intensity": "70–100"
+                "dominance_range": [80, 100], "dominance_modifier": 0,
+                "cruelty_range": [70, 90],    "cruelty_modifier": 0,
+                "closeness_range": [30, 50],  "closeness_modifier": 0,
+                "trust_range": [20, 40],      "trust_modifier": 0,
+                "respect_range": [10, 30],    "respect_modifier": 0,
+                "intensity_range": [70, 100], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Relishes in control over others, using tasks and punishments to enforce submission."
@@ -1234,12 +1234,12 @@ def insert_missing_archetypes():
         {
             "name": "Enigmatic Stranger",
             "baseline_stats": {
-                "dominance": "50–70",
-                "cruelty": "30–60",
-                "closeness": "20–40",
-                "trust": "10–30",
-                "respect": "30–60",
-                "intensity": "40–80"
+                "dominance_range": [50, 70], "dominance_modifier": 0,
+                "cruelty_range": [30, 60],   "cruelty_modifier": 0,
+                "closeness_range": [20, 40], "closeness_modifier": 0,
+                "trust_range": [10, 30],     "trust_modifier": 0,
+                "respect_range": [30, 60],   "respect_modifier": 0,
+                "intensity_range": [40, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Uses their mystery and unpredictability to control, leaving you guessing about their true intentions."
@@ -1256,12 +1256,12 @@ def insert_missing_archetypes():
         {
             "name": "Shopkeeper/Market Vendor",
             "baseline_stats": {
-                "dominance": "30–60",
-                "cruelty": "20–50",
-                "closeness": "40–70",
-                "trust": "30–50",
-                "respect": "20–40",
-                "intensity": "30–50"
+                "dominance_range": [30, 60], "dominance_modifier": 0,
+                "cruelty_range": [20, 50],   "cruelty_modifier": 0,
+                "closeness_range": [40, 70], "closeness_modifier": 0,
+                "trust_range": [30, 50],     "trust_modifier": 0,
+                "respect_range": [20, 40],   "respect_modifier": 0,
+                "intensity_range": [30, 50], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Exploits your dependency on goods or services to enforce submission, framing it as 'just business.'"
@@ -1278,12 +1278,12 @@ def insert_missing_archetypes():
         {
             "name": "Rival",
             "baseline_stats": {
-                "dominance": "50–80",
-                "cruelty": "40–70",
-                "closeness": "30–50",
-                "trust": "20–40",
-                "respect": "30–50",
-                "intensity": "50–80"
+                "dominance_range": [50, 80], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [20, 40],     "trust_modifier": 0,
+                "respect_range": [30, 50],   "respect_modifier": 0,
+                "intensity_range": [50, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Uses competition to dominate, turning every interaction into an opportunity to assert superiority."
@@ -1300,12 +1300,12 @@ def insert_missing_archetypes():
         {
             "name": "Demoness/Devil",
             "baseline_stats": {
-                "dominance": "80–100",
-                "cruelty": "70–100",
-                "closeness": "30–50",
-                "trust": "10–30",
-                "respect": "20–50",
-                "intensity": "70–100"
+                "dominance_range": [80, 100], "dominance_modifier": 0,
+                "cruelty_range": [70, 100],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50],  "closeness_modifier": 0,
+                "trust_range": [10, 30],      "trust_modifier": 0,
+                "respect_range": [20, 50],    "respect_modifier": 0,
+                "intensity_range": [70, 100], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Uses infernal power to control, framing submission as a pact or binding agreement."
@@ -1322,12 +1322,12 @@ def insert_missing_archetypes():
         {
             "name": "Queen Bee",
             "baseline_stats": {
-                "dominance": "60–90",
-                "cruelty": "40–70",
-                "closeness": "50–80",
-                "trust": "20–50",
-                "respect": "30–50",
-                "intensity": "50–80"
+                "dominance_range": [60, 90], "dominance_modifier": 0,
+                "cruelty_range": [40, 70],   "cruelty_modifier": 0,
+                "closeness_range": [50, 80], "closeness_modifier": 0,
+                "trust_range": [20, 50],     "trust_modifier": 0,
+                "respect_range": [30, 50],   "respect_modifier": 0,
+                "intensity_range": [50, 80], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Dominates via social clout and manipulation, ensuring the entire group dynamic revolves around them."
@@ -1344,12 +1344,12 @@ def insert_missing_archetypes():
         {
             "name": "Haunted Entity",
             "baseline_stats": {
-                "dominance": "50–80",
-                "cruelty": "60–90",
-                "closeness": "10–30",
-                "trust": "-50 to 10",
-                "respect": "20–40",
-                "intensity": "70–100"
+                "dominance_range": [50, 80], "dominance_modifier": 0,
+                "cruelty_range": [60, 90],   "cruelty_modifier": 0,
+                "closeness_range": [10, 30], "closeness_modifier": 0,
+                "trust_range": [-50, 10],    "trust_modifier": 0,
+                "respect_range": [20, 40],   "respect_modifier": 0,
+                "intensity_range": [70, 100],"intensity_modifier": 0
             },
             "progression_rules": [
                 "Uses supernatural fear and psychological manipulation to dominate, isolating you in terror."
@@ -1366,12 +1366,12 @@ def insert_missing_archetypes():
         {
             "name": "Pirate",
             "baseline_stats": {
-                "dominance": "60–90",
-                "cruelty": "50–80",
-                "closeness": "30–50",
-                "trust": "20–40",
-                "respect": "30–50",
-                "intensity": "60–90"
+                "dominance_range": [60, 90], "dominance_modifier": 0,
+                "cruelty_range": [50, 80],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [20, 40],     "trust_modifier": 0,
+                "respect_range": [30, 50],   "respect_modifier": 0,
+                "intensity_range": [60, 90], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Thrives on chaos and control, enforcing submission through fear, charisma, and physical dominance."
@@ -1388,12 +1388,12 @@ def insert_missing_archetypes():
         {
             "name": "Drug Dealer",
             "baseline_stats": {
-                "dominance": "60–90",
-                "cruelty": "40–80",
-                "closeness": "30–50",
-                "trust": "20–40",
-                "respect": "20–50",
-                "intensity": "60–90"
+                "dominance_range": [60, 90], "dominance_modifier": 0,
+                "cruelty_range": [40, 80],   "cruelty_modifier": 0,
+                "closeness_range": [30, 50], "closeness_modifier": 0,
+                "trust_range": [20, 40],     "trust_modifier": 0,
+                "respect_range": [20, 50],   "respect_modifier": 0,
+                "intensity_range": [60, 90], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Enforces submission through addiction, leveraging substances to deepen dependence and amplify shame."
@@ -1410,12 +1410,12 @@ def insert_missing_archetypes():
         {
             "name": "Add an extra modifier to this character (#62)",
             "baseline_stats": {
-                "dominance": "N/A",
-                "cruelty": "N/A",
-                "closeness": "N/A",
-                "trust": "N/A",
-                "respect": "N/A",
-                "intensity": "N/A"
+                "dominance_range": [0, 30], "dominance_modifier": 0,
+                "cruelty_range": [0, 30],   "cruelty_modifier": 0,
+                "closeness_range": [0, 30], "closeness_modifier": 0,
+                "trust_range": [0, 30],     "trust_modifier": 0,
+                "respect_range": [0, 30],   "respect_modifier": 0,
+                "intensity_range": [0, 30], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Add an extra modifier. Does not count as a separate archetype."
@@ -1428,12 +1428,12 @@ def insert_missing_archetypes():
         {
             "name": "Add an extra modifier to this character (#63)",
             "baseline_stats": {
-                "dominance": "N/A",
-                "cruelty": "N/A",
-                "closeness": "N/A",
-                "trust": "N/A",
-                "respect": "N/A",
-                "intensity": "N/A"
+                "dominance_range": [0, 30], "dominance_modifier": 0,
+                "cruelty_range": [0, 30],   "cruelty_modifier": 0,
+                "closeness_range": [0, 30], "closeness_modifier": 0,
+                "trust_range": [0, 30],     "trust_modifier": 0,
+                "respect_range": [0, 30],   "respect_modifier": 0,
+                "intensity_range": [0, 30], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Add an extra modifier. Does not count as a separate archetype."
@@ -1446,12 +1446,12 @@ def insert_missing_archetypes():
         {
             "name": "Add an extra modifier to this character (#64)",
             "baseline_stats": {
-                "dominance": "N/A",
-                "cruelty": "N/A",
-                "closeness": "N/A",
-                "trust": "N/A",
-                "respect": "N/A",
-                "intensity": "N/A"
+                "dominance_range": [0, 30], "dominance_modifier": 0,
+                "cruelty_range": [0, 30],   "cruelty_modifier": 0,
+                "closeness_range": [0, 30], "closeness_modifier": 0,
+                "trust_range": [0, 30],     "trust_modifier": 0,
+                "respect_range": [0, 30],   "respect_modifier": 0,
+                "intensity_range": [0, 30], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Add an extra modifier. Does not count as a separate archetype."
@@ -1464,12 +1464,12 @@ def insert_missing_archetypes():
         {
             "name": "Add an extra modifier to this character (#65)",
             "baseline_stats": {
-                "dominance": "N/A",
-                "cruelty": "N/A",
-                "closeness": "N/A",
-                "trust": "N/A",
-                "respect": "N/A",
-                "intensity": "N/A"
+                "dominance_range": [0, 30], "dominance_modifier": 0,
+                "cruelty_range": [0, 30],   "cruelty_modifier": 0,
+                "closeness_range": [0, 30], "closeness_modifier": 0,
+                "trust_range": [0, 30],     "trust_modifier": 0,
+                "respect_range": [0, 30],   "respect_modifier": 0,
+                "intensity_range": [0, 30], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Add an extra modifier. Does not count as a separate archetype."
@@ -1482,12 +1482,12 @@ def insert_missing_archetypes():
         {
             "name": "Add an extra modifier to this character (#66)",
             "baseline_stats": {
-                "dominance": "N/A",
-                "cruelty": "N/A",
-                "closeness": "N/A",
-                "trust": "N/A",
-                "respect": "N/A",
-                "intensity": "N/A"
+                "dominance_range": [0, 30], "dominance_modifier": 0,
+                "cruelty_range": [0, 30],   "cruelty_modifier": 0,
+                "closeness_range": [0, 30], "closeness_modifier": 0,
+                "trust_range": [0, 30],     "trust_modifier": 0,
+                "respect_range": [0, 30],   "respect_modifier": 0,
+                "intensity_range": [0, 30], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Add an extra modifier. Does not count as a separate archetype."
@@ -1500,12 +1500,12 @@ def insert_missing_archetypes():
         {
             "name": "Add an extra modifier to this character (#67)",
             "baseline_stats": {
-                "dominance": "N/A",
-                "cruelty": "N/A",
-                "closeness": "N/A",
-                "trust": "N/A",
-                "respect": "N/A",
-                "intensity": "N/A"
+                "dominance_range": [0, 30], "dominance_modifier": 0,
+                "cruelty_range": [0, 30],   "cruelty_modifier": 0,
+                "closeness_range": [0, 30], "closeness_modifier": 0,
+                "trust_range": [0, 30],     "trust_modifier": 0,
+                "respect_range": [0, 30],   "respect_modifier": 0,
+                "intensity_range": [0, 30], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Add an extra modifier. Does not count as a separate archetype."
@@ -1518,12 +1518,12 @@ def insert_missing_archetypes():
         {
             "name": "Add an extra modifier to this character (#68)",
             "baseline_stats": {
-                "dominance": "N/A",
-                "cruelty": "N/A",
-                "closeness": "N/A",
-                "trust": "N/A",
-                "respect": "N/A",
-                "intensity": "N/A"
+                "dominance_range": [0, 30], "dominance_modifier": 0,
+                "cruelty_range": [0, 30],   "cruelty_modifier": 0,
+                "closeness_range": [0, 30], "closeness_modifier": 0,
+                "trust_range": [0, 30],     "trust_modifier": 0,
+                "respect_range": [0, 30],   "respect_modifier": 0,
+                "intensity_range": [0, 30], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Add an extra modifier. Does not count as a separate archetype."
@@ -1536,12 +1536,12 @@ def insert_missing_archetypes():
         {
             "name": "Add an extra modifier to this character (#69)",
             "baseline_stats": {
-                "dominance": "N/A",
-                "cruelty": "N/A",
-                "closeness": "N/A",
-                "trust": "N/A",
-                "respect": "N/A",
-                "intensity": "N/A"
+                "dominance_range": [0, 30], "dominance_modifier": 0,
+                "cruelty_range": [0, 30],   "cruelty_modifier": 0,
+                "closeness_range": [0, 30], "closeness_modifier": 0,
+                "trust_range": [0, 30],     "trust_modifier": 0,
+                "respect_range": [0, 30],   "respect_modifier": 0,
+                "intensity_range": [0, 30], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Add an extra modifier. Does not count as a separate archetype."
@@ -1554,12 +1554,12 @@ def insert_missing_archetypes():
         {
             "name": "Add an extra modifier to this character (#70)",
             "baseline_stats": {
-                "dominance": "N/A",
-                "cruelty": "N/A",
-                "closeness": "N/A",
-                "trust": "N/A",
-                "respect": "N/A",
-                "intensity": "N/A"
+                "dominance_range": [0, 30], "dominance_modifier": 0,
+                "cruelty_range": [0, 30],   "cruelty_modifier": 0,
+                "closeness_range": [0, 30], "closeness_modifier": 0,
+                "trust_range": [0, 30],     "trust_modifier": 0,
+                "respect_range": [0, 30],   "respect_modifier": 0,
+                "intensity_range": [0, 30], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Add an extra modifier. Does not count as a separate archetype."
@@ -1572,12 +1572,12 @@ def insert_missing_archetypes():
         {
             "name": "Add an extra modifier to this character (#71)",
             "baseline_stats": {
-                "dominance": "N/A",
-                "cruelty": "N/A",
-                "closeness": "N/A",
-                "trust": "N/A",
-                "respect": "N/A",
-                "intensity": "N/A"
+                "dominance_range": [0, 30], "dominance_modifier": 0,
+                "cruelty_range": [0, 30],   "cruelty_modifier": 0,
+                "closeness_range": [0, 30], "closeness_modifier": 0,
+                "trust_range": [0, 30],     "trust_modifier": 0,
+                "respect_range": [0, 30],   "respect_modifier": 0,
+                "intensity_range": [0, 30], "intensity_modifier": 0
             },
             "progression_rules": [
                 "Add an extra modifier. Does not count as a separate archetype."
@@ -1587,24 +1587,24 @@ def insert_missing_archetypes():
                 "Placeholder for extra modifiers or expansions."
             ]
         },
-            {
-                "name": "Add an extra modifier to this character (#72)",
-                "baseline_stats": {
-                    "dominance": "N/A",
-                    "cruelty": "N/A",
-                    "closeness": "N/A",
-                    "trust": "N/A",
-                    "respect": "N/A",
-                    "intensity": "N/A"
-                },
-                "progression_rules": [
-                    "Add an extra modifier. Does not count as a separate archetype."
-                ],
-                "setting_examples": [],
-                "unique_traits": [
-                    "Placeholder for extra modifiers or expansions."
-                ]
-            }
+        {
+            "name": "Add an extra modifier to this character (#72)",
+            "baseline_stats": {
+                "dominance_range": [0, 30], "dominance_modifier": 0,
+                "cruelty_range": [0, 30],   "cruelty_modifier": 0,
+                "closeness_range": [0, 30], "closeness_modifier": 0,
+                "trust_range": [0, 30],     "trust_modifier": 0,
+                "respect_range": [0, 30],   "respect_modifier": 0,
+                "intensity_range": [0, 30], "intensity_modifier": 0
+            },
+            "progression_rules": [
+                "Add an extra modifier. Does not count as a separate archetype."
+            ],
+            "setting_examples": [],
+            "unique_traits": [
+                "Placeholder for extra modifiers or expansions."
+            ]
+        }
     ]
 
     conn = get_db_connection()
@@ -1616,6 +1616,8 @@ def insert_missing_archetypes():
 
     for arc in archetypes_data:
         name = arc["name"]
+
+        # Convert the new structure to JSON
         bs_json = json.dumps(arc["baseline_stats"])
         prog_rules_json = json.dumps(arc.get("progression_rules", []))
         setting_ex_json = json.dumps(arc.get("setting_examples", []))
@@ -1646,7 +1648,7 @@ def insert_missing_archetypes():
 @archetypes_bp.route('/insert_archetypes', methods=['POST'])
 def insert_archetypes_route():
     """
-    Optional route to insert/update archetypes manually with the final "range + modifier" style stats.
+    Optional route to insert/update all archetypes manually with final "range + modifier" style stats.
     """
     try:
         insert_missing_archetypes()
