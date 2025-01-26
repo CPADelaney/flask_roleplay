@@ -37,7 +37,7 @@ def create_npc(npc_name=None, introduced=False):
                 dominance, cruelty, closeness, trust, respect, intensity,
                 memory, monica_level, monica_games_left, introduced
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING npc_id
         """, (
             npc_name,
