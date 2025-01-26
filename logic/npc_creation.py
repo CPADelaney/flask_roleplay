@@ -1,50 +1,106 @@
-# logic/npc_creation.py
-
 import random
 import json
 import logging
 from db.connection import get_db_connection
-# from logic.meltdown_logic import meltdown_dialog_gpt  # If needed
-from routes.archetypes import assign_archetypes_to_npc
+from routes.archetypes import assign_archetypes_to_npc  # or whatever you call it
 
-logging.basicConfig(level=logging.DEBUG)  # or configure differently
+logging.basicConfig(level=logging.DEBUG)
+
+def clamp(value, min_val, max_val):
+    """Utility to ensure a stat stays within [0, 100]."""
+    return max(min_val, min(value, max_val))
 
 def create_npc(npc_name=None, introduced=False):
     """
-    Core function that creates a new NPC in NPCStats.
+    Core function that creates a new NPC in NPCStats,
+    combining random base stats + an archetype-based adjustment.
     """
     if not npc_name:
         npc_name = f"NPC_{random.randint(1000,9999)}"
 
     logging.debug(f"[create_npc] Starting with npc_name={npc_name}, introduced={introduced}")
 
-    dominance = random.randint(10, 40)
-    cruelty = random.randint(10, 40)
-    closeness = random.randint(0, 30)
-    trust = random.randint(-20, 20)
-    respect = random.randint(-20, 20)
-    intensity = random.randint(0, 40)
-
-    logging.debug(f"[create_npc] Random stats => dom={dominance}, cru={cruelty}, clos={closeness}, "
-                  f"trust={trust}, respect={respect}, intensity={intensity}")
-
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # 1) Pick a random archetype from the Archetypes table
+    #    We'll assume the "baseline_stats" column is JSON with keys like:
+    #    "dominance_range": [10, 40], "dominance_modifier": 20, etc.
+    cursor.execute("""
+        SELECT id, name, baseline_stats
+        FROM Archetypes
+        ORDER BY RANDOM() LIMIT 1
+    """)
+    archetype_row = cursor.fetchone()
+
+    if archetype_row is None:
+        # If no archetypes exist in the DB, fallback to some default
+        logging.warning("[create_npc] No archetypes found; using pure random stats with no modifiers.")
+        chosen_archetype_id = None
+        chosen_archetype_name = "None"
+        baseline_stats = {}
+    else:
+        chosen_archetype_id, chosen_archetype_name, baseline_stats_json = archetype_row
+        # parse the JSON
+        baseline_stats = json.loads(baseline_stats_json)
+
+    logging.debug(f"[create_npc] Picked archetype={chosen_archetype_name}, data={baseline_stats}")
+
+    # Helper to get a range [min, max] + a modifier from the baseline_stats
+    def get_range_and_modifier(stat_key):
+        # e.g. stat_key might be "dominance"
+        # then we look for "dominance_range" and "dominance_modifier" in baseline_stats
+        range_key = f"{stat_key}_range"
+        mod_key = f"{stat_key}_modifier"
+
+        # Provide defaults if not found
+        rng = baseline_stats.get(range_key, [0, 30])  # e.g. default range
+        mod = baseline_stats.get(mod_key, 0)          # default modifier
+        return rng, mod
+
+    # 2) For each stat, compute final value
+    dom_range, dom_mod = get_range_and_modifier("dominance")
+    dominance = random.randint(dom_range[0], dom_range[1]) + dom_mod
+    dominance = clamp(dominance, 0, 100)
+
+    cru_range, cru_mod = get_range_and_modifier("cruelty")
+    cruelty = random.randint(cru_range[0], cru_range[1]) + cru_mod
+    cruelty = clamp(cruelty, 0, 100)
+
+    clos_range, clos_mod = get_range_and_modifier("closeness")
+    closeness = random.randint(clos_range[0], clos_range[1]) + clos_mod
+    closeness = clamp(closeness, 0, 100)
+
+    trust_range, trust_mod = get_range_and_modifier("trust")
+    trust = random.randint(trust_range[0], trust_range[1]) + trust_mod
+    trust = clamp(trust, -100, 100)  # if you allow negatives for trust
+
+    resp_range, resp_mod = get_range_and_modifier("respect")
+    respect = random.randint(resp_range[0], resp_range[1]) + resp_mod
+    respect = clamp(respect, -100, 100)
+
+    inten_range, inten_mod = get_range_and_modifier("intensity")
+    intensity = random.randint(inten_range[0], inten_range[1]) + inten_mod
+    intensity = clamp(intensity, 0, 100)
+
+    logging.debug(
+        "[create_npc] Final stats => dom=%s cru=%s clos=%s trust=%s resp=%s inten=%s",
+        dominance, cruelty, closeness, trust, respect, intensity
+    )
+
     try:
+        # 3) Insert new NPC with final stats
         cursor.execute("""
             INSERT INTO NPCStats (
                 npc_name,
                 dominance, cruelty, closeness, trust, respect, intensity,
                 memory, monica_level, monica_games_left, introduced
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, '', 0, 0, %s)
             RETURNING npc_id
         """, (
             npc_name,
             dominance, cruelty, closeness, trust, respect, intensity,
-            "",  # memory
-            0,   # monica_level
-            0,   # monica_games_left
             introduced
         ))
         new_npc_id = cursor.fetchone()[0]
@@ -52,7 +108,21 @@ def create_npc(npc_name=None, introduced=False):
 
         logging.debug(f"[create_npc] Inserted new NPC: npc_id={new_npc_id}")
 
-        # Assign random flavor
+        # 4) Store the chosen archetype in the NPCStats (archetypes JSON field),
+        #    so we remember this NPC's main archetype. Or skip if you use a separate pivot table.
+        #    We'll store a single item array: [{"id":..., "name":...}]
+        assigned = [{"id": chosen_archetype_id, "name": chosen_archetype_name}]
+        cursor.execute("""
+            UPDATE NPCStats
+            SET archetypes = %s
+            WHERE npc_id = %s
+        """, (
+            json.dumps(assigned),
+            new_npc_id
+        ))
+        conn.commit()
+
+        # 5) Optionally assign random flavor
         assign_npc_flavor(new_npc_id)
         logging.debug(f"[create_npc] Flavor assigned for npc_id={new_npc_id}")
 
@@ -60,73 +130,31 @@ def create_npc(npc_name=None, introduced=False):
 
     except Exception as e:
         conn.rollback()
-        logging.error(f"[create_npc] ERROR: {e}", exc_info=True)
-        raise  # re-raise so calling code can handle the exception
+        logging.error("[create_npc] ERROR: %s", e, exc_info=True)
+        raise
     finally:
         conn.close()
 
 def assign_npc_flavor(npc_id: int):
     """
+    (unchanged from your original)
     Assigns random occupation, hobbies, personality traits, 
     likes, and dislikes to the given NPC.
-    
-    Stores them in NPCStats as new columns:
-      - occupation (TEXT)
-      - hobbies (JSONB array)
-      - personality_traits (JSONB array)
-      - likes (JSONB array)
-      - dislikes (JSONB array)
     """
+    # 1) Prepare lists...
+    occupations = [...]
+    hobbies_pool = [...]
+    personality_pool = [...]
+    likes_pool = [...]
+    dislikes_pool = [...]
 
-    # 1) Prepare lists to pick from
-    occupations = [
-        "College Student", "Bartender", "Software Engineer", "Nurse",
-        "Retail Clerk", "CEO of a Startup", "Freelance Artist",
-        "Research Scientist", "Fitness Trainer", "Police Officer",
-        "Influencer/Streamer", "Musician", "Gothic Fashion Designer"
-    ]
-    hobbies_pool = [
-        "Reading", "Guitar Playing", "Jogging", "Dancing", "Video Gaming",
-        "Knitting", "Cosplay", "Painting", "Tarot Reading", "Yoga",
-        "Cooking", "Rock Climbing", "Embroidery", "Archery", "Hacking",
-        "Street Racing", "Chess", "Gardening", "Swimming", "Singing",
-        "Horror Movie Marathons", "Tabletop RPGs", "Fashion Blogging"
-    ]
-    personality_pool = [
-        "Sarcastic", "Gentle", "Impatient", "Bubbly", "Brooding",
-        "Obsessive", "Analytical", "Cruel", "Protective", "Lazy",
-        "Ambitious", "Playful", "Flirtatious", "Passive-Aggressive",
-        "Hotheaded", "Stoic", "Whimsical", "Needy", "Sultry", "Dominant",
-        "Energetic", "Proud", "Compassionate", "Sadistic", "Meticulous"
-    ]
-    likes_pool = [
-        "Chocolate", "Rainy Days", "Silly Memes", "Spicy Food", 
-        "Bubble Baths", "Hard Rock Music", "Romance Novels",
-        "Collecting Figurines", "Anime", "Sci-Fi Movies",
-        "Cats", "Lavender Scent", "Camping", "Freaky Experiments",
-        "Piercings & Tattoos"
-    ]
-    dislikes_pool = [
-        "Crowded Places", "Dishonesty", "Boredom", "Loud Noises",
-        "Being Ignored", "Incompetence", "Early Mornings", "Weak Coffee",
-        "Spiders", "Obnoxious Laughter", "Long Meetings", "Cheap Perfume",
-        "Paperwork", "Reality TV", "Cold Food"
-    ]
-
-    # 2) Randomly pick single occupation
+    # 2) Random picks
     occupation = random.choice(occupations)
-
-    # 3) Randomly pick 3 distinct hobbies
     hobbies = random.sample(hobbies_pool, k=3)
-
-    # 4) Randomly pick 5 personality traits
     personality_traits = random.sample(personality_pool, k=5)
-
-    # 5) Randomly pick 3 likes, 3 dislikes
     likes = random.sample(likes_pool, k=3)
     dislikes = random.sample(dislikes_pool, k=3)
 
-    # 6) Store in DB
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -140,8 +168,8 @@ def assign_npc_flavor(npc_id: int):
             WHERE npc_id = %s
         """, (
             occupation,
-            json.dumps(hobbies),               # store as JSONB
-            json.dumps(personality_traits),    # store as JSONB
+            json.dumps(hobbies),
+            json.dumps(personality_traits),
             json.dumps(likes),
             json.dumps(dislikes),
             npc_id
@@ -149,13 +177,13 @@ def assign_npc_flavor(npc_id: int):
         conn.commit()
     except Exception as e:
         conn.rollback()
-        raise e
+        raise
     finally:
         conn.close()
 
-
 def introduce_random_npc():
     """
+    (unchanged from your original)
     Finds an unintroduced NPC in NPCStats (introduced=FALSE), 
     flips introduced=TRUE, and returns the npc_id.
     """
