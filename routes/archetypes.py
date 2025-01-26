@@ -1605,44 +1605,48 @@ def insert_missing_archetypes():
                     "Placeholder for extra modifiers or expansions."
                 ]
             }
-        ]
+    ]
 
-        # IMPORTANT: The closing bracket above lines up with the 'archetypes_data = [' line.
-        # Everything below is at the same indent as 'archetypes_data'.
-    
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-        # Check existing archetype names
+
+    # Check existing archetype names
     cursor.execute("SELECT name FROM Archetypes")
     existing = {row[0] for row in cursor.fetchall()}
-    
+
     for arc in archetypes_data:
-        if arc["name"] not in existing:
+        name = arc["name"]
+        bs_json = json.dumps(arc["baseline_stats"])
+        prog_rules_json = json.dumps(arc.get("progression_rules", []))
+        setting_ex_json = json.dumps(arc.get("setting_examples", []))
+        unique_traits_json = json.dumps(arc.get("unique_traits", []))
+
+        if name not in existing:
             cursor.execute("""
-                INSERT INTO Archetypes (name, baseline_stats, progression_rules, setting_examples, unique_traits)
+                INSERT INTO Archetypes 
+                    (name, baseline_stats, progression_rules, setting_examples, unique_traits)
                 VALUES (%s, %s, %s, %s, %s)
-            """, (
-                arc["name"],
-                json.dumps(arc["baseline_stats"]),
-                json.dumps(arc.get("progression_rules", [])),
-                json.dumps(arc.get("setting_examples", [])),
-                json.dumps(arc.get("unique_traits", []))
-            ))
-            print(f"Inserted archetype: {arc['name']}")
+            """, (name, bs_json, prog_rules_json, setting_ex_json, unique_traits_json))
+            print(f"Inserted archetype: {name}")
         else:
-            print(f"Skipped existing archetype: {arc['name']}")
+            cursor.execute("""
+                UPDATE Archetypes
+                SET baseline_stats = %s,
+                    progression_rules = %s,
+                    setting_examples = %s,
+                    unique_traits = %s
+                WHERE name = %s
+            """, (bs_json, prog_rules_json, setting_ex_json, unique_traits_json, name))
+            print(f"Updated existing archetype: {name}")
 
-    # IMPORTANT: commit the transaction so the data is actually saved
     conn.commit()
-
-    # Then close the connection
     conn.close()
+
 
 @archetypes_bp.route('/insert_archetypes', methods=['POST'])
 def insert_archetypes_route():
     """
-    Optional route to insert archetypes manually (like your /admin or /settings approach).
+    Optional route to insert/update archetypes manually with the final "range + modifier" style stats.
     """
     try:
         insert_missing_archetypes()
@@ -1653,26 +1657,23 @@ def insert_archetypes_route():
 
 def assign_archetypes_to_npc(npc_id):
     """
-    Picks 4 random archetypes from the DB and stores them in NPCStats.archetypes (a JSON field).
-    Example usage whenever you create a new NPC:
+    Picks 4 random archetypes from the DB and stores them in NPCStats.archetypes (JSON).
+    Example usage: 
         npc_id = create_npc_in_db(...)
         assign_archetypes_to_npc(npc_id)
     """
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1) Fetch all archetypes
     cursor.execute("SELECT id, name FROM Archetypes")
     archetype_rows = cursor.fetchall()
     if not archetype_rows:
         conn.close()
         raise ValueError("No archetypes found in DB.")
 
-    import random
     four = random.sample(archetype_rows, min(4, len(archetype_rows)))
     assigned_list = [{"id": row[0], "name": row[1]} for row in four]
 
-    # 2) Update the NPCStats table
     cursor.execute("""
         UPDATE NPCStats
         SET archetypes = %s
@@ -1681,5 +1682,4 @@ def assign_archetypes_to_npc(npc_id):
 
     conn.commit()
     conn.close()
-
     return assigned_list
