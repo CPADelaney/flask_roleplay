@@ -11,7 +11,7 @@ from logic.memory_logic import memory_bp
 from logic.rule_enforcement import rule_enforcement_bp
 from db.admin import admin_bp
 from flask_cors import CORS
-from routes.debug import debug_create_npc, debug_generate_setting
+from routes.debug import debug_bp
 
 def create_app():
     app = Flask(__name__)
