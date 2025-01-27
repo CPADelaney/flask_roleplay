@@ -59,7 +59,7 @@ def apply_universal_updates(data: dict):
             """, (
                 name, introduced,
                 dom, cru, clos, tru, resp, inten,
-                occ, json.dumps(hbs), json.dumps(pers),
+                json.dumps(hbs), json.dumps(pers),
                 json.dumps(lks), json.dumps(dlks),
                 json.dumps(affil), json.dumps(sched), mem, monica_lvl
             ))
