@@ -22,7 +22,6 @@ dislikes_pool = dislikes = [
     "Scratchy Wool (Modern: itchy sweaters, Fantasy: uncomfortable adventurer cloaks, Sci-Fi: subpar synthetic clothing, Post-Apoc: coarse fabrics repurposed into survival gear)",
     "Cold Coffee (Modern: ruined morning beverage, Fantasy: tepid herbal brews, Sci-Fi: chilled liquid rations pretending to be coffee, Post-Apoc: lukewarm campfire brews with salvaged beans)",
     "Soggy Cereal (Modern: ruined breakfast, Fantasy: overly soaked porridge, Sci-Fi: poorly hydrated space rations, Post-Apoc: makeshift cereal that quickly turns unappetizing)",
-    # Expansion: 100–500 Dislikes
     "Broken Umbrellas (Modern: useless in rainstorms, Fantasy: enchanted parasols failing, Sci-Fi: malfunctioning weather shields, Post-Apoc: cobbled-together umbrellas collapsing during acid rain)",
     "Plastic Cutlery (Modern: flimsy eating tools, Fantasy: poorly made feast utensils, Sci-Fi: disposable tools on space stations, Post-Apoc: salvaged plastic breaking too easily)",
     "Expired Coupons (Modern: useless pieces of paper, Fantasy: invalid guild seals, Sci-Fi: outdated colony rations, Post-Apoc: finding bartering tokens no longer accepted)",
@@ -65,5 +64,5 @@ dislikes_pool = dislikes = [
     "Overly Complicated IKEA Instructions (Modern: impossible furniture guides, Fantasy: convoluted magical assembly scrolls, Sci-Fi: alien tech requiring inscrutable manuals, Post-Apoc: scavenged furniture impossible to piece together)",
     "Fake News Notifications (Modern: constant digital misinformation, Fantasy: spreading false rumors in taverns, Sci-Fi: misleading holographic broadcasts, Post-Apoc: survivor groups spreading fake updates for control)",
     "Unscratchable Itches (Modern: maddening irritations, Fantasy: cursed itches caused by magical mischief, Sci-Fi: environmental irritants on alien planets, Post-Apoc: survival gear causing constant discomfort)",
-    "Overly Attached Exes (Modern: emotional clinginess, Fantasy: jilted lovers causing drama, Sci-Fi: vengeful ex-crew members, Post-Apoc: past relationships creating dangerous complications)",
+    "Overly Attached Exes (Modern: emotional clinginess, Fantasy: jilted lovers causing drama, Sci-Fi: vengeful ex-crew members, Post-Apoc: past relationships creating dangerous complications)"
 ]
