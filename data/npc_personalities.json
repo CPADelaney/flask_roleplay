@@ -1,4 +1,4 @@
-# logic/npc_personalities.json
+# data/npc_personalities.json
 
     personality_pool = personality_traits = [
     # 1
@@ -170,7 +170,6 @@
     # 84
     "Romantic (Modern: believes in true love, Fantasy: pines for fairy-tale romance, Sci-Fi: star-crossed cosmic love, Post-Apoc: hopes love can bloom even in ruins)",
     # 85
-    "Practical (Duplicate name from #45 but let’s keep short. Could be “Down-to-Earth.”) Let’s rename:
     "Down-to-Earth (Modern: grounded approach, Fantasy: focuses on daily tasks not prophecy, Sci-Fi: leans on proven tech, Post-Apoc: no-nonsense survival technique)",
     # 86
     "Jaded (Modern: tired of illusions, Fantasy: war-weary from too many battles, Sci-Fi: bored with cosmic wonders, Post-Apoc: saw too much tragedy to believe in hope)",
@@ -219,7 +218,7 @@
     # 108
     "Hedonistic (Modern: chases pleasure, Fantasy: indulges in feasts & luxuries, Sci-Fi: cosmic party-goer ignoring consequences, Post-Apoc: dangerously hunts for any fleeting joy)",
     # 109
-    "Idealistic (Already used #42, let's rename to 'Utopian'): Utopian (Modern: believes society can be perfected, Fantasy: dreams of a perfect kingdom, Sci-Fi: envisions a galaxy of harmony, Post-Apoc: tries to shape a perfect new society)",
+    "Utopian (Modern: believes society can be perfected, Fantasy: dreams of a perfect kingdom, Sci-Fi: envisions a galaxy of harmony, Post-Apoc: tries to shape a perfect new society)",
     # 110
     "Insensitive (Modern: lacks empathy, Fantasy: disregards others’ feelings in pursuit of power, Sci-Fi: cold or robotic attitude, Post-Apoc: offends or hurts others without noticing)",
     # 111
@@ -261,7 +260,7 @@
     # 129
     "Passionate (Modern: intense emotions & convictions, Fantasy: invests heart and soul in quests, Sci-Fi: channeling strong beliefs for progress, Post-Apoc: fights fiercely for what they love)",
     # 130
-    "Patient (already used #11). Let’s rename: Placid (Modern: rarely ruffled, Fantasy: unshakeable druidic calm, Sci-Fi: stoic in cosmic storms, Post-Apoc: offers a sense of peace in chaos)",
+    "Placid (Modern: rarely ruffled, Fantasy: unshakeable druidic calm, Sci-Fi: stoic in cosmic storms, Post-Apoc: offers a sense of peace in chaos)",
     # 131
     "Patronizing (Modern: treats others as inferior, Fantasy: a condescending noble or wizard, Sci-Fi: superior attitude to “less advanced” cultures, Post-Apoc: acts like they know best to struggling survivors)",
     # 132
@@ -341,7 +340,7 @@
     # 169
     "Steadfast (Modern: unwavering once committed, Fantasy: stands ground in battles, Sci-Fi: remains loyal to mission despite cosmic odds, Post-Apoc: never flees the settlement’s defense)",
     # 170
-    "Stingy (already used #77). Let’s rename: Stingy2 -> "Miserly" (Modern: extremely tight with money, Fantasy: coin-hoarding old retainer, Sci-Fi: collects credits refusing to spend, Post-Apoc: hoards supplies and refuses to share)",
+    "Miserly (Modern: extremely tight with money, Fantasy: coin-hoarding old retainer, Sci-Fi: collects credits refusing to spend, Post-Apoc: hoards supplies and refuses to share)",
     # 171
     "Superstitious (Modern: avoids black cats, etc., Fantasy: fully believes in omens & portents, Sci-Fi: thinks certain star patterns cause luck, Post-Apoc: creates new taboos about old world remnants)",
     # 172
@@ -397,7 +396,7 @@
     # 197
     "Aloof (Modern: distant from social ties, Fantasy: stands apart from the party, Sci-Fi: remains emotionally remote from crew, Post-Apoc: keeps walls up, trusting no one intimately)",
     # 198
-    "Altruistic (already #56). Let’s rename: 'Self-Sacrificing' (Modern: often puts others first at own expense, Fantasy: leaps in front of the dragon to save ally, Sci-Fi: jettisons self for the crew, Post-Apoc: gives away rations to help others)",
+    "Self-Sacrificing (Modern: often puts others first at own expense, Fantasy: leaps in front of the dragon to save ally, Sci-Fi: jettisons self for the crew, Post-Apoc: gives away rations to help others)",
     # 199
     "Ambiguous (Modern: unclear stance, Fantasy: moral alignment uncertain, Sci-Fi: motivations unknown, Post-Apoc: group can’t tell if ally or foe)",
     # 200
@@ -461,7 +460,7 @@
     # 229
     "Devious (Modern: cunning trickster, Fantasy: plots behind the scenes, Sci-Fi: manipulates data or sabotage, Post-Apoc: schemes to outsmart rival survivor groups)",
     # 230
-    "Diplomatic (already #74). Let’s rename: 'Bridge-Building' (Modern: fosters collaboration, Fantasy: unites feuding clans, Sci-Fi: liaison for multi-species alliances, Post-Apoc: merges enclaves peacefully)",
+    "Bridge-Building (Modern: fosters collaboration, Fantasy: unites feuding clans, Sci-Fi: liaison for multi-species alliances, Post-Apoc: merges enclaves peacefully)",
     # 231
     "Disillusioned (Modern: lost faith in system, Fantasy: no longer believes in prophecy or lords, Sci-Fi: realized star empire is corrupt, Post-Apoc: sees rebuilding attempts as futile)",
     # 232
@@ -475,7 +474,7 @@
     # 236
     "Effervescent (Modern: bubbly & high-spirited, Fantasy: joyous performer spreading cheer, Sci-Fi: star hostess beaming positivity, Post-Apoc: surprising sparkle in a broken world)",
     # 237
-    "Egocentric (already #105; let’s rename: 'Self-Centered') (Modern: references everything to self, Fantasy: cares only about personal glory, Sci-Fi: sees entire galaxy as revolve around them, Post-Apoc: prioritizes own survival/comfort first)",
+    "Self-Centered (Modern: references everything to self, Fantasy: cares only about personal glory, Sci-Fi: sees entire galaxy as revolve around them, Post-Apoc: prioritizes own survival/comfort first)",
     # 238
     "Eloquent (Modern: articulate speaker, Fantasy: silver-tongued court orator, Sci-Fi: impresses aliens with verbal finesse, Post-Apoc: rallying speeches that stir hearts)",
     # 239
@@ -509,11 +508,11 @@
     # 253
     "Granular (Modern: details every step meticulously, Fantasy: refuses to proceed without full plan, Sci-Fi: breaks down tasks to micro-level, Post-Apoc: itemizes supplies to the last crumb)",
     # 254
-    "Gregarious (already #5, let’s rename: 'Sociable2' -> 'Congenial'): Congenial (Modern: easily makes friends, Fantasy: beloved by the tavern crowd, Sci-Fi: quickly bonds with alien crew, Post-Apoc: fosters camaraderie among survivors)",
+    "Congenial (Modern: easily makes friends, Fantasy: beloved by the tavern crowd, Sci-Fi: quickly bonds with alien crew, Post-Apoc: fosters camaraderie among survivors)",
     # 255
     "Guarded (Modern: reluctant to share personal info, Fantasy: rarely reveals vulnerability, Sci-Fi: keeps emotional shield in cosmic teams, Post-Apoc: suspicious of all due to scarce trust)",
     # 256
-    "Gullible (already #34). Let’s rename: 'Overtrusting' (Modern: believes every sob story, Fantasy: easily duped by illusions, Sci-Fi: falls for elaborate star hoaxes, Post-Apoc: tricked by con artists in resource deals)",
+    "Overtrusting (Modern: believes every sob story, Fantasy: easily duped by illusions, Sci-Fi: falls for elaborate star hoaxes, Post-Apoc: tricked by con artists in resource deals)",
     # 257
     "Hard-Edged (Modern: rough around the edges from experience, Fantasy: scarred adventurer who’s seen battles, Sci-Fi: weathered star pilot, Post-Apoc: cynically tough from survival horrors)",
     # 258
@@ -569,7 +568,7 @@
     # 283
     "Lighthearted (Modern: brushes off serious tension, Fantasy: frolicsome even in dire quests, Sci-Fi: jokes about dangerous anomalies, Post-Apoc: tries to see silver linings in nuclear storms)",
     # 284
-    "Loyal (already #40). Let's rename 'Steadfast2'? We already have 'Steadfast' #169. We'll do 'Faithful' (Modern: unwavering friend/spouse, Fantasy: devoted retainer to a lord, Sci-Fi: never abandons the crew, Post-Apoc: stands by people even in desperation)",
+    "Faithful (Modern: unwavering friend/spouse, Fantasy: devoted retainer to a lord, Sci-Fi: never abandons the crew, Post-Apoc: stands by people even in desperation)",
     # 285
     "Manipulative (Modern: shapes others for personal gain, Fantasy: weaves court intrigues, Sci-Fi: engineers star alliances behind the scenes, Post-Apoc: pulls strings to become settlement’s power broker)",
     # 286
@@ -589,11 +588,11 @@
     # 293
     "Observant (Modern: notices small clues, Fantasy: picks out hidden runes or monster tracks, Sci-Fi: spots anomalies in sensors, Post-Apoc: sees footprints or supply caches others miss)",
     # 294
-    "Oblivious (already #126). Let's rename: 'Unaware' (Modern: doesn’t notice big hints, Fantasy: fails to see court intrigue, Sci-Fi: misses star-liner tension signals, Post-Apoc: ignorant of danger signs around them)",
+    "Unaware (Modern: doesn’t notice big hints, Fantasy: fails to see court intrigue, Sci-Fi: misses star-liner tension signals, Post-Apoc: ignorant of danger signs around them)",
     # 295
     "Opinionated (Modern: strong views on everything, Fantasy: constantly states stance on kingdom matters, Sci-Fi: spouts opinions on cosmic politics, Post-Apoc: sure about how settlements should run)",
     # 296
-    "Optimistic (already #52). Let’s rename: 'Bright-Sided' (Modern: always sees silver lining, Fantasy: certain every quest ends well, Sci-Fi: thinks new tech or alliances fix problems, Post-Apoc: convinced they can find a path forward)",
+    "Bright-Sided (Modern: always sees silver lining, Fantasy: certain every quest ends well, Sci-Fi: thinks new tech or alliances fix problems, Post-Apoc: convinced they can find a path forward)",
     # 297
     "Organized (Modern: good at structuring tasks, Fantasy: arranges the party’s inventory meticulously, Sci-Fi: logs star data systematically, Post-Apoc: categorizes salvage neatly for the group)",
     # 298
@@ -619,7 +618,7 @@
     # 308
     "Pitiless (Modern: no mercy for the suffering, Fantasy: wouldn’t spare a wounded foe, Sci-Fi: jettisons burdensome crewmates, Post-Apoc: discards anyone who slows them down)",
     # 309
-    "Plucky (already #137). Let’s rename: 'Upbeat Underdog' (Modern: scrappy and hopeful, Fantasy: minor hero with big heart, Sci-Fi: novice pilot with can-do attitude, Post-Apoc: small but unstoppable faith in survival)",
+    "Upbeat Underdog (Modern: scrappy and hopeful, Fantasy: minor hero with big heart, Sci-Fi: novice pilot with can-do attitude, Post-Apoc: small but unstoppable faith in survival)",
     # 310
     "Poker-Faced (Modern: hides emotions behind neutrality, Fantasy: reveals nothing in court intrigue, Sci-Fi: unreadable in tense negotiations, Post-Apoc: keeps all reactions suppressed so enemies can't read them)",
     # 311
@@ -649,13 +648,13 @@
     # 323
     "Regimental (Modern: enforces strict routines, Fantasy: runs the party schedule like a sergeant, Sci-Fi: militaristic structure in daily tasks, Post-Apoc: tries to keep discipline and daily roll calls)",
     # 324
-    "Reliable (already #149). Let's rename: 'Steady' (Modern: consistent & dependable, Fantasy: always shows up for the quest, Sci-Fi: on-time for watch shifts, Post-Apoc: never fails the group in a pinch)",
+    "Steady (Modern: consistent & dependable, Fantasy: always shows up for the quest, Sci-Fi: on-time for watch shifts, Post-Apoc: never fails the group in a pinch)",
     # 325
     "Remorseless (Modern: no regret for wrongdoing, Fantasy: kills or robs with no guilt, Sci-Fi: bombards alien worlds without second thought, Post-Apoc: commits atrocities for resources calmly)",
     # 326
     "Resolute (Modern: firm in decisions, Fantasy: unwavering in quest, Sci-Fi: stands by mission orders, Post-Apoc: never falters in defense or plan)",
     # 327
-    "Resourceful (already #151). Let’s rename: 'Ingenious' (Modern: solves issues with creativity, Fantasy: wizard illusions to fix problems, Sci-Fi: jerry-rigs advanced tech solutions, Post-Apoc: uses junk in brilliant ways)",
+    "Ingenious (Modern: solves issues with creativity, Fantasy: wizard illusions to fix problems, Sci-Fi: jerry-rigs advanced tech solutions, Post-Apoc: uses junk in brilliant ways)",
     # 328
     "Retributive (Modern: believes strongly in payback or justice, Fantasy: punishes any wrongdoing tit-for-tat, Sci-Fi: hunts criminals or foes across systems, Post-Apoc: administers frontier justice swiftly)",
     # 329
@@ -715,9 +714,9 @@
     # 356
     "Superficial (Modern: cares only about surface image, Fantasy: enthralled by fancy titles or looks, Sci-Fi: invests in flashy star suits ignoring deeper issues, Post-Apoc: prefers style even if not practical in ruin)",
     # 357
-    "Supportive (already #172). Let’s rename: 'Encouraging' (Modern: cheers on friends wholeheartedly, Fantasy: offers words of strength on quest, Sci-Fi: booster for crew morale, Post-Apoc: ensures people keep going despite daily horrors)",
+    "Encouraging (Modern: cheers on friends wholeheartedly, Fantasy: offers words of strength on quest, Sci-Fi: booster for crew morale, Post-Apoc: ensures people keep going despite daily horrors)",
     # 358
-    "Suspicious (already #35). Let's rename: 'Distrustful' (Modern: sees hidden agendas everywhere, Fantasy: refuses help from shady wizard, Sci-Fi: checks every corridor for betrayal, Post-Apoc: denies new arrivals entry easily)",
+    "Distrustful (Modern: sees hidden agendas everywhere, Fantasy: refuses help from shady wizard, Sci-Fi: checks every corridor for betrayal, Post-Apoc: denies new arrivals entry easily)",
     # 359
     "Swaggering (Modern: cocky strut, Fantasy: braggart swordsman stroll, Sci-Fi: star-liner champion walk, Post-Apoc: parades around camp, displaying weapons & confidence)",
     # 360
@@ -727,7 +726,7 @@
     # 362
     "Systematic (Modern: forms step-by-step plans, Fantasy: organizes quest gear precisely, Sci-Fi: sets star route by exact logic, Post-Apoc: crafts thorough rationing systems or patrol schedules)",
     # 363
-    "Taciturn (already #69). Let’s rename: 'Close-Lipped' (Modern: rarely speaks, Fantasy: only utters essential words on quest, Sci-Fi: minimal comm transmissions, Post-Apoc: hush about background or emotions)",
+    "Close-Lipped (Modern: rarely speaks, Fantasy: only utters essential words on quest, Sci-Fi: minimal comm transmissions, Post-Apoc: hush about background or emotions)",
     # 364
     "Tame (Modern: mild, avoids conflict, Fantasy: an unadventurous stable-hand, Sci-Fi: politely does minor tasks, Post-Apoc: no risk-taking, chooses safe routine in settlement)",
     # 365
@@ -735,7 +734,7 @@
     # 366
     "Tender (Modern: gentle & affectionate, Fantasy: kind to animals & party members, Sci-Fi: shows warmth to alien youths, Post-Apoc: fosters closeness in a world short on love)",
     # 367
-    "Tense (already #175). Let’s rename: 'Strained' (Modern: wound-up nerves, Fantasy: knight worried about each mission, Sci-Fi: easily stressed by star hazards, Post-Apoc: constant edge under threat)",
+    "Strained (Modern: wound-up nerves, Fantasy: knight worried about each mission, Sci-Fi: easily stressed by star hazards, Post-Apoc: constant edge under threat)",
     # 368
     "Territorial (Modern: defends own space fiercely, Fantasy: forest ranger or clan champion guarding land, Sci-Fi: claims star sector, Post-Apoc: fights intruders to preserve precious farmland or safe zone)",
     # 369
@@ -751,7 +750,7 @@
     # 374
     "Trendy (Modern: follows latest fashions, Fantasy: always adopting new court styles or bard hits, Sci-Fi: checks cosmic style updates, Post-Apoc: repurposes scraps into “fashion” tries to keep up appearances)",
     # 375
-    "Unambitious (already #180). Let's rename: 'Unaspiring' (Modern: no big dreams, Fantasy: stays as simple stable boy, Sci-Fi: content as minor station worker, Post-Apoc: doesn't see beyond daily routine)",
+    "Unaspiring (Modern: no big dreams, Fantasy: stays as simple stable boy, Sci-Fi: content as minor station worker, Post-Apoc: doesn't see beyond daily routine)",
     # 376
     "Uncouth (Modern: lacks manners, crass, Fantasy: barbarian from wild lands, Sci-Fi: brash among polite alien diplomats, Post-Apoc: belches & curses freely in camp, no shame)",
     # 377
@@ -783,9 +782,9 @@
     # 390
     "Whiny (Modern: complains about small discomforts, Fantasy: moans on the quest about every step, Sci-Fi: never stops griping about star conditions, Post-Apoc: laments ration taste or dusty shelter constantly)",
     # 391
-    "Withdrawn (already #193). Let’s rename: 'Seclusive' (Modern: pulls away from society, Fantasy: hidden in a forest shack, Sci-Fi: locked in personal quarters on station, Post-Apoc: rarely engages with the group unless forced)",
+    "Seclusive (Modern: pulls away from society, Fantasy: hidden in a forest shack, Sci-Fi: locked in personal quarters on station, Post-Apoc: rarely engages with the group unless forced)",
     # 392
-    "Witty (already #100). Let’s rename: 'Sharp-Tongued' (Modern: quick comedic replies, Fantasy: sassy remarks in court or tavern, Sci-Fi: snappy lines on star-liner intercom, Post-Apoc: banters to lighten gloom or mock enemies)",
+    "Sharp-Tongued (Modern: quick comedic replies, Fantasy: sassy remarks in court or tavern, Sci-Fi: snappy lines on star-liner intercom, Post-Apoc: banters to lighten gloom or mock enemies)",
     # 393
     "Workaholic (Modern: obsessively works, Fantasy: smith or mage who never leaves the forge/tower, Sci-Fi: invests all hours in star labs, Post-Apoc: tirelessly organizes or scavenges, ignoring personal rest)",
     # 394
@@ -797,7 +796,7 @@
     # 397
     "Youthful (Modern: boundless teen energy or naive optimism, Fantasy: excited squire or princess discovering world, Sci-Fi: rookie pilot enthralled by cosmic wonders, Post-Apoc: a bright new generation that’s less haunted by the old world)",
     # 398
-    "Yenning (rare usage, meaning longings or cravings) (Modern: constantly yearns for something else, Fantasy: pines for magical solutions or distant realms, Sci-Fi: fixated on a star or planet they long to see, Post-Apoc: hungry for better days or old comforts)",
+    "Yenning (Modern: constantly yearns for something else, Fantasy: pines for magical solutions or distant realms, Sci-Fi: fixated on a star or planet they long to see, Post-Apoc: hungry for better days or old comforts)",
     # 399
     "Zany (Modern: comedic, clown-like energy, Fantasy: jester on overdrive, Sci-Fi: comedic relief with wild stunts, Post-Apoc: uses craziness to distract from daily bleakness)",
     # 400
@@ -809,7 +808,7 @@
     # 403
     "Airy (Modern: somewhat vacant or light-minded, Fantasy: whimsical fairy-like persona, Sci-Fi: drifts in futuristic daydreams, Post-Apoc: acts ungrounded from survival reality)",
     # 404
-    "Ambiguous (already #199). Let’s rename: 'Equivocal' (Modern: never commits to a clear stance, Fantasy: riddling mage or prophet, Sci-Fi: answers in vague star metaphors, Post-Apoc: group can’t pin down their actual loyalty)",
+    "Equivocal (Modern: never commits to a clear stance, Fantasy: riddling mage or prophet, Sci-Fi: answers in vague star metaphors, Post-Apoc: group can’t pin down their actual loyalty)",
     # 405
     "Angelic (Modern: unbelievably kind & pure, Fantasy: saintly alignment, Sci-Fi: revered across star systems for compassion, Post-Apoc: a beacon of moral purity who helps all in need)",
     # 406
@@ -859,13 +858,13 @@
     # 428
     "Courteous (Modern: graceful social manners, Fantasy: bows properly to royalty, Sci-Fi: respects chain of command & alien customs, Post-Apoc: tries to keep respectful talk even with tough warlords)",
     # 429
-    "Cowardly (already #221). Let’s rename: 'Spineless' (Modern: flees confrontation, Fantasy: begs for mercy from goblins, Sci-Fi: hits escape pods first, Post-Apoc: abandons settlement in a pinch)",
+    "Spineless (Modern: flees confrontation, Fantasy: begs for mercy from goblins, Sci-Fi: hits escape pods first, Post-Apoc: abandons settlement in a pinch)",
     # 430
     "Crafty (Modern: cunning, possibly manipulative but clever, Fantasy: illusions & trickery, Sci-Fi: reprograms droids for advantage, Post-Apoc: creative sabotage or survival strategies to outwit foes)",
     # 431
-    "Critical (already #224). Let’s rename: 'Judgmental' (Modern: points out everyone’s flaws, Fantasy: scolds party for suboptimal methods, Sci-Fi: rants about incompetent star-liner staff, Post-Apoc: calls group’s planning incompetent at every turn)",
+    "Judgmental (Modern: points out everyone’s flaws, Fantasy: scolds party for suboptimal methods, Sci-Fi: rants about incompetent star-liner staff, Post-Apoc: calls group’s planning incompetent at every turn)",
     # 432
-    "Daring (already #33). Let’s rename: 'Audacious' (Modern: fearless stunts, Fantasy: leaps onto dragon’s back mid-flight, Sci-Fi: tries insane star maneuvers, Post-Apoc: storms raider camp alone for supplies)",
+    "Audacious (Modern: fearless stunts, Fantasy: leaps onto dragon’s back mid-flight, Sci-Fi: tries insane star maneuvers, Post-Apoc: storms raider camp alone for supplies)",
     # 433
     "Dark-Humored (Modern: jokes about grim topics, Fantasy: jest about battlefield gore, Sci-Fi: laughs at cosmic existential dread, Post-Apoc: cracks jokes about doomsday events to cope)",
     # 434
@@ -885,13 +884,13 @@
     # 441
     "Dim (Modern: not bright intellectually, Fantasy: dull-witted orcish soldier, Sci-Fi: pilot who needs constant re-explanation of controls, Post-Apoc: slow to grasp even survival tips, relies on others’ smarts)",
     # 442
-    "Diplomatic (we have it thrice, let’s rename: 'Peacemaking' for variety) (Modern: tries to unify conflicting parties, Fantasy: arranges truces between warring barons, Sci-Fi: fosters alliances among star races, Post-Apoc: negotiates peaceful resource sharing between enclaves)",
+    "Peacemaking (Modern: tries to unify conflicting parties, Fantasy: arranges truces between warring barons, Sci-Fi: fosters alliances among star races, Post-Apoc: negotiates peaceful resource sharing between enclaves)",
     # 443
     "Disciplined (Modern: follows set routines, Fantasy: knight abiding code strictly, Sci-Fi: strict daily regimen for cosmic readiness, Post-Apoc: fosters stable routines for a chaotic group)",
     # 444
     "Dismissive (Modern: waves away others’ input, Fantasy: ignores advice from wise wizards, Sci-Fi: cracks jokes about lesser tech or species, Post-Apoc: refuses to consider group suggestions in survival tactics)",
     # 445
-    "Earnest (already #25). Let’s rename: 'Heartfelt' (Modern: genuine from the soul, Fantasy: open sincerity in quest, Sci-Fi: strongly expresses real care for the crew, Post-Apoc: tries to convey honest emotions in an untrusting world)",
+    "Heartfelt (Modern: genuine from the soul, Fantasy: open sincerity in quest, Sci-Fi: strongly expresses real care for the crew, Post-Apoc: tries to convey honest emotions in an untrusting world)",
     # 446
     "Efficient (Modern: waste no time or resources, Fantasy: organizes quest steps precisely, Sci-Fi: optimizes ship’s route & energy usage, Post-Apoc: ensures rations & salvage used to max potential)",
     # 447
@@ -909,7 +908,7 @@
     # 453
     "Fawning (Modern: overly flatters superiors, Fantasy: sycophant to kings, Sci-Fi: sucks up to captains or corporate heads, Post-Apoc: coddles warlord for protection or favor)",
     # 454
-    "Fickle (already #245). Let’s rename: 'Inconstant' (Modern: changes mind or allegiances frequently, Fantasy: might join another adventuring party mid-quest, Sci-Fi: signs with different star faction each month, Post-Apoc: camp-hops for better deals)",
+    "Inconstant (Modern: changes mind or allegiances frequently, Fantasy: might join another adventuring party mid-quest, Sci-Fi: signs with different star faction each month, Post-Apoc: camp-hops for better deals)",
     # 455
     "Flustered (Modern: easily thrown off by stress, Fantasy: losing composure in battles or illusions, Sci-Fi: stumbles with star-liner systems under pressure, Post-Apoc: panics mid scavenging run)",
     # 456
@@ -921,15 +920,15 @@
     # 459
     "Giddy (Modern: giggly excitement, Fantasy: easily enthralled by festival atmosphere, Sci-Fi: euphoria seeing new planets, Post-Apoc: laughs and spins around any small joy in bleakness)",
     # 460
-    "Gloomy (already #251). Let’s rename: 'Sorrowful' (Modern: constant air of sadness, Fantasy: laments fallen companions, Sci-Fi: burdened by star tragedies, Post-Apoc: gloom over unstoppable destruction)",
+    "Sorrowful (Modern: constant air of sadness, Fantasy: laments fallen companions, Sci-Fi: burdened by star tragedies, Post-Apoc: gloom over unstoppable destruction)",
     # 461
     "Graceful (Modern: poised in movement & speech, Fantasy: elegant elf or dancer vibe, Sci-Fi: fluid in zero-G maneuvers, Post-Apoc: uncanny smoothness amid ragged conditions)",
     # 462
-    "Guarded (already #255). Let’s rename: 'Closed-Off' (Modern: refuses emotional intimacy, Fantasy: wizard locked behind wards, Sci-Fi: minimal personal data shared, Post-Apoc: doesn't reveal backstory or feelings to group)",
+    "Closed-Off (Modern: refuses emotional intimacy, Fantasy: wizard locked behind wards, Sci-Fi: minimal personal data shared, Post-Apoc: doesn't reveal backstory or feelings to group)",
     # 463
     "Hardheaded (Modern: once decided, never budges, Fantasy: unstoppable dwarven approach, Sci-Fi: pilot ignoring new evidence, Post-Apoc: won't deviate from initial plan despite potential ruin)",
     # 464
-    "Haughty (already #260). Let’s rename: 'Arrogantly Proud' (Modern: sneers at “inferiors,” Fantasy: typical highborn arrogance, Sci-Fi: advanced species complex, Post-Apoc: looks down on “rabble” survivors)",
+    "Arrogantly Proud (Modern: sneers at “inferiors,” Fantasy: typical highborn arrogance, Sci-Fi: advanced species complex, Post-Apoc: looks down on “rabble” survivors)",
     # 465
     "Hilarious (Modern: comedic genius, Fantasy: jester who kills the crowd (figuratively?), Sci-Fi: stand-up routines on star-liners, Post-Apoc: precious comedic relief in dire times)",
     # 466
@@ -941,7 +940,7 @@
     # 469
     "Humorous (Modern: cracks jokes, Fantasy: comedic relief in the quest, Sci-Fi: keeps crew spirits high, Post-Apoc: comedic takes on daily survival for morale)",
     # 470
-    "Idealistic (we used #42, #109 as 'Utopian'). Let’s rename: 'Visionary' (Modern: focuses on better future, Fantasy: believes in a glorious prophecy, Sci-Fi: sees the galaxy’s best potential, Post-Apoc: determined to craft a new ideal world from rubble)",
+    "Visionary (Modern: focuses on better future, Fantasy: believes in a glorious prophecy, Sci-Fi: sees the galaxy’s best potential, Post-Apoc: determined to craft a new ideal world from rubble)",
     # 471
     "Ignoble (Modern: lacks moral principle, acts lowly, Fantasy: petty & cowardly for personal gain, Sci-Fi: deserts the cause or sells data to pirates, Post-Apoc: betrays group for scraps with no guilt)",
     # 472
@@ -951,7 +950,7 @@
     # 474
     "Incorruptible (Modern: cannot be bribed, Fantasy: no treasure can sway them, Sci-Fi: rejects corporate kickbacks, Post-Apoc: keeps integrity despite dire resource shortage)",
     # 475
-    "Indifferent (already #275). Let’s rename: 'Apathetic2' -> 'Uncaring' (Modern: sees no reason to help, Fantasy: ignores suffering peasants, Sci-Fi: shrugs at planetary crises, Post-Apoc: doesn't bother with community issues)",
+    "Uncaring (Modern: sees no reason to help, Fantasy: ignores suffering peasants, Sci-Fi: shrugs at planetary crises, Post-Apoc: doesn't bother with community issues)",
     # 476
     "Ineffectual (Modern: tries but fails to produce results, Fantasy: incompetent mage or swordsman who can’t quite deliver, Sci-Fi: bungles star-liner tasks, Post-Apoc: ends up hindering more than helping despite best intentions)",
     # 477
@@ -963,7 +962,7 @@
     # 480
     "Intrepid (Modern: boldly goes into unknown, Fantasy: unstoppable exploring dungeons, Sci-Fi: leaps into uncharted wormholes, Post-Apoc: roams far beyond settlement in search of resources)",
     # 481
-    "Introspective (already #111). Let's rename: 'Reflective' (Modern: contemplates personal growth, Fantasy: ponders quest meaning by the campfire, Sci-Fi: logs emotional journey in star diaries, Post-Apoc: frequently examines conscience after daily horrors)",
+    "Reflective (Modern: contemplates personal growth, Fantasy: ponders quest meaning by the campfire, Sci-Fi: logs emotional journey in star diaries, Post-Apoc: frequently examines conscience after daily horrors)",
     # 482
     "Irresponsible (Modern: neglects duties, Fantasy: drops quest tasks or misplaces relics, Sci-Fi: forgets to refuel thrusters, Post-Apoc: careless with ration inventory or watch rotations)",
     # 483
@@ -973,9 +972,9 @@
     # 485
     "Long-Winded (Modern: never stops talking, Fantasy: tells epic tales for hours, Sci-Fi: monologues about cosmic stats, Post-Apoc: group begs them to get to the point so they can watch for raiders!)",
     # 486
-    "Magnanimous (already #116). Let’s rename: 'Noble-Spirited' (Modern: forgives enemies generously, Fantasy: spares defeated foes, Sci-Fi: extends big gestures to star-liner stowaways, Post-Apoc: charitable to rival enclaves or ex-raiders)",
+    "Noble-Spirited (Modern: forgives enemies generously, Fantasy: spares defeated foes, Sci-Fi: extends big gestures to star-liner stowaways, Post-Apoc: charitable to rival enclaves or ex-raiders)",
     # 487
-    "Materialistic (already #118). Let’s rename: 'Object-Focused' (Modern: too fixated on possessions, Fantasy: only cares about gold or artifacts, Sci-Fi: hoards advanced gadgets, Post-Apoc: hunts old relics for personal collection)",
+    "Object-Focused (Modern: too fixated on possessions, Fantasy: only cares about gold or artifacts, Sci-Fi: hoards advanced gadgets, Post-Apoc: hunts old relics for personal collection)",
     # 488
     "Meek (Modern: easily overshadowed, Fantasy: subdued peasant overshadowed by knights, Sci-Fi: yields in crew decisions quickly, Post-Apoc: tries not to speak up or show presence in group councils)",
     # 489
@@ -983,23 +982,23 @@
     # 490
     "Mercenary (Modern: works only for pay, Fantasy: sells sword to highest bidder, Sci-Fi: contractor for corporate war or space privateer, Post-Apoc: helps enclaves only for personal gain in resources)",
     # 491
-    "Mournful (already #291). Let’s rename: 'Grief-Stricken' (Modern: cannot move past loss, Fantasy: wails songs of sorrow, Sci-Fi: heartbreak over destroyed home planet, Post-Apoc: lost everyone, now carries daily sorrow)",
+    "Grief-Stricken (Modern: cannot move past loss, Fantasy: wails songs of sorrow, Sci-Fi: heartbreak over destroyed home planet, Post-Apoc: lost everyone, now carries daily sorrow)",
     # 492
-    "Naive (already #83). Let's rename: 'Inexperienced' (Modern: lacks worldly exposure, Fantasy: fresh farmhand on first quest, Sci-Fi: new recruit never left Earth, Post-Apoc: no prior knowledge of survival hardships)",
+    "Inexperienced (Modern: lacks worldly exposure, Fantasy: fresh farmhand on first quest, Sci-Fi: new recruit never left Earth, Post-Apoc: no prior knowledge of survival hardships)",
     # 493
     "Nervous (Modern: anxious about daily tasks, Fantasy: trembling at monsters or curses, Sci-Fi: shakes under star-liner alarms, Post-Apoc: worries raiders will show up any second)",
     # 494
-    "Obedient (already #81). Let’s rename: 'Docile' (Modern: easily follows orders, Fantasy: devoted retainer or stable servant, Sci-Fi: never questions chain of command, Post-Apoc: does whatever the settlement leader says)",
+    "Docile (Modern: easily follows orders, Fantasy: devoted retainer or stable servant, Sci-Fi: never questions chain of command, Post-Apoc: does whatever the settlement leader says)",
     # 495
-    "Observant (already #293). Let’s rename: 'Sharp-Eyed' (Modern: notices small cues, Fantasy: sees footprints or hidden runes, Sci-Fi: picks up cosmic anomalies on sensor readout, Post-Apoc: catches movement on the horizon first)",
+    "Sharp-Eyed (Modern: notices small cues, Fantasy: sees footprints or hidden runes, Sci-Fi: picks up cosmic anomalies on sensor readout, Post-Apoc: catches movement on the horizon first)",
     # 496
     "Open-Minded (Modern: welcomes new ideas, Fantasy: not prejudiced against strange magics or races, Sci-Fi: embraces alien perspectives, Post-Apoc: tries unorthodox survival methods or alliances)",
     # 497
-    "Opinionated (already #295). Let’s rename: 'Strong-Voiced' (Modern: forceful takes on every topic, Fantasy: announces stance in mead hall, Sci-Fi: loud on intercom about policy, Post-Apoc: unstoppable commentary on group decisions)",
+    "Strong-Voiced (Modern: forceful takes on every topic, Fantasy: announces stance in mead hall, Sci-Fi: loud on intercom about policy, Post-Apoc: unstoppable commentary on group decisions)",
     # 498
     "Overconfident (Modern: believes can handle anything, Fantasy: tries to solo dragons, Sci-Fi: attempts risky star maneuvers alone, Post-Apoc: goes into raider territory alone, risking everything)",
     # 499
-    "Passionate (already #129). Let’s rename: 'Fiery' (Modern: intense convictions or emotions, Fantasy: inflamed by the quest cause, Sci-Fi: passionately fights for cosmic justice, Post-Apoc: invests full emotional energy in survival group or rebellion)",
+    "Fiery (Modern: intense convictions or emotions, Fantasy: inflamed by the quest cause, Sci-Fi: passionately fights for cosmic justice, Post-Apoc: invests full emotional energy in survival group or rebellion)",
     # 500
-    "Zealous (already #194). Let’s rename: 'Fanatical2' -> 'Unrelenting Faith' (Modern: unstoppable religious or ideological drive, Fantasy: unstoppable crusader for a deity, Sci-Fi: pushes cosmic empire’s ideology, Post-Apoc: believes wholeheartedly in some new doomsday or salvation faith and drives others to join)"
+    'Unrelenting Faith' (Modern: unstoppable religious or ideological drive, Fantasy: unstoppable crusader for a deity, Sci-Fi: pushes cosmic empire’s ideology, Post-Apoc: believes wholeheartedly in some new doomsday or salvation faith and drives others to join)"
 ]
