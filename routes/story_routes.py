@@ -202,13 +202,13 @@ def build_aggregator_text(aggregator_data, meltdown_flavor=""):
                 f"Close={npc.get('closeness',0)}, Trust={npc.get('trust',0)}, "
                 f"Respect={npc.get('respect',0)}, Int={npc.get('intensity',0)}"
             )
-            occupation = npc.get("occupation", "Unemployed?")
+         #   occupation = npc.get("occupation", "Unemployed?")
             hobbies = npc.get("hobbies", [])
             personality = npc.get("personality_traits", [])
             likes = npc.get("likes", [])
             dislikes = npc.get("dislikes", [])
 
-            lines.append(f"  Occupation: {occupation}")
+        #    lines.append(f"  Occupation: {occupation}")
             lines.append(f"  Hobbies: {', '.join(hobbies)}" if hobbies else "  Hobbies: None")
             lines.append(f"  Personality: {', '.join(personality)}" if personality else "  Personality: None")
             lines.append(f"  Likes: {', '.join(likes)} | Dislikes: {', '.join(dislikes)}\n")
