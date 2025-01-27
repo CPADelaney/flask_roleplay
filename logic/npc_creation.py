@@ -43,12 +43,12 @@ for key, path in DATA_FILES.items():
         # We expect raw to have {"hobbies_pool": [...]}
         DATA["hobbies"] = raw["hobbies_pool"]
     elif key == "likes":
-        DATA["likes"] = raw["likes_pool"]
+        DATA["likes"] = raw["npc_likes"]
     elif key == "dislikes":
         DATA["dislikes"] = raw["dislikes_pool"]
     elif key == "personalities":
         # If it's also stored as "personalities_pool", do:
-        DATA["personalities"] = raw["personalities_pool"]
+        DATA["personalities"] = raw["personality_pool"]
     # else: handle other keys if needed
 
 logging.debug("DATA loaded. For example, hobbies => %s", DATA.get("hobbies"))
