@@ -1,39 +1,71 @@
 import random
 import json
 import logging
+from flask import Blueprint, jsonify
 from db.connection import get_db_connection
-from routes.archetypes import assign_archetypes_to_npc  # Import your archetype logic
+from routes.archetypes import assign_archetypes_to_npc  # or your archetype logic
 
 logging.basicConfig(level=logging.DEBUG)
 
-# 1. Utility: Load external data files
-def load_data(file_path):
-    try:
-        with open(file_path, "r") as file:
-            return json.load(file)
-    except Exception as e:
-        logging.error(f"Failed to load data from {file_path}: {e}")
-        return {}
-
-# 2. Lazy-load pools for NPC creation
+###################
+# 1. File Paths
+###################
 DATA_FILES = {
     "hobbies": "data/npc_hobbies.json",
     "likes": "data/npc_likes.json",
     "dislikes": "data/npc_dislikes.json",
-    # "occupations": "data/npc_occupations.json",  # Commented out
     "personalities": "data/npc_personalities.json"
+    # "occupations": "data/npc_occupations.json" # If you need occupations
 }
 
-DATA = {key: load_data(path) for key, path in DATA_FILES.items()}
+###################
+# 2. Utility: Load external data
+###################
+def load_data(file_path):
+    """Loads JSON from file_path; returns Python data (dict or list)."""
+    try:
+        with open(file_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to load data from {file_path}: {e}")
+        return {}
 
+###################
+# 3. Build Our DATA Dictionary
+###################
+DATA = {}
+for key, path in DATA_FILES.items():
+    raw = load_data(path)
+    
+    # If each file has a top-level object with key *_pool*
+    # we turn that into a direct list in DATA.
+    if key == "hobbies":
+        # We expect raw to have {"hobbies_pool": [...]}
+        DATA["hobbies"] = raw["hobbies_pool"]
+    elif key == "likes":
+        DATA["likes"] = raw["likes_pool"]
+    elif key == "dislikes":
+        DATA["dislikes"] = raw["dislikes_pool"]
+    elif key == "personalities":
+        # If it's also stored as "personalities_pool", do:
+        DATA["personalities"] = raw["personalities_pool"]
+    # else: handle other keys if needed
+
+logging.debug("DATA loaded. For example, hobbies => %s", DATA.get("hobbies"))
+
+###################
+# 4. Stat Clamping
+###################
 def clamp(value, min_val, max_val):
     """Utility to ensure a stat stays within [0, 100]."""
     return max(min_val, min(value, max_val))
 
+###################
+# 5. Core create_npc Function
+###################
 def create_npc(npc_name=None, introduced=False):
     """
-    Core function to create an NPC in NPCStats.
-    Combines base stats with archetype-based modifiers.
+    Creates a new NPC in NPCStats, using random base stats + an archetype-based adjustment.
     """
     if not npc_name:
         npc_name = f"NPC_{random.randint(1000,9999)}"
@@ -55,28 +87,29 @@ def create_npc(npc_name=None, introduced=False):
         chosen_archetype_id, chosen_archetype_name, baseline_stats = None, "None", {}
     else:
         chosen_archetype_id, chosen_archetype_name, baseline_stats = archetype_row
+        # If your column is JSON/JSONB, baseline_stats is already a dict
+        # If it's TEXT, you might need baseline_stats = json.loads(baseline_stats)
 
     logging.debug(f"[create_npc] Picked archetype={chosen_archetype_name}, stats={baseline_stats}")
 
-    # 2) Generate stats based on archetype
+    # 2) Generate stats based on the archetype's range+modifier
     def get_range_and_modifier(stat_key):
-        """Helper to fetch range and modifier for a stat from archetype data."""
-        range_key = f"{stat_key}_range"
-        mod_key = f"{stat_key}_modifier"
-        rng = baseline_stats.get(range_key, [0, 30])  # Default range
-        mod = baseline_stats.get(mod_key, 0)         # Default modifier
+        """Helper to fetch (range, modifier) for a stat."""
+        rng = baseline_stats.get(f"{stat_key}_range", [0, 30])
+        mod = baseline_stats.get(f"{stat_key}_modifier", 0)
         return rng, mod
 
     stats = {}
     for stat_key in ["dominance", "cruelty", "closeness", "trust", "respect", "intensity"]:
-        stat_range, stat_mod = get_range_and_modifier(stat_key)
-        stat_value = random.randint(stat_range[0], stat_range[1]) + stat_mod
-        stats[stat_key] = clamp(stat_value, -100 if stat_key in ["trust", "respect"] else 0, 100)
+        r, m = get_range_and_modifier(stat_key)
+        val = random.randint(r[0], r[1]) + m
+        # clamp trust/respect between -100 & 100, others 0 & 100
+        stats[stat_key] = clamp(val, -100 if stat_key in ["trust", "respect"] else 0, 100)
 
-    logging.debug(f"[create_npc] Final stats: {stats}")
+    logging.debug(f"[create_npc] Final stats => {stats}")
 
     try:
-        # 3) Insert NPC into the database
+        # 3) Insert NPC
         cursor.execute("""
             INSERT INTO NPCStats (
                 npc_name, dominance, cruelty, closeness, trust, respect, intensity,
@@ -88,15 +121,15 @@ def create_npc(npc_name=None, introduced=False):
             npc_name,
             stats["dominance"], stats["cruelty"], stats["closeness"],
             stats["trust"], stats["respect"], stats["intensity"],
-            '{}',  # Memory JSON field
-            0, 0,  # Monica-level placeholders
+            '{}',  # memory is an empty JSON object for now
+            0, 0,
             introduced
         ))
         new_npc_id = cursor.fetchone()[0]
         conn.commit()
         logging.debug(f"[create_npc] Inserted new NPC with ID={new_npc_id}")
 
-        # 4) Assign archetype
+        # 4) Assign archetype (store it in archetypes field as an array of dict)
         cursor.execute("""
             UPDATE NPCStats
             SET archetypes = %s
@@ -104,7 +137,7 @@ def create_npc(npc_name=None, introduced=False):
         """, (json.dumps([{"id": chosen_archetype_id, "name": chosen_archetype_name}]), new_npc_id))
         conn.commit()
 
-        # 5) Assign random flavor (hobbies, personality traits, etc.)
+        # 5) Assign random flavor
         assign_npc_flavor(new_npc_id)
         return new_npc_id
 
@@ -115,15 +148,17 @@ def create_npc(npc_name=None, introduced=False):
     finally:
         conn.close()
 
+###################
+# 6. Random Flavor
+###################
 def assign_npc_flavor(npc_id: int):
     """
-    Assigns random hobbies, personality traits, likes, and dislikes to an NPC.
+    Assigns random hobbies, personality traits, likes, and dislikes to the given NPC.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Randomly sample attributes from loaded data
-    # occupation = random.choice(DATA["occupations"])  # Commented out
+    # Now that we stored the correct data in DATA["hobbies"] etc.
     hobbies = random.sample(DATA["hobbies"], k=3)
     personality_traits = random.sample(DATA["personalities"], k=5)
     likes = random.sample(DATA["likes"], k=3)
@@ -133,14 +168,12 @@ def assign_npc_flavor(npc_id: int):
         cursor.execute("""
             UPDATE NPCStats
             SET 
-                -- occupation = %s,  # Commented out
                 hobbies = %s,
                 personality_traits = %s,
                 likes = %s,
                 dislikes = %s
             WHERE npc_id = %s
         """, (
-            # occupation,  # Commented out
             json.dumps(hobbies),
             json.dumps(personality_traits),
             json.dumps(likes),
