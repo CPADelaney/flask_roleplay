@@ -1,6 +1,5 @@
-# data/npc_likes.json
-
-likes_pool = likes = [
+{
+  "npc_likes": [
     "Thrift Store Smells (Modern: nostalgic scent of old finds, Fantasy: enchanted wares in secondhand shops, Sci-Fi: browsing forgotten colony markets, Post-Apoc: scavenging for treasures among ruins)",
     "Perfectly Timed Traffic Lights (Modern: breezing through green lights, Fantasy: navigating gates that magically open in time, Sci-Fi: smooth transit through space lanes, Post-Apoc: making it past raider ambushes undetected)",
     "Misprinted Menus (Modern: funny or endearing typos, Fantasy: scrolls with humorous spelling errors, Sci-Fi: malfunctioning food replicator listings, Post-Apoc: menus from the old world still being used ironically)",
@@ -46,6 +45,6 @@ likes_pool = likes = [
     "Foggy Mornings (Modern: serene and quiet, Fantasy: mysterious landscapes veiled in mist, Sci-Fi: alien fogs swirling over domed cities, Post-Apoc: mornings cloaked in eerie, recovering mist)",
     "DIY Projects (Modern: building or crafting at home, Fantasy: fixing tools or weaving spells, Sci-Fi: jury-rigging gadgets from scrap, Post-Apoc: essential repair work from salvage)",
     "True Crime Docs (Modern: binge-worthy series, Fantasy: tales of infamous villains, Sci-Fi: documentaries about rogue AI or pirates, Post-Apoc: piecing together the stories of infamous raider leaders)",
-    "Scented Candles (Modern: cozy home aromas, Fantasy: enchanted candles with magical effects, Sci-Fi: scent-enhanced mood lighting in habitats, Post-Apoc: rare finds with familiar smells)",
-    "Old Bookstores (Modern: treasures in stacks, Fantasy: enchanted libraries with hidden grimoires)
-    ]
+    "Scented Candles (Modern: cozy home aromas, Fantasy: enchanted candles with magical effects, Sci-Fi: scent-enhanced mood lighting in habitats, Post-Apoc: rare finds with familiar smells)"
+  ]
+}
