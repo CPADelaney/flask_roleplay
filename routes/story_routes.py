@@ -56,6 +56,11 @@ def next_storybeat():
 #            remove_meltdown_npc(force=True)  # calls meltdown removal route logic
   #          meltdown_forced_removal = True
 
+
+        # 3) Fetch aggregator data after universal updates
+        aggregator_data = get_aggregated_roleplay_context(player_name)
+        logging.info(f"Aggregator Data: {aggregator_data}")
+
         mega_setting_name_if_generated = None
         current_setting = aggregator_data["currentRoleplay"].get("CurrentSetting")
         
@@ -72,10 +77,6 @@ def next_storybeat():
      #   meltdown_newly_triggered = False
         removed_npcs_list = []
         new_npc_data = None
-
-        # 3) Fetch aggregator data after universal updates
-        aggregator_data = get_aggregated_roleplay_context(player_name)
-        logging.info(f"Aggregator Data: {aggregator_data}")
 
         # Possibly parse meltdown level or NPC archetypes from aggregator
         npc_archetypes = []
