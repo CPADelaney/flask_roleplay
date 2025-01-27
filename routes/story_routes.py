@@ -57,11 +57,16 @@ def next_storybeat():
   #          meltdown_forced_removal = True
 
         mega_setting_name_if_generated = None
-        if "generate environment" in user_lower or "mega setting" in user_lower:
-            logging.info("Generating new mega setting")
-            mega_data = generate_mega_setting_logic()
-            mega_setting_name_if_generated = mega_data.get("mega_name", "No environment")
-            logging.info(f"New Mega Setting: {mega_setting_name_if_generated}")
+        current_setting = aggregator_data["currentRoleplay"].get("CurrentSetting")
+        
+        if ("generate environment" in user_lower or "mega setting" in user_lower):
+            if current_setting and "force" not in user_lower:
+                logging.info(f"Already have environment '{current_setting}'. Skipping new generation.")
+            else:
+                logging.info("Generating new mega setting (force or none set).")
+                mega_data = generate_mega_setting_logic()
+                mega_setting_name_if_generated = mega_data.get("mega_name", "No environment")
+                logging.info(f"New Mega Setting: {mega_setting_name_if_generated}")
 
         # We'll track meltdown or new NPC data, etc.
      #   meltdown_newly_triggered = False
