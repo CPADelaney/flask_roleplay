@@ -1,4 +1,4 @@
-# logic/npc_dislikes.json
+# data/npc_dislikes.json
 
 dislikes_pool = dislikes = [
     # Original 100 Dislikes
