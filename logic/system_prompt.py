@@ -107,7 +107,7 @@ def build_system_prompt(player_name):
     # Summarize NPCs
     cursor.execute("""
         SELECT npc_name, dominance, cruelty, closeness, trust, respect, intensity,
-               occupation, hobbies, personality_traits, likes, dislikes
+               hobbies, personality_traits, likes, dislikes
         FROM NPCStats
         WHERE introduced = TRUE
         ORDER BY npc_id ASC
@@ -119,7 +119,7 @@ def build_system_prompt(player_name):
         (n_name, dom, cru, clos, tru, resp, inten, occ, hbs, pers, lks, dlks) = row
         # Build a string summarizing those:
         line = f"- {n_name}: Dom={dom}, Cru={cru}, Close={clos}, Trust={tru}, Respect={resp}, Int={inten}\n"
-        line += f"  Occupation: {occ}\n"
+     #   line += f"  Occupation: {occ}\n"
         line += f"  Hobbies: {hbs if hbs else []}\n"
         line += f"  Personality: {pers if pers else []}\n"
         line += f"  Likes: {lks if lks else []} | Dislikes: {dlks if dlks else []}"
