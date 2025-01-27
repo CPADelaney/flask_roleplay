@@ -44,7 +44,7 @@ def next_storybeat():
         user_input = data.get("user_input", "")
         logging.info(f"Player: {player_name}, User Input: {user_input}")
 
-        meltdown_forced_removal = False
+    #    meltdown_forced_removal = False
         user_lower = user_input.lower()
 
         if "obedience=100" in user_lower:
@@ -101,14 +101,14 @@ def next_storybeat():
         aggregator_data["activitySuggestions"] = lines_for_gpt
 
         # 4b) Now we do meltdown synergy with the centralized meltdown check
-        meltdown_flavor = check_and_inject_meltdown()
-        meltdown_newly_triggered = bool(meltdown_flavor)
+      #  meltdown_flavor = check_and_inject_meltdown()
+      #  meltdown_newly_triggered = bool(meltdown_flavor)
 
         changed_stats = {"obedience": 100} if "obedience=100" in user_lower else {}
 
         updates_dict = {
-            "meltdown_triggered": meltdown_newly_triggered,
-            "meltdown_removed": meltdown_forced_removal,
+        #    "meltdown_triggered": meltdown_newly_triggered,
+        #    "meltdown_removed": meltdown_forced_removal,
             "new_mega_setting": mega_setting_name_if_generated,
             "updated_player_stats": changed_stats,
             "removed_npc_ids": removed_npcs_list,
@@ -123,8 +123,8 @@ def next_storybeat():
 
         # 6) Re-fetch aggregator in case anything changed again
         aggregator_data = get_aggregated_roleplay_context(player_name)
-        # Build final textual summary
-        story_output = build_aggregator_text(aggregator_data, meltdown_flavor)
+        # Build final textual summary (meltdown_flavor removed)
+        story_output = build_aggregator_text(aggregator_data)
 
         # Return final scenario text + some updates
         return jsonify({
@@ -160,8 +160,8 @@ def force_obedience_to_100(player_name):
     finally:
         conn.close()
 
-
-def build_aggregator_text(aggregator_data, meltdown_flavor=""):
+# (meltdown_flavor removed)
+def build_aggregator_text(aggregator_data):
     """
     Merges aggregator_data into user-friendly text for your front-end or GPT usage.
     If meltdown_flavor is non-empty, append it at the end.
