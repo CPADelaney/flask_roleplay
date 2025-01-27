@@ -1,4 +1,4 @@
-# logic/npc_hobbies.json
+# data/npc_hobbies.json
 
 hobbies_pool = hobbies = [
     # 1-100: Original list with slight refinements
