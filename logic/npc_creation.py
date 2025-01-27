@@ -143,12 +143,6 @@ def assign_npc_flavor(npc_id: int):
     Assigns random occupation, hobbies, personality traits, 
     likes, and dislikes to the given NPC.
     """
-    # 1) Prepare lists...
-    occupations = [...]
-    hobbies_pool = [...]
-    personality_pool = [...]
-    likes_pool = [...]
-    dislikes_pool = [...]
 
     # 2) Random picks
     occupation = random.choice(occupations)
