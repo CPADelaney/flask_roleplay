@@ -29,7 +29,7 @@ def next_storybeat():
         logging.info(f"Request Data: {data}")
 
         # 1) If there's a 'universal_update' block, apply it
-        universal_data = data.get("universal_update", {})
+        universal_data = data.get("params", {}).get("universal_update", {})
         if universal_data:
             logging.info("Applying universal update from payload.")
             update_result = apply_universal_updates(universal_data)
