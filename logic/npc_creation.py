@@ -54,8 +54,7 @@ def create_npc(npc_name=None, introduced=False):
         logging.warning("[create_npc] No archetypes found; using pure random stats with no modifiers.")
         chosen_archetype_id, chosen_archetype_name, baseline_stats = None, "None", {}
     else:
-        chosen_archetype_id, chosen_archetype_name, baseline_stats_json = archetype_row
-        baseline_stats = baseline_stats_db  
+        chosen_archetype_id, chosen_archetype_name, baseline_stats = archetype_row
 
     logging.debug(f"[create_npc] Picked archetype={chosen_archetype_name}, stats={baseline_stats}")
 
