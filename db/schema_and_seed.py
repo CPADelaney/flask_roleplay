@@ -182,9 +182,20 @@ def create_all_tables():
         );
     ''')
 
+    # 13) PlannedEvents
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlannedEvents (
+            event_id SERIAL PRIMARY KEY,
+            npc_id INT NOT NULL REFERENCES NPCStats(npc_id),
+            day INT NOT NULL,
+            time_of_day TEXT NOT NULL,
+            override_location TEXT NOT NULL,
+            UNIQUE (npc_id, day, time_of_day)
+        );
+    ''')
+
     conn.commit()
     conn.close()
-
 
 def seed_initial_data():
     """
