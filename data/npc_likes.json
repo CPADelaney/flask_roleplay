@@ -1,4 +1,4 @@
-# logic/npc_likes.json
+# data/npc_likes.json
 
 likes_pool = likes = [
     "Thrift Store Smells (Modern: nostalgic scent of old finds, Fantasy: enchanted wares in secondhand shops, Sci-Fi: browsing forgotten colony markets, Post-Apoc: scavenging for treasures among ruins)",
