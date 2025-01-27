@@ -1,4 +1,4 @@
-# logic/npc_occupations.json
+# data/npc_occupations.json
 
 occupations = occupations = [
     "Paramedic (Modern: emergency medic; Historical/Fantasy: traveling chirurgeon; Sci-Fi: biotech paramedic; Post-Apoc: scavenger healer)",
