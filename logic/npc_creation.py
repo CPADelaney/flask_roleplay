@@ -55,7 +55,7 @@ def create_npc(npc_name=None, introduced=False):
         chosen_archetype_id, chosen_archetype_name, baseline_stats = None, "None", {}
     else:
         chosen_archetype_id, chosen_archetype_name, baseline_stats_json = archetype_row
-        baseline_stats = json.loads(baseline_stats_json)
+      #  baseline_stats = json.loads(baseline_stats_json)
 
     logging.debug(f"[create_npc] Picked archetype={chosen_archetype_name}, stats={baseline_stats}")
 
