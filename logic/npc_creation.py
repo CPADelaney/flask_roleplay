@@ -20,7 +20,7 @@ DATA_FILES = {
     "hobbies": "data/npc_hobbies.json",
     "likes": "data/npc_likes.json",
     "dislikes": "data/npc_dislikes.json",
-    "occupations": "data/npc_occupations.json",
+    # "occupations": "data/npc_occupations.json",  # Commented out
     "personalities": "data/npc_personalities.json"
 }
 
@@ -105,7 +105,7 @@ def create_npc(npc_name=None, introduced=False):
         """, (json.dumps([{"id": chosen_archetype_id, "name": chosen_archetype_name}]), new_npc_id))
         conn.commit()
 
-        # 5) Assign random flavor (occupation, hobbies, etc.)
+        # 5) Assign random flavor (hobbies, personality traits, etc.)
         assign_npc_flavor(new_npc_id)
         return new_npc_id
 
@@ -118,13 +118,13 @@ def create_npc(npc_name=None, introduced=False):
 
 def assign_npc_flavor(npc_id: int):
     """
-    Assigns random occupation, hobbies, personality traits, likes, and dislikes to an NPC.
+    Assigns random hobbies, personality traits, likes, and dislikes to an NPC.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
 
     # Randomly sample attributes from loaded data
-    occupation = random.choice(DATA["occupations"])
+    # occupation = random.choice(DATA["occupations"])  # Commented out
     hobbies = random.sample(DATA["hobbies"], k=3)
     personality_traits = random.sample(DATA["personalities"], k=5)
     likes = random.sample(DATA["likes"], k=3)
@@ -133,14 +133,15 @@ def assign_npc_flavor(npc_id: int):
     try:
         cursor.execute("""
             UPDATE NPCStats
-            SET occupation = %s,
+            SET 
+                -- occupation = %s,  # Commented out
                 hobbies = %s,
                 personality_traits = %s,
                 likes = %s,
                 dislikes = %s
             WHERE npc_id = %s
         """, (
-            occupation,
+            # occupation,  # Commented out
             json.dumps(hobbies),
             json.dumps(personality_traits),
             json.dumps(likes),
