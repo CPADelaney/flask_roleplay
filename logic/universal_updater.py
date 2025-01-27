@@ -35,7 +35,7 @@ def apply_universal_updates(data: dict):
             tru = npc_data.get("trust", 0)
             resp = npc_data.get("respect", 0)
             inten = npc_data.get("intensity", 0)
-            occ = npc_data.get("occupation", "")
+    #        occ = npc_data.get("occupation", "")
             hbs = npc_data.get("hobbies", [])
             pers = npc_data.get("personality_traits", [])
             lks = npc_data.get("likes", [])
@@ -50,12 +50,12 @@ def apply_universal_updates(data: dict):
                 INSERT INTO NPCStats (
                     npc_name, introduced,
                     dominance, cruelty, closeness, trust, respect, intensity,
-                    occupation, hobbies, personality_traits, likes, dislikes,
+                    hobbies, personality_traits, likes, dislikes,
                     affiliations, schedule, memory, monica_level
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
                         %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s)
+                        %s, %s, %s)
             """, (
                 name, introduced,
                 dom, cru, clos, tru, resp, inten,
