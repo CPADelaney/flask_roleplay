@@ -31,12 +31,13 @@ def start_new_game():
             logging.info(f"After unwrapping 'params': {data}")
 
         # 2) Clear relevant tables
-        logging.info("Deleting from Events, PlannedEvents, PlayerInventory, Quests, Locations, CurrentRoleplay.")
+        logging.info("Deleting from old game.")
         cursor.execute("DELETE FROM Events;")
         cursor.execute("DELETE FROM PlannedEvents;")
         cursor.execute("DELETE FROM PlayerInventory;")
         cursor.execute("DELETE FROM Quests;")
         cursor.execute("DELETE FROM Locations;")
+        cursor.execute("DELETE FROM SocialLinks;")
         cursor.execute("DELETE FROM CurrentRoleplay;")
         conn.commit()
         logging.info("Tables cleared successfully.")
