@@ -191,8 +191,9 @@ def create_all_tables():
           override_location TEXT NOT NULL,
           UNIQUE(npc_id, day, time_of_day)
         );
+    ''')
 
-
+    # 13) SocialLinks
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS SocialLinks (
             link_id SERIAL PRIMARY KEY,
@@ -210,6 +211,7 @@ def create_all_tables():
         );
     ''')
 
+    # 13) PlayerPerks
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerPerks (
             id SERIAL PRIMARY KEY,
