@@ -1,190 +1,217 @@
-import random
-import json
+# routes/story_routes.py
+
+from flask import Blueprint, request, jsonify
 import logging
-from flask import Blueprint, jsonify
+import json
+
 from db.connection import get_db_connection
-from routes.archetypes import assign_archetypes_to_npc  # or your archetype logic
+from logic.activities_logic import filter_activities_for_npc, build_short_summary
+from logic.stats_logic import update_player_stats
+# from logic.meltdown_logic import check_and_inject_meltdown  # optionally remove or keep
+from logic.aggregator import get_aggregated_roleplay_context
+# from routes.meltdown import remove_meltdown_npc  # if you keep meltdown removal
+from routes.settings_routes import generate_mega_setting_logic
+from logic.universal_updater import apply_universal_updates  # Single universal update
+from logic.time_cycle import advance_time_and_update
+from logic.inventory_logic import (
+    add_item_to_inventory, remove_item_from_inventory, get_player_inventory
+)
 
-logging.basicConfig(level=logging.DEBUG)
+story_bp = Blueprint("story_bp", __name__)
 
-###################
-# 1. File Paths
-###################
-DATA_FILES = {
-    "hobbies": "data/npc_hobbies.json",
-    "likes": "data/npc_likes.json",
-    "dislikes": "data/npc_dislikes.json",
-    "personalities": "data/npc_personalities.json"
-    # "occupations": "data/npc_occupations.json" # If you need occupations
-}
-
-###################
-# 2. Utility: Load external data
-###################
-def load_data(file_path):
-    """Loads JSON from file_path; returns Python data (dict or list)."""
+@story_bp.route("/next_storybeat", methods=["POST"])
+def next_storybeat():
+    """
+    Handles the main story logic, processes user input, and returns story context.
+    Also automatically applies any 'universal_update' data that GPT or the front-end
+    passes in (like new NPCs, changed stats, location creation, etc.).
+    """
     try:
-        with open(file_path, "r") as f:
-            return json.load(f)
+        # 1) Get the JSON from the request
+        data = request.get_json() or {}
+
+        # 2) If the GPT front-end places everything under "params", unwrap it
+        if "params" in data:
+            data = data["params"]
+
+        # 3) Extract fields
+        player_name = data.get("player_name", "Chase")
+        user_input = data.get("user_input", "")
+        logging.info(f"Player: {player_name}, User Input: {user_input}")
+
+        # 4) Apply universal update if present
+        universal_data = data.get("universal_update", {})
+        if universal_data:
+            logging.info("Applying universal update from payload.")
+            update_result = apply_universal_updates(universal_data)
+            if "error" in update_result:
+                # Return a 500 if DB update fails
+                return jsonify(update_result), 500
+        else:
+            logging.info("No universal update data found, skipping DB updates aside from meltdown or user triggers.")
+
+        # 5) Handle user input triggers
+        user_lower = user_input.lower()
+        if "obedience=100" in user_lower:
+            logging.info("Setting obedience to 100 for player.")
+            force_obedience_to_100(player_name)
+
+        # 6) Fetch aggregator data after updates
+        aggregator_data = get_aggregated_roleplay_context(player_name)
+        logging.info(f"Aggregator Data: {aggregator_data}")
+
+        # 7) Possibly generate a mega setting if forced or missing
+        mega_setting_name_if_generated = None
+        current_setting = aggregator_data["currentRoleplay"].get("CurrentSetting")
+
+        if "generate environment" in user_lower or "mega setting" in user_lower:
+            if current_setting and "force" not in user_lower:
+                logging.info(f"Already have environment '{current_setting}'. Skipping new generation.")
+            else:
+                logging.info("Generating new mega setting (forced or none set).")
+                mega_data = generate_mega_setting_logic()
+                mega_setting_name_if_generated = mega_data.get("mega_name", "No environment")
+                logging.info(f"New Mega Setting: {mega_setting_name_if_generated}")
+
+        # 8) Prepare placeholders for optional logic
+        removed_npcs_list = []
+        new_npc_data = None
+        meltdown_level = 0
+        setting_str = current_setting or ""
+        npc_list = aggregator_data.get("npcStats", [])
+        npc_archetypes = []
+
+        if npc_list:
+            # Example: if first NPC has "giant" in name, assume "Giantess" archetype
+            if "giant" in npc_list[0].get("npc_name", "").lower():
+                npc_archetypes = ["Giantess"]
+
+        user_stats = aggregator_data.get("playerStats", {})
+
+        # 9) Suggest possible activities
+        chosen_activities = filter_activities_for_npc(
+            npc_archetypes=npc_archetypes,
+            meltdown_level=meltdown_level,
+            user_stats=user_stats,
+            setting=setting_str
+        )
+        lines_for_gpt = [build_short_summary(act) for act in chosen_activities]
+        aggregator_data["activitySuggestions"] = lines_for_gpt
+
+        # 10) Build updates dict
+        changed_stats = {"obedience": 100} if "obedience=100" in user_lower else {}
+        updates_dict = {
+            "new_mega_setting": mega_setting_name_if_generated,
+            "updated_player_stats": changed_stats,
+            "removed_npc_ids": removed_npcs_list,
+            "added_npc": new_npc_data,
+            "plot_event": None,
+        }
+        logging.info(f"Updates Dict: {updates_dict}")
+
+        # 11) Advance time
+        time_spent = 1
+        new_day, new_phase = advance_time_and_update(increment=time_spent)
+
+        # 12) Re-fetch aggregator if needed
+        aggregator_data = get_aggregated_roleplay_context(player_name)
+        story_output = build_aggregator_text(aggregator_data)
+
+        # 13) Return final scenario text & updates
+        return jsonify({
+            "story_output": story_output,
+            "updates": {
+                "current_day": new_day,
+                "time_of_day": new_phase,
+                "internal_changes": updates_dict
+            }
+        }), 200
+
     except Exception as e:
-        logging.error(f"Failed to load data from {file_path}: {e}")
-        return {}
+        logging.exception("Error in next_storybeat")
+        return jsonify({"error": str(e)}), 500
 
-###################
-# 3. Build Our DATA Dictionary
-###################
-DATA = {}
-for key, path in DATA_FILES.items():
-    raw = load_data(path)
-    
-    # If each file has a top-level object with key *_pool*
-    # we turn that into a direct list in DATA.
-    if key == "hobbies":
-        # We expect raw to have {"hobbies_pool": [...]}
-        DATA["hobbies"] = raw["hobbies_pool"]
-    elif key == "likes":
-        DATA["likes"] = raw["npc_likes"]
-    elif key == "dislikes":
-        DATA["dislikes"] = raw["dislikes_pool"]
-    elif key == "personalities":
-        # If it's also stored as "personalities_pool", do:
-        DATA["personalities"] = raw["personality_pool"]
-    # else: handle other keys if needed
 
-logging.debug("DATA loaded. For example, hobbies => %s", DATA.get("hobbies"))
-
-###################
-# 4. Stat Clamping
-###################
-def clamp(value, min_val, max_val):
-    """Utility to ensure a stat stays within [0, 100]."""
-    return max(min_val, min(value, max_val))
-
-###################
-# 5. Core create_npc Function
-###################
-def create_npc(npc_name=None, introduced=False):
+def force_obedience_to_100(player_name):
     """
-    Creates a new NPC in NPCStats, using random base stats + an archetype-based adjustment.
+    Simple direct approach to set player's Obedience=100.
+    Alternatively, you could place this in stats_logic.py or use update_player_stats.
     """
-    if not npc_name:
-        npc_name = f"NPC_{random.randint(1000,9999)}"
-    logging.debug(f"[create_npc] Starting with npc_name={npc_name}, introduced={introduced}")
-
     conn = get_db_connection()
     cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE PlayerStats
+            SET obedience = 100
+            WHERE player_name = %s
+        """, (player_name,))
+        conn.commit()
+    except:
+        conn.rollback()
+    finally:
+        conn.close()
 
-    # 1) Pick a random archetype
-    cursor.execute("""
-        SELECT id, name, baseline_stats
-        FROM Archetypes
-        ORDER BY RANDOM() LIMIT 1
-    """)
-    archetype_row = cursor.fetchone()
 
-    if archetype_row is None:
-        logging.warning("[create_npc] No archetypes found; using pure random stats with no modifiers.")
-        chosen_archetype_id, chosen_archetype_name, baseline_stats = None, "None", {}
+def build_aggregator_text(aggregator_data):
+    """
+    Merges aggregator_data into user-friendly text for your front-end or GPT usage.
+    """
+    lines = []
+    day = aggregator_data.get("day", "1")
+    tod = aggregator_data.get("timeOfDay", "Morning")
+    player_stats = aggregator_data.get("playerStats", {})
+    npc_stats = aggregator_data.get("npcStats", [])
+    current_rp = aggregator_data.get("currentRoleplay", {})
+
+    lines.append("=== PLAYER STATS ===")
+    lines.append(f"=== DAY {day}, {tod.upper()} ===")
+
+    if player_stats:
+        lines.append(
+            f"Name: {player_stats.get('name', 'Unknown')}\n"
+            f"Corruption: {player_stats.get('corruption', 0)}, "
+            f"Confidence: {player_stats.get('confidence', 0)}, "
+            f"Willpower: {player_stats.get('willpower', 0)}, "
+            f"Obedience: {player_stats.get('obedience', 0)}, "
+            f"Dependency: {player_stats.get('dependency', 0)}, "
+            f"Lust: {player_stats.get('lust', 0)}, "
+            f"MentalResilience: {player_stats.get('mental_resilience', 0)}, "
+            f"PhysicalEndurance: {player_stats.get('physical_endurance', 0)}"
+        )
     else:
-        chosen_archetype_id, chosen_archetype_name, baseline_stats = archetype_row
-        # If your column is JSON/JSONB, baseline_stats is already a dict
-        # If it's TEXT, you might need baseline_stats = json.loads(baseline_stats)
+        lines.append("(No player stats found)")
 
-    logging.debug(f"[create_npc] Picked archetype={chosen_archetype_name}, stats={baseline_stats}")
-
-    # 2) Generate stats based on the archetype's range+modifier
-    def get_range_and_modifier(stat_key):
-        """Helper to fetch (range, modifier) for a stat."""
-        rng = baseline_stats.get(f"{stat_key}_range", [0, 30])
-        mod = baseline_stats.get(f"{stat_key}_modifier", 0)
-        return rng, mod
-
-    stats = {}
-    for stat_key in ["dominance", "cruelty", "closeness", "trust", "respect", "intensity"]:
-        r, m = get_range_and_modifier(stat_key)
-        val = random.randint(r[0], r[1]) + m
-        # clamp trust/respect between -100 & 100, others 0 & 100
-        stats[stat_key] = clamp(val, -100 if stat_key in ["trust", "respect"] else 0, 100)
-
-    logging.debug(f"[create_npc] Final stats => {stats}")
-
-    try:
-        # 3) Insert NPC
-        cursor.execute("""
-            INSERT INTO NPCStats (
-                npc_name, dominance, cruelty, closeness, trust, respect, intensity,
-                memory, monica_level, monica_games_left, introduced
+    lines.append("\n=== NPC STATS ===")
+    if npc_stats:
+        for npc in npc_stats:
+            lines.append(
+                f"NPC: {npc.get('npc_name','Unnamed')} | "
+                f"Dom={npc.get('dominance',0)}, Cru={npc.get('cruelty',0)}, "
+                f"Close={npc.get('closeness',0)}, Trust={npc.get('trust',0)}, "
+                f"Respect={npc.get('respect',0)}, Int={npc.get('intensity',0)}"
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING npc_id
-        """, (
-            npc_name,
-            stats["dominance"], stats["cruelty"], stats["closeness"],
-            stats["trust"], stats["respect"], stats["intensity"],
-            '{}',  # memory is an empty JSON object for now
-            0, 0,
-            introduced
-        ))
-        new_npc_id = cursor.fetchone()[0]
-        conn.commit()
-        logging.debug(f"[create_npc] Inserted new NPC with ID={new_npc_id}")
+            hobbies = npc.get("hobbies", [])
+            personality = npc.get("personality_traits", [])
+            likes = npc.get("likes", [])
+            dislikes = npc.get("dislikes", [])
 
-        # 4) Assign archetype (store it in archetypes field as an array of dict)
-        cursor.execute("""
-            UPDATE NPCStats
-            SET archetypes = %s
-            WHERE npc_id = %s
-        """, (json.dumps([{"id": chosen_archetype_id, "name": chosen_archetype_name}]), new_npc_id))
-        conn.commit()
+            lines.append(f"  Hobbies: {', '.join(hobbies)}" if hobbies else "  Hobbies: None")
+            lines.append(f"  Personality: {', '.join(personality)}" if personality else "  Personality: None")
+            lines.append(f"  Likes: {', '.join(likes)} | Dislikes: {', '.join(dislikes)}\n")
+    else:
+        lines.append("(No NPCs found)")
 
-        # 5) Assign random flavor
-        assign_npc_flavor(new_npc_id)
-        return new_npc_id
+    lines.append("\n=== CURRENT ROLEPLAY ===")
+    if current_rp:
+        for k, v in current_rp.items():
+            lines.append(f"{k}: {v}")
+    else:
+        lines.append("(No current roleplay data)")
 
-    except Exception as e:
-        conn.rollback()
-        logging.error(f"[create_npc] Error creating NPC: {e}", exc_info=True)
-        raise
-    finally:
-        conn.close()
+    if "activitySuggestions" in aggregator_data:
+        lines.append("\n=== NPC POTENTIAL ACTIVITIES ===")
+        for suggestion in aggregator_data["activitySuggestions"]:
+            lines.append(f"- {suggestion}")
+        lines.append("NPCs can adopt, combine, or ignore these ideas in line with their personality.\n")
 
-###################
-# 6. Random Flavor
-###################
-def assign_npc_flavor(npc_id: int):
-    """
-    Assigns random hobbies, personality traits, likes, and dislikes to the given NPC.
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # Now that we stored the correct data in DATA["hobbies"] etc.
-    hobbies = random.sample(DATA["hobbies"], k=3)
-    personality_traits = random.sample(DATA["personalities"], k=5)
-    likes = random.sample(DATA["likes"], k=3)
-    dislikes = random.sample(DATA["dislikes"], k=3)
-
-    try:
-        cursor.execute("""
-            UPDATE NPCStats
-            SET 
-                hobbies = %s,
-                personality_traits = %s,
-                likes = %s,
-                dislikes = %s
-            WHERE npc_id = %s
-        """, (
-            json.dumps(hobbies),
-            json.dumps(personality_traits),
-            json.dumps(likes),
-            json.dumps(dislikes),
-            npc_id
-        ))
-        conn.commit()
-        logging.debug(f"[assign_npc_flavor] Flavor assigned for npc_id={npc_id}")
-    except Exception as e:
-        conn.rollback()
-        logging.error(f"[assign_npc_flavor] Error assigning flavor: {e}", exc_info=True)
-        raise
-    finally:
-        conn.close()
+    return "\n".join(lines)
