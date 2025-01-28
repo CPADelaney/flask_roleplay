@@ -6,8 +6,9 @@ import json
 def get_aggregated_roleplay_context(player_name="Chase"):
     """
     Gathers everything from multiple tables: PlayerStats, NPCStats, meltdown states,
-    environment from CurrentRoleplay, plus SocialLinks, PlayerPerks,
-    PlayerInventory (all?), Events, PlannedEvents, Locations, GameRules, Quests, and StatDefinitions.
+    environment from CurrentRoleplay, plus SocialLinks, PlayerPerks, 
+    PlayerInventory, Events, PlannedEvents, Locations, GameRules, Quests, 
+    StatDefinitions, *and now each NPC's schedule*.
     Returns a single Python dict representing the entire roleplay state.
     """
 
@@ -47,11 +48,12 @@ def get_aggregated_roleplay_context(player_name="Chase"):
     else:
         player_stats = {}
 
-    # 3a) Introduced NPCs
+    # 3a) Introduced NPCs: also fetch schedule
     cursor.execute("""
         SELECT npc_id, npc_name,
                dominance, cruelty, closeness, trust, respect, intensity,
-               hobbies, personality_traits, likes, dislikes
+               hobbies, personality_traits, likes, dislikes,
+               schedule
         FROM NPCStats
         WHERE introduced = TRUE
         ORDER BY npc_id
@@ -60,7 +62,7 @@ def get_aggregated_roleplay_context(player_name="Chase"):
 
     npc_list = []
     for row in introduced_rows:
-        (nid, nname, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks) = row
+        (nid, nname, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks, sched) = row
         npc_list.append({
             "npc_id": nid,
             "npc_name": nname,
@@ -73,21 +75,24 @@ def get_aggregated_roleplay_context(player_name="Chase"):
             "hobbies": hbs or [],
             "personality_traits": pers or [],
             "likes": lks or [],
-            "dislikes": dlks or []
+            "dislikes": dlks or [],
+            # We assume `sched` is JSONB; store it as a Python dict if not None
+            "schedule": sched if sched else {}
         })
 
-    # 3b) Unintroduced NPCs
+    # 3b) Unintroduced NPCs: same approach
     cursor.execute("""
         SELECT npc_id, npc_name,
                dominance, cruelty, closeness, trust, respect, intensity,
-               hobbies, personality_traits, likes, dislikes
+               hobbies, personality_traits, likes, dislikes,
+               schedule
         FROM NPCStats
         WHERE introduced = FALSE
         ORDER BY npc_id
     """)
     unintroduced_rows = cursor.fetchall()
     for row in unintroduced_rows:
-        (nid, nname, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks) = row
+        (nid, nname, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks, sched) = row
         npc_list.append({
             "npc_id": nid,
             "npc_name": nname,
@@ -100,10 +105,11 @@ def get_aggregated_roleplay_context(player_name="Chase"):
             "hobbies": hbs or [],
             "personality_traits": pers or [],
             "likes": lks or [],
-            "dislikes": dlks or []
+            "dislikes": dlks or [],
+            "schedule": sched if sched else {}
         })
 
-    # 4) CurrentRoleplay data
+    # 4) CurrentRoleplay
     cursor.execute("""
         SELECT key, value
         FROM CurrentRoleplay
@@ -149,8 +155,7 @@ def get_aggregated_roleplay_context(player_name="Chase"):
             "perk_effect": p_fx
         })
 
-    # 7) PlayerInventory (All or just for 'Chase'?)
-    # If you want to see *all* items for all players, remove WHERE. If only for Chase:
+    # 7) PlayerInventory
     cursor.execute("""
         SELECT player_name, item_name, item_description, item_effect, quantity, category
         FROM PlayerInventory
@@ -260,16 +265,13 @@ def get_aggregated_roleplay_context(player_name="Chase"):
 
     # Final aggregator_data
     aggregated = {
-        # Existing entries
         "playerStats": player_stats,
-        "npcStats": npc_list,
+        "npcStats": npc_list,       # includes both introduced + unintroduced, with schedules
         "currentRoleplay": currentroleplay_data,
         "day": current_day,
         "timeOfDay": time_of_day,
         "socialLinks": social_links,
         "playerPerks": player_perks,
-
-        # Newly added
         "inventory": inventory_list,
         "events": events_list,
         "plannedEvents": planned_events_list,
