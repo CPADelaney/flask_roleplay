@@ -46,7 +46,7 @@ def get_aggregated_roleplay_context(player_name="Chase"):
     else:
         player_stats = {}
 
-    # 3) NPC stats
+    # 3a) NPC stats
     cursor.execute("""
         SELECT npc_id, npc_name,
                dominance, cruelty, closeness, trust, respect, intensity,
@@ -77,6 +77,17 @@ def get_aggregated_roleplay_context(player_name="Chase"):
             "likes": lks if lks else [],
             "dislikes": dlks if dlks else [],
         })
+
+    # 3b) Unintroduced NPCs
+    cursor.execute("""
+        SELECT npc_id, npc_name,
+               dominance, cruelty, closeness, trust, respect, intensity,
+               hobbies, personality_traits, likes, dislikes
+        FROM NPCStats
+        WHERE introduced = FALSE
+        ORDER BY npc_id
+    """)
+    npc_rows = cursor.fetchall()
 
     # 4) Current environment / meltdown states from CurrentRoleplay
     cursor.execute("""
