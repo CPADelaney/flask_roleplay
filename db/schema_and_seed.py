@@ -193,6 +193,23 @@ def create_all_tables():
         );
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS SocialLinks (
+            link_id SERIAL PRIMARY KEY,
+            -- Entities can be 'player' or 'npc'
+            entity1_type TEXT NOT NULL,
+            entity1_id INT NOT NULL,
+            entity2_type TEXT NOT NULL,
+            entity2_id INT NOT NULL,
+    
+            link_type TEXT,         -- e.g. 'friends', 'rivals', 'lovers', 'enemies', 'allies'
+            link_level INT DEFAULT 0,  -- e.g. 0..100 or some other scale
+            link_history JSONB,     -- track events or memories about this relationship
+    
+            UNIQUE (entity1_type, entity1_id, entity2_type, entity2_id)
+        );
+    ''')
+
     conn.commit()
     conn.close()
 
