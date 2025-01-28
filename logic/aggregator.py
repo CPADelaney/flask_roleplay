@@ -50,7 +50,7 @@ def get_aggregated_roleplay_context(player_name="Chase"):
     cursor.execute("""
         SELECT npc_id, npc_name,
                dominance, cruelty, closeness, trust, respect, intensity,
-               occupation, hobbies, personality_traits, likes, dislikes
+               hobbies, personality_traits, likes, dislikes
         FROM NPCStats
         WHERE introduced = TRUE
         ORDER BY npc_id
@@ -60,10 +60,10 @@ def get_aggregated_roleplay_context(player_name="Chase"):
     npc_list = []
     for row in npc_rows:
         # row might look like:
-        # (nid, nname, dom, cru, clos, tru, resp, inten, occ, hbs, pers, lks, dlks)
+        # (nid, nname, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks)
         (nid, nname,
          dom, cru, clos, tru, resp, inten,
-         occ, hbs, pers, lks, dlks) = row
+         hbs, pers, lks, dlks) = row
 
         npc_list.append({
             "npc_id": nid,
@@ -74,7 +74,6 @@ def get_aggregated_roleplay_context(player_name="Chase"):
             "trust": tru,
             "respect": resp,
             "intensity": inten,
-            "occupation": occ,                     # <--- new
             "hobbies": hbs if hbs else [],         # JSONB => Python list
             "personality_traits": pers if pers else [],
             "likes": lks if lks else [],
