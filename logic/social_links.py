@@ -1,0 +1,114 @@
+# logic/social_links.py
+
+from db.connection import get_db_connection
+import json
+
+def get_social_link(entity1_type, entity1_id, entity2_type, entity2_id):
+    """
+    Fetch an existing link if it exists, else return None.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # We can order entity1/2 to keep them in a canonical form if you want
+        # but let's keep it simple:
+        cursor.execute("""
+            SELECT link_id, link_type, link_level, link_history
+            FROM SocialLinks
+            WHERE entity1_type=%s AND entity1_id=%s
+              AND entity2_type=%s AND entity2_id=%s
+        """, (entity1_type, entity1_id, entity2_type, entity2_id))
+        row = cursor.fetchone()
+        if row:
+            (link_id, link_type, link_level, link_hist) = row
+            return {
+                "link_id": link_id,
+                "link_type": link_type,
+                "link_level": link_level,
+                "link_history": link_hist
+            }
+        else:
+            return None
+    finally:
+        conn.close()
+
+def create_social_link(entity1_type, entity1_id, entity2_type, entity2_id,
+                       link_type="neutral", link_level=0):
+    """
+    Create a new row in SocialLinks. 
+    Initialize link_history as an empty array (JSON).
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO SocialLinks (
+                entity1_type, entity1_id,
+                entity2_type, entity2_id,
+                link_type, link_level, link_history
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, '[]')
+            RETURNING link_id
+        """, (entity1_type, entity1_id, entity2_type, entity2_id,
+              link_type, link_level))
+        link_id = cursor.fetchone()[0]
+        conn.commit()
+        return link_id
+    except:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+def update_link_type_and_level(link_id, new_type=None, level_change=0):
+    """
+    Possibly adjust link_type and/or increment link_level by some amount.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # We'll fetch existing link_level and link_type first
+        cursor.execute("SELECT link_type, link_level FROM SocialLinks WHERE link_id=%s", (link_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        (old_type, old_level) = row
+        final_type = new_type if new_type else old_type
+        final_level = old_level + level_change
+
+        cursor.execute("""
+            UPDATE SocialLinks
+            SET link_type=%s, link_level=%s
+            WHERE link_id=%s
+        """, (final_type, final_level, link_id))
+        conn.commit()
+        return {
+            "link_id": link_id,
+            "new_type": final_type,
+            "new_level": final_level
+        }
+    except:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+def add_link_event(link_id, event_text):
+    """
+    Append a string to link_history array in SocialLinks.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE SocialLinks
+            SET link_history = COALESCE(link_history, '[]'::jsonb) || to_jsonb(%s)
+            WHERE link_id = %s
+        """, (event_text, link_id))
+        conn.commit()
+    except:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
