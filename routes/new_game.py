@@ -23,7 +23,11 @@ def start_new_game():
 
     try:
         # 1) Clear out 'Settings' and 'CurrentRoleplay'
-        cursor.execute("DELETE FROM Settings;")
+        cursor.execute("DELETE FROM Events;")
+        cursor.execute("DELETE FROM PlannedEvents;")
+        cursor.execute("DELETE FROM PlayerInventory;")
+        cursor.execute("DELETE FROM Quests;")
+        cursor.execute("DELETE FROM Locations;")
         cursor.execute("DELETE FROM CurrentRoleplay;")
         conn.commit()  # ensures we have a clean slate
 
