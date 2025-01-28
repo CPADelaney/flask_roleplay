@@ -82,7 +82,7 @@ def create_all_tables():
             monica_level INT DEFAULT 0,
             monica_games_left INT DEFAULT 0,
 
-            occupation TEXT,
+          #  occupation TEXT,
             hobbies JSONB,
             personality_traits JSONB,
             likes JSONB,
