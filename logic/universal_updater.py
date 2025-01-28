@@ -318,6 +318,24 @@ def apply_universal_updates(data: dict):
                 if "new_event" in link_data:
                     add_link_event(existing["link_id"], link_data["new_event"])
 
+        # 12) perk_unlocks
+        perk_unlocks = data.get("perk_unlocks", [])
+        for perk in perk_unlocks:
+            perk_name = perk.get("perk_name")
+            perk_desc = perk.get("perk_description", "")
+            perk_fx   = perk.get("perk_effect", "")
+        
+            # the player's name might be in 'player_name' or assume "Chase"
+            player_name = data.get("player_name", "Chase")
+        
+            if perk_name:
+                cursor.execute("""
+                    INSERT INTO PlayerPerks (player_name, perk_name, perk_description, perk_effect)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (player_name, perk_name) DO NOTHING
+                """, (player_name, perk_name, perk_desc, perk_fx))
+        
+
         conn.commit()
         return {"message": "Universal update successful"}
         
