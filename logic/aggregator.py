@@ -129,4 +129,23 @@ def get_aggregated_roleplay_context(player_name="Chase"):
         "socialLinks": social_links   # <--- new key
     }
 
+    # 7) Player social link perks
+    cursor.execute("""
+        SELECT perk_name, perk_description, perk_effect
+        FROM PlayerPerks
+        WHERE player_name=%s
+    """, (player_name,))
+    perk_rows = cursor.fetchall()
+    
+    player_perks = []
+    for (p_name, p_desc, p_fx) in perk_rows:
+        player_perks.append({
+            "perk_name": p_name,
+            "perk_description": p_desc,
+            "perk_effect": p_fx
+        })
+    
+    aggregated["playerPerks"] = player_perks
+    
+
     return aggregated
