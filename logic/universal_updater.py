@@ -2,6 +2,9 @@
 
 import json
 from db.connection import get_db_connection
+from logic.social_links import (
+    get_social_link, create_social_link,
+    update_link_type_and_level, add_link_event)
 
 def apply_universal_updates(data: dict):
     """
@@ -282,8 +285,42 @@ def apply_universal_updates(data: dict):
                     WHERE quest_id=%s
                 """, (status, detail, qid))
 
+
+        # 11) Social Links (NPC↔NPC or player↔NPC relationships)
+        rel_links = data.get("social_links", [])
+        for link_data in rel_links:
+            e1_type = link_data.get("entity1_type")
+            e1_id   = link_data.get("entity1_id")
+            e2_type = link_data.get("entity2_type")
+            e2_id   = link_data.get("entity2_id")
+            if not e1_type or not e1_id or not e2_type or not e2_id:
+                continue  # skip invalid
+
+            # Check if a link already exists
+            existing = get_social_link(e1_type, e1_id, e2_type, e2_id)
+            if not existing:
+                # Create
+                new_link_id = create_social_link(
+                    e1_type, e1_id, e2_type, e2_id,
+                    link_type=link_data.get("link_type", "neutral"),
+                    link_level=link_data.get("level_change", 0)  # or 0 if no level
+                )
+                # Optionally add an event
+                if "new_event" in link_data:
+                    add_link_event(new_link_id, link_data["new_event"])
+            else:
+                # Possibly update link_type/level
+                ltype = link_data.get("link_type")
+                lvl_change = link_data.get("level_change", 0)
+                update_link_type_and_level(existing["link_id"], new_type=ltype, level_change=lvl_change)
+
+                # If there's a new event text
+                if "new_event" in link_data:
+                    add_link_event(existing["link_id"], link_data["new_event"])
+
         conn.commit()
         return {"message": "Universal update successful"}
+        
     except Exception as e:
         conn.rollback()
         return {"error": str(e)}
