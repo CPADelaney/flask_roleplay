@@ -1,5 +1,6 @@
 # routes/new_game.py
 
+import logging
 from flask import Blueprint, request, jsonify
 import random
 from db.connection import get_db_connection
@@ -17,19 +18,23 @@ def start_new_game():
     and sets a new environment in CurrentRoleplay.
     """
 
+    logging.info("=== START: /start_new_game CALLED ===")
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
         # 1) Get the request data, unwrap if "params" is used by the GPT front-end
         data = request.get_json() or {}
+        logging.info(f"Raw incoming JSON data: {data}")
         if "params" in data:
             data = data["params"]
+            logging.info(f"After unwrapping 'params': {data}")
 
-        # If the user passes keepChance, use it. Otherwise default to 0.025
         keep_chance = data.get("keepChance", 0.025)
+        logging.info(f"Parsed keep_chance = {keep_chance}")
 
         # 2) Clear relevant tables
+        logging.info("Deleting from Events, PlannedEvents, PlayerInventory, Quests, Locations, CurrentRoleplay.")
         cursor.execute("DELETE FROM Events;")
         cursor.execute("DELETE FROM PlannedEvents;")
         cursor.execute("DELETE FROM PlayerInventory;")
@@ -37,53 +42,62 @@ def start_new_game():
         cursor.execute("DELETE FROM Locations;")
         cursor.execute("DELETE FROM CurrentRoleplay;")
         conn.commit()
+        logging.info("Tables cleared successfully.")
 
-        # Reinsert default settings
+        # 3) Reinsert default settings
+        logging.info("Calling insert_missing_settings()")
         insert_missing_settings()
+        logging.info("insert_missing_settings() completed.")
 
-        # Now gather existing NPCs
+        # 4) Gather existing NPCs
+        logging.info("Fetching NPCStats (npc_id, npc_name, monica_level, memory)")
         cursor.execute("""
             SELECT npc_id, npc_name, monica_level, memory
             FROM NPCStats
         """)
         all_npcs = cursor.fetchall()
+        logging.info(f"Fetched {len(all_npcs)} NPCs from NPCStats.")
 
-        # meltdown_pick_chance = 0.0005
-        # meltdown_increment_chance = 0.20
         full_memory_chance = 0.50
-
         carried_npcs = []
-        # meltdown_npc = None  # remove meltdown references altogether
 
-        # 3) Decide which NPCs to keep or delete
+        # 5) Decide which NPCs to keep or delete
+        logging.info(f"Processing each NPC with keepChance={keep_chance}")
         for npc_id, npc_name, old_monica_level, old_memory in all_npcs:
-            # For now, treat all NPCs the same—no meltdown auto-keep
             if random.random() < keep_chance:
                 carried_npcs.append((npc_id, npc_name, old_monica_level, old_memory))
             else:
+                logging.info(f"Deleting NPC (ID={npc_id}, name={npc_name}) due to keepChance logic.")
                 cursor.execute("DELETE FROM NPCStats WHERE npc_id = %s", (npc_id,))
 
-        # (Meltdown logic removed completely)
+        conn.commit()
+        logging.info(f"Carried {len(carried_npcs)} NPCs forward.")
 
-        # 4) For carried NPCs, partial memory if old_monica_level == 0
+        # 6) For carried NPCs, partial memory if old_monica_level == 0
+        logging.info("Applying partial memory logic for normal NPCs.")
         for npc_id, npc_name, old_monica_level, old_memory in carried_npcs:
             if old_monica_level == 0:
-                # 50% chance to fully keep memory
                 if random.random() < full_memory_chance:
                     new_entry = "Somehow, you remember everything from the last cycle."
                 else:
                     new_entry = "You vaguely recall your old life, but details are blurry."
+
+                logging.info(f"Adding memory entry to NPC (ID={npc_id}, name={npc_name}): {new_entry[:60]}...")
                 cursor.execute("""
                     UPDATE NPCStats
                     SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s)
                     WHERE npc_id = %s
                 """, (new_entry, npc_id))
+        conn.commit()
 
-        # 5) Reset PlayerStats to keep only 'Chase'
+        # 7) Reset PlayerStats to keep only 'Chase'
+        logging.info("Resetting PlayerStats to keep only 'Chase'.")
         cursor.execute("DELETE FROM PlayerStats WHERE player_name != 'Chase';")
         cursor.execute("SELECT id FROM PlayerStats WHERE player_name = 'Chase';")
         chase_row = cursor.fetchone()
+
         if chase_row:
+            logging.info("Updating existing 'Chase' stats.")
             cursor.execute('''
                 UPDATE PlayerStats
                 SET corruption = 10,
@@ -97,6 +111,7 @@ def start_new_game():
                 WHERE player_name = 'Chase'
             ''')
         else:
+            logging.info("Inserting fresh row for 'Chase'.")
             cursor.execute('''
                 INSERT INTO PlayerStats (
                   player_name, corruption, confidence, willpower, obedience,
@@ -105,20 +120,25 @@ def start_new_game():
                   'Chase', 10, 60, 50, 20, 10, 15, 55, 40
                 )
             ''')
-
         conn.commit()
+        logging.info("PlayerStats reset complete.")
 
-        # 6) Spawn 10 new unintroduced NPCs
-        for _ in range(10):
+        # 8) Spawn 10 new unintroduced NPCs
+        logging.info("Spawning 10 new unintroduced NPCs via create_npc(introduced=False).")
+        for i in range(10):
             new_id = create_npc(introduced=False)
-            print(f"Created new unintroduced NPC, ID={new_id}")
+            logging.info(f"Created new unintroduced NPC {i+1}/10, ID={new_id}")
 
-        # 7) Generate environment & update CurrentRoleplay
+        # 9) Generate environment & update CurrentRoleplay
+        logging.info("Calling insert_missing_settings() again, just to be safe.")
         insert_missing_settings()
+        logging.info("Generating new mega setting via generate_mega_setting_logic()")
         mega_data = generate_mega_setting_logic()
         if "error" in mega_data:
+            logging.info("mega_data contained an error, forcing mega_name to 'No environment available'")
             mega_data["mega_name"] = "No environment available"
 
+        logging.info(f"Setting CurrentSetting in CurrentRoleplay to: {mega_data['mega_name']}")
         cursor.execute("""
             INSERT INTO CurrentRoleplay (key, value)
             VALUES ('CurrentSetting', %s)
@@ -126,16 +146,18 @@ def start_new_game():
         """, (mega_data["mega_name"],))
         conn.commit()
 
-        # 8) Return the top-level "message" for the openapi "SuccessResponse"
-        return jsonify({
-            "message": (
-                f"New game started with 10 unintroduced NPCs and keepChance={keep_chance}. "
-                f"New environment = {mega_data['mega_name']}"
-            )
-        }), 200
+        # 10) Return the top-level "message" for the openapi "SuccessResponse"
+        success_msg = (
+            f"New game started with 10 unintroduced NPCs and keepChance={keep_chance}. "
+            f"New environment = {mega_data['mega_name']}"
+        )
+        logging.info(f"Success! Returning 200 with message: {success_msg}")
+        return jsonify({"message": success_msg}), 200
 
     except Exception as e:
+        logging.exception("Error in /start_new_game:")  # Log full traceback
         conn.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
+        logging.info("=== END: /start_new_game ===")
