@@ -7,13 +7,15 @@ import json
 from db.connection import get_db_connection
 from logic.activities_logic import filter_activities_for_npc, build_short_summary
 from logic.stats_logic import update_player_stats
-# from logic.meltdown_logic import check_and_inject_meltdown  # Central meltdown synergy
+#from logic.meltdown_logic import check_and_inject_meltdown  # optionally remove or keep
 from logic.aggregator import get_aggregated_roleplay_context
-# from routes.meltdown import remove_meltdown_npc  # If you keep that route
-from routes.settings_routes import generate_mega_setting_logic  # if you want to generate new environment
+#from routes.meltdown import remove_meltdown_npc  # if you keep meltdown removal
+from routes.settings_routes import generate_mega_setting_logic
 from logic.universal_updater import apply_universal_updates  # Single universal update
 from logic.time_cycle import advance_time_and_update
-from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory, get_player_inventory
+from logic.inventory_logic import (
+    add_item_to_inventory, remove_item_from_inventory, get_player_inventory
+)
 
 story_bp = Blueprint("story_bp", __name__)
 
@@ -21,7 +23,7 @@ story_bp = Blueprint("story_bp", __name__)
 def next_storybeat():
     """
     Handles the main story logic, processes user input, and returns story context.
-    Also automatically applies any 'universal update' data that GPT or the front-end
+    Also automatically applies any 'universal_update' data that GPT or the front-end
     passes in (like new NPCs, changed stats, location creation, etc.).
     """
     try:
@@ -39,31 +41,29 @@ def next_storybeat():
         else:
             logging.info("No universal update data found, skipping DB updates aside from meltdown or user triggers.")
 
-        # 2) Handle user input triggers (like meltdown removal, forced obedience, environment generation)
+        # 2) Handle user input triggers, e.g. forced obedience, meltdown removal, environment generation
         player_name = data.get("player_name", "Chase")
         user_input = data.get("user_input", "")
         logging.info(f"Player: {player_name}, User Input: {user_input}")
 
-    #    meltdown_forced_removal = False
+        # Example force-obedience snippet
         user_lower = user_input.lower()
-
         if "obedience=100" in user_lower:
             logging.info("Setting obedience to 100 for player.")
             force_obedience_to_100(player_name)
 
- #       if "remove meltdown" in user_lower:
- #           logging.info("Attempting to remove meltdown NPCs")
-#            remove_meltdown_npc(force=True)  # calls meltdown removal route logic
-  #          meltdown_forced_removal = True
-
+        # If meltdown logic is still relevant, you might keep it or remove it:
+        # if "remove meltdown" in user_lower:
+        #     remove_meltdown_npc(force=True)
 
         # 3) Fetch aggregator data after universal updates
         aggregator_data = get_aggregated_roleplay_context(player_name)
         logging.info(f"Aggregator Data: {aggregator_data}")
 
+        # Possibly generate a mega setting if forced or missing
         mega_setting_name_if_generated = None
         current_setting = aggregator_data["currentRoleplay"].get("CurrentSetting")
-        
+
         if ("generate environment" in user_lower or "mega setting" in user_lower):
             if current_setting and "force" not in user_lower:
                 logging.info(f"Already have environment '{current_setting}'. Skipping new generation.")
@@ -73,38 +73,30 @@ def next_storybeat():
                 mega_setting_name_if_generated = mega_data.get("mega_name", "No environment")
                 logging.info(f"New Mega Setting: {mega_setting_name_if_generated}")
 
-        # We'll track meltdown or new NPC data, etc.
-     #   meltdown_newly_triggered = False
+        # Some placeholders for other logic you might do
         removed_npcs_list = []
         new_npc_data = None
-
-        # Possibly parse meltdown level or NPC archetypes from aggregator
-        npc_archetypes = []
         meltdown_level = 0
-        setting_str = None
-
-        current_rp = aggregator_data.get("currentRoleplay", {})
-        if "CurrentSetting" in current_rp:
-            setting_str = current_rp["CurrentSetting"]
-
+        setting_str = aggregator_data["currentRoleplay"].get("CurrentSetting", "")
         npc_list = aggregator_data.get("npcStats", [])
+        npc_archetypes = []
         if npc_list:
-            # Example: if first NPC name has "giant", assume "Giantess" archetype
+            # Example: if first NPC's name contains "giant"
             if "giant" in npc_list[0].get("npc_name", "").lower():
                 npc_archetypes = ["Giantess"]
-            meltdown_level = 0  # or do something else if meltdown is relevant
 
         user_stats = aggregator_data.get("playerStats", {})
 
-        # 4) Suggest possible activities based on current stats, meltdown, setting, etc.
+        # 4) Suggest possible activities based on meltdown, stats, setting, etc.
         chosen_activities = filter_activities_for_npc(
             npc_archetypes=npc_archetypes,
             meltdown_level=meltdown_level,
             user_stats=user_stats,
-            setting=setting_str or ""
+            setting=setting_str
         )
         lines_for_gpt = [build_short_summary(act) for act in chosen_activities]
         aggregator_data["activitySuggestions"] = lines_for_gpt
+
 
         # 4b) Now we do meltdown synergy with the centralized meltdown check
       #  meltdown_flavor = check_and_inject_meltdown()
@@ -123,13 +115,12 @@ def next_storybeat():
         }
         logging.info(f"Updates Dict: {updates_dict}")
 
-        # 5) Possibly advance the time
+        # 6) Advance time
         time_spent = 1
         new_day, new_phase = advance_time_and_update(increment=time_spent)
 
-        # 6) Re-fetch aggregator in case anything changed again
+        # 7) Re-fetch aggregator in case anything changed again
         aggregator_data = get_aggregated_roleplay_context(player_name)
-        # Build final textual summary (meltdown_flavor removed)
         story_output = build_aggregator_text(aggregator_data)
 
         # Return final scenario text + some updates
@@ -166,13 +157,10 @@ def force_obedience_to_100(player_name):
     finally:
         conn.close()
 
-# (meltdown_flavor removed)
 def build_aggregator_text(aggregator_data):
     """
     Merges aggregator_data into user-friendly text for your front-end or GPT usage.
-    If meltdown_flavor is non-empty, append it at the end.
     """
-
     lines = []
     day = aggregator_data.get("day", "1")
     tod = aggregator_data.get("timeOfDay", "Morning")
@@ -198,7 +186,6 @@ def build_aggregator_text(aggregator_data):
     else:
         lines.append("(No player stats found)")
 
-    # NPC Stats
     lines.append("\n=== NPC STATS ===")
     if npc_stats:
         for npc in npc_stats:
@@ -208,20 +195,17 @@ def build_aggregator_text(aggregator_data):
                 f"Close={npc.get('closeness',0)}, Trust={npc.get('trust',0)}, "
                 f"Respect={npc.get('respect',0)}, Int={npc.get('intensity',0)}"
             )
-         #   occupation = npc.get("occupation", "Unemployed?")
             hobbies = npc.get("hobbies", [])
             personality = npc.get("personality_traits", [])
             likes = npc.get("likes", [])
             dislikes = npc.get("dislikes", [])
 
-        #    lines.append(f"  Occupation: {occupation}")
             lines.append(f"  Hobbies: {', '.join(hobbies)}" if hobbies else "  Hobbies: None")
             lines.append(f"  Personality: {', '.join(personality)}" if personality else "  Personality: None")
             lines.append(f"  Likes: {', '.join(likes)} | Dislikes: {', '.join(dislikes)}\n")
     else:
         lines.append("(No NPCs found)")
 
-    # CurrentRoleplay
     lines.append("\n=== CURRENT ROLEPLAY ===")
     if current_rp:
         for k, v in current_rp.items():
@@ -229,16 +213,10 @@ def build_aggregator_text(aggregator_data):
     else:
         lines.append("(No current roleplay data)")
 
-    # If aggregator_data has "activitySuggestions" from filter_activities_for_npc
     if "activitySuggestions" in aggregator_data:
         lines.append("\n=== NPC POTENTIAL ACTIVITIES ===")
         for suggestion in aggregator_data["activitySuggestions"]:
             lines.append(f"- {suggestion}")
-        lines.append("NPC can adopt, combine, or ignore these ideas in line with their personality.\n")
-
-  #  # meltdown flavor if present
- #   if meltdown_flavor:
-  #      lines.append("\n=== MELTDOWN NPC MESSAGE ===")
-   #     lines.append(meltdown_flavor)
+        lines.append("NPCs can adopt, combine, or ignore these ideas in line with their personality.\n")
 
     return "\n".join(lines)
