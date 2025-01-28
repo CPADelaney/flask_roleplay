@@ -116,7 +116,7 @@ def build_system_prompt(player_name):
     
     npc_lines = []
     for row in npc_rows:
-        (n_name, dom, cru, clos, tru, resp, inten, occ, hbs, pers, lks, dlks) = row
+        (n_name, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks) = row
         # Build a string summarizing those:
         line = f"- {n_name}: Dom={dom}, Cru={cru}, Close={clos}, Trust={tru}, Respect={resp}, Int={inten}\n"
      #   line += f"  Occupation: {occ}\n"
