@@ -74,7 +74,7 @@ def next_storybeat():
         # Prepare placeholders for other logic
         removed_npcs_list = []
         new_npc_data = None
-        meltdown_level = 0
+   #     meltdown_level = 0
         setting_str = current_setting if current_setting else ""
         npc_list = aggregator_data.get("npcStats", [])
         npc_archetypes = []
@@ -89,7 +89,7 @@ def next_storybeat():
         # 7) Suggest possible activities
         chosen_activities = filter_activities_for_npc(
             npc_archetypes=npc_archetypes,
-            meltdown_level=meltdown_level,
+     #       meltdown_level=meltdown_level,
             user_stats=user_stats,
             setting=setting_str
         )
