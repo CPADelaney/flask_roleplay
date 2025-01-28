@@ -30,9 +30,6 @@ def start_new_game():
             data = data["params"]
             logging.info(f"After unwrapping 'params': {data}")
 
-        keep_chance = data.get("keepChance", 0.025)
-        logging.info(f"Parsed keep_chance = {keep_chance}")
-
         # 2) Clear relevant tables
         logging.info("Deleting from Events, PlannedEvents, PlayerInventory, Quests, Locations, CurrentRoleplay.")
         cursor.execute("DELETE FROM Events;")
@@ -58,37 +55,37 @@ def start_new_game():
         all_npcs = cursor.fetchall()
         logging.info(f"Fetched {len(all_npcs)} NPCs from NPCStats.")
 
-        full_memory_chance = 0.50
+      #  full_memory_chance = 0.50
         carried_npcs = []
 
         # 5) Decide which NPCs to keep or delete
-        logging.info(f"Processing each NPC with keepChance={keep_chance}")
-        for npc_id, npc_name, old_monica_level, old_memory in all_npcs:
-            if random.random() < keep_chance:
-                carried_npcs.append((npc_id, npc_name, old_monica_level, old_memory))
-            else:
-                logging.info(f"Deleting NPC (ID={npc_id}, name={npc_name}) due to keepChance logic.")
-                cursor.execute("DELETE FROM NPCStats WHERE npc_id = %s", (npc_id,))
+     #   logging.info(f"Processing each NPC with keepChance={keep_chance}")
+     #   for npc_id, npc_name, old_monica_level, old_memory in all_npcs:
+     #       if random.random() < keep_chance:
+      #          carried_npcs.append((npc_id, npc_name, old_monica_level, old_memory))
+       #     else:
+     #           logging.info(f"Deleting NPC (ID={npc_id}, name={npc_name}) due to keepChance logic.")
+    #            cursor.execute("DELETE FROM NPCStats WHERE npc_id = %s", (npc_id,))
 
-        conn.commit()
-        logging.info(f"Carried {len(carried_npcs)} NPCs forward.")
+     #   conn.commit()
+     #   logging.info(f"Carried {len(carried_npcs)} NPCs forward.")
 
         # 6) For carried NPCs, partial memory if old_monica_level == 0
-        logging.info("Applying partial memory logic for normal NPCs.")
-        for npc_id, npc_name, old_monica_level, old_memory in carried_npcs:
-            if old_monica_level == 0:
-                if random.random() < full_memory_chance:
-                    new_entry = "Somehow, you remember everything from the last cycle."
-                else:
-                    new_entry = "You vaguely recall your old life, but details are blurry."
+  #      logging.info("Applying partial memory logic for normal NPCs.")
+   #     for npc_id, npc_name, old_monica_level, old_memory in carried_npcs:
+     #       if old_monica_level == 0:
+     #           if random.random() < full_memory_chance:
+   #                 new_entry = "Somehow, you remember everything from the last cycle."
+   #             else:
+    #                new_entry = "You vaguely recall your old life, but details are blurry."
 
-                logging.info(f"Adding memory entry to NPC (ID={npc_id}, name={npc_name}): {new_entry[:60]}...")
-                cursor.execute("""
-                    UPDATE NPCStats
-                    SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s)
-                    WHERE npc_id = %s
-                """, (new_entry, npc_id))
-        conn.commit()
+    #            logging.info(f"Adding memory entry to NPC (ID={npc_id}, name={npc_name}): {new_entry[:60]}...")
+   #             cursor.execute("""
+   #                 UPDATE NPCStats
+   #                 SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s)
+   #                 WHERE npc_id = %s
+   #             """, (new_entry, npc_id))
+  #      conn.commit()
 
         # 7) Reset PlayerStats to keep only 'Chase'
         logging.info("Resetting PlayerStats to keep only 'Chase'.")
