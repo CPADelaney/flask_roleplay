@@ -1,11 +1,12 @@
-# logic/aggregator.py 
+# logic/aggregator.py
+
 from db.connection import get_db_connection
 import json
 
 def get_aggregated_roleplay_context(player_name="Chase"):
     """
     Gathers everything from multiple tables: PlayerStats, NPCStats, meltdown states,
-    environment from CurrentRoleplay, etc. Returns a single Python dict
+    environment from CurrentRoleplay, etc., plus SocialLinks. Returns a single Python dict
     representing the entire roleplay state.
     """
 
@@ -20,9 +21,8 @@ def get_aggregated_roleplay_context(player_name="Chase"):
     cursor.execute("SELECT value FROM CurrentRoleplay WHERE key='TimeOfDay'")
     row = cursor.fetchone()
     time_of_day = row[0] if row else "Morning"
-  
-    
-    # 1) Player stats
+
+    # 2) Player stats
     cursor.execute("""
         SELECT corruption, confidence, willpower, obedience, dependency,
                lust, mental_resilience, physical_endurance
@@ -45,8 +45,8 @@ def get_aggregated_roleplay_context(player_name="Chase"):
         }
     else:
         player_stats = {}
-    
-    # 2) NPC stats: add your new columns: occupation, hobbies, personality_traits, likes, dislikes
+
+    # 3) NPC stats
     cursor.execute("""
         SELECT npc_id, npc_name,
                dominance, cruelty, closeness, trust, respect, intensity,
@@ -56,11 +56,9 @@ def get_aggregated_roleplay_context(player_name="Chase"):
         ORDER BY npc_id
     """)
     npc_rows = cursor.fetchall()
-    
+
     npc_list = []
     for row in npc_rows:
-        # row might look like:
-        # (nid, nname, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks)
         (nid, nname,
          dom, cru, clos, tru, resp, inten,
          hbs, pers, lks, dlks) = row
@@ -74,15 +72,13 @@ def get_aggregated_roleplay_context(player_name="Chase"):
             "trust": tru,
             "respect": resp,
             "intensity": inten,
-            "hobbies": hbs if hbs else [],         # JSONB => Python list
+            "hobbies": hbs if hbs else [],
             "personality_traits": pers if pers else [],
             "likes": lks if lks else [],
             "dislikes": dlks if dlks else [],
         })
 
-
-    # 3) Current environment or meltdown states from CurrentRoleplay
-    #    e.g. environment might be stored as ("CurrentSetting", "UsedSettings", etc.)
+    # 4) Current environment / meltdown states from CurrentRoleplay
     cursor.execute("""
         SELECT key, value
         FROM CurrentRoleplay
@@ -91,25 +87,46 @@ def get_aggregated_roleplay_context(player_name="Chase"):
 
     currentroleplay_data = {}
     for (k, v) in rows:
-        # If you store JSON in 'value', you might parse it. Otherwise keep as string.
-        # We'll do a naive approach:
         currentroleplay_data[k] = v
+
+    # 5) Social Links
+    # We'll fetch all links. If you only want NPC↔NPC or only the ones involving "Chase," you can filter.
+    cursor.execute("""
+        SELECT link_id,
+               entity1_type, entity1_id,
+               entity2_type, entity2_id,
+               link_type, link_level, link_history
+        FROM SocialLinks
+        ORDER BY link_id
+    """)
+    link_rows = cursor.fetchall()
+
+    social_links = []
+    for row in link_rows:
+        (lid, e1_type, e1_id,
+         e2_type, e2_id,
+         link_type, link_level, link_hist) = row
+        social_links.append({
+            "link_id": lid,
+            "entity1_type": e1_type,
+            "entity1_id": e1_id,
+            "entity2_type": e2_type,
+            "entity2_id": e2_id,
+            "link_type": link_type,
+            "link_level": link_level,
+            "link_history": link_hist if link_hist else []
+        })
 
     conn.close()
 
-    # 4) Construct a single aggregated dict
-    #    You can structure it however you want. Example:
+    # 6) Construct the aggregator dict
     aggregated = {
         "playerStats": player_stats,
         "npcStats": npc_list,
         "currentRoleplay": currentroleplay_data,
         "day": current_day,
-        "timeOfDay": time_of_day
+        "timeOfDay": time_of_day,
+        "socialLinks": social_links   # <--- new key
     }
-
-    # Optionally add meltdown if you store meltdown level or meltdown events in a separate table
-    # e.g. meltdown table:
-    # meltdown_data = ...
-    # aggregated["meltdownStates"] = meltdown_data
 
     return aggregated
