@@ -4,14 +4,15 @@ import json
 from db.connection import get_db_connection
 from logic.social_links import (
     get_social_link, create_social_link,
-    update_link_type_and_level, add_link_event)
+    update_link_type_and_level, add_link_event
+)
 
 def apply_universal_updates(data: dict):
     """
     Applies the 'universal update' logic to the database using the JSON structure
-    described in data. This replaces the duplicate logic found in:
-      - routes/universal_update.py
-      - new_game.py (next_storybeat, etc.)
+    described in data. This handles NPC creations/updates, location creations,
+    roleplay state changes, events, inventory, quests, social links, perk unlocks,
+    and now full/partial schedule changes.
     """
 
     conn = get_db_connection()
@@ -33,37 +34,33 @@ def apply_universal_updates(data: dict):
         for npc_data in npc_creations:
             name = npc_data.get("npc_name", "Unnamed NPC")
             introduced = npc_data.get("introduced", False)
-        
-            # New field:
+
             arche = npc_data.get("archetypes", [])
-        
+
             dom = npc_data.get("dominance", 0)
             cru = npc_data.get("cruelty", 0)
             clos = npc_data.get("closeness", 0)
             tru = npc_data.get("trust", 0)
             resp = npc_data.get("respect", 0)
             inten = npc_data.get("intensity", 0)
-        
+
             hbs = npc_data.get("hobbies", [])
             pers = npc_data.get("personality_traits", [])
             lks = npc_data.get("likes", [])
             dlks = npc_data.get("dislikes", [])
             affil = npc_data.get("affiliations", [])
             sched = npc_data.get("schedule", {})
-        
-            # If memory is an array of strings, do something like:
+
             mem = npc_data.get("memory", [])
-            # If memory can be a single string, convert it to an array 
-            # or handle it differently. Example:
             if isinstance(mem, str):
                 mem = [mem]
-        
+
             monica_lvl = npc_data.get("monica_level", 0)
-        
+
             cursor.execute("""
                 INSERT INTO NPCStats (
                     npc_name, introduced,
-                    archetypes,                -- ADDED
+                    archetypes,
                     dominance, cruelty, closeness, trust, respect, intensity,
                     hobbies, personality_traits, likes, dislikes,
                     affiliations, schedule, memory, monica_level
@@ -77,23 +74,23 @@ def apply_universal_updates(data: dict):
                 )
             """, (
                 name, introduced,
-                json.dumps(arche),          # Archetypes as JSON
+                json.dumps(arche),
                 dom, cru, clos, tru, resp, inten,
                 json.dumps(hbs), json.dumps(pers),
                 json.dumps(lks), json.dumps(dlks),
                 json.dumps(affil), json.dumps(sched),
-                json.dumps(mem),            # If memory is a JSON array
+                json.dumps(mem),
                 monica_lvl
             ))
 
+        # 3) npc_updates (including schedule overwrites & partial merges)
         npc_updates = data.get("npc_updates", [])
         for up in npc_updates:
             npc_id = up.get("npc_id")
             if not npc_id:
                 continue
-        
-            # We'll handle memory separately if present
-            # This map covers normal columns that we just set = %s
+
+            # Basic columns
             fields_map = {
                 "npc_name": "npc_name",
                 "introduced": "introduced",
@@ -105,68 +102,90 @@ def apply_universal_updates(data: dict):
                 "intensity": "intensity",
                 "monica_level": "monica_level"
             }
-        
+
             set_clauses = []
             set_vals = []
-        
-            # 1) Gather normal fields (NOT memory)
+
             for field_key, db_col in fields_map.items():
                 if field_key in up:
                     set_clauses.append(f"{db_col} = %s")
                     set_vals.append(up[field_key])
-        
-            # 2) If we have normal fields, build the dynamic UPDATE
+
             if set_clauses:
                 set_str = ", ".join(set_clauses)
                 set_vals.append(npc_id)
                 query = f"UPDATE NPCStats SET {set_str} WHERE npc_id=%s"
                 cursor.execute(query, tuple(set_vals))
-        
-            # 3) Now handle "memory" if it exists in up (append to the existing JSON array)
+
+            # Memory merges (append new entries)
             if "memory" in up:
                 new_mem_entries = up["memory"]
-        
-                # If the user is sending a single string, wrap it in a list
-                # If they're sending an array of strings, just use it as is.
                 if isinstance(new_mem_entries, str):
                     new_mem_entries = [new_mem_entries]
-        
-                # new_mem_entries should now be a list of strings
-                # We'll append them to existing memory with COALESCE(..., '[]') || to_jsonb(...)
                 cursor.execute("""
                     UPDATE NPCStats
                     SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s)
                     WHERE npc_id = %s
                 """, (new_mem_entries, npc_id))
-        
-                # 4) character_stat_updates
-                char_update = data.get("character_stat_updates", {})
-                if char_update:
-                    p_name = char_update.get("player_name", "Chase")
-                    stats = char_update.get("stats", {})
-                    stat_map = {
-                        "corruption": "corruption",
-                        "confidence": "confidence",
-                        "willpower": "willpower",
-                        "obedience": "obedience",
-                        "dependency": "dependency",
-                        "lust": "lust",
-                        "mental_resilience": "mental_resilience",
-                        "physical_endurance": "physical_endurance"
-                    }
-                    set_clauses = []
-                    set_vals = []
-                    for k, col in stat_map.items():
-                        if k in stats:
-                            set_clauses.append(f"{col} = %s")
-                            set_vals.append(stats[k])
-                    if set_clauses:
-                        set_str = ", ".join(set_clauses)
-                        set_vals.append(p_name)
-                        cursor.execute(
-                            f"UPDATE PlayerStats SET {set_str} WHERE player_name=%s",
-                            tuple(set_vals)
-                        )
+
+            # Entire schedule overwrite if "schedule" is present
+            if "schedule" in up:
+                new_schedule = up["schedule"]
+                # Overwrite the existing schedule
+                cursor.execute("""
+                    UPDATE NPCStats
+                    SET schedule = %s
+                    WHERE npc_id = %s
+                """, (json.dumps(new_schedule), npc_id))
+
+            # Partial merges if "schedule_updates" is present
+            if "schedule_updates" in up:
+                partial_sched = up["schedule_updates"]  # e.g. {"Wednesday": {"Afternoon": "Dentist"}}
+                cursor.execute("SELECT schedule FROM NPCStats WHERE npc_id=%s", (npc_id,))
+                row = cursor.fetchone()
+                if row:
+                    existing_schedule = row[0] or {}
+                    # Merge
+                    for day_key, times_map in partial_sched.items():
+                        if day_key not in existing_schedule:
+                            existing_schedule[day_key] = {}
+                        existing_schedule[day_key].update(times_map)
+
+                    # store updated
+                    cursor.execute("""
+                        UPDATE NPCStats
+                        SET schedule = %s
+                        WHERE npc_id=%s
+                    """, (json.dumps(existing_schedule), npc_id))
+
+        # 4) character_stat_updates
+        char_update = data.get("character_stat_updates", {})
+        if char_update:
+            p_name = char_update.get("player_name", "Chase")
+            stats = char_update.get("stats", {})
+            stat_map = {
+                "corruption": "corruption",
+                "confidence": "confidence",
+                "willpower": "willpower",
+                "obedience": "obedience",
+                "dependency": "dependency",
+                "lust": "lust",
+                "mental_resilience": "mental_resilience",
+                "physical_endurance": "physical_endurance"
+            }
+            set_clauses = []
+            set_vals = []
+            for k, col in stat_map.items():
+                if k in stats:
+                    set_clauses.append(f"{col} = %s")
+                    set_vals.append(stats[k])
+            if set_clauses:
+                set_str = ", ".join(set_clauses)
+                set_vals.append(p_name)
+                cursor.execute(
+                    f"UPDATE PlayerStats SET {set_str} WHERE player_name=%s",
+                    tuple(set_vals)
+                )
 
         # 5) relationship_updates
         rel_updates = data.get("relationship_updates", [])
@@ -209,29 +228,23 @@ def apply_universal_updates(data: dict):
         for ev in event_updates:
             ev_name = ev.get("event_name", "UnnamedEvent")
             ev_desc = ev.get("description", "")
-        
-            # Add these lines:
-            ev_start = ev.get("start_time", "TBD Start")    # or "Day X, Morning"
+            ev_start = ev.get("start_time", "TBD Start")
             ev_end = ev.get("end_time", "TBD End")
             ev_loc = ev.get("location", "Unknown")
-        
-            # Now insert all columns
             cursor.execute("""
                 INSERT INTO Events (event_name, description, start_time, end_time, location)
                 VALUES (%s, %s, %s, %s, %s)
             """, (ev_name, ev_desc, ev_start, ev_end, ev_loc))
 
-
-        # 9) inventory_updates 
+        # 9) inventory_updates
         inv_updates = data.get("inventory_updates", {})
         if inv_updates:
             p_n = inv_updates.get("player_name", "Chase")
             added = inv_updates.get("added_items", [])
             removed = inv_updates.get("removed_items", [])
 
-            # For added items
+            # Adding items
             for item in added:
-                # Distinguish if it's a dict or a simple string
                 if isinstance(item, dict):
                     item_name = item.get("item_name", "Unnamed")
                     item_desc = item.get("item_description", "")
@@ -245,7 +258,6 @@ def apply_universal_updates(data: dict):
                             SET quantity = PlayerInventory.quantity + 1
                     """, (p_n, item_name, item_desc, item_fx, category))
                 elif isinstance(item, str):
-                    # Old fallback if item is just a string
                     cursor.execute("""
                         INSERT INTO PlayerInventory
                             (player_name, item_name, quantity)
@@ -254,11 +266,9 @@ def apply_universal_updates(data: dict):
                             SET quantity = PlayerInventory.quantity + 1
                     """, (p_n, item))
 
-            # For removed items
+            # Removing items
             for item in removed:
                 if isinstance(item, dict):
-                    # If you want to allow removing by item dict,
-                    # you'll need to decide how to handle item_name, etc.
                     i_name = item.get("item_name")
                     if i_name:
                         cursor.execute("""
@@ -270,7 +280,6 @@ def apply_universal_updates(data: dict):
                         DELETE FROM PlayerInventory
                         WHERE player_name = %s AND item_name = %s
                     """, (p_n, item))
-
 
         # 10) quest_updates
         quest_updates = data.get("quest_updates", [])
@@ -285,8 +294,7 @@ def apply_universal_updates(data: dict):
                     WHERE quest_id=%s
                 """, (status, detail, qid))
 
-
-        # 11) Social Links (NPC↔NPC or player↔NPC relationships)
+        # 11) Social Links
         rel_links = data.get("social_links", [])
         for link_data in rel_links:
             e1_type = link_data.get("entity1_type")
@@ -294,27 +302,21 @@ def apply_universal_updates(data: dict):
             e2_type = link_data.get("entity2_type")
             e2_id   = link_data.get("entity2_id")
             if not e1_type or not e1_id or not e2_type or not e2_id:
-                continue  # skip invalid
+                continue
 
-            # Check if a link already exists
             existing = get_social_link(e1_type, e1_id, e2_type, e2_id)
             if not existing:
-                # Create
                 new_link_id = create_social_link(
                     e1_type, e1_id, e2_type, e2_id,
                     link_type=link_data.get("link_type", "neutral"),
-                    link_level=link_data.get("level_change", 0)  # or 0 if no level
+                    link_level=link_data.get("level_change", 0)
                 )
-                # Optionally add an event
                 if "new_event" in link_data:
                     add_link_event(new_link_id, link_data["new_event"])
             else:
-                # Possibly update link_type/level
                 ltype = link_data.get("link_type")
                 lvl_change = link_data.get("level_change", 0)
                 update_link_type_and_level(existing["link_id"], new_type=ltype, level_change=lvl_change)
-
-                # If there's a new event text
                 if "new_event" in link_data:
                     add_link_event(existing["link_id"], link_data["new_event"])
 
@@ -324,21 +326,19 @@ def apply_universal_updates(data: dict):
             perk_name = perk.get("perk_name")
             perk_desc = perk.get("perk_description", "")
             perk_fx   = perk.get("perk_effect", "")
-        
-            # the player's name might be in 'player_name' or assume "Chase"
+
             player_name = data.get("player_name", "Chase")
-        
+
             if perk_name:
                 cursor.execute("""
                     INSERT INTO PlayerPerks (player_name, perk_name, perk_description, perk_effect)
                     VALUES (%s, %s, %s, %s)
                     ON CONFLICT (player_name, perk_name) DO NOTHING
                 """, (player_name, perk_name, perk_desc, perk_fx))
-        
 
         conn.commit()
         return {"message": "Universal update successful"}
-        
+
     except Exception as e:
         conn.rollback()
         return {"error": str(e)}
