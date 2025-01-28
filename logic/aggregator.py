@@ -55,10 +55,10 @@ def get_aggregated_roleplay_context(player_name="Chase"):
         WHERE introduced = TRUE
         ORDER BY npc_id
     """)
-    npc_rows = cursor.fetchall()
+    introduced_rows = cursor.fetchall()
 
     npc_list = []
-    for row in npc_rows:
+    for row in introduced_rows:
         (nid, nname,
          dom, cru, clos, tru, resp, inten,
          hbs, pers, lks, dlks) = row
@@ -87,7 +87,26 @@ def get_aggregated_roleplay_context(player_name="Chase"):
         WHERE introduced = FALSE
         ORDER BY npc_id
     """)
-    npc_rows = cursor.fetchall()
+    unintroduced_rows = cursor.fetchall()
+    unintroduced_list = []
+    for row in npc_rows:
+        (nid, nname,
+         dom, cru, clos, tru, resp, inten,
+         hbs, pers, lks, dlks) = row
+
+        npc_list.append({
+            "npc_id": nid,
+            "npc_name": nname,
+            "dominance": dom,
+            "cruelty": cru,
+            "closeness": clos,
+            "trust": tru,
+            "respect": resp,
+            "intensity": inten,
+            "hobbies": hbs if hbs else [],
+            "personality_traits": pers if pers else [],
+            "likes": lks if lks else [],
+            "dislikes": dlks if dlks else [],
 
     # 4) Current environment / meltdown states from CurrentRoleplay
     cursor.execute("""
