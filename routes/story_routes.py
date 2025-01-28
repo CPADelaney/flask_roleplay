@@ -7,9 +7,9 @@ import json
 from db.connection import get_db_connection
 from logic.activities_logic import filter_activities_for_npc, build_short_summary
 from logic.stats_logic import update_player_stats
-#from logic.meltdown_logic import check_and_inject_meltdown  # optionally remove or keep
+# from logic.meltdown_logic import check_and_inject_meltdown  # optionally remove or keep
 from logic.aggregator import get_aggregated_roleplay_context
-#from routes.meltdown import remove_meltdown_npc  # if you keep meltdown removal
+# from routes.meltdown import remove_meltdown_npc  # if you keep meltdown removal
 from routes.settings_routes import generate_mega_setting_logic
 from logic.universal_updater import apply_universal_updates  # Single universal update
 from logic.time_cycle import advance_time_and_update
@@ -27,35 +27,36 @@ def next_storybeat():
     passes in (like new NPCs, changed stats, location creation, etc.).
     """
     try:
+        # 1) Get the request JSON
         data = request.get_json() or {}
-        logging.info(f"Request Data: {data}")
 
-        # 1) If there's a 'universal_update' block, apply it
+        # 2) If the GPT front-end nests everything under "params", unwrap it
+        if "params" in data:
+            data = data["params"]
+
+        # 3) Extract the usual fields
+        player_name = data.get("player_name", "Chase")
+        user_input = data.get("user_input", "")
+        logging.info(f"Player: {player_name}, User Input: {user_input}")
+
+        # 4) Apply universal update if provided
         universal_data = data.get("universal_update", {})
         if universal_data:
             logging.info("Applying universal update from payload.")
             update_result = apply_universal_updates(universal_data)
             if "error" in update_result:
+                # Return a 500 with the error message if the update failed
                 return jsonify(update_result), 500
         else:
             logging.info("No universal update data found, skipping DB updates aside from meltdown or user triggers.")
 
-        # 2) Handle user input triggers, e.g. forced obedience, meltdown removal, environment generation
-        player_name = data.get("player_name", "Chase")
-        user_input = data.get("user_input", "")
-        logging.info(f"Player: {player_name}, User Input: {user_input}")
-
-        # Example force-obedience snippet
+        # 5) Handle user input triggers (obedience=100, meltdown removal, environment generation, etc.)
         user_lower = user_input.lower()
         if "obedience=100" in user_lower:
             logging.info("Setting obedience to 100 for player.")
             force_obedience_to_100(player_name)
 
-        # If meltdown logic is still relevant, you might keep it or remove it:
-        # if "remove meltdown" in user_lower:
-        #     remove_meltdown_npc(force=True)
-
-        # 3) Fetch aggregator data after universal updates
+        # 6) Get aggregator data after updates
         aggregator_data = get_aggregated_roleplay_context(player_name)
         logging.info(f"Aggregator Data: {aggregator_data}")
 
@@ -72,21 +73,22 @@ def next_storybeat():
                 mega_setting_name_if_generated = mega_data.get("mega_name", "No environment")
                 logging.info(f"New Mega Setting: {mega_setting_name_if_generated}")
 
-        # Some placeholders for other logic you might do
+        # Prepare placeholders for optional logic
         removed_npcs_list = []
         new_npc_data = None
         meltdown_level = 0
-        setting_str = aggregator_data["currentRoleplay"].get("CurrentSetting", "")
+        setting_str = current_setting if current_setting else ""
         npc_list = aggregator_data.get("npcStats", [])
         npc_archetypes = []
+
         if npc_list:
-            # Example: if first NPC's name contains "giant"
+            # Example: if first NPC name has "giant", assume "Giantess" archetype
             if "giant" in npc_list[0].get("npc_name", "").lower():
                 npc_archetypes = ["Giantess"]
 
         user_stats = aggregator_data.get("playerStats", {})
 
-        # 4) Suggest possible activities based on meltdown, stats, setting, etc.
+        # 7) Suggest possible activities based on meltdown, stats, etc.
         chosen_activities = filter_activities_for_npc(
             npc_archetypes=npc_archetypes,
             meltdown_level=meltdown_level,
@@ -96,16 +98,9 @@ def next_storybeat():
         lines_for_gpt = [build_short_summary(act) for act in chosen_activities]
         aggregator_data["activitySuggestions"] = lines_for_gpt
 
-
-        # 4b) Now we do meltdown synergy with the centralized meltdown check
-      #  meltdown_flavor = check_and_inject_meltdown()
-      #  meltdown_newly_triggered = bool(meltdown_flavor)
-
+        # 8) Track internal changes
         changed_stats = {"obedience": 100} if "obedience=100" in user_lower else {}
-
         updates_dict = {
-        #    "meltdown_triggered": meltdown_newly_triggered,
-        #    "meltdown_removed": meltdown_forced_removal,
             "new_mega_setting": mega_setting_name_if_generated,
             "updated_player_stats": changed_stats,
             "removed_npc_ids": removed_npcs_list,
@@ -114,15 +109,15 @@ def next_storybeat():
         }
         logging.info(f"Updates Dict: {updates_dict}")
 
-        # 6) Advance time
+        # 9) Advance time
         time_spent = 1
         new_day, new_phase = advance_time_and_update(increment=time_spent)
 
-        # 7) Re-fetch aggregator in case anything changed again
+        # 10) Re-fetch aggregator (if needed)
         aggregator_data = get_aggregated_roleplay_context(player_name)
         story_output = build_aggregator_text(aggregator_data)
 
-        # Return final scenario text + some updates
+        # 11) Return final scenario text and updates
         return jsonify({
             "story_output": story_output,
             "updates": {
@@ -155,6 +150,7 @@ def force_obedience_to_100(player_name):
         conn.rollback()
     finally:
         conn.close()
+
 
 def build_aggregator_text(aggregator_data):
     """
