@@ -48,54 +48,24 @@ def start_new_game():
         """)
         all_npcs = cursor.fetchall()
 
-        meltdown_pick_chance = 0.0005
-        meltdown_increment_chance = 0.20
+        # meltdown_pick_chance = 0.0005
+        # meltdown_increment_chance = 0.20
         full_memory_chance = 0.50
 
         carried_npcs = []
-        meltdown_npc = None
+        # meltdown_npc = None  # remove meltdown references altogether
 
         # 3) Decide which NPCs to keep or delete
         for npc_id, npc_name, old_monica_level, old_memory in all_npcs:
-            if old_monica_level > 0:
-                # meltdown NPC -> automatically keep
+            # For now, treat all NPCs the same—no meltdown auto-keep
+            if random.random() < keep_chance:
                 carried_npcs.append((npc_id, npc_name, old_monica_level, old_memory))
-                meltdown_npc = (npc_id, npc_name, old_monica_level, old_memory)
             else:
-                # normal NPC -> keep based on user-specified keepChance
-                if random.random() < keep_chance:
-                    carried_npcs.append((npc_id, npc_name, old_monica_level, old_memory))
-                else:
-                    cursor.execute("DELETE FROM NPCStats WHERE npc_id = %s", (npc_id,))
+                cursor.execute("DELETE FROM NPCStats WHERE npc_id = %s", (npc_id,))
 
-        # Possibly pick meltdown among survivors
-        if not meltdown_npc and carried_npcs:
-            if random.random() < meltdown_pick_chance:
-                chosen = random.choice(carried_npcs)
-                c_id, c_name, c_mlvl, c_mem = chosen
-                meltdown_npc = (c_id, c_name, 1, c_mem)
-                meltdown_line = f"{c_name} meltdown awakened at level=1."
-                cursor.execute("""
-                    UPDATE NPCStats
-                    SET monica_level = 1,
-                        memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s)
-                    WHERE npc_id = %s
-                """, (meltdown_line, c_id))
+        # (Meltdown logic removed completely)
 
-        # Possibly increment meltdown if meltdown NPC
-        if meltdown_npc:
-            npc_id, npc_name, old_mlvl, old_mem = meltdown_npc
-            new_level = old_mlvl
-            if random.random() < meltdown_increment_chance:
-                new_level += 1
-                meltdown_line = f"{npc_name} meltdown level incremented to {new_level}."
-                cursor.execute("""
-                    UPDATE NPCStats
-                    SET monica_level = %s
-                    WHERE npc_id = %s
-                """, (new_level, npc_id))
-
-        # 4) For carried normal NPCs, partial memory
+        # 4) For carried NPCs, partial memory if old_monica_level == 0
         for npc_id, npc_name, old_monica_level, old_memory in carried_npcs:
             if old_monica_level == 0:
                 # 50% chance to fully keep memory
