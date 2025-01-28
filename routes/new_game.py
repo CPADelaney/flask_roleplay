@@ -145,7 +145,7 @@ def start_new_game():
 
         # 10) Return the top-level "message" for the openapi "SuccessResponse"
         success_msg = (
-            f"New game started with 10 unintroduced NPCs and keepChance={keep_chance}. "
+            f"New game started with 10 unintroduced NPCs. "
             f"New environment = {mega_data['mega_name']}"
         )
         logging.info(f"Success! Returning 200 with message: {success_msg}")
