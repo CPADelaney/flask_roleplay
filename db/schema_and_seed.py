@@ -210,6 +210,17 @@ def create_all_tables():
         );
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerPerks (
+            id SERIAL PRIMARY KEY,
+            player_name TEXT NOT NULL,
+            perk_name TEXT NOT NULL,
+            perk_description TEXT,
+            perk_effect TEXT,
+            UNIQUE (player_name, perk_name)
+        );
+    ''')
+
     conn.commit()
     conn.close()
 
