@@ -12,6 +12,7 @@ from logic.rule_enforcement import rule_enforcement_bp
 from db.admin import admin_bp
 from flask_cors import CORS
 from routes.debug import debug_bp
+from routes.universal_update import universal_bp 
 
 def create_app():
     app = Flask(__name__)
@@ -41,6 +42,7 @@ def create_app():
     app.register_blueprint(knowledge_bp, url_prefix="/knowledge")
     app.register_blueprint(story_bp, url_prefix="/story")
     app.register_blueprint(debug_bp, url_prefix='/debug')
+    app.register_blueprint(universal_bp, url_prefix="/universal") 
     return app
 
 app = create_app()
