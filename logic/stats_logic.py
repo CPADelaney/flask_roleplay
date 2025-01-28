@@ -4,6 +4,9 @@ from flask import Blueprint, request, jsonify
 from db.connection import get_db_connection
 import random
 import json
+# We'll import or define these from your social_links
+from logic.social_links import add_link_event
+
 
 stats_bp = Blueprint('stats_bp', __name__)
 
@@ -530,6 +533,45 @@ def update_player_stats(player_name, stat_key, value):
         raise e
     finally:
         conn.close()
+
+def check_social_link_milestones():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # fetch all links where player is involved
+    cursor.execute("""
+        SELECT link_id, entity1_type, entity1_id,
+               entity2_type, entity2_id,
+               link_type, link_level
+        FROM SocialLinks
+        WHERE entity1_type='player' OR entity2_type='player'
+    """)
+    links = cursor.fetchall()
+
+    for (lid, e1_t, e1_i, e2_t, e2_i, ltype, lvl) in links:
+        # Assume "Chase" is the only 'player' for now
+        player_name = "Chase"
+
+        # Example triggers
+        if ltype == "friends" and lvl >= 30:
+            # Insert an item if not already given
+            cursor.execute("""
+                INSERT INTO PlayerInventory (player_name, item_name, quantity)
+                VALUES (%s, %s, 1)
+                ON CONFLICT (player_name, item_name) DO NOTHING
+            """, (player_name, "Friendship Token"))
+            add_link_event(lid, "RewardGiven: Friendship Token")
+
+        if ltype == "enslave" and lvl >= 40:
+            cursor.execute("""
+                INSERT INTO PlayerInventory (player_name, item_name, quantity)
+                VALUES (%s, %s, 1)
+                ON CONFLICT (player_name, item_name) DO NOTHING
+            """, (player_name, "Sweaty Socks"))
+            add_link_event(lid, "RewardGiven: Sweaty Socks")
+
+    conn.commit()
+    conn.close()
 
 
 @stats_bp.route("/init_stats_and_rules", methods=["POST"])
