@@ -206,10 +206,18 @@ def apply_universal_updates(data: dict):
         for ev in event_updates:
             ev_name = ev.get("event_name", "UnnamedEvent")
             ev_desc = ev.get("description", "")
+        
+            # Add these lines:
+            ev_start = ev.get("start_time", "TBD Start")    # or "Day X, Morning"
+            ev_end = ev.get("end_time", "TBD End")
+            ev_loc = ev.get("location", "Unknown")
+        
+            # Now insert all columns
             cursor.execute("""
-                INSERT INTO Events (event_name, description)
-                VALUES (%s, %s)
-            """, (ev_name, ev_desc))
+                INSERT INTO Events (event_name, description, start_time, end_time, location)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (ev_name, ev_desc, ev_start, ev_end, ev_loc))
+
 
         # 9) inventory_updates 
         inv_updates = data.get("inventory_updates", {})
