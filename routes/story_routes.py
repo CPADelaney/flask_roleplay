@@ -36,8 +36,7 @@ def next_storybeat():
             logging.info("Applying universal update from payload.")
             update_result = apply_universal_updates(universal_data)
             if "error" in update_result:
-                # Log or handle error from universal update
-                logging.warning(f"Universal update error: {update_result['error']}")
+                return jsonify(update_result), 500
         else:
             logging.info("No universal update data found, skipping DB updates aside from meltdown or user triggers.")
 
