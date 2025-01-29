@@ -5,10 +5,12 @@
   <title>Login</title>
 </head>
 <body>
+
   <h2>Register a New User</h2>
   <input type="text" id="reg_username" placeholder="New username">
   <input type="password" id="reg_password" placeholder="Password">
-  <button onclick="registerUser()">Register</button>
+  <!-- type="button" to prevent form submission -->
+  <button type="button" onclick="registerUser()">Register</button>
   <div id="registerStatus"></div>
 
   <hr/>
@@ -16,11 +18,12 @@
   <h2>Login</h2>
   <input type="text" id="username" placeholder="Username">
   <input type="password" id="password" placeholder="Password">
-  <button onclick="attemptLogin()">Login</button>
+  <!-- type="button" to prevent form submission -->
+  <button type="button" onclick="attemptLogin()">Login</button>
   <div id="loginStatus"></div>
 
   <script>
-    // 1. On page load, check if user is already logged in. If so, go to /chat
+    // On page load, check if user is already logged in
     window.onload = async function() {
       await checkAlreadyLoggedIn();
     };
@@ -43,11 +46,13 @@
       }
     }
 
-    // 2. Registration flow
+    // 1) Registration
     async function registerUser() {
       const user = document.getElementById("reg_username").value.trim();
       const pass = document.getElementById("reg_password").value.trim();
       const statusDiv = document.getElementById("registerStatus");
+
+      console.log("Registering user:", user, pass); // For debugging
 
       if (!user || !pass) {
         statusDiv.innerText = "Username & password required to register.";
@@ -58,13 +63,13 @@
         const res = await fetch("/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          credentials: "include",
+          credentials: "include",  // session cookies
           body: JSON.stringify({ username: user, password: pass })
         });
         const data = await res.json();
         if (res.ok) {
           statusDiv.innerText = `Registration successful! user_id=${data.user_id}`;
-          // Optionally redirect them to /chat
+          // Redirect to chat if you want:
           window.location.href = "/chat";
         } else {
           statusDiv.innerText = `Registration error: ${data.error || "Unknown error"}`;
@@ -75,11 +80,13 @@
       }
     }
 
-    // 3. Login flow
+    // 2) Login
     async function attemptLogin() {
       const user = document.getElementById("username").value.trim();
       const pass = document.getElementById("password").value.trim();
       const statusDiv = document.getElementById("loginStatus");
+
+      console.log("Attempting login with:", user, pass); // For debugging
 
       if (!user || !pass) {
         statusDiv.innerText = "Username & password required to login.";
@@ -91,12 +98,11 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ username, password: pass })
+          body: JSON.stringify({ username: user, password: pass })
         });
         const data = await res.json();
         if (res.ok) {
           statusDiv.innerText = `Login successful! user_id=${data.user_id}`;
-          // Optionally redirect to /chat:
           window.location.href = "/chat";
         } else {
           statusDiv.innerText = `Login error: ${data.error || "Unknown error"}`;
