@@ -2,21 +2,64 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Roleplay Chat</title>
+  <title>Roleplay Chat - Comprehensive</title>
   <style>
-    /* Simple flex layout: side panel for convos, main panel for chat */
+    /* Overall Layout */
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      transition: background-color 0.3s, color 0.3s;
+    }
+    .dark-mode {
+      background-color: #2c2c2c;
+      color: #f0f0f0;
+    }
+    
+    /* Top Bar (for login/logout, dark-mode toggle) */
+    #topBar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px;
+      border-bottom: 1px solid #ccc;
+    }
+    #topBar button {
+      margin-right: 10px;
+    }
+
+    /* Container for side panel and main chat area */
     #chatContainer {
       display: flex;
-      flex-direction: row;
       width: 100%;
-      height: 80vh;
+      height: calc(100vh - 50px);
     }
-    #convPanel {
-      width: 250px;
+    #leftPanel {
+      width: 280px;
       border-right: 1px solid #ccc;
-      padding: 10px;
-      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
     }
+    #leftPanelInner {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+    }
+
+    /* Conversation list area */
+    #convList button {
+      width: 100%;
+      text-align: left;
+      margin-bottom: 5px;
+      padding: 5px;
+      cursor: pointer;
+    }
+
+    /* Buttons for naming/renaming chats, etc. */
+    .inline-input {
+      width: 65%;
+      margin-right: 5px;
+    }
+
     #chatPanel {
       flex: 1;
       display: flex;
@@ -28,7 +71,44 @@
       margin: 10px;
       padding: 10px;
       overflow-y: auto;
+      background-color: #fefefe;
+      position: relative;
     }
+
+    /* Bubbles for messages */
+    .message-bubble {
+      max-width: 60%;
+      margin-bottom: 10px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      display: inline-block;
+      line-height: 1.4em;
+      word-wrap: break-word;
+    }
+    .message-user {
+      background-color: #007bff;
+      color: white;
+      align-self: flex-end;
+      margin-left: 40%;
+      text-align: right;
+    }
+    .message-gpt {
+      background-color: #e5e5e5;
+      color: #333;
+      margin-right: 40%;
+      text-align: left;
+    }
+
+    /* Load more / pagination link */
+    #loadMore {
+      display: block;
+      text-align: center;
+      margin: 10px 0;
+      cursor: pointer;
+      color: #007bff;
+    }
+
+    /* Input row for messages */
     #inputRow {
       margin: 10px;
       display: flex;
@@ -36,40 +116,142 @@
     #userMsg {
       flex: 1;
       margin-right: 10px;
+      padding: 8px;
+    }
+    #sendBtn {
+      padding: 8px 16px;
+      cursor: pointer;
+    }
+
+    /* Dark mode overrides */
+    .dark-mode #chatWindow {
+      background-color: #3b3b3b;
+    }
+    .dark-mode .message-user {
+      background-color: #375a7f;
+    }
+    .dark-mode .message-gpt {
+      background-color: #666666;
+      color: #f0f0f0;
     }
   </style>
 </head>
 <body>
-
-<h1>Roleplay Chat</h1>
+<div id="topBar">
+  <div>
+    <button id="loginBtn" onclick="login()">Login</button>
+    <button id="logoutBtn" onclick="logout()">Logout</button>
+  </div>
+  <div>
+    <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
+  </div>
+</div>
 
 <div id="chatContainer">
-  <!-- Left: Conversation List + "New Chat" Button -->
-  <div id="convPanel">
-    <button onclick="createNewChat()">+ New Chat</button>
-    <h3>My Conversations</h3>
-    <div id="convList"></div>
+  <!-- LEFT PANEL: Conversation List & Controls -->
+  <div id="leftPanel">
+    <div id="leftPanelInner">
+      <h3>Conversations</h3>
+      <div>
+        <input type="text" id="newConvName" class="inline-input" placeholder="Conversation name..."/>
+        <button onclick="createConversation()">Create</button>
+      </div>
+      <div id="convList" style="margin-top:10px;"></div>
+    </div>
   </div>
 
-  <!-- Right: Chat window + input -->
+  <!-- MAIN CHAT PANEL -->
   <div id="chatPanel">
-    <div id="chatWindow"></div>
+    <div id="chatWindow">
+      <span id="loadMore" onclick="loadPreviousMessages()" style="display:none;">Load older messages...</span>
+    </div>
     <div id="inputRow">
       <input type="text" id="userMsg" placeholder="Type your message"/>
-      <button onclick="sendMessage()">Send</button>
+      <button id="sendBtn" onclick="sendMessage()">Send</button>
     </div>
   </div>
 </div>
 
 <script>
+  /* 
+    Global State 
+  */
   let currentConvId = null;
+  let isDarkMode = false;
+  let messagesOffset = 0;  // For pagination if you want to load older messages
+  const MESSAGES_PER_LOAD = 20;
 
-  // On page load, fetch existing conversations
-  window.onload = async function() {
-    await loadConversations();
+  window.onload = function() {
+    // Press Enter to send message
+    const input = document.getElementById("userMsg");
+    input.addEventListener("keydown", function(e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    // Potentially check if user is already logged in, then load conversation list
+    loadConversations();
   };
 
-  // 1. Load the user's existing conversations
+  /* 
+    LOGIN / LOGOUT (Minimal Demo)
+    In real usage, you'd have a /login route and so forth. 
+    We'll just do a quick fetch to /login or /logout if you have those endpoints.
+  */
+  async function login() {
+    try {
+      // For a real approach, you'd prompt for username/password
+      const res = await fetch("/login", {method: "POST", body: JSON.stringify({username:"demo",password:"demo"})});
+      if (res.ok) {
+        alert("Logged in (demo)!");
+        await loadConversations();
+      } else {
+        alert("Failed to log in!");
+      }
+    } catch (err) {
+      console.error("Login error:", err);
+    }
+  }
+
+  async function logout() {
+    try {
+      // If you have a /logout route
+      const res = await fetch("/logout", {method: "POST"});
+      if (res.ok) {
+        alert("Logged out!");
+        document.getElementById("convList").innerHTML = "";
+        document.getElementById("chatWindow").innerHTML = "";
+        currentConvId = null;
+      } else {
+        alert("Failed to log out!");
+      }
+    } catch (err) {
+      console.error("Logout error:", err);
+    }
+  }
+
+  /* 
+    Dark Mode Toggle
+  */
+  function toggleDarkMode() {
+    isDarkMode = !isDarkMode;
+    if (isDarkMode) {
+      document.body.classList.add("dark-mode");
+    } else {
+      document.body.classList.remove("dark-mode");
+    }
+  }
+
+  /*
+    Conversation CRUD
+    - loadConversations
+    - createConversation
+    - renameConversation
+    - deleteConversation
+  */
+
   async function loadConversations() {
     try {
       const res = await fetch("/multiuser/conversations");
@@ -84,102 +266,252 @@
     }
   }
 
+  async function createConversation() {
+    const convNameInput = document.getElementById("newConvName");
+    const convName = convNameInput.value.trim();
+    if (!convName) {
+      alert("Please enter a conversation name!");
+      return;
+    }
+    try {
+      // If you have a dedicated route to create a conversation:
+      // e.g. POST /multiuser/conversations with {conversation_name: convName}
+      const res = await fetch("/multiuser/conversations", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({conversation_name: convName})
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert("Error creating conversation: " + (data.error || res.status));
+        return;
+      }
+      convNameInput.value = "";
+      await loadConversations();
+    } catch (err) {
+      console.error("createConversation error:", err);
+    }
+  }
+
+  async function renameConversation(convId) {
+    const newName = prompt("Enter new conversation name:");
+    if (!newName) return;
+    try {
+      // If you have a /multiuser/conversations/:id route with PUT or PATCH
+      const res = await fetch(`/multiuser/conversations/${convId}`, {
+        method: "PUT",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({conversation_name: newName})
+      });
+      if (!res.ok) {
+        console.error("Error renaming conversation:", res.status);
+        alert("Rename failed!");
+        return;
+      }
+      await loadConversations();
+      if (convId === currentConvId) {
+        // If we renamed the active conversation, optionally keep it loaded
+        // no changes needed except the name in the list
+      }
+    } catch (err) {
+      console.error("renameConversation error:", err);
+    }
+  }
+
+  async function deleteConversation(convId) {
+    if (!confirm("Really delete this conversation?")) {
+      return;
+    }
+    try {
+      // If you have a DELETE route
+      const res = await fetch(`/multiuser/conversations/${convId}`, {
+        method: "DELETE"
+      });
+      if (!res.ok) {
+        console.error("Error deleting conversation:", res.status);
+        alert("Delete failed!");
+        return;
+      }
+      if (convId === currentConvId) {
+        // If we deleted the active conversation, clear the chat
+        currentConvId = null;
+        document.getElementById("chatWindow").innerHTML = "";
+      }
+      await loadConversations();
+    } catch (err) {
+      console.error("deleteConversation error:", err);
+    }
+  }
+
   function renderConvoList(conversations) {
     const convListDiv = document.getElementById("convList");
-    convListDiv.innerHTML = ""; // clear old
+    convListDiv.innerHTML = "";
 
     conversations.forEach(conv => {
-      // Create a button or clickable element
+      const wrapper = document.createElement("div");
+      wrapper.style.display = "flex";
+      wrapper.style.marginBottom = "5px";
+
+      // Conversation button
       const btn = document.createElement("button");
       btn.textContent = conv.name;
-      btn.style.display = "block";
-      btn.style.marginBottom = "5px";
       btn.onclick = () => selectConversation(conv.id);
-      convListDiv.appendChild(btn);
+      btn.style.flex = "1";
+
+      // Rename & Delete icons (or text)
+      const renameBtn = document.createElement("button");
+      renameBtn.textContent = "✎";
+      renameBtn.style.width = "30px";
+      renameBtn.onclick = (e) => {
+        e.stopPropagation();
+        renameConversation(conv.id);
+      };
+
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "🗑";
+      delBtn.style.width = "30px";
+      delBtn.onclick = (e) => {
+        e.stopPropagation();
+        deleteConversation(conv.id);
+      };
+
+      wrapper.appendChild(btn);
+      wrapper.appendChild(renameBtn);
+      wrapper.appendChild(delBtn);
+
+      convListDiv.appendChild(wrapper);
     });
   }
 
-  // 2. Select an existing conversation, load its messages
+  /*
+    Select and load messages from a conversation
+  */
   async function selectConversation(convId) {
     currentConvId = convId;
+    messagesOffset = 0; // reset pagination
+    await loadMessages(convId, true); // pass 'replace' = true
+  }
+
+  async function loadMessages(convId, replace = false) {
+    // Example: /multiuser/conversations/<id>/messages?offset=0&limit=20
+    let url = `/multiuser/conversations/${convId}/messages?offset=${messagesOffset}&limit=${MESSAGES_PER_LOAD}`;
     try {
-      const res = await fetch(`/multiuser/conversations/${convId}/messages`);
+      const res = await fetch(url);
       if (!res.ok) {
         console.error("Failed to load messages for convo:", convId);
         return;
       }
       const data = await res.json(); // {messages: [...]}
-      renderChat(data.messages);
+      if (replace) {
+        renderChat(data.messages);
+      } else {
+        prependMessages(data.messages);
+      }
+      // if data.messages length < MESSAGES_PER_LOAD, hide "Load older messages"
+      document.getElementById("loadMore").style.display = data.messages.length < MESSAGES_PER_LOAD ? "none" : "block";
+
     } catch (err) {
-      console.error("Error selecting conversation:", err);
+      console.error("Error loading messages:", err);
     }
   }
 
-  // 3. Create a brand-new conversation
-  //    We won't actually create it in /multiuser/conversations here:
-  //    Instead, we let the backend auto-create on first message.
-  //    If you prefer to name your chat or do something else, you can do it here.
-  function createNewChat() {
-    currentConvId = null;  // We'll let the next user message auto-create it
-    renderChat([]);        // Clear chat window
+  // Load older messages (pagination)
+  async function loadPreviousMessages() {
+    messagesOffset += MESSAGES_PER_LOAD;
+    await loadMessages(currentConvId, false);
   }
 
-  // 4. Send a message to /story/next_storybeat
+  // Replacing the entire chat
+  function renderChat(messages) {
+    const chatWindow = document.getElementById("chatWindow");
+    chatWindow.innerHTML = `<span id="loadMore" onclick="loadPreviousMessages()" style="display:none;">Load older messages...</span>`;
+    // Insert each message
+    messages.slice().reverse().forEach(msg => {
+      appendMessage(msg, false);
+    });
+    // We reversed the array so we can append in chronological order
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+  }
+
+  // Prepending older messages to existing chat
+  function prependMessages(messages) {
+    const chatWindow = document.getElementById("chatWindow");
+    const loadMoreElem = document.getElementById("loadMore");
+
+    messages.slice().reverse().forEach(msg => {
+      const bubble = createBubble(msg);
+      chatWindow.insertBefore(bubble, loadMoreElem.nextSibling);
+    });
+  }
+
+  // Append single message to the bottom
+  function appendMessage(m, autoScroll = true) {
+    const chatWindow = document.getElementById("chatWindow");
+    const loadMoreElem = document.getElementById("loadMore");
+
+    const bubble = createBubble(m);
+    // Insert after loadMore link
+    chatWindow.insertBefore(bubble, loadMoreElem.nextSibling);
+
+    if (autoScroll) {
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+  }
+
+  function createBubble(m) {
+    const bubble = document.createElement("div");
+    bubble.classList.add("message-bubble");
+
+    if (m.sender === "user") {
+      bubble.classList.add("message-user");
+    } else {
+      bubble.classList.add("message-gpt");
+    }
+    bubble.innerHTML = `<strong>${m.sender}:</strong> ${m.content}`;
+    return bubble;
+  }
+
+  /*
+    Sending a new message to /story/next_storybeat
+  */
   async function sendMessage() {
     const userInputElem = document.getElementById("userMsg");
     const userText = userInputElem.value.trim();
     userInputElem.value = "";
     if (!userText) return;
 
-    // We'll pass conversation_id if we have one, else server will create a new one
     const payload = {
       user_input: userText,
-      conversation_id: currentConvId, 
-      player_name: "Chase" // or dynamic
+      conversation_id: currentConvId // if null, the server will auto-create
+      // player_name: "Chase" // or dynamic
     };
 
     try {
       const res = await fetch("/story/next_storybeat", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
       const data = await res.json();
 
       if (!res.ok) {
         console.error("Server error:", data);
+        alert("Message send failed!");
         return;
       }
 
-      // Server always returns updated conversation_id + messages
-      currentConvId = data.conversation_id; 
-      const messages = data.messages || [];
-      renderChat(messages);
+      currentConvId = data.conversation_id;
+      // data.messages is the entire conversation in ascending order
+      // We'll just re-render from scratch:
+      renderChat(data.messages);
 
-      // If it's a brand-new conversation, let's refresh the list
-      // so we see a new "New Chat" item appear if the server
-      // named it that or if you have logic for conversation_name
+      // Refresh conv list in case new conversation was created
       await loadConversations();
 
     } catch (err) {
       console.error("sendMessage error:", err);
     }
   }
-
-  // 5. Render entire chat from the 'messages' array
-  function renderChat(messages) {
-    const chatWindow = document.getElementById("chatWindow");
-    chatWindow.innerHTML = ""; // clear old
-
-    messages.forEach(m => {
-      const p = document.createElement("p");
-      let senderName = (m.sender === "user") ? "You" : m.sender;
-      p.innerHTML = `<strong>${senderName}:</strong> ${m.content}`;
-      chatWindow.appendChild(p);
-    });
-    chatWindow.scrollTop = chatWindow.scrollHeight;
-  }
-
 </script>
 </body>
 </html>
