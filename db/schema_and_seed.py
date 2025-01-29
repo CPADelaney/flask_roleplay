@@ -259,6 +259,31 @@ def create_all_tables():
     conn.commit()
     conn.close()
 
+    cursor.execute('''
+        ALTER TABLE conversations
+        ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE
+    ''')
+
+    # B) Add a 'folder' column for conversation grouping (if you want it)
+    cursor.execute('''
+        ALTER TABLE conversations
+        ADD COLUMN IF NOT EXISTS folder TEXT DEFAULT 'Inbox'
+    ''')
+
+    # C) Adjust the foreign key on 'messages' for ON DELETE CASCADE
+    #    First drop the existing constraint if it’s not already cascade,
+    #    then re-add it with cascade
+    cursor.execute('''
+        ALTER TABLE messages
+        DROP CONSTRAINT IF EXISTS messages_conversation_id_fkey
+    ''')
+    cursor.execute('''
+        ALTER TABLE messages
+        ADD CONSTRAINT messages_conversation_id_fkey
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        ON DELETE CASCADE
+    ''')
+
 def seed_initial_data():
     """
     Inserts default data (stat definitions, game rules, settings, activities, archetypes, etc.).
