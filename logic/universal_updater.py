@@ -1,5 +1,3 @@
-# logic/universal_updater.py
-
 import json
 from db.connection import get_db_connection
 from logic.social_links import (
@@ -12,41 +10,49 @@ def apply_universal_updates(data: dict):
     Applies the 'universal update' logic to the database using the JSON structure
     described in data. This handles NPC creations/updates, location creations,
     roleplay state changes, events, inventory, quests, social links, perk unlocks,
-    and full/partial schedule changes for NPCs.
+    and full/partial schedule changes for NPCs, all scoped by user_id & conversation_id.
     """
 
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        # roleplay_updates
+        # 1) Pull user_id, conversation_id from the data
+        user_id = data.get("user_id")
+        conv_id = data.get("conversation_id")
+        if not user_id or not conv_id:
+            return {"error": "Missing user_id or conversation_id in payload."}
+
+        # 2) roleplay_updates
+        # Now we store them in CurrentRoleplay, referencing user_id, conversation_id, key, value
         rp_updates = data.get("roleplay_updates", {})
         for key, val in rp_updates.items():
+            # Convert val to string or JSON
             if isinstance(val, (dict, list)):
                 stored_val = json.dumps(val)
             else:
                 stored_val = str(val)
-            cursor.execute("""
-                INSERT INTO CurrentRoleplay(key,value)
-                VALUES(%s,%s)
-                ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value
-            """, (key, stored_val))
 
-        # 2) npc_creations (brand-new NPCs)
+            # We assume CurrentRoleplay has (user_id, conversation_id, key) as a composite primary or unique
+            # so we can do ON CONFLICT
+            cursor.execute("""
+                INSERT INTO CurrentRoleplay(user_id, conversation_id, key, value)
+                VALUES(%s, %s, %s, %s)
+                ON CONFLICT (user_id, conversation_id, key) DO UPDATE SET value=EXCLUDED.value
+            """, (user_id, conv_id, key, stored_val))
+
+        # 3) npc_creations (brand-new NPCs)
         npc_creations = data.get("npc_creations", [])
         for npc_data in npc_creations:
             name = npc_data.get("npc_name", "Unnamed NPC")
             introduced = npc_data.get("introduced", False)
 
-            # Archetypes is optional JSON
             arche = npc_data.get("archetypes", [])
-
             dom = npc_data.get("dominance", 0)
             cru = npc_data.get("cruelty", 0)
             clos = npc_data.get("closeness", 0)
             tru = npc_data.get("trust", 0)
             resp = npc_data.get("respect", 0)
             inten = npc_data.get("intensity", 0)
-
             hbs = npc_data.get("hobbies", [])
             pers = npc_data.get("personality_traits", [])
             lks = npc_data.get("likes", [])
@@ -60,8 +66,10 @@ def apply_universal_updates(data: dict):
 
             monica_lvl = npc_data.get("monica_level", 0)
 
+            # Insert into NPCStats with user_id, conversation_id
             cursor.execute("""
                 INSERT INTO NPCStats (
+                    user_id, conversation_id,
                     npc_name, introduced,
                     archetypes,
                     dominance, cruelty, closeness, trust, respect, intensity,
@@ -70,12 +78,14 @@ def apply_universal_updates(data: dict):
                 )
                 VALUES (
                     %s, %s,
+                    %s, %s,
                     %s,
                     %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s, %s
                 )
             """, (
+                user_id, conv_id,
                 name, introduced,
                 json.dumps(arche),
                 dom, cru, clos, tru, resp, inten,
@@ -86,14 +96,16 @@ def apply_universal_updates(data: dict):
                 monica_lvl
             ))
 
-        # 3) npc_updates (existing NPC changes, including schedule merges)
+        # 4) npc_updates
+        # Here, we do the same as before, but consider user_id, conv_id if we want to ensure the user only
+        # updates NPCs they own. E.g., "WHERE npc_id=%s AND user_id=%s AND conversation_id=%s"
         npc_updates = data.get("npc_updates", [])
         for up in npc_updates:
             npc_id = up.get("npc_id")
             if not npc_id:
                 continue
 
-            # Basic columns to update directly
+            # Basic columns
             fields_map = {
                 "npc_name": "npc_name",
                 "introduced": "introduced",
@@ -116,11 +128,17 @@ def apply_universal_updates(data: dict):
 
             if set_clauses:
                 set_str = ", ".join(set_clauses)
-                set_vals.append(npc_id)
-                query = f"UPDATE NPCStats SET {set_str} WHERE npc_id=%s"
+                # Typically we'd do: WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+                # to ensure ownership
+                set_vals += [npc_id, user_id, conv_id]
+                query = f"""
+                    UPDATE NPCStats
+                    SET {set_str}
+                    WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+                """
                 cursor.execute(query, tuple(set_vals))
 
-            # Memory merges: append new entries
+            # Memory merges
             if "memory" in up:
                 new_mem_entries = up["memory"]
                 if isinstance(new_mem_entries, str):
@@ -128,22 +146,26 @@ def apply_universal_updates(data: dict):
                 cursor.execute("""
                     UPDATE NPCStats
                     SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s)
-                    WHERE npc_id = %s
-                """, (new_mem_entries, npc_id))
+                    WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+                """, (new_mem_entries, npc_id, user_id, conv_id))
 
             # Overwrite entire schedule if "schedule" is present
             if "schedule" in up:
                 new_schedule = up["schedule"]
                 cursor.execute("""
                     UPDATE NPCStats
-                    SET schedule = %s
-                    WHERE npc_id = %s
-                """, (json.dumps(new_schedule), npc_id))
+                    SET schedule=%s
+                    WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+                """, (json.dumps(new_schedule), npc_id, user_id, conv_id))
 
             # Partial merges if "schedule_updates" is present
             if "schedule_updates" in up:
-                partial_sched = up["schedule_updates"]  # e.g. { "Wednesday": { "Afternoon": "Dentist" } }
-                cursor.execute("SELECT schedule FROM NPCStats WHERE npc_id=%s", (npc_id,))
+                partial_sched = up["schedule_updates"]
+                cursor.execute("""
+                    SELECT schedule
+                    FROM NPCStats
+                    WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+                """, (npc_id, user_id, conv_id))
                 row = cursor.fetchone()
                 if row:
                     existing_schedule = row[0] or {}
@@ -154,11 +176,12 @@ def apply_universal_updates(data: dict):
 
                     cursor.execute("""
                         UPDATE NPCStats
-                        SET schedule = %s
-                        WHERE npc_id=%s
-                    """, (json.dumps(existing_schedule), npc_id))
+                        SET schedule=%s
+                        WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+                    """, (json.dumps(existing_schedule), npc_id, user_id, conv_id))
 
-        # 4) character_stat_updates (PlayerStats changes)
+        # 5) character_stat_updates
+        # Similarly, we do "WHERE player_name=%s AND user_id=%s AND conversation_id=%s"
         char_update = data.get("character_stat_updates", {})
         if char_update:
             p_name = char_update.get("player_name", "Chase")
@@ -177,17 +200,22 @@ def apply_universal_updates(data: dict):
             set_vals = []
             for k, col in stat_map.items():
                 if k in stats:
-                    set_clauses.append(f"{col} = %s")
+                    set_clauses.append(f"{col}=%s")
                     set_vals.append(stats[k])
             if set_clauses:
                 set_str = ", ".join(set_clauses)
-                set_vals.append(p_name)
+                set_vals += [p_name, user_id, conv_id]
                 cursor.execute(
-                    f"UPDATE PlayerStats SET {set_str} WHERE player_name=%s",
+                    f"""
+                    UPDATE PlayerStats
+                    SET {set_str}
+                    WHERE player_name=%s AND user_id=%s AND conversation_id=%s
+                    """,
                     tuple(set_vals)
                 )
 
-        # 5) relationship_updates (NPC affiliations array)
+        # 6) relationship_updates
+        # If "affiliations" is stored in NPCStats, do the same pattern
         rel_updates = data.get("relationship_updates", [])
         for r in rel_updates:
             npc_id = r.get("npc_id")
@@ -197,33 +225,33 @@ def apply_universal_updates(data: dict):
             if aff_list is not None:
                 cursor.execute("""
                     UPDATE NPCStats
-                    SET affiliations = %s
-                    WHERE npc_id = %s
-                """, (json.dumps(aff_list), npc_id))
+                    SET affiliations=%s
+                    WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+                """, (json.dumps(aff_list), npc_id, user_id, conv_id))
 
-        # 6) npc_introductions
+        # 7) npc_introductions
         npc_intros = data.get("npc_introductions", [])
         for intro in npc_intros:
             nid = intro.get("npc_id")
             if nid:
                 cursor.execute("""
                     UPDATE NPCStats
-                    SET introduced = TRUE
-                    WHERE npc_id=%s
-                """, (nid,))
+                    SET introduced=TRUE
+                    WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+                """, (nid, user_id, conv_id))
 
-        # 7) location_creations
-        location_creations = data.get("location_creations", [])
-        for loc in location_creations:
+        # 8) location_creations
+        loc_creations = data.get("location_creations", [])
+        for loc in loc_creations:
             loc_name = loc.get("location_name", "Unnamed")
             desc = loc.get("description", "")
             open_hours = loc.get("open_hours", [])
             cursor.execute("""
-                INSERT INTO Locations (name, description, open_hours)
-                VALUES (%s, %s, %s)
-            """, (loc_name, desc, json.dumps(open_hours)))
+                INSERT INTO Locations (user_id, conversation_id, name, description, open_hours)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (user_id, conv_id, loc_name, desc, json.dumps(open_hours)))
 
-        # 8) event_list_updates
+        # 9) event_list_updates
         event_updates = data.get("event_list_updates", [])
         for ev in event_updates:
             ev_name = ev.get("event_name", "UnnamedEvent")
@@ -232,18 +260,20 @@ def apply_universal_updates(data: dict):
             ev_end = ev.get("end_time", "TBD End")
             ev_loc = ev.get("location", "Unknown")
             cursor.execute("""
-                INSERT INTO Events (event_name, description, start_time, end_time, location)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (ev_name, ev_desc, ev_start, ev_end, ev_loc))
+                INSERT INTO Events (
+                  user_id, conversation_id,
+                  event_name, description, start_time, end_time, location
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (user_id, conv_id, ev_name, ev_desc, ev_start, ev_end, ev_loc))
 
-        # 9) inventory_updates
+        # 10) inventory_updates
         inv_updates = data.get("inventory_updates", {})
         if inv_updates:
             p_n = inv_updates.get("player_name", "Chase")
             added = inv_updates.get("added_items", [])
             removed = inv_updates.get("removed_items", [])
 
-            # Add items
             for item in added:
                 if isinstance(item, dict):
                     item_name = item.get("item_name", "Unnamed")
@@ -251,50 +281,56 @@ def apply_universal_updates(data: dict):
                     item_fx   = item.get("item_effect", "")
                     category  = item.get("category", "")
                     cursor.execute("""
-                        INSERT INTO PlayerInventory
-                            (player_name, item_name, item_description, item_effect, category, quantity)
-                        VALUES (%s, %s, %s, %s, %s, 1)
+                        INSERT INTO PlayerInventory (
+                            user_id, conversation_id,
+                            player_name, item_name, item_description, item_effect, category, quantity
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, 1)
                         ON CONFLICT (player_name, item_name) DO UPDATE
-                            SET quantity = PlayerInventory.quantity + 1
-                    """, (p_n, item_name, item_desc, item_fx, category))
+                            SET quantity=PlayerInventory.quantity+1
+                    """, (user_id, conv_id, p_n, item_name, item_desc, item_fx, category))
                 elif isinstance(item, str):
                     cursor.execute("""
-                        INSERT INTO PlayerInventory
-                            (player_name, item_name, quantity)
-                        VALUES (%s, %s, 1)
+                        INSERT INTO PlayerInventory (
+                            user_id, conversation_id,
+                            player_name, item_name, quantity
+                        )
+                        VALUES (%s, %s, %s, %s, 1)
                         ON CONFLICT (player_name, item_name) DO UPDATE
-                            SET quantity = PlayerInventory.quantity + 1
-                    """, (p_n, item))
+                            SET quantity=PlayerInventory.quantity+1
+                    """, (user_id, conv_id, p_n, item))
 
-            # Remove items
             for item in removed:
                 if isinstance(item, dict):
                     i_name = item.get("item_name")
                     if i_name:
                         cursor.execute("""
                             DELETE FROM PlayerInventory
-                            WHERE player_name=%s AND item_name=%s
-                        """, (p_n, i_name))
+                            WHERE user_id=%s AND conversation_id=%s
+                              AND player_name=%s AND item_name=%s
+                        """, (user_id, conv_id, p_n, i_name))
                 elif isinstance(item, str):
                     cursor.execute("""
                         DELETE FROM PlayerInventory
-                        WHERE player_name=%s AND item_name=%s
-                    """, (p_n, item))
+                        WHERE user_id=%s AND conversation_id=%s
+                          AND player_name=%s AND item_name=%s
+                    """, (user_id, conv_id, p_n, item))
 
-        # 10) quest_updates
+        # 11) quest_updates
         quest_updates = data.get("quest_updates", [])
         for qu in quest_updates:
             qid = qu.get("quest_id")
             status = qu.get("status", "In Progress")
             detail = qu.get("progress_detail", "")
             if qid:
+                # we might do: WHERE quest_id=%s AND user_id=%s AND conversation_id=%s
                 cursor.execute("""
                     UPDATE Quests
                     SET status=%s, progress_detail=%s
                     WHERE quest_id=%s
                 """, (status, detail, qid))
 
-        # 11) social_links (NPC<->NPC or player<->NPC relationships)
+        # 12) social_links
         rel_links = data.get("social_links", [])
         for link_data in rel_links:
             e1_type = link_data.get("entity1_type")
@@ -304,12 +340,17 @@ def apply_universal_updates(data: dict):
             if not e1_type or not e1_id or not e2_type or not e2_id:
                 continue
 
-            existing = get_social_link(e1_type, e1_id, e2_type, e2_id)
+            # If you store user_id, conversation_id in SocialLinks, you must pass them
+            # to get_social_link(...) or create_social_link(...). 
+            # For simplicity we just show the pattern:
+            existing = get_social_link(e1_type, e1_id, e2_type, e2_id, user_id, conv_id)
             if not existing:
                 new_link_id = create_social_link(
                     e1_type, e1_id, e2_type, e2_id,
                     link_type=link_data.get("link_type", "neutral"),
-                    link_level=link_data.get("level_change", 0)
+                    link_level=link_data.get("level_change", 0),
+                    user_id=user_id,
+                    conversation_id=conv_id
                 )
                 if "new_event" in link_data:
                     add_link_event(new_link_id, link_data["new_event"])
@@ -320,7 +361,7 @@ def apply_universal_updates(data: dict):
                 if "new_event" in link_data:
                     add_link_event(existing["link_id"], link_data["new_event"])
 
-        # 12) perk_unlocks (one-time perks/skills)
+        # 13) perk_unlocks
         perk_unlocks = data.get("perk_unlocks", [])
         for perk in perk_unlocks:
             perk_name = perk.get("perk_name")
@@ -331,6 +372,7 @@ def apply_universal_updates(data: dict):
             player_name = data.get("player_name", "Chase")
 
             if perk_name:
+                # Also might store user_id, conversation_id in PlayerPerks if it's scoping
                 cursor.execute("""
                     INSERT INTO PlayerPerks (player_name, perk_name, perk_description, perk_effect)
                     VALUES (%s, %s, %s, %s)
