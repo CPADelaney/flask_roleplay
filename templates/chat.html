@@ -23,7 +23,6 @@
     #topBar button {
       margin-right: 10px;
     }
-
     #chatContainer {
       display: flex;
       width: 100%;
@@ -117,6 +116,21 @@
       background-color: #666666;
       color: #f0f0f0;
     }
+    /* Context Menu styling */
+    #contextMenu {
+      position: absolute;
+      display: none;
+      border: 1px solid #ccc;
+      background: #fff;
+      z-index: 999;
+    }
+    #contextMenu div {
+      padding: 5px;
+      cursor: pointer;
+    }
+    #contextMenu div:hover {
+      background-color: #eee;
+    }
   </style>
 </head>
 <body>
@@ -136,7 +150,7 @@
       <h3>Conversations</h3>
       <div>
         <input type="text" id="newConvName" class="inline-input" placeholder="Conversation name..."/>
-        <button onclick="createConversation()">Create</button>
+        <button type="button" onclick="createConversation()">Create</button>
       </div>
       <div id="convList" style="margin-top:10px;"></div>
     </div>
@@ -154,15 +168,13 @@
   </div>
 </div>
 
+<!-- The custom context menu (hidden by default) -->
+<div id="contextMenu"></div>
+
 <script>
-  /*
-    Global State
-  */
   let currentConvId = null;
   let messagesOffset = 0;
   const MESSAGES_PER_LOAD = 20;
-
-  // Dark mode flag
   let isDarkMode = false;
 
   // "pendingUniversalUpdates"
@@ -212,7 +224,6 @@
     };
   }
 
-  // On load
   window.onload = async function() {
     await checkLoggedIn();
     attachEnterKey();
@@ -220,12 +231,12 @@
     await loadConversations();
   };
 
-  // 1) Check if user is logged in by calling /whoami
+  // Check login
   async function checkLoggedIn() {
     try {
       const res = await fetch("/whoami", {
         method: "GET",
-        credentials: "include"  // must include cookies
+        credentials: "include"
       });
       if (res.ok) {
         const data = await res.json();
@@ -243,7 +254,6 @@
     }
   }
 
-  // 2) Attach "Enter" Key
   function attachEnterKey() {
     const input = document.getElementById("userMsg");
     input.addEventListener("keydown", function(e) {
@@ -254,7 +264,6 @@
     });
   }
 
-  // 3) Dark Mode
   function loadDarkModeFromStorage() {
     const val = localStorage.getItem("dark_mode_enabled");
     if (val === "true") {
@@ -276,12 +285,11 @@
     }
   }
 
-  // 4) Logout
   async function logout() {
     try {
       const res = await fetch("/logout", {
         method: "POST",
-        credentials: "include"   // so the server sees your session
+        credentials: "include"
       });
       if (res.ok) {
         window.location.href = "/login_page";
@@ -293,12 +301,12 @@
     }
   }
 
-  // Conversation Management
+  // Load & Create Convos
   async function loadConversations() {
     try {
       const res = await fetch("/multiuser/conversations", {
         method: "GET",
-        credentials: "include"   // important for session-based
+        credentials: "include"
       });
       if (!res.ok) {
         console.error("Failed to get conversations:", res.status);
@@ -347,9 +355,17 @@
       wrapper.style.marginBottom = "5px";
 
       const btn = document.createElement("button");
-      btn.textContent = conv.name;
-      btn.onclick = () => selectConversation(conv.id);
+      btn.textContent = conv.name || "New Chat";
       btn.style.flex = "1";
+
+      // Left-click
+      btn.onclick = () => selectConversation(conv.id);
+
+      // Right-click => custom context menu
+      btn.oncontextmenu = (e) => {
+        e.preventDefault();
+        showContextMenu(e.clientX, e.clientY, conv.id);
+      };
 
       wrapper.appendChild(btn);
       convListDiv.appendChild(wrapper);
@@ -431,26 +447,21 @@
     return bubble;
   }
 
-  /*
-    Sending a new message
-  */
+  // Send a new message
   async function sendMessage() {
     const userInputElem = document.getElementById("userMsg");
     const userText = userInputElem.value.trim();
     userInputElem.value = "";
     if (!userText) return;
 
-    // For demonstration: forcibly set Obedience=80, add "Chains of Submission"
+    // Example additions to universal_update
     pendingUniversalUpdates.character_stat_updates.stats.obedience = 80;
     pendingUniversalUpdates.inventory_updates.added_items.push("Chains of Submission");
     
-    // Build the final payload
     const payload = {
       user_input: userText,
       conversation_id: currentConvId,
       player_name: "Chase",
-      // e.g. if a user clicked “advance time”
-      // advance_time: true,
       universal_update: pendingUniversalUpdates
     };
   
@@ -458,7 +469,7 @@
       const res = await fetch("/story/next_storybeat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",  // <== needed for session
+        credentials: "include",
         body: JSON.stringify(payload)
       });
       const data = await res.json();
@@ -468,19 +479,88 @@
         alert("Message send failed!");
         return;
       }
-
-      // Clear or partially clear the pending updates
       resetPendingUniversalUpdates();
-  
-      // Refresh chat
       currentConvId = data.conversation_id;
       renderChat(data.messages);
-
-      // Optionally refresh conv list
       await loadConversations();
-
     } catch (err) {
       console.error("sendMessage error:", err);
+    }
+  }
+
+  // =====================
+  // Context Menu
+  // =====================
+
+  const menuDiv = document.getElementById("contextMenu");
+
+  function showContextMenu(x, y, convId) {
+    menuDiv.innerHTML = `
+      <div onclick="renameConversation(${convId})">Rename</div>
+      <div onclick="archiveConversation(${convId})">Archive</div>
+      <div onclick="deleteConversation(${convId})">Delete</div>
+    `;
+    menuDiv.style.left = x + "px";
+    menuDiv.style.top = y + "px";
+    menuDiv.style.display = "block";
+  }
+
+  // Hide menu if user clicks anywhere else
+  document.addEventListener("click", () => {
+    menuDiv.style.display = "none";
+  });
+
+  async function renameConversation(convId) {
+    const newName = prompt("Enter new conversation name:");
+    if (!newName) return;
+    try {
+      const res = await fetch("/multiuser/conversations/" + convId, {
+        method: "PUT",
+        headers: {"Content-Type": "application/json"},
+        credentials: "include",
+        body: JSON.stringify({ conversation_name: newName })
+      });
+      if (res.ok) {
+        await loadConversations();
+      } else {
+        alert("Error renaming conversation");
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function archiveConversation(convId) {
+    // Example route: POST /multiuser/conversations/<conv_id>/archive
+    try {
+      const res = await fetch(`/multiuser/conversations/${convId}/archive`, {
+        method: "POST",
+        credentials: "include"
+      });
+      if (res.ok) {
+        await loadConversations();
+      } else {
+        alert("Error archiving conversation");
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function deleteConversation(convId) {
+    if (!confirm("Really delete this conversation?")) return;
+    try {
+      const res = await fetch("/multiuser/conversations/" + convId, {
+        method: "DELETE",
+        credentials: "include"
+      });
+      if (res.ok) {
+        await loadConversations();
+      } else {
+        alert("Error deleting conversation");
+      }
+    } catch (err) {
+      console.error(err);
     }
   }
 </script>
