@@ -274,12 +274,32 @@ def create_all_tables():
         ALTER TABLE messages
         DROP CONSTRAINT IF EXISTS messages_conversation_id_fkey
     ''')
+    
     cursor.execute('''
         ALTER TABLE messages
         ADD CONSTRAINT messages_conversation_id_fkey
         FOREIGN KEY (conversation_id) REFERENCES conversations(id)
         ON DELETE CASCADE
     ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS folders (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            folder_name TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    ''')
+
+    -- Add a folder_id column to conversations, referencing folders.id
+    cursor.execute('''
+        ALTER TABLE conversations
+            ADD COLUMN IF NOT EXISTS folder_id INTEGER,
+            ADD CONSTRAINT fk_conversations_folder
+            FOREIGN KEY (folder_id)
+            REFERENCES folders(id)
+            ON DELETE CASCADE;
+        ''')
 
     conn.commit()
     conn.close()
