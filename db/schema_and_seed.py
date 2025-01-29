@@ -224,6 +224,39 @@ def create_all_tables():
         );
     ''')
 
+    # 14) Multiple User Support
+    -- Table to store users
+    cursor.execute('''
+        CREATE TABLE users (
+          id SERIAL PRIMARY KEY,
+          username VARCHAR(50) NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+    ''')
+
+    -- Each conversation belongs to one user
+    cursor.execute('''
+        CREATE TABLE conversations (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id),
+          conversation_name VARCHAR(100) NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+    ''')
+
+-- Messages still reference which conversation they belong to
+-- Optionally, you can store the "sender_id" if it's a user or NPC
+    cursor.execute('''
+        CREATE TABLE messages (
+          id SERIAL PRIMARY KEY,
+          conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+          sender VARCHAR(50) NOT NULL,  -- e.g. "user", "GPT", or "NPC_5070"
+          content TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+    ''')
+
     conn.commit()
     conn.close()
 
