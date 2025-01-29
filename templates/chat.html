@@ -420,6 +420,16 @@
     chatWindow.scrollTop = chatWindow.scrollHeight;
   }
 
+  async function moveConversation(convId, folderId) {
+    const res = await fetch(`/multiuser/conversations/${convId}/folder`, {
+      method: "POST",
+      credentials: "include",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ folder_id: folderId })
+    });
+    // if res.ok => reload
+  }
+  
   function prependMessages(messages) {
     const chatWindow = document.getElementById("chatWindow");
     const loadMoreElem = document.getElementById("loadMore");
