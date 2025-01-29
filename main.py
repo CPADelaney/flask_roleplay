@@ -98,6 +98,12 @@ def create_app():
         else:
             return jsonify({"logged_in": False}), 200
 
+    @app.route("/logout", methods=["POST"])
+    def logout():
+        # Clear the session so the user is "logged out"
+        session.clear()
+        return jsonify({"message": "Logged out"}), 200       
+    
     @app.route("/register", methods=["POST"])
     def register():
         """
@@ -114,8 +120,8 @@ def create_app():
         # For real production, also store a hashed password. Example with bcrypt:
         #
         # import bcrypt
-        # hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
+        # hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')     
+        
         conn = get_db_connection()
         cur = conn.cursor()
 
