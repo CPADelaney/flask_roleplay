@@ -261,11 +261,6 @@ def create_all_tables():
         ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE
     ''')
 
-    cursor.execute('''
-        ALTER TABLE conversations
-        ADD COLUMN IF NOT EXISTS folder TEXT DEFAULT 'Inbox'
-    ''')
-
     # Drop + re-add foreign key on messages for ON DELETE CASCADE
     cursor.execute('''
         ALTER TABLE messages
