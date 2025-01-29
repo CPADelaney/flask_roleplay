@@ -38,6 +38,7 @@ def start_new_game():
         cursor.execute("DELETE FROM PlannedEvents;")
         cursor.execute("DELETE FROM PlayerInventory;")
         cursor.execute("DELETE FROM Quests;")
+        cursor.execute("DELETE FROM NPCStats;")
         cursor.execute("DELETE FROM Locations;")
         cursor.execute("DELETE FROM SocialLinks;")
         cursor.execute("DELETE FROM CurrentRoleplay;")
