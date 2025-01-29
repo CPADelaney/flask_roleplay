@@ -109,7 +109,7 @@ def apply_universal_updates(data: dict):
                 "trust": "trust",
                 "respect": "respect",
                 "intensity": "intensity",
-                "monica_level": "monica_level"
+                "monica_level": "monica_level",
                 "sex": "sex"
             }
 
