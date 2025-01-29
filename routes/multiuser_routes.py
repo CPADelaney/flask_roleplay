@@ -1,7 +1,7 @@
 # routes/multiuser_routes.py
 
 from flask import Blueprint, request, jsonify, session
-from db import db  # Or however you handle your DB connection
+from db.connection import get_db_connection  # <--- Instead of from db import db
 
 multiuser_bp = Blueprint("multiuser_bp", __name__)
 
