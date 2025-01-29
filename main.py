@@ -88,7 +88,15 @@ def create_app():
         # If valid, store user_id in session
         session["user_id"] = user_id
 
-        return jsonify({"message": "Logged in", "user_id": user_id})
+        return jsonify({"message": "Logged in", "user_id": user_id})\
+    
+    @app.route("/whoami", methods=["GET"])
+    def whoami():
+        user_id = session.get("user_id")
+        if user_id:
+            return jsonify({"logged_in": True, "user_id": user_id}), 200
+        else:
+            return jsonify({"logged_in": False}), 200
 
     @app.route("/register", methods=["POST"])
     def register():
