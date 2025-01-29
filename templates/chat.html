@@ -249,20 +249,25 @@
   // 1) Check if user is logged in by calling /whoami
   async function checkLoggedIn() {
     try {
-      const res = await fetch("/whoami");
+      const res = await fetch("/whoami", {
+        method: "GET",
+        credentials: "include"  // <-- Ensures cookies are included
+      });
       if (res.ok) {
         const data = await res.json();
         if (!data.logged_in) {
           window.location.href = "/login_page";
         } else {
-          // Show logout button
+          // Show logout button if we have one
           document.getElementById("logoutBtn").style.display = "inline-block";
         }
       } else {
+        // If the response is not OK, e.g. 401 or 500, redirect to login
         window.location.href = "/login_page";
       }
     } catch (err) {
       console.error("Check login error:", err);
+      // If there's an error fetching /whoami, assume not logged in
       window.location.href = "/login_page";
     }
   }
