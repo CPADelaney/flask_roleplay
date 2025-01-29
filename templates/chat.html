@@ -530,17 +530,20 @@
     }
   }
 
-  async function archiveConversation(convId) {
-    // Example route: POST /multiuser/conversations/<conv_id>/archive
+  async function moveToFolder(convId) {
+    const folderName = prompt("Which folder name?");
+    if (!folderName) return;
     try {
-      const res = await fetch(`/multiuser/conversations/${convId}/archive`, {
+      const res = await fetch(`/multiuser/conversations/${convId}/move_folder`, {
         method: "POST",
-        credentials: "include"
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder: folderName })
       });
       if (res.ok) {
         await loadConversations();
       } else {
-        alert("Error archiving conversation");
+        alert("Error moving conversation");
       }
     } catch (err) {
       console.error(err);
