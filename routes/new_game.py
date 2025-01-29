@@ -165,7 +165,7 @@ def start_new_game():
 
         # 9) Return final message + environment data
         success_msg = (
-            "New game started with 10 unintroduced NPCs. "
+            "New game started. "
             f"New environment = {environment_name}"
         )
         logging.info(f"Success! Returning 200 with message: {success_msg}")
