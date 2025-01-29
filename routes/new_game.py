@@ -127,10 +127,39 @@ def start_new_game():
                 "Evening": "Free time",
                 "Night": "Return to inn"
             },
-            # More days, etc., as you like
+            "Wednesday": {
+                "Morning": "Wake at small inn",
+                "Afternoon": "Guild errands",
+                "Evening": "Leisure time",
+                "Night": "Inn room rest"
+            },
+            "Thursday": {
+                "Morning": "Physical training",
+                "Afternoon": "Study mystical texts",
+                "Evening": "Free time",
+                "Night": "Return to inn"
+            },            
+            "Friday": {
+                "Morning": "Wake at small inn",
+                "Afternoon": "Guild errands",
+                "Evening": "Leisure time",
+                "Night": "Inn room rest"
+            },
+            "Saturday": {
+                "Morning": "Physical training",
+                "Afternoon": "Study mystical texts",
+                "Evening": "Free time",
+                "Night": "Return to inn"
+            },
+            "Sunday": {
+                "Morning": "Physical training",
+                "Afternoon": "Study mystical texts",
+                "Evening": "Free time",
+                "Night": "Return to inn"
+            },            
         }
         chase_role = (
-            "Chase is an everyman traveler seeking purpose amid overlapping worlds. "
+            "Chase is one of the only men in this world of dominant females. "
             "He scrapes by on odd jobs, forging bonds with the realm’s formidable denizens."
         )
 
