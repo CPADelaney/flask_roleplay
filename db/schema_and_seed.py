@@ -256,9 +256,6 @@ def create_all_tables():
         );
     ''')
 
-    conn.commit()
-    conn.close()
-
     cursor.execute('''
         ALTER TABLE conversations
         ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE
@@ -283,6 +280,10 @@ def create_all_tables():
         FOREIGN KEY (conversation_id) REFERENCES conversations(id)
         ON DELETE CASCADE
     ''')
+
+    conn.commit()
+    conn.close()
+
 
 def seed_initial_data():
     """
