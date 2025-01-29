@@ -45,6 +45,8 @@ def create_app():
     # A simple route to serve the chat page
     @app.route("/chat")
     def chat_page():
+        if "user_id" not in session:
+            return redirect("/login_page")
         return render_template("chat.html")
 
     # Optional: a dedicated login_page that serves login.html
