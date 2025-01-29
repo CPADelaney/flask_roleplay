@@ -227,7 +227,7 @@ def create_all_tables():
     # 16) Multiple User Support
     # Table to store users
     cursor.execute('''
-        CREATE TABLE users (
+        CREATE TABLE IF NOT EXISTS users (
           id SERIAL PRIMARY KEY,
           username VARCHAR(50) NOT NULL UNIQUE,
           password_hash TEXT NOT NULL,
@@ -237,7 +237,7 @@ def create_all_tables():
 
     # Each conversation belongs to one user
     cursor.execute('''
-        CREATE TABLE conversations (
+        CREATE TABLE IF NOT EXISTS conversations (
           id SERIAL PRIMARY KEY,
           user_id INTEGER NOT NULL REFERENCES users(id),
           conversation_name VARCHAR(100) NOT NULL,
@@ -247,7 +247,7 @@ def create_all_tables():
 
 # Messages still reference which conversation they belong to
     cursor.execute('''
-        CREATE TABLE messages (
+        CREATE TABLE IF NOT EXISTS messages (
           id SERIAL PRIMARY KEY,
           conversation_id INTEGER NOT NULL REFERENCES conversations(id),
           sender VARCHAR(50) NOT NULL,  -- e.g. "user", "GPT", or "NPC_5070"
