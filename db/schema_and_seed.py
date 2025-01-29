@@ -1,5 +1,3 @@
-# db/schema_and_seed.py
-
 import json
 from db.connection import get_db_connection
 
@@ -138,13 +136,13 @@ def create_all_tables():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerInventory (
             id SERIAL PRIMARY KEY,
-            player_name TEXT NOT NULL,            
-            item_name TEXT NOT NULL,            
-            item_description TEXT,             
-            item_effect TEXT,                  
-            quantity INT DEFAULT 1,           
-            category TEXT,                     
-            UNIQUE (player_name, item_name)      
+            player_name TEXT NOT NULL,
+            item_name TEXT NOT NULL,
+            item_description TEXT,
+            item_effect TEXT,
+            quantity INT DEFAULT 1,
+            category TEXT,
+            UNIQUE (player_name, item_name)
         );
     ''')
 
@@ -198,16 +196,14 @@ def create_all_tables():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS SocialLinks (
             link_id SERIAL PRIMARY KEY,
-            -- Entities can be 'player' or 'npc'
             entity1_type TEXT NOT NULL,
             entity1_id INT NOT NULL,
             entity2_type TEXT NOT NULL,
             entity2_id INT NOT NULL,
     
-            link_type TEXT,         -- e.g. 'friends', 'rivals', 'lovers', 'enemies', 'allies'
-            link_level INT DEFAULT 0,  -- e.g. 0..100 or some other scale
-            link_history JSONB,     -- track events or memories about this relationship
-    
+            link_type TEXT,
+            link_level INT DEFAULT 0,
+            link_history JSONB,
             UNIQUE (entity1_type, entity1_id, entity2_type, entity2_id)
         );
     ''')
@@ -234,7 +230,7 @@ def create_all_tables():
         );
     ''')
 
-    # conversations
+    # conversations table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS conversations (
           id SERIAL PRIMARY KEY,
@@ -244,7 +240,7 @@ def create_all_tables():
         );
     ''')
 
-    # messages
+    # messages table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS messages (
           id SERIAL PRIMARY KEY,
@@ -255,21 +251,14 @@ def create_all_tables():
         );
     ''')
 
-    # Add 'archived' + 'folder' columns to conversations
-    cursor.execute('''
-        ALTER TABLE conversations
-        ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE
-    ''')
-
-    # Drop + re-add foreign key on messages for ON DELETE CASCADE
+    # Drop + re-add the foreign key on messages for ON DELETE CASCADE
     cursor.execute('''
         ALTER TABLE messages
         DROP CONSTRAINT IF EXISTS messages_conversation_id_fkey
     ''')
-
     cursor.execute('''
         ALTER TABLE messages
-        ADD CONSTRAINT messages_conversation_id_fkey
+        ADD CONSTRAINT IF NOT EXISTS messages_conversation_id_fkey
         FOREIGN KEY (conversation_id) REFERENCES conversations(id)
         ON DELETE CASCADE
     ''')
@@ -285,9 +274,6 @@ def create_all_tables():
     ''')
 
     # Add a folder_id column to conversations, referencing folders.id
-    # We can choose ON DELETE SET NULL if we don't want convos to vanish if folder is deleted
-    # or ON DELETE CASCADE if we do want them removed
-    # e.g. we'll do ON DELETE SET NULL
     cursor.execute('''
         ALTER TABLE conversations
         ADD COLUMN IF NOT EXISTS folder_id INTEGER
@@ -297,14 +283,16 @@ def create_all_tables():
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE conversations DROP CONSTRAINT IF EXISTS fk_conversations_folder;
+            ALTER TABLE conversations
+            DROP CONSTRAINT IF EXISTS fk_conversations_folder;
         EXCEPTION WHEN undefined_object THEN
             -- no constraint yet
         END;
         $$
     ''')
 
-    # Now re-add the constraint
+    # Now re-add the constraint with ON DELETE CASCADE or SET NULL
+    # We'll do CASCADE here, as requested
     cursor.execute('''
         DO $$
         BEGIN
@@ -327,33 +315,17 @@ def seed_initial_data():
     Inserts default data (stat definitions, game rules, settings, activities, archetypes, etc.).
     (Merged from logic/initialization.py)
     """
-    # Insert or update game rules
     insert_or_update_game_rules()
-
-    # Insert stat definitions
     insert_stat_definitions()
-
-    # Insert missing settings
     insert_missing_settings()
-
-    # Insert missing activities
     insert_missing_activities()
-
-    # Insert missing archetypes
     insert_missing_archetypes()
-
-    # Insert default 'Chase' player stats
     insert_default_player_stats_chase()
 
     print("All default data seeded successfully.")
 
 
 def initialize_all_data():
-    """
-    Master function that:
-      1) Creates all tables if not exist.
-      2) Seeds them with default data.
-    """
     create_all_tables()
     seed_initial_data()
     print("All tables created & default data seeded successfully!")
