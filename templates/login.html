@@ -1,4 +1,3 @@
-<!-- templates/login.html -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -6,6 +5,14 @@
   <title>Login</title>
 </head>
 <body>
+  <h2>Register a New User</h2>
+  <input type="text" id="reg_username" placeholder="New username">
+  <input type="password" id="reg_password" placeholder="Password">
+  <button onclick="registerUser()">Register</button>
+  <div id="registerStatus"></div>
+
+  <hr/>
+
   <h2>Login</h2>
   <input type="text" id="username" placeholder="Username">
   <input type="password" id="password" placeholder="Password">
@@ -13,13 +20,43 @@
   <div id="loginStatus"></div>
 
   <script>
-    async function attemptLogin() {
-      const username = document.getElementById("username").value.trim();
-      const password = document.getElementById("password").value.trim();
-      const loginStatus = document.getElementById("loginStatus");
+    async function registerUser() {
+      const user = document.getElementById("reg_username").value.trim();
+      const pass = document.getElementById("reg_password").value.trim();
+      const statusDiv = document.getElementById("registerStatus");
 
-      if (!username || !password) {
-        loginStatus.innerText = "Please enter username & password.";
+      if (!user || !pass) {
+        statusDiv.innerText = "Username & password required to register.";
+        return;
+      }
+
+      try {
+        const res = await fetch("/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: user, password: pass })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          statusDiv.innerText = `Registration successful! user_id=${data.user_id}`;
+          // Optionally redirect them to /chat
+          window.location.href = "/chat";
+        } else {
+          statusDiv.innerText = `Registration error: ${data.error || "Unknown error"}`;
+        }
+      } catch (err) {
+        statusDiv.innerText = "Request failed. Check console.";
+        console.error(err);
+      }
+    }
+
+    async function attemptLogin() {
+      const user = document.getElementById("username").value.trim();
+      const pass = document.getElementById("password").value.trim();
+      const statusDiv = document.getElementById("loginStatus");
+
+      if (!user || !pass) {
+        statusDiv.innerText = "Username & password required to login.";
         return;
       }
 
@@ -27,18 +64,18 @@
         const res = await fetch("/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username, password })
+          body: JSON.stringify({ username: user, password: pass })
         });
         const data = await res.json();
         if (res.ok) {
-          loginStatus.innerText = "Login success.";
-          // Optionally redirect to the chat page:
+          statusDiv.innerText = `Login successful! user_id=${data.user_id}`;
+          // Optionally redirect to /chat:
           window.location.href = "/chat";
         } else {
-          loginStatus.innerText = `Error: ${data.error || "Unknown error"}`;
+          statusDiv.innerText = `Login error: ${data.error || "Unknown error"}`;
         }
       } catch (err) {
-        loginStatus.innerText = "Login request failed.";
+        statusDiv.innerText = "Login request failed. Check console.";
         console.error(err);
       }
     }
