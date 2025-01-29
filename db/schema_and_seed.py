@@ -81,6 +81,7 @@ def create_all_tables():
             memory JSONB,
             monica_level INT DEFAULT 0,
             monica_games_left INT DEFAULT 0,
+            sex TEXT DEFAULT 'female',
 
             hobbies JSONB,
             personality_traits JSONB,
