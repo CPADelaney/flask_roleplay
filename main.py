@@ -1,6 +1,6 @@
 # main.py 
 
-from flask import Flask
+from flask import Flask, render_template
 # from routes.meltdown import meltdown_bp
 from routes.new_game import new_game_bp
 from routes.player_input import player_input_bp
