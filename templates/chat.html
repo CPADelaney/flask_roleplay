@@ -1,0 +1,62 @@
+<!-- templates/chat.html -->
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Roleplay GPT Chat</title>
+</head>
+<body>
+
+  <h1>Roleplay Chat</h1>
+
+  <div id="chatWindow" style="border: 1px solid #ccc; padding: 10px; height: 400px; overflow:auto;">
+    <!-- We'll append messages here -->
+  </div>
+
+  <input type="text" id="userMsg" placeholder="Type your message" style="width: 80%;">
+  <button onclick="sendMessage()">Send</button>
+
+  <script>
+    async function sendMessage() {
+      const userInputElem = document.getElementById("userMsg");
+      const userText = userInputElem.value;
+      userInputElem.value = "";  // clear input
+
+      // We'll post to /story/next_storybeat with JSON
+      const payload = {
+        player_name: "Chase",    // Or let user pick a name
+        user_input: userText
+      };
+
+      try {
+        const response = await fetch("/story/next_storybeat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`HTTP error! status: ${response.status}\n${errText}`);
+        }
+
+        const data = await response.json();
+
+        // data.story_output is what we return from the back-end
+        const storyText = data.story_output || "(No story output?)";
+
+        // We'll append the user's text and GPT response to chatWindow
+        const chatWindow = document.getElementById("chatWindow");
+        chatWindow.innerHTML += "<p><strong>You:</strong> " + userText + "</p>";
+        chatWindow.innerHTML += "<p><strong>GPT:</strong> " + storyText + "</p>";
+
+        // Optionally scroll to bottom:
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+
+      } catch (err) {
+        console.error("Error sending message:", err);
+      }
+    }
+  </script>
+</body>
+</html>
