@@ -225,7 +225,7 @@ def create_all_tables():
     ''')
 
     # 16) Multiple User Support
-    -- Table to store users
+    # Table to store users
     cursor.execute('''
         CREATE TABLE users (
           id SERIAL PRIMARY KEY,
@@ -235,7 +235,7 @@ def create_all_tables():
         );
     ''')
 
-    -- Each conversation belongs to one user
+    # Each conversation belongs to one user
     cursor.execute('''
         CREATE TABLE conversations (
           id SERIAL PRIMARY KEY,
@@ -245,7 +245,7 @@ def create_all_tables():
         );
     ''')
 
--- Messages still reference which conversation they belong to
+# Messages still reference which conversation they belong to
     cursor.execute('''
         CREATE TABLE messages (
           id SERIAL PRIMARY KEY,
