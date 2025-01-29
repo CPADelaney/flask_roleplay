@@ -1,0 +1,47 @@
+<!-- templates/login.html -->
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Login</title>
+</head>
+<body>
+  <h2>Login</h2>
+  <input type="text" id="username" placeholder="Username">
+  <input type="password" id="password" placeholder="Password">
+  <button onclick="attemptLogin()">Login</button>
+  <div id="loginStatus"></div>
+
+  <script>
+    async function attemptLogin() {
+      const username = document.getElementById("username").value.trim();
+      const password = document.getElementById("password").value.trim();
+      const loginStatus = document.getElementById("loginStatus");
+
+      if (!username || !password) {
+        loginStatus.innerText = "Please enter username & password.";
+        return;
+      }
+
+      try {
+        const res = await fetch("/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          loginStatus.innerText = "Login success.";
+          // Optionally redirect to the chat page:
+          window.location.href = "/chat";
+        } else {
+          loginStatus.innerText = `Error: ${data.error || "Unknown error"}`;
+        }
+      } catch (err) {
+        loginStatus.innerText = "Login request failed.";
+        console.error(err);
+      }
+    }
+  </script>
+</body>
+</html>
