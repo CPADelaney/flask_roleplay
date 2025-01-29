@@ -43,6 +43,11 @@ def create_app():
     app.register_blueprint(story_bp, url_prefix="/story")
     app.register_blueprint(debug_bp, url_prefix='/debug')
     app.register_blueprint(universal_bp, url_prefix="/universal") 
+    
+    @app.route("/chat")
+    def chat_page():
+        return render_template("chat.html")
+
     return app
 
 app = create_app()
