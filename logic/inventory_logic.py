@@ -1,40 +1,52 @@
-# logic/inventory_logic.py
-
 from db.connection import get_db_connection
 
-def add_item_to_inventory(player_name, item_name, description=None, effect=None, category=None, quantity=1):
+def add_item_to_inventory(user_id, conversation_id, player_name,
+                          item_name, description=None, effect=None,
+                          category=None, quantity=1):
     """
-    Adds an item to the player's inventory. If the item already exists,
+    Adds an item to the player's inventory for a specific user & conversation.
+    If the item already exists (for that user_id, conversation_id, player_name, item_name),
     increments the quantity. Otherwise, inserts a new row.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
 
     try:
-        # Check if an item with this name already exists for the player
+        # Check if this item already exists for the same (user_id, conv_id, player_name, item_name)
         cursor.execute("""
             SELECT id, quantity
             FROM PlayerInventory
-            WHERE player_name = %s AND item_name = %s
-        """, (player_name, item_name))
+            WHERE user_id=%s AND conversation_id=%s
+              AND player_name=%s
+              AND item_name=%s
+        """, (user_id, conversation_id, player_name, item_name))
         row = cursor.fetchone()
 
         if row:
-            # Already exists, so just update the quantity
+            # Update the quantity
             existing_id, existing_qty = row
             new_qty = existing_qty + quantity
             cursor.execute("""
                 UPDATE PlayerInventory
-                SET quantity = %s
-                WHERE id = %s
+                SET quantity=%s
+                WHERE id=%s
             """, (new_qty, existing_id))
         else:
-            # Insert a brand new row
+            # Insert brand new row
             cursor.execute("""
-                INSERT INTO PlayerInventory
-                  (player_name, item_name, item_description, item_effect, category, quantity)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (player_name, item_name, description, effect, category, quantity))
+                INSERT INTO PlayerInventory (
+                    user_id, conversation_id,
+                    player_name, item_name,
+                    item_description, item_effect,
+                    category, quantity
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                user_id, conversation_id,
+                player_name, item_name,
+                description, effect,
+                category, quantity
+            ))
 
         conn.commit()
     except Exception as e:
@@ -43,10 +55,13 @@ def add_item_to_inventory(player_name, item_name, description=None, effect=None,
     finally:
         conn.close()
 
-def remove_item_from_inventory(player_name, item_name, quantity=1):
+def remove_item_from_inventory(user_id, conversation_id,
+                               player_name, item_name, quantity=1):
     """
-    Removes a certain quantity of the given item from the player's inventory.
+    Removes a certain quantity of the given item from the player's inventory
+    (scoped to user_id + conversation_id).
     If the resulting quantity <= 0, the row is deleted entirely.
+    Returns True if something changed, or False if the item wasn't found.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -54,13 +69,15 @@ def remove_item_from_inventory(player_name, item_name, quantity=1):
         cursor.execute("""
             SELECT id, quantity
             FROM PlayerInventory
-            WHERE player_name = %s AND item_name = %s
-        """, (player_name, item_name))
+            WHERE user_id=%s AND conversation_id=%s
+              AND player_name=%s
+              AND item_name=%s
+        """, (user_id, conversation_id, player_name, item_name))
         row = cursor.fetchone()
 
         if not row:
-            # The player doesn't have this item
-            return False  # or raise an exception
+            # The user doesn't have this item in this conversation
+            return False
 
         item_id, existing_qty = row
         new_qty = existing_qty - quantity
@@ -69,16 +86,16 @@ def remove_item_from_inventory(player_name, item_name, quantity=1):
             # Just update the quantity
             cursor.execute("""
                 UPDATE PlayerInventory
-                SET quantity = %s
-                WHERE id = %s
+                SET quantity=%s
+                WHERE id=%s
             """, (new_qty, item_id))
         else:
-            # Remove the row altogether
+            # Remove the row entirely
             cursor.execute("""
                 DELETE FROM PlayerInventory
-                WHERE id = %s
+                WHERE id=%s
             """, (item_id,))
-        
+
         conn.commit()
         return True
     except Exception as e:
@@ -87,10 +104,11 @@ def remove_item_from_inventory(player_name, item_name, quantity=1):
     finally:
         conn.close()
 
-def get_player_inventory(player_name):
+def get_player_inventory(user_id, conversation_id, player_name):
     """
-    Returns a list of dicts representing all items the player currently holds.
-    Each dict has keys: item_name, item_description, item_effect, category, quantity.
+    Returns a list of dicts for all items the player currently holds,
+    scoped to user_id + conversation_id.
+    Each dict has keys: item_name, description, effect, category, quantity.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -98,9 +116,10 @@ def get_player_inventory(player_name):
         cursor.execute("""
             SELECT item_name, item_description, item_effect, category, quantity
             FROM PlayerInventory
-            WHERE player_name = %s
+            WHERE user_id=%s AND conversation_id=%s
+              AND player_name=%s
             ORDER BY item_name
-        """, (player_name,))
+        """, (user_id, conversation_id, player_name))
         rows = cursor.fetchall()
 
         inventory = []
@@ -116,9 +135,10 @@ def get_player_inventory(player_name):
     finally:
         conn.close()
 
-def update_item_effect(player_name, item_name, new_effect):
+def update_item_effect(user_id, conversation_id,
+                       player_name, item_name, new_effect):
     """
-    Example function to update the 'effect' field of an existing item,
+    Updates the 'item_effect' field of an existing item for a specific user+conversation,
     in case we want to store new or changed effects over time.
     """
     conn = get_db_connection()
@@ -126,9 +146,11 @@ def update_item_effect(player_name, item_name, new_effect):
     try:
         cursor.execute("""
             UPDATE PlayerInventory
-            SET item_effect = %s
-            WHERE player_name = %s AND item_name = %s
-        """, (new_effect, player_name, item_name))
+            SET item_effect=%s
+            WHERE user_id=%s AND conversation_id=%s
+              AND player_name=%s
+              AND item_name=%s
+        """, (new_effect, user_id, conversation_id, player_name, item_name))
         conn.commit()
     except:
         conn.rollback()
