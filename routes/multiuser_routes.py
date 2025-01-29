@@ -119,3 +119,98 @@ def add_message(conv_id):
     conn.close()
 
     return jsonify({"status": "ok"})
+
+# RENAME
+@multiuser_bp.route("/conversations/<int:conv_id>", methods=["PUT"])
+def rename_conversation(conv_id):
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not logged in"}), 401
+
+    data = request.get_json()
+    new_name = data.get("conversation_name", "New Chat")
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Check ownership
+    cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Conversation not found"}), 404
+    if row[0] != user_id:
+        conn.close()
+        return jsonify({"error": "Unauthorized"}), 403
+
+    # Rename
+    cur.execute("""
+        UPDATE conversations
+        SET conversation_name = %s
+        WHERE id = %s
+    """, (new_name, conv_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({"message": "Renamed"})
+
+# ARCHIVE
+@multiuser_bp.route("/conversations/<int:conv_id>/archive", methods=["POST"])
+def archive_conversation(conv_id):
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not logged in"}), 401
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Check ownership
+    cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Conversation not found"}), 404
+    if row[0] != user_id:
+        conn.close()
+        return jsonify({"error": "Unauthorized"}), 403
+
+    # Suppose you add an 'archived' boolean or 'folder' column
+    cur.execute("""
+        UPDATE conversations
+        SET archived = TRUE
+        WHERE id = %s
+    """, (conv_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({"message": "Archived"})
+
+# DELETE
+@multiuser_bp.route("/conversations/<int:conv_id>", methods=["DELETE"])
+def delete_conversation(conv_id):
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not logged in"}), 401
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Check ownership
+    cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Conversation not found"}), 404
+    if row[0] != user_id:
+        conn.close()
+        return jsonify({"error": "Unauthorized"}), 403
+
+    # Actually delete or maybe just mark it "deleted"
+    cur.execute("DELETE FROM conversations WHERE id=%s", (conv_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({"message": "Deleted"})
