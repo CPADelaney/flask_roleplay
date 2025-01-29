@@ -27,7 +27,6 @@
 
     async function checkAlreadyLoggedIn() {
       try {
-        // Note the credentials: "include" here if you want to send cookies to /whoami
         const res = await fetch("/whoami", {
           method: "GET",
           credentials: "include"
@@ -39,7 +38,6 @@
             window.location.href = "/chat";
           }
         }
-        // If not ok, or any error -> remain on login form
       } catch (err) {
         console.log("No login session found or an error occurred:", err);
       }
@@ -60,7 +58,6 @@
         const res = await fetch("/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          // IMPORTANT: enable credentials so we get/set the session cookie
           credentials: "include",
           body: JSON.stringify({ username: user, password: pass })
         });
@@ -93,8 +90,8 @@
         const res = await fetch("/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          credentials: "include", // CRITICAL for session cookie
-          body: JSON.stringify({ username: user, password: pass })
+          credentials: "include",
+          body: JSON.stringify({ username, password: pass })
         });
         const data = await res.json();
         if (res.ok) {
