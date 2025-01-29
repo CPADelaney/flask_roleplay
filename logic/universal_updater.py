@@ -12,7 +12,7 @@ def apply_universal_updates(data: dict):
     Applies the 'universal update' logic to the database using the JSON structure
     described in data. This handles NPC creations/updates, location creations,
     roleplay state changes, events, inventory, quests, social links, perk unlocks,
-    and now full/partial schedule changes.
+    and full/partial schedule changes for NPCs.
     """
 
     conn = get_db_connection()
@@ -20,21 +20,30 @@ def apply_universal_updates(data: dict):
 
     try:
         # 1) roleplay_updates
+        #    GPT can store environment name/desc, a "ChaseSchedule", or any other global data here.
         roleplay_updates = data.get("roleplay_updates", {})
         for key, value in roleplay_updates.items():
+            # If "value" is a list or dict (e.g. schedule), store as JSON;
+            # else store as a string
+            if isinstance(value, (dict, list)):
+                val_to_store = json.dumps(value)
+            else:
+                val_to_store = str(value)
+
             cursor.execute("""
                 INSERT INTO CurrentRoleplay (key, value)
                 VALUES (%s, %s)
                 ON CONFLICT (key) DO UPDATE
                     SET value = EXCLUDED.value
-            """, (key, json.dumps(value) if isinstance(value, (dict, list)) else str(value)))
+            """, (key, val_to_store))
 
-        # 2) npc_creations
+        # 2) npc_creations (brand-new NPCs)
         npc_creations = data.get("npc_creations", [])
         for npc_data in npc_creations:
             name = npc_data.get("npc_name", "Unnamed NPC")
             introduced = npc_data.get("introduced", False)
 
+            # Archetypes is optional JSON
             arche = npc_data.get("archetypes", [])
 
             dom = npc_data.get("dominance", 0)
@@ -83,14 +92,14 @@ def apply_universal_updates(data: dict):
                 monica_lvl
             ))
 
-        # 3) npc_updates (including schedule overwrites & partial merges)
+        # 3) npc_updates (existing NPC changes, including schedule merges)
         npc_updates = data.get("npc_updates", [])
         for up in npc_updates:
             npc_id = up.get("npc_id")
             if not npc_id:
                 continue
 
-            # Basic columns
+            # Basic columns to update directly
             fields_map = {
                 "npc_name": "npc_name",
                 "introduced": "introduced",
@@ -105,7 +114,6 @@ def apply_universal_updates(data: dict):
 
             set_clauses = []
             set_vals = []
-
             for field_key, db_col in fields_map.items():
                 if field_key in up:
                     set_clauses.append(f"{db_col} = %s")
@@ -117,7 +125,7 @@ def apply_universal_updates(data: dict):
                 query = f"UPDATE NPCStats SET {set_str} WHERE npc_id=%s"
                 cursor.execute(query, tuple(set_vals))
 
-            # Memory merges (append new entries)
+            # Memory merges: append new entries
             if "memory" in up:
                 new_mem_entries = up["memory"]
                 if isinstance(new_mem_entries, str):
@@ -128,10 +136,9 @@ def apply_universal_updates(data: dict):
                     WHERE npc_id = %s
                 """, (new_mem_entries, npc_id))
 
-            # Entire schedule overwrite if "schedule" is present
+            # Overwrite entire schedule if "schedule" is present
             if "schedule" in up:
                 new_schedule = up["schedule"]
-                # Overwrite the existing schedule
                 cursor.execute("""
                     UPDATE NPCStats
                     SET schedule = %s
@@ -140,25 +147,23 @@ def apply_universal_updates(data: dict):
 
             # Partial merges if "schedule_updates" is present
             if "schedule_updates" in up:
-                partial_sched = up["schedule_updates"]  # e.g. {"Wednesday": {"Afternoon": "Dentist"}}
+                partial_sched = up["schedule_updates"]  # e.g. { "Wednesday": { "Afternoon": "Dentist" } }
                 cursor.execute("SELECT schedule FROM NPCStats WHERE npc_id=%s", (npc_id,))
                 row = cursor.fetchone()
                 if row:
                     existing_schedule = row[0] or {}
-                    # Merge
                     for day_key, times_map in partial_sched.items():
                         if day_key not in existing_schedule:
                             existing_schedule[day_key] = {}
                         existing_schedule[day_key].update(times_map)
 
-                    # store updated
                     cursor.execute("""
                         UPDATE NPCStats
                         SET schedule = %s
                         WHERE npc_id=%s
                     """, (json.dumps(existing_schedule), npc_id))
 
-        # 4) character_stat_updates
+        # 4) character_stat_updates (PlayerStats changes)
         char_update = data.get("character_stat_updates", {})
         if char_update:
             p_name = char_update.get("player_name", "Chase")
@@ -187,7 +192,7 @@ def apply_universal_updates(data: dict):
                     tuple(set_vals)
                 )
 
-        # 5) relationship_updates
+        # 5) relationship_updates (NPC affiliations array)
         rel_updates = data.get("relationship_updates", [])
         for r in rel_updates:
             npc_id = r.get("npc_id")
@@ -243,7 +248,7 @@ def apply_universal_updates(data: dict):
             added = inv_updates.get("added_items", [])
             removed = inv_updates.get("removed_items", [])
 
-            # Adding items
+            # Add items
             for item in added:
                 if isinstance(item, dict):
                     item_name = item.get("item_name", "Unnamed")
@@ -266,19 +271,19 @@ def apply_universal_updates(data: dict):
                             SET quantity = PlayerInventory.quantity + 1
                     """, (p_n, item))
 
-            # Removing items
+            # Remove items
             for item in removed:
                 if isinstance(item, dict):
                     i_name = item.get("item_name")
                     if i_name:
                         cursor.execute("""
                             DELETE FROM PlayerInventory
-                            WHERE player_name = %s AND item_name = %s
+                            WHERE player_name=%s AND item_name=%s
                         """, (p_n, i_name))
                 elif isinstance(item, str):
                     cursor.execute("""
                         DELETE FROM PlayerInventory
-                        WHERE player_name = %s AND item_name = %s
+                        WHERE player_name=%s AND item_name=%s
                     """, (p_n, item))
 
         # 10) quest_updates
@@ -294,7 +299,7 @@ def apply_universal_updates(data: dict):
                     WHERE quest_id=%s
                 """, (status, detail, qid))
 
-        # 11) Social Links
+        # 11) social_links (NPC<->NPC or player<->NPC relationships)
         rel_links = data.get("social_links", [])
         for link_data in rel_links:
             e1_type = link_data.get("entity1_type")
@@ -320,13 +325,14 @@ def apply_universal_updates(data: dict):
                 if "new_event" in link_data:
                     add_link_event(existing["link_id"], link_data["new_event"])
 
-        # 12) perk_unlocks
+        # 12) perk_unlocks (one-time perks/skills)
         perk_unlocks = data.get("perk_unlocks", [])
         for perk in perk_unlocks:
             perk_name = perk.get("perk_name")
             perk_desc = perk.get("perk_description", "")
             perk_fx   = perk.get("perk_effect", "")
 
+            # We'll default the player_name if not in the perk object
             player_name = data.get("player_name", "Chase")
 
             if perk_name:
