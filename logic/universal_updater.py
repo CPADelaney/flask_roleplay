@@ -17,25 +17,19 @@ def apply_universal_updates(data: dict):
 
     conn = get_db_connection()
     cursor = conn.cursor()
-
     try:
-        # 1) roleplay_updates
-        #    GPT can store environment name/desc, a "ChaseSchedule", or any other global data here.
-        roleplay_updates = data.get("roleplay_updates", {})
-        for key, value in roleplay_updates.items():
-            # If "value" is a list or dict (e.g. schedule), store as JSON;
-            # else store as a string
-            if isinstance(value, (dict, list)):
-                val_to_store = json.dumps(value)
+        # roleplay_updates
+        rp_updates = data.get("roleplay_updates", {})
+        for key, val in rp_updates.items():
+            if isinstance(val, (dict, list)):
+                stored_val = json.dumps(val)
             else:
-                val_to_store = str(value)
-
+                stored_val = str(val)
             cursor.execute("""
-                INSERT INTO CurrentRoleplay (key, value)
-                VALUES (%s, %s)
-                ON CONFLICT (key) DO UPDATE
-                    SET value = EXCLUDED.value
-            """, (key, val_to_store))
+                INSERT INTO CurrentRoleplay(key,value)
+                VALUES(%s,%s)
+                ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value
+            """, (key, stored_val))
 
         # 2) npc_creations (brand-new NPCs)
         npc_creations = data.get("npc_creations", [])
