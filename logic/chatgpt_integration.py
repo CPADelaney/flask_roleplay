@@ -6,7 +6,7 @@ import openai
 # Set your API key from environment
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-def get_chatgpt_response(messages, model="gpt-3.5-turbo"):
+def get_chatgpt_response(messages, model="gpt-4o"):
     """
     Sends a list of messages to the OpenAI ChatCompletion endpoint
     and returns the content of the first choice's message.
