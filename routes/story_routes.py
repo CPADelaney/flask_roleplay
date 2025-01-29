@@ -215,6 +215,10 @@ def build_aggregator_text(aggregator_data):
     else:
         lines.append("(No current roleplay data)")
 
+    env_desc = current_rp.get("EnvironmentDescription")
+    if env_desc:
+        lines.append(f"\nENVIRONMENT: {env_desc}")
+
     if "activitySuggestions" in aggregator_data:
         lines.append("\n=== NPC POTENTIAL ACTIVITIES ===")
         for suggestion in aggregator_data["activitySuggestions"]:
