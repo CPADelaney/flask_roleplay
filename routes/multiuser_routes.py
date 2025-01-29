@@ -156,61 +156,67 @@ def rename_conversation(conv_id):
     return jsonify({"message": "Renamed"})
 
 # ARCHIVE
-@multiuser_bp.route("/conversations/<int:conv_id>/archive", methods=["POST"])
-def archive_conversation(conv_id):
+@multiuser_bp.route("/conversations/<int:conv_id>/folder", methods=["POST"])
+def move_folder(conv_id):
     user_id = session.get("user_id")
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
+    data = request.get_json() or {}
+    folder_name = data.get("folder", "Inbox")
+
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # Check ownership
+    # check ownership
     cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
     row = cur.fetchone()
     if not row:
         conn.close()
-        return jsonify({"error": "Conversation not found"}), 404
+        return jsonify({"error":"Conversation not found"}),404
     if row[0] != user_id:
         conn.close()
-        return jsonify({"error": "Unauthorized"}), 403
+        return jsonify({"error":"Unauthorized"}),403
 
-    # Suppose you add an 'archived' boolean or 'folder' column
+    # set folder
     cur.execute("""
-        UPDATE conversations
-        SET archived = TRUE
-        WHERE id = %s
-    """, (conv_id,))
+      UPDATE conversations
+      SET folder=%s
+      WHERE id=%s
+    """, (folder_name, conv_id))
     conn.commit()
     cur.close()
     conn.close()
 
-    return jsonify({"message": "Archived"})
+    return jsonify({"message":"Moved to folder"})
+
 
 # DELETE
 @multiuser_bp.route("/conversations/<int:conv_id>", methods=["DELETE"])
 def delete_conversation(conv_id):
     user_id = session.get("user_id")
     if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
+        return jsonify({"error":"Not logged in"}),401
 
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # Check ownership
-    cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
+    cur.execute("SELECT user_id FROM conversations WHERE id=%s",(conv_id,))
     row = cur.fetchone()
     if not row:
+        cur.close()
         conn.close()
-        return jsonify({"error": "Conversation not found"}), 404
-    if row[0] != user_id:
+        return jsonify({"error":"Conversation not found"}),404
+    if row[0]!=user_id:
+        cur.close()
         conn.close()
-        return jsonify({"error": "Unauthorized"}), 403
+        return jsonify({"error":"Unauthorized"}),403
 
-    # Actually delete or maybe just mark it "deleted"
-    cur.execute("DELETE FROM conversations WHERE id=%s", (conv_id,))
+    # This will also delete all messages referencing conversation_id
+    cur.execute("DELETE FROM conversations WHERE id=%s",(conv_id,))
     conn.commit()
     cur.close()
     conn.close()
 
-    return jsonify({"message": "Deleted"})
+    return jsonify({"message":"Deleted"})
+
