@@ -20,6 +20,28 @@
   <div id="loginStatus"></div>
 
   <script>
+    // 1. On page load, check if user is already logged in. If so, go to /chat
+    window.onload = async function() {
+      await checkAlreadyLoggedIn();
+    };
+
+    async function checkAlreadyLoggedIn() {
+      try {
+        const res = await fetch("/whoami");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.logged_in) {
+            // If they're logged in, skip this page
+            window.location.href = "/chat";
+          }
+        }
+        // if not ok, or any error -> show login form
+      } catch (err) {
+        console.log("No login session found or an error occurred.");
+      }
+    }
+
+    // 2. Registration flow
     async function registerUser() {
       const user = document.getElementById("reg_username").value.trim();
       const pass = document.getElementById("reg_password").value.trim();
@@ -50,6 +72,7 @@
       }
     }
 
+    // 3. Login flow
     async function attemptLogin() {
       const user = document.getElementById("username").value.trim();
       const pass = document.getElementById("password").value.trim();
