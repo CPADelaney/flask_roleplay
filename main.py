@@ -13,6 +13,7 @@ from db.admin import admin_bp
 from flask_cors import CORS
 from routes.debug import debug_bp
 from routes.universal_update import universal_bp 
+from routes.multiuser_routes import multiuser_bp
 
 def create_app():
     app = Flask(__name__)
@@ -43,6 +44,7 @@ def create_app():
     app.register_blueprint(story_bp, url_prefix="/story")
     app.register_blueprint(debug_bp, url_prefix='/debug')
     app.register_blueprint(universal_bp, url_prefix="/universal") 
+    app.register_blueprint(multiuser_bp, url_prefix="/multiuser")
     
     @app.route("/chat")
     def chat_page():
