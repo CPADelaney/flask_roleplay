@@ -194,7 +194,7 @@ def create_all_tables():
         );
     ''')
 
-    # 13) SocialLinks
+    # 14) SocialLinks
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS SocialLinks (
             link_id SERIAL PRIMARY KEY,
@@ -212,7 +212,7 @@ def create_all_tables():
         );
     ''')
 
-    # 13) PlayerPerks
+    # 15) PlayerPerks
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerPerks (
             id SERIAL PRIMARY KEY,
@@ -224,7 +224,7 @@ def create_all_tables():
         );
     ''')
 
-    # 14) Multiple User Support
+    # 16) Multiple User Support
     -- Table to store users
     cursor.execute('''
         CREATE TABLE users (
@@ -246,7 +246,6 @@ def create_all_tables():
     ''')
 
 -- Messages still reference which conversation they belong to
--- Optionally, you can store the "sender_id" if it's a user or NPC
     cursor.execute('''
         CREATE TABLE messages (
           id SERIAL PRIMARY KEY,
