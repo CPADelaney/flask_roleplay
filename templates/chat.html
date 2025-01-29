@@ -131,6 +131,15 @@
     #contextMenu div:hover {
       background-color: #eee;
     }
+    /* In dark mode, override #contextMenu */
+    .dark-mode #contextMenu {
+      background-color: #333;
+      color: #fff;
+      border: 1px solid #999;
+    }    
+    .dark-mode #contextMenu div:hover {
+      background-color: #444; /* slightly lighter dark gray on hover */
+    }
   </style>
 </head>
 <body>
