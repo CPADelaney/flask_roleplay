@@ -317,7 +317,7 @@ def create_all_tables():
             ADD CONSTRAINT fk_conversations_folder
             FOREIGN KEY (folder_id)
             REFERENCES folders(id)
-            ON DELETE SET NULL;
+            ON DELETE CASCADE;
         EXCEPTION WHEN duplicate_object THEN
             -- constraint already there
         END;
