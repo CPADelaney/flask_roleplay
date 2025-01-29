@@ -110,6 +110,7 @@ def apply_universal_updates(data: dict):
                 "respect": "respect",
                 "intensity": "intensity",
                 "monica_level": "monica_level"
+                "sex": "sex"
             }
 
             set_clauses = []
