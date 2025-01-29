@@ -1,9 +1,8 @@
-# main.py
 import os
 from flask import Flask, render_template, request, session, jsonify
 from flask_cors import CORS
 
-# Import your route blueprints
+# Your blueprint imports
 from routes.new_game import new_game_bp
 from routes.player_input import player_input_bp
 from routes.settings_routes import settings_bp
@@ -16,16 +15,15 @@ from routes.debug import debug_bp
 from routes.universal_update import universal_bp 
 from routes.multiuser_routes import multiuser_bp
 
-# If you have a helper function to get DB connections:
+# DB connection helper
 from db.connection import get_db_connection
+
 
 def create_app():
     app = Flask(__name__)
+    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_dev_key")  # fallback for local dev
 
-    # Use SECRET_KEY from environment or a fallback for local dev
-    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY")
-
-    CORS(app)  # Allow cross-origin requests globally
+    CORS(app)
 
     # Register your blueprint modules
     app.register_blueprint(new_game_bp, url_prefix="/new_game")
@@ -40,9 +38,19 @@ def create_app():
     app.register_blueprint(universal_bp, url_prefix="/universal")
     app.register_blueprint(multiuser_bp, url_prefix="/multiuser")
 
+    # -----------------
+    # ROUTES
+    # -----------------
+
+    # A simple route to serve the chat page
     @app.route("/chat")
     def chat_page():
         return render_template("chat.html")
+
+    # Optional: a dedicated login_page that serves login.html
+    @app.route("/login_page", methods=["GET"])
+    def login_page():
+        return render_template("login.html")  # Create templates/login.html
 
     @app.route("/login", methods=["POST"])
     def login():
@@ -70,19 +78,68 @@ def create_app():
             return jsonify({"error": "Invalid username"}), 401
 
         user_id, password_hash = row
-        # TODO: Check if 'password' matches 'password_hash' for real security
+        
+        # TODO: For real security, verify the password with a hashing library (bcrypt or similar).
+        # if not bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8')):
+        #     return jsonify({"error": "Invalid password"}), 401
 
         # If valid, store user_id in session
         session["user_id"] = user_id
 
         return jsonify({"message": "Logged in", "user_id": user_id})
 
+    @app.route("/register", methods=["POST"])
+    def register():
+        """
+        A minimal endpoint to create a new user in the 'users' table.
+        """
+        data = request.get_json()
+        username = data.get("username")
+        password = data.get("password")
+
+        if not username or not password:
+            return jsonify({"error": "Username and password required"}), 400
+
+        # (Optional) Check password complexity, length, etc.
+        # For real production, also store a hashed password. Example with bcrypt:
+        #
+        # import bcrypt
+        # hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Check if username already exists
+        cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+        existing = cur.fetchone()
+        if existing:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Username already taken"}), 400
+
+        # Insert new user
+        # For demonstration, storing password in plaintext (NOT recommended in production)
+        cur.execute("""
+            INSERT INTO users (username, password_hash)
+            VALUES (%s, %s)
+            RETURNING id
+        """, (username, password))
+        new_user_id = cur.fetchone()[0]
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        # Optionally log them in right away:
+        session["user_id"] = new_user_id
+
+        return jsonify({"message": "User registered successfully", "user_id": new_user_id})
+
     return app
 
 
-# Create the Flask app instance
 app = create_app()
 
 if __name__ == "__main__":
-    # Run in debug mode on port 5000, or as specified by environment variables
+    # Run the Flask app
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
