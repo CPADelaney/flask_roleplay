@@ -89,6 +89,65 @@ def rename_folder(folder_id):
 
     return jsonify({"message":"Folder renamed"})
 
+@multiuser_bp.route("/conversations/<int:conv_id>/move_folder", methods=["POST"])
+def move_folder_auto_create(conv_id):
+    """
+    Creates folder if needed, then moves conversation to folder_id
+    """
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not logged in"}), 401
+
+    data = request.get_json() or {}
+    folder_name = data.get("folder_name", "").strip()
+    if not folder_name:
+        return jsonify({"error": "No folder name provided"}), 400
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Check conversation ownership
+    cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error":"Conversation not found"}),404
+    if row[0] != user_id:
+        conn.close()
+        return jsonify({"error":"Unauthorized"}),403
+
+    # Check if folder already exists for this user
+    cur.execute("""
+        SELECT id FROM folders
+        WHERE user_id=%s AND folder_name ILIKE %s
+    """, (user_id, folder_name))
+    frow = cur.fetchone()
+
+    if frow:
+        # folder already exists
+        folder_id = frow[0]
+    else:
+        # Create a new folder
+        cur.execute("""
+            INSERT INTO folders (user_id, folder_name)
+            VALUES (%s, %s) RETURNING id
+        """, (user_id, folder_name))
+        folder_id = cur.fetchone()[0]
+
+    # Now update the conversation's folder_id
+    cur.execute("""
+        UPDATE conversations
+        SET folder_id=%s
+        WHERE id=%s
+    """, (folder_id, conv_id))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({"message": f"Conversation moved to folder '{folder_name}' (ID={folder_id})"})
+
+
 @multiuser_bp.route("/folders/<int:folder_id>", methods=["DELETE"])
 def delete_folder(folder_id):
     user_id = session.get("user_id")
