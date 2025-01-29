@@ -5,10 +5,9 @@ import json
 
 def get_aggregated_roleplay_context(player_name="Chase"):
     """
-    Gathers everything from multiple tables: PlayerStats, NPCStats, meltdown states,
-    environment from CurrentRoleplay, plus SocialLinks, PlayerPerks, 
-    PlayerInventory, Events, PlannedEvents, Locations, GameRules, Quests, 
-    StatDefinitions, *and now each NPC's schedule*.
+    Gathers everything from multiple tables: PlayerStats, NPCStats, environment from
+    CurrentRoleplay, plus SocialLinks, PlayerPerks, PlayerInventory, Events, PlannedEvents,
+    Locations, GameRules, Quests, and StatDefinitions.
     Returns a single Python dict representing the entire roleplay state.
     """
 
@@ -48,12 +47,11 @@ def get_aggregated_roleplay_context(player_name="Chase"):
     else:
         player_stats = {}
 
-    # 3a) Introduced NPCs: also fetch schedule
+    # 3a) Introduced NPCs
     cursor.execute("""
         SELECT npc_id, npc_name,
                dominance, cruelty, closeness, trust, respect, intensity,
-               hobbies, personality_traits, likes, dislikes,
-               schedule
+               hobbies, personality_traits, likes, dislikes
         FROM NPCStats
         WHERE introduced = TRUE
         ORDER BY npc_id
@@ -62,7 +60,7 @@ def get_aggregated_roleplay_context(player_name="Chase"):
 
     npc_list = []
     for row in introduced_rows:
-        (nid, nname, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks, sched) = row
+        (nid, nname, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks) = row
         npc_list.append({
             "npc_id": nid,
             "npc_name": nname,
@@ -75,24 +73,21 @@ def get_aggregated_roleplay_context(player_name="Chase"):
             "hobbies": hbs or [],
             "personality_traits": pers or [],
             "likes": lks or [],
-            "dislikes": dlks or [],
-            # We assume `sched` is JSONB; store it as a Python dict if not None
-            "schedule": sched if sched else {}
+            "dislikes": dlks or []
         })
 
-    # 3b) Unintroduced NPCs: same approach
+    # 3b) Unintroduced NPCs
     cursor.execute("""
         SELECT npc_id, npc_name,
                dominance, cruelty, closeness, trust, respect, intensity,
-               hobbies, personality_traits, likes, dislikes,
-               schedule
+               hobbies, personality_traits, likes, dislikes
         FROM NPCStats
         WHERE introduced = FALSE
         ORDER BY npc_id
     """)
     unintroduced_rows = cursor.fetchall()
     for row in unintroduced_rows:
-        (nid, nname, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks, sched) = row
+        (nid, nname, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks) = row
         npc_list.append({
             "npc_id": nid,
             "npc_name": nname,
@@ -105,19 +100,10 @@ def get_aggregated_roleplay_context(player_name="Chase"):
             "hobbies": hbs or [],
             "personality_traits": pers or [],
             "likes": lks or [],
-            "dislikes": dlks or [],
-            "schedule": sched if sched else {}
+            "dislikes": dlks or []
         })
 
-    # 4) CurrentRoleplay
-    cursor.execute("""
-        SELECT key, value
-        FROM CurrentRoleplay
-    """)
-    rows = cursor.fetchall()
-    currentroleplay_data = {}
-    for (k, v) in rows:
-        currentroleplay_data[k] = v
+    # (REMOVED the duplicate SELECT key,value FROM CurrentRoleplay here)
 
     # 5) SocialLinks
     cursor.execute("""
@@ -155,7 +141,7 @@ def get_aggregated_roleplay_context(player_name="Chase"):
             "perk_effect": p_fx
         })
 
-    # 7) PlayerInventory
+    # 7) PlayerInventory (just for 'Chase')
     cursor.execute("""
         SELECT player_name, item_name, item_description, item_effect, quantity, category
         FROM PlayerInventory
@@ -215,8 +201,7 @@ def get_aggregated_roleplay_context(player_name="Chase"):
         ORDER BY rule_name
     """)
     game_rules_list = []
-    for row in cursor.fetchall():
-        (rname, cond, eff) = row
+    for (rname, cond, eff) in cursor.fetchall():
         game_rules_list.append({
             "rule_name": rname,
             "condition": cond,
@@ -230,8 +215,7 @@ def get_aggregated_roleplay_context(player_name="Chase"):
         ORDER BY quest_id
     """)
     quest_list = []
-    for row in cursor.fetchall():
-        (qid, qname, qstatus, qdetail, qgiver, qreward) = row
+    for (qid, qname, qstatus, qdetail, qgiver, qreward) in cursor.fetchall():
         quest_list.append({
             "quest_id": qid,
             "quest_name": qname,
@@ -261,12 +245,28 @@ def get_aggregated_roleplay_context(player_name="Chase"):
             "progression_triggers": sprg
         })
 
+    # 13) Now read CurrentRoleplay *once*, parse special keys if needed
+    cursor.execute("""
+        SELECT key, value
+        FROM CurrentRoleplay
+    """)
+    rows = cursor.fetchall()
+    currentroleplay_data = {}
+    for k, v in rows:
+        if k == "ChaseSchedule":
+            try:
+                currentroleplay_data[k] = json.loads(v)
+            except:
+                currentroleplay_data[k] = v
+        else:
+            currentroleplay_data[k] = v
+
     conn.close()
 
-    # Final aggregator_data
+    # Final aggregator
     aggregated = {
         "playerStats": player_stats,
-        "npcStats": npc_list,       # includes both introduced + unintroduced, with schedules
+        "npcStats": npc_list,
         "currentRoleplay": currentroleplay_data,
         "day": current_day,
         "timeOfDay": time_of_day,
