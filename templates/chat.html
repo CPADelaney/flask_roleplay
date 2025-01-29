@@ -13,7 +13,6 @@
       background-color: #2c2c2c;
       color: #f0f0f0;
     }
-    
     #topBar {
       display: flex;
       justify-content: space-between;
@@ -166,48 +165,30 @@
   // Dark mode flag
   let isDarkMode = false;
 
-  // ===============================
-  // 1) "pendingUniversalUpdates"
-  // This object includes ALL fields your universal_updater might expect.
-  // You can fill them dynamically before sending a message.
-  // ===============================
+  // "pendingUniversalUpdates"
   let pendingUniversalUpdates = {
-    // 1) Roleplay/Environment
     roleplay_updates: {},
-    // 2) NPC Creations
     npc_creations: [],
-    // 3) NPC Updates
     npc_updates: [],
-    // 4) Character Stat Updates
     character_stat_updates: {
-      player_name: "Chase",  // or dynamic
+      player_name: "Chase",
       stats: {}
     },
-    // 5) Relationship Updates
     relationship_updates: [],
-    // 6) NPC Introductions
     npc_introductions: [],
-    // 7) Location Creations
     location_creations: [],
-    // 8) event_list_updates
     event_list_updates: [],
-    // 9) inventory_updates
     inventory_updates: {
-      player_name: "Chase",  // or dynamic
+      player_name: "Chase",
       added_items: [],
       removed_items: []
     },
-    // 10) quest_updates
     quest_updates: [],
-    // 11) social_links
     social_links: [],
-    // 12) perk_unlocks
     perk_unlocks: []
   };
 
-  // Called after we successfully send a message
   function resetPendingUniversalUpdates() {
-    // Resets all fields to empty arrays/objects so each new message starts fresh
     pendingUniversalUpdates = {
       roleplay_updates: {},
       npc_creations: [],
@@ -233,16 +214,9 @@
 
   // On load
   window.onload = async function() {
-    // 1) Check if user is logged in, else redirect
     await checkLoggedIn();
-
-    // 2) Attach "Enter" key to send message
     attachEnterKey();
-
-    // 3) Load dark mode from localStorage
     loadDarkModeFromStorage();
-
-    // 4) Load conversation list
     await loadConversations();
   };
 
@@ -251,23 +225,20 @@
     try {
       const res = await fetch("/whoami", {
         method: "GET",
-        credentials: "include"  // <-- Ensures cookies are included
+        credentials: "include"  // must include cookies
       });
       if (res.ok) {
         const data = await res.json();
         if (!data.logged_in) {
           window.location.href = "/login_page";
         } else {
-          // Show logout button if we have one
           document.getElementById("logoutBtn").style.display = "inline-block";
         }
       } else {
-        // If the response is not OK, e.g. 401 or 500, redirect to login
         window.location.href = "/login_page";
       }
     } catch (err) {
       console.error("Check login error:", err);
-      // If there's an error fetching /whoami, assume not logged in
       window.location.href = "/login_page";
     }
   }
@@ -283,7 +254,7 @@
     });
   }
 
-  // 3) Dark Mode with localStorage
+  // 3) Dark Mode
   function loadDarkModeFromStorage() {
     const val = localStorage.getItem("dark_mode_enabled");
     if (val === "true") {
@@ -308,7 +279,10 @@
   // 4) Logout
   async function logout() {
     try {
-      const res = await fetch("/logout", { method: "POST" });
+      const res = await fetch("/logout", {
+        method: "POST",
+        credentials: "include"   // so the server sees your session
+      });
       if (res.ok) {
         window.location.href = "/login_page";
       } else {
@@ -322,12 +296,15 @@
   // Conversation Management
   async function loadConversations() {
     try {
-      const res = await fetch("/multiuser/conversations");
+      const res = await fetch("/multiuser/conversations", {
+        method: "GET",
+        credentials: "include"   // important for session-based
+      });
       if (!res.ok) {
         console.error("Failed to get conversations:", res.status);
         return;
       }
-      const convoData = await res.json(); // array of {id, name, created_at}
+      const convoData = await res.json();
       renderConvoList(convoData);
     } catch (err) {
       console.error("Error loading conversations:", err);
@@ -344,7 +321,8 @@
     try {
       const res = await fetch("/multiuser/conversations", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ conversation_name: convName })
       });
       const data = await res.json();
@@ -368,7 +346,6 @@
       wrapper.style.display = "flex";
       wrapper.style.marginBottom = "5px";
 
-      // main button
       const btn = document.createElement("button");
       btn.textContent = conv.name;
       btn.onclick = () => selectConversation(conv.id);
@@ -381,19 +358,22 @@
 
   async function selectConversation(convId) {
     currentConvId = convId;
-    messagesOffset = 0; // reset pagination
+    messagesOffset = 0;
     await loadMessages(convId, true);
   }
 
   async function loadMessages(convId, replace = false) {
-    let url = `/multiuser/conversations/${convId}/messages?offset=${messagesOffset}&limit=${MESSAGES_PER_LOAD}`;
+    const url = `/multiuser/conversations/${convId}/messages?offset=${messagesOffset}&limit=${MESSAGES_PER_LOAD}`;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        method: "GET",
+        credentials: "include"
+      });
       if (!res.ok) {
-        console.error("Failed to load messages for convo:", convId);
+        console.error("Failed to load messages for convo:", convId, res.status);
         return;
       }
-      const data = await res.json(); // {messages: [...]}
+      const data = await res.json();
       if (replace) {
         renderChat(data.messages);
       } else {
@@ -460,8 +440,7 @@
     userInputElem.value = "";
     if (!userText) return;
 
-    // For demonstration, let's say we forcibly set Obedience=80 each time,
-    // or add a new item to the inventory, just to show usage:
+    // For demonstration: forcibly set Obedience=80, add "Chains of Submission"
     pendingUniversalUpdates.character_stat_updates.stats.obedience = 80;
     pendingUniversalUpdates.inventory_updates.added_items.push("Chains of Submission");
     
@@ -470,9 +449,8 @@
       user_input: userText,
       conversation_id: currentConvId,
       player_name: "Chase",
-      // e.g. if a user clicked “advance time” somewhere:
+      // e.g. if a user clicked “advance time”
       // advance_time: true,
-      // The important part:
       universal_update: pendingUniversalUpdates
     };
   
@@ -480,6 +458,7 @@
       const res = await fetch("/story/next_storybeat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",  // <== needed for session
         body: JSON.stringify(payload)
       });
       const data = await res.json();
@@ -497,7 +476,7 @@
       currentConvId = data.conversation_id;
       renderChat(data.messages);
 
-      // Optionally refresh conv list in case it changed
+      // Optionally refresh conv list
       await loadConversations();
 
     } catch (err) {
