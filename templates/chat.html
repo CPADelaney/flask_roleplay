@@ -4,33 +4,33 @@
   <meta charset="UTF-8">
   <title>Roleplay Chat</title>
   <style>
-    /* Minimal styling for a “side panel left / chat panel right” layout */
+    /* Simple flex layout: side panel for convos, main panel for chat */
     #chatContainer {
       display: flex;
       flex-direction: row;
       width: 100%;
       height: 80vh;
     }
-    #conversationList {
-      width: 200px;
+    #convPanel {
+      width: 250px;
       border-right: 1px solid #ccc;
       padding: 10px;
       overflow-y: auto;
     }
-    #chatWindow {
+    #chatPanel {
       flex: 1;
       display: flex;
       flex-direction: column;
-      border: 1px solid #ccc;
-      padding: 10px;
-      overflow-y: auto;
-      height: 80vh;
     }
-    #messages {
+    #chatWindow {
       flex: 1;
+      border: 1px solid #ccc;
+      margin: 10px;
+      padding: 10px;
       overflow-y: auto;
     }
     #inputRow {
+      margin: 10px;
       display: flex;
     }
     #userMsg {
@@ -44,15 +44,16 @@
 <h1>Roleplay Chat</h1>
 
 <div id="chatContainer">
-  <!-- Left side: conversation list & “New Chat” button -->
-  <div id="conversationList">
+  <!-- Left: Conversation List + "New Chat" Button -->
+  <div id="convPanel">
     <button onclick="createNewChat()">+ New Chat</button>
-    <div id="convItems"></div>
+    <h3>My Conversations</h3>
+    <div id="convList"></div>
   </div>
 
-  <!-- Right side: chat messages + input -->
-  <div id="chatWindow">
-    <div id="messages"></div>
+  <!-- Right: Chat window + input -->
+  <div id="chatPanel">
+    <div id="chatWindow"></div>
     <div id="inputRow">
       <input type="text" id="userMsg" placeholder="Type your message"/>
       <button onclick="sendMessage()">Send</button>
@@ -61,137 +62,124 @@
 </div>
 
 <script>
-  let currentConvId = null; 
-  let messagesDiv = document.getElementById("messages");
-  let convItemsDiv = document.getElementById("convItems");
+  let currentConvId = null;
 
-  // 1) On page load, fetch existing conversations for the logged-in user
+  // On page load, fetch existing conversations
   window.onload = async function() {
     await loadConversations();
   };
 
+  // 1. Load the user's existing conversations
   async function loadConversations() {
     try {
-      let res = await fetch("/multiuser/conversations");
-      if (!res.ok) throw new Error("Failed to fetch conversations");
-      let data = await res.json(); // array of {id, name}
-
-      // Clear old list
-      convItemsDiv.innerHTML = "";
-
-      data.forEach(conv => {
-        let btn = document.createElement("button");
-        btn.textContent = conv.name;
-        btn.onclick = () => selectConversation(conv.id); // load that conversation
-        convItemsDiv.appendChild(btn);
-        convItemsDiv.appendChild(document.createElement("br"));
-      });
+      const res = await fetch("/multiuser/conversations");
+      if (!res.ok) {
+        console.error("Failed to get conversations:", res.status);
+        return;
+      }
+      const convoData = await res.json(); // array of {id, name, created_at}
+      renderConvoList(convoData);
     } catch (err) {
-      console.error(err);
+      console.error("Error loading conversations:", err);
     }
   }
 
+  function renderConvoList(conversations) {
+    const convListDiv = document.getElementById("convList");
+    convListDiv.innerHTML = ""; // clear old
+
+    conversations.forEach(conv => {
+      // Create a button or clickable element
+      const btn = document.createElement("button");
+      btn.textContent = conv.name;
+      btn.style.display = "block";
+      btn.style.marginBottom = "5px";
+      btn.onclick = () => selectConversation(conv.id);
+      convListDiv.appendChild(btn);
+    });
+  }
+
+  // 2. Select an existing conversation, load its messages
   async function selectConversation(convId) {
     currentConvId = convId;
-    // Fetch messages from this conversation
     try {
-      let res = await fetch(`/multiuser/conversations/${convId}/messages`);
-      if (!res.ok) throw new Error("Failed to fetch messages");
-      let data = await res.json(); // {messages: [{sender,content,created_at}, ...]}
-
-      // Clear chat
-      messagesDiv.innerHTML = "";
-      data.messages.forEach(msg => {
-        appendMessage(msg.sender, msg.content);
-      });
+      const res = await fetch(`/multiuser/conversations/${convId}/messages`);
+      if (!res.ok) {
+        console.error("Failed to load messages for convo:", convId);
+        return;
+      }
+      const data = await res.json(); // {messages: [...]}
+      renderChat(data.messages);
     } catch (err) {
-      console.error(err);
+      console.error("Error selecting conversation:", err);
     }
   }
 
-  async function createNewChat() {
-    // We won't create the conversation immediately here. 
-    // We’ll wait until the user sends the first message to auto-create.
-    currentConvId = null;  
-    messagesDiv.innerHTML = "";
+  // 3. Create a brand-new conversation
+  //    We won't actually create it in /multiuser/conversations here:
+  //    Instead, we let the backend auto-create on first message.
+  //    If you prefer to name your chat or do something else, you can do it here.
+  function createNewChat() {
+    currentConvId = null;  // We'll let the next user message auto-create it
+    renderChat([]);        // Clear chat window
   }
 
-  function appendMessage(sender, text) {
-    let p = document.createElement("p");
-    p.innerHTML = `<strong>${sender}:</strong> ${text}`;
-    messagesDiv.appendChild(p);
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
-  }
-
+  // 4. Send a message to /story/next_storybeat
   async function sendMessage() {
     const userInputElem = document.getElementById("userMsg");
     const userText = userInputElem.value.trim();
-    if (!userText) return;
     userInputElem.value = "";
+    if (!userText) return;
 
-    // 1) If no currentConvId, create one now
-    if (!currentConvId) {
-      const convResponse = await fetch("/multiuser/conversations", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({conversation_name: "New Chat " + Date.now()})
-      });
-      if (!convResponse.ok) {
-        console.error("Could not create conversation");
-        return;
-      }
-      let convData = await convResponse.json();
-      currentConvId = convData.conversation_id;
-
-      // Also refresh the conversation list
-      await loadConversations();
-    }
-
-    // 2) Store the user’s message in the DB (via /multiuser/conversations/<id>/messages)
-    await fetch(`/multiuser/conversations/${currentConvId}/messages`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ sender: "user", content: userText })
-    });
-
-    // 3) Append user’s message locally
-    appendMessage("You", userText);
-
-    // 4) Call GPT route to get response
-    let payload = {
+    // We'll pass conversation_id if we have one, else server will create a new one
+    const payload = {
       user_input: userText,
-      conversation_id: currentConvId, // so we can store it if we want
-      player_name: "Chase"
+      conversation_id: currentConvId, 
+      player_name: "Chase" // or dynamic
     };
 
     try {
-      let storyRes = await fetch("/story/next_storybeat", {
+      const res = await fetch("/story/next_storybeat", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload)
       });
-      if (!storyRes.ok) {
-        let errText = await storyRes.text();
-        throw new Error(`HTTP error! status: ${storyRes.status}\n${errText}`);
+      const data = await res.json();
+
+      if (!res.ok) {
+        console.error("Server error:", data);
+        return;
       }
-      let storyData = await storyRes.json();
-      let storyText = storyData.story_output || "(No story output)";
 
-      // 5) Store GPT’s reply in DB
-      await fetch(`/multiuser/conversations/${currentConvId}/messages`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ sender: "GPT", content: storyText })
-      });
+      // Server always returns updated conversation_id + messages
+      currentConvId = data.conversation_id; 
+      const messages = data.messages || [];
+      renderChat(messages);
 
-      // 6) Display GPT’s reply
-      appendMessage("GPT", storyText);
+      // If it's a brand-new conversation, let's refresh the list
+      // so we see a new "New Chat" item appear if the server
+      // named it that or if you have logic for conversation_name
+      await loadConversations();
 
     } catch (err) {
-      console.error("Error calling GPT route:", err);
+      console.error("sendMessage error:", err);
     }
   }
-</script>
 
+  // 5. Render entire chat from the 'messages' array
+  function renderChat(messages) {
+    const chatWindow = document.getElementById("chatWindow");
+    chatWindow.innerHTML = ""; // clear old
+
+    messages.forEach(m => {
+      const p = document.createElement("p");
+      let senderName = (m.sender === "user") ? "You" : m.sender;
+      p.innerHTML = `<strong>${senderName}:</strong> ${m.content}`;
+      chatWindow.appendChild(p);
+    });
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+  }
+
+</script>
 </body>
 </html>
