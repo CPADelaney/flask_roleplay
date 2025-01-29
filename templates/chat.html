@@ -116,6 +116,7 @@
       background-color: #666666;
       color: #f0f0f0;
     }
+
     /* Context Menu styling */
     #contextMenu {
       position: absolute;
@@ -136,9 +137,9 @@
       background-color: #333;
       color: #fff;
       border: 1px solid #999;
-    }    
+    }
     .dark-mode #contextMenu div:hover {
-      background-color: #444; /* slightly lighter dark gray on hover */
+      background-color: #444;
     }
   </style>
 </head>
@@ -420,16 +421,6 @@
     chatWindow.scrollTop = chatWindow.scrollHeight;
   }
 
-  async function moveConversation(convId, folderId) {
-    const res = await fetch(`/multiuser/conversations/${convId}/folder`, {
-      method: "POST",
-      credentials: "include",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ folder_id: folderId })
-    });
-    // if res.ok => reload
-  }
-  
   function prependMessages(messages) {
     const chatWindow = document.getElementById("chatWindow");
     const loadMoreElem = document.getElementById("loadMore");
@@ -516,7 +507,7 @@
   function showContextMenu(x, y, convId) {
     menuDiv.innerHTML = `
       <div onclick="renameConversation(${convId})">Rename</div>
-      <div onclick="archiveConversation(${convId})">Archive</div>
+      <div onclick="moveConversationToFolder(${convId})">Move to Folder</div>
       <div onclick="deleteConversation(${convId})">Delete</div>
     `;
     menuDiv.style.left = x + "px";
@@ -549,15 +540,17 @@
     }
   }
 
-  async function moveToFolder(convId) {
-    const folderName = prompt("Which folder name?");
+  // Prompt user for a folder name, then call the route that
+  // auto-creates the folder if needed & moves conversation
+  async function moveConversationToFolder(convId) {
+    const folderName = prompt("Which folder name? (It will be created if it doesn't exist)");
     if (!folderName) return;
     try {
       const res = await fetch(`/multiuser/conversations/${convId}/move_folder`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ folder: folderName })
+        body: JSON.stringify({ folder_name: folderName })
       });
       if (res.ok) {
         await loadConversations();
