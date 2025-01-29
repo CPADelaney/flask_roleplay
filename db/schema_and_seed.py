@@ -225,7 +225,6 @@ def create_all_tables():
     ''')
 
     # 16) Multiple User Support
-    # Table to store users
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
           id SERIAL PRIMARY KEY,
@@ -235,7 +234,7 @@ def create_all_tables():
         );
     ''')
 
-    # Each conversation belongs to one user
+    # conversations
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS conversations (
           id SERIAL PRIMARY KEY,
@@ -245,43 +244,42 @@ def create_all_tables():
         );
     ''')
 
-# Messages still reference which conversation they belong to
+    # messages
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS messages (
           id SERIAL PRIMARY KEY,
           conversation_id INTEGER NOT NULL REFERENCES conversations(id),
-          sender VARCHAR(50) NOT NULL,  -- e.g. "user", "GPT", or "NPC_5070"
+          sender VARCHAR(50) NOT NULL,
           content TEXT NOT NULL,
           created_at TIMESTAMP DEFAULT NOW()
         );
     ''')
 
+    # Add 'archived' + 'folder' columns to conversations
     cursor.execute('''
         ALTER TABLE conversations
         ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE
     ''')
 
-    # B) Add a 'folder' column for conversation grouping (if you want it)
     cursor.execute('''
         ALTER TABLE conversations
         ADD COLUMN IF NOT EXISTS folder TEXT DEFAULT 'Inbox'
     ''')
 
-    # C) Adjust the foreign key on 'messages' for ON DELETE CASCADE
-    #    First drop the existing constraint if it’s not already cascade,
-    #    then re-add it with cascade
+    # Drop + re-add foreign key on messages for ON DELETE CASCADE
     cursor.execute('''
         ALTER TABLE messages
         DROP CONSTRAINT IF EXISTS messages_conversation_id_fkey
     ''')
-    
+
     cursor.execute('''
         ALTER TABLE messages
         ADD CONSTRAINT messages_conversation_id_fkey
         FOREIGN KEY (conversation_id) REFERENCES conversations(id)
         ON DELETE CASCADE
     ''')
-    
+
+    # Create the folders table if not exists
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS folders (
             id SERIAL PRIMARY KEY,
@@ -291,19 +289,43 @@ def create_all_tables():
         );
     ''')
 
-    -- Add a folder_id column to conversations, referencing folders.id
+    # Add a folder_id column to conversations, referencing folders.id
+    # We can choose ON DELETE SET NULL if we don't want convos to vanish if folder is deleted
+    # or ON DELETE CASCADE if we do want them removed
+    # e.g. we'll do ON DELETE SET NULL
     cursor.execute('''
         ALTER TABLE conversations
-            ADD COLUMN IF NOT EXISTS folder_id INTEGER,
+        ADD COLUMN IF NOT EXISTS folder_id INTEGER
+    ''')
+
+    # If the foreign key constraint might already exist, we can drop it first
+    cursor.execute('''
+        DO $$
+        BEGIN
+            ALTER TABLE conversations DROP CONSTRAINT IF EXISTS fk_conversations_folder;
+        EXCEPTION WHEN undefined_object THEN
+            -- no constraint yet
+        END;
+        $$
+    ''')
+
+    # Now re-add the constraint
+    cursor.execute('''
+        DO $$
+        BEGIN
+            ALTER TABLE conversations
             ADD CONSTRAINT fk_conversations_folder
             FOREIGN KEY (folder_id)
             REFERENCES folders(id)
-            ON DELETE CASCADE;
-        ''')
+            ON DELETE SET NULL;
+        EXCEPTION WHEN duplicate_object THEN
+            -- constraint already there
+        END;
+        $$
+    ''')
 
     conn.commit()
     conn.close()
-
 
 def seed_initial_data():
     """
