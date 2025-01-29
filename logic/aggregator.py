@@ -14,7 +14,7 @@ def get_aggregated_roleplay_context(player_name="Chase"):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1) Current day/time
+    # 1) Day/time
     cursor.execute("SELECT value FROM CurrentRoleplay WHERE key='CurrentDay'")
     row = cursor.fetchone()
     current_day = row[0] if row else "1"
@@ -244,15 +244,12 @@ def get_aggregated_roleplay_context(player_name="Chase"):
             "effects": seff,
             "progression_triggers": sprg
         })
-
-    # 13) Now read CurrentRoleplay *once*, parse special keys if needed
-    cursor.execute("""
-        SELECT key, value
-        FROM CurrentRoleplay
-    """)
-    rows = cursor.fetchall()
+    
+    # 13) CurrentRoleplay
+    cursor.execute("""SELECT key, value FROM CurrentRoleplay""")
+    all_rows = cursor.fetchall()
     currentroleplay_data = {}
-    for k, v in rows:
+    for (k,v) in all_rows:
         if k == "ChaseSchedule":
             try:
                 currentroleplay_data[k] = json.loads(v)
@@ -262,7 +259,7 @@ def get_aggregated_roleplay_context(player_name="Chase"):
             currentroleplay_data[k] = v
 
     conn.close()
-
+        
     # Final aggregator
     aggregated = {
         "playerStats": player_stats,
