@@ -166,6 +166,72 @@
   // Dark mode flag
   let isDarkMode = false;
 
+  // ===============================
+  // 1) "pendingUniversalUpdates"
+  // This object includes ALL fields your universal_updater might expect.
+  // You can fill them dynamically before sending a message.
+  // ===============================
+  let pendingUniversalUpdates = {
+    // 1) Roleplay/Environment
+    roleplay_updates: {},
+    // 2) NPC Creations
+    npc_creations: [],
+    // 3) NPC Updates
+    npc_updates: [],
+    // 4) Character Stat Updates
+    character_stat_updates: {
+      player_name: "Chase",  // or dynamic
+      stats: {}
+    },
+    // 5) Relationship Updates
+    relationship_updates: [],
+    // 6) NPC Introductions
+    npc_introductions: [],
+    // 7) Location Creations
+    location_creations: [],
+    // 8) event_list_updates
+    event_list_updates: [],
+    // 9) inventory_updates
+    inventory_updates: {
+      player_name: "Chase",  // or dynamic
+      added_items: [],
+      removed_items: []
+    },
+    // 10) quest_updates
+    quest_updates: [],
+    // 11) social_links
+    social_links: [],
+    // 12) perk_unlocks
+    perk_unlocks: []
+  };
+
+  // Called after we successfully send a message
+  function resetPendingUniversalUpdates() {
+    // Resets all fields to empty arrays/objects so each new message starts fresh
+    pendingUniversalUpdates = {
+      roleplay_updates: {},
+      npc_creations: [],
+      npc_updates: [],
+      character_stat_updates: {
+        player_name: "Chase",
+        stats: {}
+      },
+      relationship_updates: [],
+      npc_introductions: [],
+      location_creations: [],
+      event_list_updates: [],
+      inventory_updates: {
+        player_name: "Chase",
+        added_items: [],
+        removed_items: []
+      },
+      quest_updates: [],
+      social_links: [],
+      perk_unlocks: []
+    };
+  }
+
+  // On load
   window.onload = async function() {
     // 1) Check if user is logged in, else redirect
     await checkLoggedIn();
@@ -180,9 +246,7 @@
     await loadConversations();
   };
 
-  /*
-    1) Check if user is logged in by calling /whoami
-  */
+  // 1) Check if user is logged in by calling /whoami
   async function checkLoggedIn() {
     try {
       const res = await fetch("/whoami");
@@ -195,7 +259,6 @@
           document.getElementById("logoutBtn").style.display = "inline-block";
         }
       } else {
-        // Not logged in
         window.location.href = "/login_page";
       }
     } catch (err) {
@@ -204,9 +267,7 @@
     }
   }
 
-  /*
-    2) Attach "Enter" Key
-  */
+  // 2) Attach "Enter" Key
   function attachEnterKey() {
     const input = document.getElementById("userMsg");
     input.addEventListener("keydown", function(e) {
@@ -217,9 +278,7 @@
     });
   }
 
-  /*
-    3) Dark Mode with localStorage
-  */
+  // 3) Dark Mode with localStorage
   function loadDarkModeFromStorage() {
     const val = localStorage.getItem("dark_mode_enabled");
     if (val === "true") {
@@ -241,9 +300,7 @@
     }
   }
 
-  /*
-    4) Logout
-  */
+  // 4) Logout
   async function logout() {
     try {
       const res = await fetch("/logout", { method: "POST" });
@@ -257,9 +314,7 @@
     }
   }
 
-  /*
-    Conversation Management
-  */
+  // Conversation Management
   async function loadConversations() {
     try {
       const res = await fetch("/multiuser/conversations");
@@ -313,8 +368,6 @@
       btn.textContent = conv.name;
       btn.onclick = () => selectConversation(conv.id);
       btn.style.flex = "1";
-
-      // If you want rename/delete, add buttons here
 
       wrapper.appendChild(btn);
       convListDiv.appendChild(wrapper);
@@ -401,15 +454,20 @@
     const userText = userInputElem.value.trim();
     userInputElem.value = "";
     if (!userText) return;
-  
-    // Combine the user’s typed text + our pending updates
+
+    // For demonstration, let's say we forcibly set Obedience=80 each time,
+    // or add a new item to the inventory, just to show usage:
+    pendingUniversalUpdates.character_stat_updates.stats.obedience = 80;
+    pendingUniversalUpdates.inventory_updates.added_items.push("Chains of Submission");
+    
+    // Build the final payload
     const payload = {
       user_input: userText,
       conversation_id: currentConvId,
       player_name: "Chase",
-      // Optionally, if the user clicked “advance time”
+      // e.g. if a user clicked “advance time” somewhere:
       // advance_time: true,
-      // Now pass our “pendingUniversalUpdates” object
+      // The important part:
       universal_update: pendingUniversalUpdates
     };
   
@@ -426,46 +484,21 @@
         alert("Message send failed!");
         return;
       }
-  
-      // If successful, clear or partially clear pending updates
+
+      // Clear or partially clear the pending updates
       resetPendingUniversalUpdates();
   
-      // Render the new chat state, etc.
+      // Refresh chat
       currentConvId = data.conversation_id;
       renderChat(data.messages);
+
+      // Optionally refresh conv list in case it changed
+      await loadConversations();
+
     } catch (err) {
       console.error("sendMessage error:", err);
     }
   }
-  
-  function resetPendingUniversalUpdates() {
-    // Maybe you want to clear everything after each send,
-    // or only certain fields. It depends on your design.
-    pendingUniversalUpdates = {
-      npc_creations: [],
-      npc_updates: [],
-      // ...
-    };
-  }
-      try {
-        const res = await fetch("/story/next_storybeat", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          console.error("Server error:", data);
-          alert("Message send failed!");
-          return;
-        }
-        currentConvId = data.conversation_id;
-        renderChat(data.messages);  // entire conversation
-        await loadConversations();
-      } catch (err) {
-        console.error("sendMessage error:", err);
-      }
-    }
 </script>
 </body>
 </html>
