@@ -1,7 +1,5 @@
-# routes/multiuser_routes.py
-
 from flask import Blueprint, request, jsonify, session
-from db.connection import get_db_connection  # <--- Instead of from db import db
+from db.connection import get_db_connection  # We import the function here
 
 multiuser_bp = Blueprint("multiuser_bp", __name__)
 
@@ -11,7 +9,8 @@ def list_conversations():
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
-    cur = db.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     cur.execute("""
         SELECT id, conversation_name
         FROM conversations
@@ -19,6 +18,9 @@ def list_conversations():
         ORDER BY created_at DESC
     """, (user_id,))
     rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
     conversations = [{"id": r[0], "name": r[1]} for r in rows]
     return jsonify(conversations)
 
@@ -31,13 +33,16 @@ def create_conversation():
     data = request.get_json()
     name = data.get("conversation_name", "Untitled Session")
 
-    cur = db.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     cur.execute("""
         INSERT INTO conversations (user_id, conversation_name)
         VALUES (%s, %s) RETURNING id
     """, (user_id, name))
     new_id = cur.fetchone()[0]
-    db.commit()
+    conn.commit()
+    cur.close()
+    conn.close()
 
     return jsonify({"conversation_id": new_id, "conversation_name": name})
 
@@ -47,13 +52,19 @@ def get_messages(conv_id):
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
+    conn = get_db_connection()
+    cur = conn.cursor()
+
     # Check conversation ownership
-    cur = db.cursor()
     cur.execute("SELECT user_id FROM conversations WHERE id = %s", (conv_id,))
     row = cur.fetchone()
     if not row:
+        cur.close()
+        conn.close()
         return jsonify({"error": "Conversation not found"}), 404
     if row[0] != user_id:
+        cur.close()
+        conn.close()
         return jsonify({"error": "Unauthorized"}), 403
 
     # Fetch messages
@@ -64,12 +75,11 @@ def get_messages(conv_id):
         ORDER BY id ASC
     """, (conv_id,))
     rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
     messages = [
-        {
-            "sender": r[0],
-            "content": r[1],
-            "created_at": r[2].isoformat()
-        } 
+        {"sender": r[0], "content": r[1], "created_at": r[2].isoformat()}
         for r in rows
     ]
     return jsonify({"messages": messages})
@@ -80,13 +90,19 @@ def add_message(conv_id):
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
+    conn = get_db_connection()
+    cur = conn.cursor()
+
     # Check ownership again
-    cur = db.cursor()
     cur.execute("SELECT user_id FROM conversations WHERE id = %s", (conv_id,))
     row = cur.fetchone()
     if not row:
+        cur.close()
+        conn.close()
         return jsonify({"error": "Conversation not found"}), 404
     if row[0] != user_id:
+        cur.close()
+        conn.close()
         return jsonify({"error": "Unauthorized"}), 403
 
     # Insert the message
@@ -98,6 +114,8 @@ def add_message(conv_id):
         INSERT INTO messages (conversation_id, sender, content)
         VALUES (%s, %s, %s)
     """, (conv_id, sender, content))
-    db.commit()
+    conn.commit()
+    cur.close()
+    conn.close()
 
     return jsonify({"status": "ok"})
