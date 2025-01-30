@@ -12,12 +12,11 @@ def get_chatgpt_response(user_input: str) -> str:
     Calls the ChatCompletion endpoint with 'gpt-4o' and the roles
     'developer'/'user' from the doc snippet.
     """
-    completion = client.chat.completions.create(
-         messages=[
-             # 1) The 'developer' role for your system-level instructions
-             {"role": "developer", "content": SYSTEM_PROMPT},
-             {"role": "user", "content": user_input}
-         ]
+    messages=[
+        # 1) The 'developer' role for your system-level instructions
+        {"role": "developer", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_input}
+    ]
     response = client.chat.completions.create(
         model="gpt-4o",  # Ensure correct model name is used
         messages=messages,
