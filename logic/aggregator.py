@@ -1,7 +1,7 @@
 import json
 from db.connection import get_db_connection
 
-def get_aggregated_roleplay_context(user_id, conversation_id):
+def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     """
     Gathers data from multiple tables, all scoped by (user_id, conversation_id) plus player_name where needed.
     Returns a single dict representing the entire roleplay state.
