@@ -1,6 +1,7 @@
 # logic/chatgpt_integration.py
 import os
-import openai
+from openai import OpenAI
+client = OpenAI()
 
 from logic.prompts import SYSTEM_PROMPT, DB_SCHEMA_PROMPT
 
@@ -12,7 +13,7 @@ def get_chatgpt_response(user_input: str, model="gpt-4o") -> str:
     'developer'/'user' from the doc snippet.
     """
     try:
-        completion = openai.chat.completions.create(
+        completion = client.chat.completions.create(
             model="gpt-4o",
             # If your environment supports store=, keep it; else remove it:
             store=True,
