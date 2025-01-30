@@ -134,7 +134,7 @@ def generate_mega_setting_route():
         return jsonify({"error": str(e)}), 500
 
 
-def insert_missing_settings(user_id, conversation_id):
+def insert_missing_settings():
     """
     Inserts the default 1–30 settings if they do not exist for this user & conversation.
     Each setting row is associated with (user_id, conversation_id, name).
@@ -631,34 +631,23 @@ def insert_missing_settings(user_id, conversation_id):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1) Retrieve existing setting names for (user_id, conversation_id)
-    cursor.execute("""
-        SELECT name
-        FROM Settings
-        WHERE user_id=%s
-          AND conversation_id=%s
-    """, (user_id, conversation_id))
+    # Just SELECT name from Settings (no user_id, conversation_id)
+    cursor.execute("SELECT name FROM Settings")
     existing = {row[0] for row in cursor.fetchall()}
 
-    # 2) Insert if not existing
     for s in settings_data:
         if s["name"] not in existing:
             cursor.execute("""
-                INSERT INTO Settings (
-                  user_id, conversation_id,
-                  name, mood_tone,
-                  enhanced_features, stat_modifiers, activity_examples
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO Settings (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
+                VALUES (%s, %s, %s, %s, %s)
             """, (
-                user_id, conversation_id,
                 s["name"],
                 s["mood_tone"],
                 json.dumps(s["enhanced_features"]),
                 json.dumps(s["stat_modifiers"]),
                 json.dumps(s["activity_examples"])
             ))
-            print(f"Inserted new setting for user={user_id}, conv={conversation_id}, name={s['name']}")
+            print(f"Inserted new setting: {s['name']}")
         else:
             print(f"Skipped existing setting: {s['name']}")
 
