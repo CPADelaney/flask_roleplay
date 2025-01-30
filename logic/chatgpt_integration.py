@@ -19,11 +19,6 @@ def get_chatgpt_response(user_input: str) -> str:
             messages=[
                 # 1) The 'developer' role for your system-level instructions
                 {"role": "developer", "content": SYSTEM_PROMPT},
-
-                # 2) Another 'developer' message for the DB schema, if you like
-                {"role": "developer", "content": DB_SCHEMA_PROMPT},
-
-                # 3) The user's actual prompt
                 {"role": "user", "content": user_input}
             ]
         )
