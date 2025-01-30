@@ -1,12 +1,9 @@
-# logic/stats_logic.py
-
-from flask import Blueprint, request, jsonify
+import logging
+from flask import Blueprint, request, jsonify, session
 from db.connection import get_db_connection
 import random
 import json
-# We'll import or define these from your social_links
-from logic.social_links import add_link_event
-
+from logic.social_links import add_link_event  # We'll import or define these from your social_links
 
 stats_bp = Blueprint('stats_bp', __name__)
 
@@ -52,8 +49,8 @@ def insert_or_update_game_rules():
             INSERT INTO GameRules (rule_name, condition, effect)
             VALUES (%s, %s, %s)
             ON CONFLICT (rule_name)
-            DO UPDATE SET condition = EXCLUDED.condition,
-                          effect = EXCLUDED.effect
+            DO UPDATE SET condition=EXCLUDED.condition,
+                          effect=EXCLUDED.effect
         """, (rule["rule_name"], rule["condition"], rule["effect"]))
 
     conn.commit()
@@ -294,7 +291,7 @@ def insert_default_player_stats_chase():
         "physical_endurance": 40
     }
 
-    cursor.execute("SELECT id FROM PlayerStats WHERE player_name = %s", (chase_stats["player_name"],))
+    cursor.execute("SELECT id FROM PlayerStats WHERE player_name=%s", (chase_stats["player_name"],))
     row = cursor.fetchone()
 
     if row:
@@ -321,29 +318,44 @@ def insert_default_player_stats_chase():
 
     conn.close()
 
+
 ############################
-# 4. Player Stats Route
+# 4. Player Stats Route (Needs user_id/conversation_id Scoping)
 ############################
 
 @stats_bp.route('/player/<player_name>', methods=['GET', 'PUT'])
 def handle_player_stats(player_name):
+    """
+    GET => returns the player's stats for user_id, conversation_id, and player_name
+    PUT => updates them
+    We'll read user_id from session, conversation_id from query (GET) or JSON (PUT)
+    """
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not logged in"}), 401
+
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     if request.method == 'GET':
+        # conversation_id from query param
+        conversation_id = request.args.get("conversation_id")
+        if not conversation_id:
+            conn.close()
+            return jsonify({"error": "Missing conversation_id"}), 400
+
         cursor.execute("""
             SELECT corruption, confidence, willpower, obedience, 
                    dependency, lust, mental_resilience, physical_endurance
             FROM PlayerStats
-            WHERE player_name = %s
-        """, (player_name,))
+            WHERE user_id=%s AND conversation_id=%s AND player_name=%s
+        """, (user_id, conversation_id, player_name))
         row = cursor.fetchone()
 
         if not row:
             conn.close()
-            return jsonify({"error": f"Player '{player_name}' not found"}), 404
+            return jsonify({"error": f"PlayerStats not found for user={user_id}, conv={conversation_id}, name={player_name}"}), 404
 
-        # Construct response
         stats_response = {
             "corruption": row[0],
             "confidence": row[1],
@@ -358,37 +370,47 @@ def handle_player_stats(player_name):
         return jsonify(stats_response), 200
 
     elif request.method == 'PUT':
-        stats = request.get_json() or {}
+        data = request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        if not conversation_id:
+            conn.close()
+            return jsonify({"error": "Missing conversation_id"}), 400
+
+        # Extract stats from JSON
+        corruption = data.get('corruption', 0)
+        confidence = data.get('confidence', 0)
+        willpower  = data.get('willpower', 0)
+        obedience  = data.get('obedience', 0)
+        dependency = data.get('dependency', 0)
+        lust       = data.get('lust', 0)
+        mental     = data.get('mental_resilience', 0)
+        physical   = data.get('physical_endurance', 0)
+
         try:
             cursor.execute("""
                 UPDATE PlayerStats
-                SET corruption = %s,
-                    confidence = %s,
-                    willpower = %s,
-                    obedience = %s,
-                    dependency = %s,
-                    lust = %s,
-                    mental_resilience = %s,
-                    physical_endurance = %s
-                WHERE player_name = %s
+                SET corruption=%s,
+                    confidence=%s,
+                    willpower=%s,
+                    obedience=%s,
+                    dependency=%s,
+                    lust=%s,
+                    mental_resilience=%s,
+                    physical_endurance=%s
+                WHERE user_id=%s AND conversation_id=%s
+                  AND player_name=%s
                 RETURNING corruption, confidence, willpower, obedience,
                           dependency, lust, mental_resilience, physical_endurance
             """, (
-                stats.get('corruption', 0),
-                stats.get('confidence', 0),
-                stats.get('willpower', 0),
-                stats.get('obedience', 0),
-                stats.get('dependency', 0),
-                stats.get('lust', 0),
-                stats.get('mental_resilience', 0),
-                stats.get('physical_endurance', 0),
-                player_name
+                corruption, confidence, willpower, obedience, dependency,
+                lust, mental, physical,
+                user_id, conversation_id, player_name
             ))
             updated_row = cursor.fetchone()
             if not updated_row:
                 conn.rollback()
                 conn.close()
-                return jsonify({"error": f"Player '{player_name}' not found"}), 404
+                return jsonify({"error": f"PlayerStats not found for user={user_id}, conv={conversation_id}, name={player_name}"}), 404
 
             conn.commit()
             conn.close()
@@ -404,7 +426,7 @@ def handle_player_stats(player_name):
                 "physical_endurance": updated_row[7]
             }
             return jsonify({
-                "message": f"Player '{player_name}' stats updated successfully.",
+                "message": f"Player '{player_name}' stats updated for user={user_id}, conversation={conversation_id}.",
                 "new_stats": updated_stats
             }), 200
         except Exception as e:
@@ -414,25 +436,39 @@ def handle_player_stats(player_name):
 
 
 ############################
-# 5. NPC Stats Route
+# 5. NPC Stats Route (Needs user_id/conversation_id Scoping)
 ############################
 
 @stats_bp.route('/npc/<int:npc_id>', methods=['GET', 'PUT'])
 def handle_npc_stats(npc_id):
+    """
+    GET => fetch the NPC's stats for (user_id, conversation_id, npc_id)
+    PUT => update them
+    We'll read user_id from session, conversation_id from query or JSON
+    """
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not logged in"}), 401
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
     if request.method == 'GET':
+        conversation_id = request.args.get("conversation_id")
+        if not conversation_id:
+            conn.close()
+            return jsonify({"error": "Missing conversation_id"}), 400
+
         cursor.execute("""
             SELECT dominance, cruelty, closeness, trust, respect, intensity
             FROM NPCStats
-            WHERE npc_id = %s
-        """, (npc_id,))
+            WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+        """, (user_id, conversation_id, npc_id))
         row = cursor.fetchone()
+        conn.close()
 
         if not row:
-            conn.close()
-            return jsonify({"error": f"NPC with id={npc_id} not found"}), 404
+            return jsonify({"error": f"NPCStats not found for user={user_id}, conv={conversation_id}, npc_id={npc_id}"}), 404
 
         npc_response = {
             "dominance": row[0],
@@ -442,36 +478,43 @@ def handle_npc_stats(npc_id):
             "respect": row[4],
             "intensity": row[5]
         }
-        conn.close()
         return jsonify(npc_response), 200
 
     elif request.method == 'PUT':
-        npc_updates = request.get_json() or {}
+        data = request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        if not conversation_id:
+            conn.close()
+            return jsonify({"error": "Missing conversation_id"}), 400
+
+        # Extract new stats
+        dominance = data.get('dominance', 0)
+        cruelty   = data.get('cruelty', 0)
+        closeness = data.get('closeness', 0)
+        trust     = data.get('trust', 0)
+        respect   = data.get('respect', 0)
+        intensity = data.get('intensity', 0)
+
         try:
             cursor.execute("""
                 UPDATE NPCStats
-                SET dominance = %s,
-                    cruelty = %s,
-                    closeness = %s,
-                    trust = %s,
-                    respect = %s,
-                    intensity = %s
-                WHERE npc_id = %s
+                SET dominance=%s,
+                    cruelty=%s,
+                    closeness=%s,
+                    trust=%s,
+                    respect=%s,
+                    intensity=%s
+                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
                 RETURNING dominance, cruelty, closeness, trust, respect, intensity
             """, (
-                npc_updates.get('dominance', 0),
-                npc_updates.get('cruelty', 0),
-                npc_updates.get('closeness', 0),
-                npc_updates.get('trust', 0),
-                npc_updates.get('respect', 0),
-                npc_updates.get('intensity', 0),
-                npc_id
+                dominance, cruelty, closeness, trust, respect, intensity,
+                user_id, conversation_id, npc_id
             ))
             updated_npc = cursor.fetchone()
             if not updated_npc:
                 conn.rollback()
                 conn.close()
-                return jsonify({"error": f"NPC with id={npc_id} not found"}), 404
+                return jsonify({"error": f"NPCStats not found for user={user_id}, conv={conversation_id}, npc_id={npc_id}"}), 404
 
             conn.commit()
             conn.close()
@@ -485,7 +528,7 @@ def handle_npc_stats(npc_id):
                 "intensity": updated_npc[5]
             }
             return jsonify({
-                "message": f"NPC with id={npc_id} updated successfully.",
+                "message": f"NPC with id={npc_id} updated for user={user_id}, conv={conversation_id}.",
                 "new_stats": updated_stats
             }), 200
         except Exception as e:
@@ -515,9 +558,11 @@ def init_stats_system():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-def update_player_stats(player_name, stat_key, value):
+def update_player_stats(user_id, conversation_id, player_name, stat_key, value):
     """
     Updates a specific stat for a given player in the PlayerStats table.
+    (No user_id or conversation_id used here, so it updates the global row if it exists)
+    If you want scoping, just add user_id, conversation_id to the WHERE clause.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -525,7 +570,7 @@ def update_player_stats(player_name, stat_key, value):
         cursor.execute(f"""
             UPDATE PlayerStats
             SET {stat_key} = %s
-            WHERE player_name = %s
+            WHERE user_id=%s AND conversation_id=%s AND player_name=%s
         """, (value, player_name))
         conn.commit()
     except Exception as e:
@@ -535,16 +580,22 @@ def update_player_stats(player_name, stat_key, value):
         conn.close()
 
 def check_social_link_milestones():
+    """
+    Example function referencing social links. If you do user+conversation scoping,
+    you'd incorporate them here. 
+    Currently just uses a broad 'player is involved' approach.
+    """
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # fetch all links where player is involved
     cursor.execute("""
         SELECT link_id, entity1_type, entity1_id,
                entity2_type, entity2_id,
                link_type, link_level
         FROM SocialLinks
-        WHERE entity1_type='player' OR entity2_type='player'
+        WHERE (entity1_type='player' OR entity2_type='player')
+        AND user_id=%s AND conversation_id=%s AND player_name=%s
+
     """)
     links = cursor.fetchall()
 
@@ -554,7 +605,6 @@ def check_social_link_milestones():
 
         # Example triggers
         if ltype == "friends" and lvl >= 30:
-            # Insert an item if not already given
             cursor.execute("""
                 INSERT INTO PlayerInventory (player_name, item_name, quantity)
                 VALUES (%s, %s, 1)
