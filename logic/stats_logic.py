@@ -271,10 +271,9 @@ Decreases: Failing endurance-based tasks."""
 # 3. Default Player Stats
 ############################
 
-def insert_default_player_stats_chase():
+def insert_default_player_stats_chase(user_id, conversation_id):
     """
-    Inserts a default row for player_name='Chase' into PlayerStats, if it doesn't exist yet.
-    Adjust the numeric stats as desired.
+    Insert row for 'Chase' in PlayerStats, scoping by user_id + conversation_id.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -291,32 +290,38 @@ def insert_default_player_stats_chase():
         "physical_endurance": 40
     }
 
-    cursor.execute("SELECT id FROM PlayerStats WHERE player_name=%s", (chase_stats["player_name"],))
+    # Check if a row already exists for these user+conversation+player
+    cursor.execute("""
+        SELECT id FROM PlayerStats
+        WHERE user_id=%s
+          AND conversation_id=%s
+          AND player_name=%s
+    """, (user_id, conversation_id, chase_stats["player_name"]))
     row = cursor.fetchone()
 
     if row:
-        print("Default stats for Chase already exist. Skipping insert.")
+        print("Default stats for Chase already exist in this user/conversation. Skipping insert.")
     else:
-        cursor.execute('''
-            INSERT INTO PlayerStats
-              (player_name, corruption, confidence, willpower, obedience,
-               dependency, lust, mental_resilience, physical_endurance)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ''', (
+        cursor.execute("""
+            INSERT INTO PlayerStats (
+                user_id, conversation_id,
+                player_name,
+                corruption, confidence, willpower,
+                obedience, dependency, lust,
+                mental_resilience, physical_endurance
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            user_id, conversation_id,
             chase_stats["player_name"],
-            chase_stats["corruption"],
-            chase_stats["confidence"],
-            chase_stats["willpower"],
-            chase_stats["obedience"],
-            chase_stats["dependency"],
-            chase_stats["lust"],
-            chase_stats["mental_resilience"],
-            chase_stats["physical_endurance"]
+            chase_stats["corruption"], chase_stats["confidence"], chase_stats["willpower"],
+            chase_stats["obedience"], chase_stats["dependency"], chase_stats["lust"],
+            chase_stats["mental_resilience"], chase_stats["physical_endurance"]
         ))
         conn.commit()
-        print("Inserted default stats for Chase.")
+        print("Inserted default stats for Chase in user={}, conv={}".format(user_id, conversation_id))
 
     conn.close()
+
 
 
 ############################
