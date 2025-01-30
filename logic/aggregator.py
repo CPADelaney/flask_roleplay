@@ -184,7 +184,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id):
         FROM PlayerInventory
         WHERE user_id=%s
           AND conversation_id=%s
-    """, (user_id, conversation_id)
+    """, (user_id, conversation_id))
     inv_rows = cursor.fetchall()
     inventory_list = []
     for (p_n, iname, idesc, ieffect, qty, cat) in inv_rows:
