@@ -368,6 +368,24 @@ def create_all_tables():
         );
     ''')
 
+    # 19) Player Perks
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerPerks (
+            id SERIAL PRIMARY KEY,
+        
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+        
+            player_name TEXT NOT NULL,
+            perk_name TEXT NOT NULL,
+            perk_description TEXT,
+            perk_effect TEXT,
+
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
+
     conn.commit()
     conn.close()
 
