@@ -641,7 +641,6 @@ def seed_initial_data():
     insert_missing_settings()  # Provide them here
     insert_missing_activities()
     insert_missing_archetypes()
-    insert_default_player_stats_chase(user_id, conversation_id)
     print("All default data seeded successfully.")
 
 
