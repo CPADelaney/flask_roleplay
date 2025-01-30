@@ -1,5 +1,3 @@
-# routes/new_game.py
-
 import logging
 from flask import Blueprint, request, jsonify, session
 import random
@@ -7,18 +5,18 @@ from db.connection import get_db_connection
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
 from logic.npc_creation import create_npc
 
-new_game_bp = Blueprint('new_game', __name__)
+new_game_bp = Blueprint('new_game_bp', __name__)
 
 @new_game_bp.route('/start_new_game', methods=['POST'])
 def start_new_game():
     """
     Creates or re-initializes a game scenario *for the current user, in a specific conversation*.
     - Accepts optional 'conversation_id' in JSON. If not provided, we create a new conversation row.
-    - Clears data in relevant tables where user_id = this user AND conversation_id = this conversation.
-    - Resets/creates 'Chase' in PlayerStats for (user_id, conversation_id).
+    - Clears data in relevant tables (Events, NPCStats, etc.) where user_id=this user AND conversation_id=this conversation.
+    - Resets or creates 'Chase' in PlayerStats for (user_id, conversation_id).
     - Spawns 10 new unintroduced NPCs for (user_id, conversation_id).
-    - Sets new environment in CurrentRoleplay for (user_id, conversation_id).
-    - Returns environment info + sample schedule.
+    - Sets a new environment in CurrentRoleplay for (user_id, conversation_id).
+    - Returns environment info + a sample schedule + conversation_id.
     """
 
     logging.info("=== START: /start_new_game CALLED ===")
@@ -32,16 +30,17 @@ def start_new_game():
     cursor = conn.cursor()
 
     try:
+        # 2) Parse input
         data = request.get_json() or {}
         logging.info(f"Raw incoming JSON data: {data}")
         if "params" in data:
             data = data["params"]
             logging.info(f"After unwrapping 'params': {data}")
 
-        # 2) Determine conversation_id
+        # 3) Determine conversation_id
         conversation_id = data.get("conversation_id")
         if not conversation_id:
-            # If none provided, create a new conversation row for this user
+            # Create a new conversation row for this user
             cursor.execute("""
                 INSERT INTO conversations (user_id, conversation_name)
                 VALUES (%s, %s)
@@ -51,7 +50,7 @@ def start_new_game():
             logging.info(f"Created new conversation_id={conversation_id} for user_id={user_id}")
             conn.commit()
         else:
-            # Verify the conversation actually belongs to this user
+            # Verify the conversation belongs to this user
             cursor.execute("""
                 SELECT id FROM conversations
                 WHERE id=%s AND user_id=%s
@@ -62,70 +61,31 @@ def start_new_game():
                 return jsonify({"error": "Conversation not found or unauthorized"}), 403
             logging.info(f"Using existing conversation_id={conversation_id} for user_id={user_id}")
 
-        # 3) Clear relevant data *only for this user & conversation*
-        # E.g. each table: Events, PlannedEvents, PlayerInventory, Quests, NPCStats, Locations, SocialLinks, CurrentRoleplay
-        # where user_id=? and conversation_id=?
+        # 4) Clear data for this user+conversation from events, NPCStats, etc.
         logging.info(f"Deleting old game state for user_id={user_id}, conversation_id={conversation_id}.")
-
-        # Example if columns are user_id, conversation_id in these tables:
-        cursor.execute("""
-            DELETE FROM Events
-            WHERE user_id=%s AND conversation_id=%s
-        """, (user_id, conversation_id))
-
-        cursor.execute("""
-            DELETE FROM PlannedEvents
-            WHERE user_id=%s AND conversation_id=%s
-        """, (user_id, conversation_id))
-
-        cursor.execute("""
-            DELETE FROM PlayerInventory
-            WHERE user_id=%s AND conversation_id=%s
-        """, (user_id, conversation_id))
-
-        cursor.execute("""
-            DELETE FROM Quests
-            WHERE user_id=%s AND conversation_id=%s
-        """, (user_id, conversation_id))
-
-        cursor.execute("""
-            DELETE FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s
-        """, (user_id, conversation_id))
-
-        cursor.execute("""
-            DELETE FROM Locations
-            WHERE user_id=%s AND conversation_id=%s
-        """, (user_id, conversation_id))
-
-        cursor.execute("""
-            DELETE FROM SocialLinks
-            WHERE user_id=%s AND conversation_id=%s
-        """, (user_id, conversation_id))
-
-        cursor.execute("""
-            DELETE FROM CurrentRoleplay
-            WHERE user_id=%s AND conversation_id=%s
-        """, (user_id, conversation_id))
-
+        cursor.execute("DELETE FROM Events        WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
+        cursor.execute("DELETE FROM PlannedEvents WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
+        cursor.execute("DELETE FROM PlayerInventory WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
+        cursor.execute("DELETE FROM Quests        WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
+        cursor.execute("DELETE FROM NPCStats      WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
+        cursor.execute("DELETE FROM Locations     WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
+        cursor.execute("DELETE FROM SocialLinks   WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
+        cursor.execute("DELETE FROM CurrentRoleplay WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
         conn.commit()
         logging.info("Per-conversation tables cleared successfully.")
 
-        # 4) Reinsert default settings (global or user-specific)
-        # If 'settings' is truly global, no user/conversation scoping needed. Otherwise, you'd do it differently.
-        logging.info("Calling insert_missing_settings()")
-        insert_missing_settings()
-        logging.info("insert_missing_settings() completed.")
+        # 5) Insert missing settings if needed (if your 'Settings' is global, you can just call it once globally).
+        logging.info("Calling insert_missing_settings() (global or local).")
+        insert_missing_settings()  # or if it's global, it doesn't need user_id, conversation_id
 
-        # 5) Reset PlayerStats for 'Chase' in (user_id, conversation_id)
-        # We'll remove all PlayerStats for this user+conversation except 'Chase'
-        logging.info(f"Resetting PlayerStats: keep only 'Chase' for user_id={user_id}, conversation_id={conversation_id}.")
+        # 6) Reset or create the 'Chase' PlayerStats for user_id+conversation_id
+        logging.info(f"Resetting PlayerStats for user_id={user_id}, conversation_id={conversation_id}, keep only 'Chase'.")
         cursor.execute("""
             DELETE FROM PlayerStats
-            WHERE user_id=%s AND conversation_id=%s AND player_name != 'Chase'
+            WHERE user_id=%s AND conversation_id=%s AND player_name <> 'Chase'
         """, (user_id, conversation_id))
 
-        # Now check if 'Chase' row exists
+        # Check if 'Chase' row exists
         cursor.execute("""
             SELECT id FROM PlayerStats
             WHERE user_id=%s AND conversation_id=%s AND player_name='Chase'
@@ -161,18 +121,21 @@ def start_new_game():
         conn.commit()
         logging.info("PlayerStats reset complete.")
 
-        # 6) Spawn 10 new unintroduced NPCs for (user_id, conversation_id)
+        # 7) Spawn 10 new unintroduced NPCs in (user_id, conversation_id)
         logging.info("Spawning 10 new unintroduced NPCs.")
+        from logic.npc_creation import create_npc  # ensure it can handle user_id/conversation_id
         for i in range(10):
-            # your create_npc() should accept (user_id, conversation_id, introduced=False)
-            new_id = create_npc(user_id=user_id, conversation_id=conversation_id, introduced=False)
+            new_id = create_npc(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                introduced=False
+            )
             logging.info(f"Created new unintroduced NPC {i+1}/10, ID={new_id}")
 
-        # 7) Possibly re-insert missing settings again
-        logging.info("Calling insert_missing_settings() again.")
-        insert_missing_settings()
+        # 8) Optionally re-insert missing settings again if you want? (unclear if needed)
+        # insert_missing_settings() 
 
-        # 8) Generate environment & store in CurrentRoleplay (with user_id, conversation_id)
+        # 9) Generate environment & store in CurrentRoleplay
         logging.info("Generating new mega setting via generate_mega_setting_logic()")
         mega_data = generate_mega_setting_logic()
         if "error" in mega_data:
@@ -189,7 +152,7 @@ def start_new_game():
         """, (user_id, conversation_id, environment_name))
         conn.commit()
 
-        # 9) Provide environment description, schedule, role
+        # Provide environment info
         environment_desc = (
             "An eclectic realm combining monstrous societies, futuristic tech, "
             "and archaic ruins floating across the sky. Strange energies swirl, "
@@ -244,11 +207,7 @@ def start_new_game():
             "He scrapes by on odd jobs, forging bonds with the realm’s formidable denizens."
         )
 
-        # 10) Return final message + environment data
-        success_msg = (
-            "New game started. "
-            f"New environment = {environment_name}, conversation_id={conversation_id}"
-        )
+        success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
         logging.info(f"Success! Returning 200 with message: {success_msg}")
 
         return jsonify({
