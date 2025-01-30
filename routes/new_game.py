@@ -219,6 +219,7 @@ def start_new_game():
                 "Afternoon": "Work",
                 "Evening": "Meetup with hobby group",
                 "Night": "Return to inn"
+            },
             "Friday": {
                 "Morning": "Wake at small inn",
                 "Afternoon": "Guild errands",
