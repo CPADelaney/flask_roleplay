@@ -100,7 +100,7 @@ def next_storybeat():
         # Possibly meltdown logic, environment generation triggers, etc.
 
         # 7) aggregator_data => from aggregator scoping
-        aggregator_data = get_aggregated_roleplay_context(user_id, conv_id)
+        aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
         logging.info(f"[next_storybeat] aggregator_data keys: {aggregator_data.keys()}")
 
         # Possibly generate new environment
