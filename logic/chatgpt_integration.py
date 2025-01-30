@@ -1,6 +1,6 @@
 # logic/chatgpt_integration.py
 import os
-import openai
+from openai import OpenAI
 
 from logic.prompts import SYSTEM_PROMPT, DB_SCHEMA_PROMPT
 
@@ -14,15 +14,15 @@ def get_chatgpt_response(user_input: str, model="chatgpt-4o-latest") -> str:
 
     messages = [
         # 1) Primary system prompt
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "developer", "content": SYSTEM_PROMPT},
         
         # 2) Extra system prompt or 'developer' context: the DB schema
-      #  {"role": "system", "content": DB_SCHEMA_PROMPT},
+        {"role": "developer", "content": DB_SCHEMA_PROMPT},
 
         # 3) The user message
         {"role": "user", "content": user_input}
     ]
-    
+    store: true,
     try:
         response = openai.ChatCompletion.create(
             model=model,
