@@ -638,7 +638,7 @@ def seed_initial_data():
     """
     insert_or_update_game_rules()
     insert_stat_definitions()
-    insert_missing_settings()
+    insert_missing_settings(user_id, conversation_id)  # Provide them here
     insert_missing_activities()
     insert_missing_archetypes()
     insert_default_player_stats_chase()
