@@ -1,31 +1,36 @@
 # routes/settings_routes.py
 
-from flask import Blueprint, request, jsonify
-from db.connection import get_db_connection
 import random, json
+import logging
+from flask import Blueprint, request, jsonify, session
+from db.connection import get_db_connection
 
-settings_bp = Blueprint('settings', __name__)
+settings_bp = Blueprint('settings_bp', __name__)
 
-def generate_mega_setting_logic():
+def generate_mega_setting_logic(user_id, conversation_id):
     """
-    This function does the actual merging of random settings 
-    and returns a Python dict (NOT a Flask response).
+    This function merges random 'Settings' rows for (user_id, conversation_id)
+    into a single "mega setting". Returns a Python dict with results.
+
+    If you want them to be truly global, you could remove user_id/conversation_id scoping.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    # 1) Fetch all Settings
+
+    # 1) Fetch all Settings for this user + conversation
     cursor.execute("""
         SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples
         FROM Settings
-    """)
+        WHERE user_id=%s
+          AND conversation_id=%s
+    """, (user_id, conversation_id))
     rows = cursor.fetchall()
     conn.close()
 
     if not rows:
-        # Return a dict with an "error" field or default fallback
+        # Return a dict with an "error" or fallback
         return {
-            "error": "No settings found in DB",
+            "error": "No settings found in DB for this user & conversation.",
             "mega_name": "Empty Settings Table",
             "mega_description": "No environment generated",
             "enhanced_features": [],
@@ -33,19 +38,25 @@ def generate_mega_setting_logic():
             "activity_examples": []
         }
 
-    # 2) Convert rows
+    # 2) Convert rows to a list of dicts
     all_settings = []
     for row_id, row_name, row_mood, row_ef, row_sm, row_ae in rows:
+        # row_ef, row_sm, row_ae might be stored as JSON in the DB. If so, parse them:
+        # (If they're already JSON, remove the loads part.)
+        ef_list = row_ef if isinstance(row_ef, list) else json.loads(row_ef)
+        sm_dict = row_sm if isinstance(row_sm, dict) else json.loads(row_sm)
+        ae_list = row_ae if isinstance(row_ae, list) else json.loads(row_ae)
+
         all_settings.append({
             "id": row_id,
             "name": row_name,
             "mood_tone": row_mood,
-            "enhanced_features": row_ef,  # list
-            "stat_modifiers": row_sm,     # dict
-            "activity_examples": row_ae   # list
+            "enhanced_features": ef_list,
+            "stat_modifiers": sm_dict,
+            "activity_examples": ae_list
         })
 
-    # 3) Randomly pick 3–5
+    # 3) Randomly pick 3–5 of them
     num_settings = random.choice([3, 4, 5])
     selected = random.sample(all_settings, min(num_settings, len(all_settings)))
     picked_names = [s["name"] for s in selected]
@@ -53,7 +64,7 @@ def generate_mega_setting_logic():
     # 4) Build mega_name
     mega_name = " + ".join(picked_names)
 
-    # 5) Merge mood_tones
+    # 5) Merge mood_tones into a single descriptive line
     all_mood_tones = [s["mood_tone"] for s in selected]
     if len(all_mood_tones) == 1:
         mega_description = f"The setting is just {all_mood_tones[0]}, forming a single thematic environment."
@@ -64,7 +75,7 @@ def generate_mega_setting_logic():
             "Together, they form a grand vision, unexpected and brilliant."
         )
 
-    # 6) Merge features, stat modifiers, activities
+    # 6) Merge features, stat_modifiers, activities
     combined_enhanced_features = []
     combined_stat_modifiers = {}
     combined_activity_examples = []
@@ -82,13 +93,13 @@ def generate_mega_setting_logic():
             if key not in combined_stat_modifiers:
                 combined_stat_modifiers[key] = val
             else:
-                # If you want to chain them
+                # If you want to chain them, or sum them, or override them, etc.
                 combined_stat_modifiers[key] = f"{combined_stat_modifiers[key]}, {val}"
 
         # Merge activities
         combined_activity_examples.extend(ae_list)
 
-    # 7) Return the final dictionary
+    # 7) Return final dictionary
     return {
         "selected_settings": picked_names,
         "mega_name": mega_name,
@@ -102,26 +113,34 @@ def generate_mega_setting_logic():
 @settings_bp.route('/generate_mega_setting', methods=['POST'])
 def generate_mega_setting_route():
     """
-    A route that calls the above logic function,
-    then jsonify(...)'s the result to return a Flask Response.
+    A route that calls the logic function, scoping by user_id + conversation_id.
+    Expects { "conversation_id": XXX } in JSON or something similar.
     """
     try:
-        data = generate_mega_setting_logic()
-        if "error" in data:
-            return jsonify(data), 404  # or 200 if you prefer
-        return jsonify(data), 200
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+
+        data = request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        if not conversation_id:
+            return jsonify({"error":"No conversation_id provided"}), 400
+
+        result = generate_mega_setting_logic(user_id, conversation_id)
+        if "error" in result:
+            return jsonify(result), 404
+        return jsonify(result), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-def insert_missing_settings():
+def insert_missing_settings(user_id, conversation_id):
     """
-    Inserts the default 1–30 settings if they do not exist.
-    This is usually called as part of initialization or admin logic.
+    Inserts the default 1–30 settings if they do not exist for this user & conversation.
+    Each setting row is associated with (user_id, conversation_id, name).
     """
-    # Full set of 30 (truncated excerpt shown here for brevity).
-    # In your code, you have the entire list from #1 to #30.
-    # Full set of 30
+    # Full set of 30 (truncated excerpt). 
+    # Here, each setting is basically the same structure, but we also store them with user_id/conversation_id.
     settings_data = [
         {
             "name": "All-Girls College",  # #1
@@ -612,30 +631,36 @@ def insert_missing_settings():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1. Retrieve existing setting names
-    cursor.execute("SELECT name FROM Settings")
+    # 1) Retrieve existing setting names for (user_id, conversation_id)
+    cursor.execute("""
+        SELECT name
+        FROM Settings
+        WHERE user_id=%s
+          AND conversation_id=%s
+    """, (user_id, conversation_id))
     existing = {row[0] for row in cursor.fetchall()}
 
-    # 2. Only insert if not existing
-    for setting in settings_data:
-        if setting["name"] not in existing:
-            cursor.execute(
-                '''
-                INSERT INTO Settings
-                  (name, mood_tone, enhanced_features, stat_modifiers, activity_examples)
-                VALUES (%s, %s, %s, %s, %s)
-                ''',
-                (
-                    setting["name"],
-                    setting["mood_tone"],
-                    json.dumps(setting["enhanced_features"]),
-                    json.dumps(setting["stat_modifiers"]),
-                    json.dumps(setting["activity_examples"])
+    # 2) Insert if not existing
+    for s in settings_data:
+        if s["name"] not in existing:
+            cursor.execute("""
+                INSERT INTO Settings (
+                  user_id, conversation_id,
+                  name, mood_tone,
+                  enhanced_features, stat_modifiers, activity_examples
                 )
-            )
-            print(f"Inserted new setting: {setting['name']}")
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                user_id, conversation_id,
+                s["name"],
+                s["mood_tone"],
+                json.dumps(s["enhanced_features"]),
+                json.dumps(s["stat_modifiers"]),
+                json.dumps(s["activity_examples"])
+            ))
+            print(f"Inserted new setting for user={user_id}, conv={conversation_id}, name={s['name']}")
         else:
-            print(f"Skipped existing setting: {setting['name']}")
+            print(f"Skipped existing setting: {s['name']}")
 
     conn.commit()
     conn.close()
