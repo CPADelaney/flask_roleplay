@@ -21,10 +21,14 @@ def get_chatgpt_response(user_input: str) -> str:
                 {"role": "developer", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_input}
             ]
-        )
-        # The doc indicates the text is in completion.choices[0].message["content"]
-        return completion.choices[0].message["content"]
-
-    except Exception as e:
-        print(f"Error calling GPT-4o: {e}")
-        return f"Error: Unable to fetch response from GPT-4o. Reason: {e}"
+    response = client.chat.completions.create(
+        model="gpt-4o",  # Ensure correct model name is used
+        messages=messages,
+        temperature=0.2,
+        max_tokens=1000,
+        frequency_penalty=0.0
+    )
+    response_text = response.choices[0].message.content
+    tokens_used = response.usage.total_tokens
+    
+    return {"response": response_text, "tokens_used": tokens_used}
