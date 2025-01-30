@@ -1,7 +1,6 @@
 import random
 import json
 import logging
-from flask import Blueprint, jsonify
 from db.connection import get_db_connection
 
 logging.basicConfig(level=logging.DEBUG)
@@ -60,12 +59,12 @@ def clamp(value, min_val, max_val):
 def combine_archetype_stats(archetype_rows):
     """
     archetype_rows is a list of (id, name, baseline_stats).
-    baseline_stats might be JSON or a dict of e.g.:
-       { "dominance_range": [20,60], "dominance_modifier": 5, ... }
-    We do a random pick within each stat's range, add the modifier,
-    sum them for all chosen archetypes, then average/clamp them.
+    baseline_stats might be JSON or a dict:
+      e.g. { "dominance_range": [20,60], "dominance_modifier": 5, ... }
+    We random pick within each stat's range, add the modifier,
+    sum for all chosen archetypes, then average & clamp them.
     """
-    # We'll accumulate sums for each stat, then average them
+
     sums = {
         "dominance": 0,
         "cruelty": 0,
@@ -76,7 +75,7 @@ def combine_archetype_stats(archetype_rows):
     }
     count = len(archetype_rows)
     if count == 0:
-        # No archetypes -> fallback: random ~30
+        # No archetypes => fallback random
         for k in sums.keys():
             sums[k] = random.randint(0, 30)
         return sums
@@ -98,7 +97,7 @@ def combine_archetype_stats(archetype_rows):
                 val = random.randint(0, 30)
             sums[stat_key] += val
 
-    # Now average & clamp
+    # average & clamp
     for sk in sums.keys():
         sums[sk] = sums[sk] / count
         if sk in ["trust", "respect"]:
@@ -111,7 +110,7 @@ def combine_archetype_stats(archetype_rows):
 def archetypes_to_json(rows):
     """
     Convert (id, name, baseline_stats) => 
-       [ {"id": id, "name": name}, ... ].
+       [ {"id": id, "name": name}, ... ]
     """
     arr = []
     for (aid, aname, _bs) in rows:
@@ -121,21 +120,28 @@ def archetypes_to_json(rows):
 ###################
 # 6) Create NPC
 ###################
-def create_npc(npc_name=None, introduced=False, sex="female", reroll_extra=False, total_archetypes=4):
+def create_npc(user_id, conversation_id,
+               npc_name=None,
+               introduced=False,
+               sex="female",
+               reroll_extra=False,
+               total_archetypes=4):
     """
-    Creates a new NPC in NPCStats with multiple archetypes logic.
-    - If sex='male', we skip archetypes or treat them differently.
+    Creates a new NPC in NPCStats with multiple archetypes logic,
+    scoping by user_id + conversation_id.
+
+    - If sex='male', we skip archetypes or do minimal random.
     - total_archetypes: how many normal archetypes to pick.
-    - reroll_extra: if True, we add an extra from the REROLL_IDS pool (62..72).
+    - reroll_extra: if True, we add 1 from REROLL_IDS (62..72).
     """
     if not npc_name:
         npc_name = f"NPC_{random.randint(1000,9999)}"
-    logging.info(f"[create_npc] Creating NPC: name={npc_name}, introduced={introduced}, sex={sex}")
+    logging.info(f"[create_npc] user_id={user_id}, conversation_id={conversation_id}, name={npc_name}, introduced={introduced}, sex={sex}")
 
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1) If sex = male, skip archetypes or do minimal
+    # 1) If male, skip archetypes
     if sex.lower() == "male":
         chosen_arcs = []
         final_stats = {
@@ -147,7 +153,7 @@ def create_npc(npc_name=None, introduced=False, sex="female", reroll_extra=False
             "intensity": random.randint(0,30)
         }
     else:
-        # 2) We gather all archetypes
+        # 2) Gather all archetypes
         cursor.execute("SELECT id, name, baseline_stats FROM Archetypes")
         all_arcs = cursor.fetchall()
         if not all_arcs:
@@ -172,23 +178,24 @@ def create_npc(npc_name=None, introduced=False, sex="female", reroll_extra=False
             else:
                 chosen_arcs = random.sample(normal_pool, total_archetypes)
 
-            # if reroll_extra, add 1 random from reroll_pool
+            # if reroll_extra, add 1 from reroll_pool
             if reroll_extra and reroll_pool:
                 chosen_arcs.append(random.choice(reroll_pool))
 
-            # now combine stats
             final_stats = combine_archetype_stats(chosen_arcs)
 
-    # 3) Insert the NPC
+    # 3) Insert the NPC row in NPCStats with user_id, conversation_id
     try:
         cursor.execute("""
             INSERT INTO NPCStats (
+              user_id, conversation_id,
               npc_name, introduced, sex,
               dominance, cruelty, closeness, trust, respect, intensity,
               archetypes,
               memory, monica_level
             )
             VALUES (
+              %s, %s,
               %s, %s, %s,
               %s, %s, %s, %s, %s, %s,
               %s,
@@ -196,6 +203,7 @@ def create_npc(npc_name=None, introduced=False, sex="female", reroll_extra=False
             )
             RETURNING npc_id
         """, (
+            user_id, conversation_id,
             npc_name,
             introduced,
             sex.lower(),
@@ -212,8 +220,8 @@ def create_npc(npc_name=None, introduced=False, sex="female", reroll_extra=False
         conn.close()
         raise
 
-    # 4) Assign random flavor (hobbies/likes/dislikes/etc.)
-    assign_npc_flavor(new_id)
+    # 4) Assign random flavor
+    assign_npc_flavor(user_id, conversation_id, new_id)
 
     conn.close()
     return new_id
@@ -221,36 +229,42 @@ def create_npc(npc_name=None, introduced=False, sex="female", reroll_extra=False
 ###################
 # 7) NPC Flavor
 ###################
-def assign_npc_flavor(npc_id: int):
+def assign_npc_flavor(user_id, conversation_id, npc_id: int):
     """
-    Randomly pick 3 hobbies, 3 likes, 3 dislikes, 5 personalities from the
-    JSON data, then store them in NPCStats for that npc_id.
+    Randomly pick e.g. 3 hobbies, 5 personalities, 3 likes, 3 dislikes 
+    from JSON data, then store them in NPCStats 
+    for this user_id + conversation_id + npc_id.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    hbs    = random.sample(DATA.get("hobbies", []),       k=3) if len(DATA.get("hobbies", []))>=3 else []
-    pers   = random.sample(DATA.get("personalities", []), k=5) if len(DATA.get("personalities", []))>=5 else []
-    lks    = random.sample(DATA.get("likes", []),         k=3) if len(DATA.get("likes", []))>=3 else []
-    dlks   = random.sample(DATA.get("dislikes", []),      k=3) if len(DATA.get("dislikes", []))>=3 else []
+    hobby_pool       = DATA.get("hobbies", [])
+    personality_pool = DATA.get("personalities", [])
+    likes_pool       = DATA.get("likes", [])
+    dislikes_pool    = DATA.get("dislikes", [])
+
+    hbs  = random.sample(hobby_pool, 3)       if len(hobby_pool) >= 3 else hobby_pool
+    pers = random.sample(personality_pool, 5) if len(personality_pool) >= 5 else personality_pool
+    lks  = random.sample(likes_pool, 3)       if len(likes_pool) >= 3 else likes_pool
+    dlks = random.sample(dislikes_pool, 3)    if len(dislikes_pool) >= 3 else dislikes_pool
 
     try:
         cursor.execute("""
             UPDATE NPCStats
-            SET hobbies = %s,
-                personality_traits = %s,
-                likes = %s,
-                dislikes = %s
-            WHERE npc_id = %s
+            SET hobbies=%s,
+                personality_traits=%s,
+                likes=%s,
+                dislikes=%s
+            WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
         """, (
             json.dumps(hbs),
             json.dumps(pers),
             json.dumps(lks),
             json.dumps(dlks),
-            npc_id
+            user_id, conversation_id, npc_id
         ))
         conn.commit()
-        logging.debug(f"[assign_npc_flavor] Flavor set for npc_id={npc_id}")
+        logging.debug(f"[assign_npc_flavor] Flavor set for npc_id={npc_id}, user={user_id}, conv={conversation_id}")
     except Exception as e:
         conn.rollback()
         logging.error(f"[assign_npc_flavor] DB error: {e}", exc_info=True)
