@@ -242,14 +242,19 @@ def create_all_tables():
         );
     ''')
 
-    # Let messages cascade-delete if conversation is deleted
+    # -- Fix the problematic constraint code below --
+    # Instead of "ADD CONSTRAINT IF NOT EXISTS", do "DROP ... IF EXISTS" then "ADD CONSTRAINT"
+    # --------------
+    # 1) Drop old constraint if present
     cursor.execute('''
         ALTER TABLE messages
         DROP CONSTRAINT IF EXISTS messages_conversation_id_fkey
     ''')
+
+    # 2) Now add the constraint normally, without IF NOT EXISTS
     cursor.execute('''
         ALTER TABLE messages
-        ADD CONSTRAINT IF NOT EXISTS messages_conversation_id_fkey
+        ADD CONSTRAINT messages_conversation_id_fkey
         FOREIGN KEY (conversation_id) REFERENCES conversations(id)
         ON DELETE CASCADE
     ''')
@@ -269,36 +274,36 @@ def create_all_tables():
         ADD COLUMN IF NOT EXISTS folder_id INTEGER
     ''')
 
+    # We'll drop old constraint then add again
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE conversations
-            DROP CONSTRAINT IF EXISTS fk_conversations_folder;
+            ALTER TABLE conversations DROP CONSTRAINT IF EXISTS fk_conversations_folder;
         EXCEPTION WHEN undefined_object THEN
             -- no constraint yet
         END;
         $$
     ''')
 
+    # Add constraint plainly, no IF NOT EXISTS
     cursor.execute('''
         DO $$
         BEGIN
             ALTER TABLE conversations
-            ADD CONSTRAINT IF NOT EXISTS fk_conversations_folder
+            ADD CONSTRAINT fk_conversations_folder
             FOREIGN KEY (folder_id)
             REFERENCES folders(id)
             ON DELETE CASCADE;
         EXCEPTION WHEN duplicate_object THEN
-            -- constraint already there
+            -- constraint might already exist
         END;
         $$
     ''')
 
     # --------------------------------------------------------------------
     # Now add user_id AND conversation_id to each table for multi-user & multi-conversation scoping
-    # We'll do them with NOT NULL if you want them always required.
 
-    # Example for NPCStats:
+    # NPCStats:
     cursor.execute('''
         ALTER TABLE NPCStats
         ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL
@@ -307,32 +312,35 @@ def create_all_tables():
         ALTER TABLE NPCStats
         ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL
     ''')
-
+    # Drop then add constraint(s) plainly
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE NPCStats
-            ADD CONSTRAINT IF NOT EXISTS npcstats_user_fk
-            FOREIGN KEY (user_id) REFERENCES users(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE NPCStats DROP CONSTRAINT IF EXISTS npcstats_user_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
     ''')
-
+    cursor.execute('''
+        ALTER TABLE NPCStats
+        ADD CONSTRAINT npcstats_user_fk
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
+    ''')
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE NPCStats
-            ADD CONSTRAINT IF NOT EXISTS npcstats_conv_fk
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE NPCStats DROP CONSTRAINT IF EXISTS npcstats_conv_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
     ''')
+    cursor.execute('''
+        ALTER TABLE NPCStats
+        ADD CONSTRAINT npcstats_conv_fk
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        ON DELETE CASCADE
+    ''')
 
-    # Same pattern for PlayerStats:
+    # PlayerStats:
     cursor.execute('''
         ALTER TABLE PlayerStats
         ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL
@@ -344,24 +352,28 @@ def create_all_tables():
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE PlayerStats
-            ADD CONSTRAINT IF NOT EXISTS playerstats_user_fk
-            FOREIGN KEY (user_id) REFERENCES users(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE PlayerStats DROP CONSTRAINT IF EXISTS playerstats_user_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE PlayerStats
+        ADD CONSTRAINT playerstats_user_fk
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
     ''')
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE PlayerStats
-            ADD CONSTRAINT IF NOT EXISTS playerstats_conv_fk
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE PlayerStats DROP CONSTRAINT IF EXISTS playerstats_conv_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE PlayerStats
+        ADD CONSTRAINT playerstats_conv_fk
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        ON DELETE CASCADE
     ''')
 
     # CurrentRoleplay:
@@ -376,24 +388,28 @@ def create_all_tables():
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE CurrentRoleplay
-            ADD CONSTRAINT IF NOT EXISTS currentroleplay_user_fk
-            FOREIGN KEY (user_id) REFERENCES users(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE CurrentRoleplay DROP CONSTRAINT IF EXISTS currentroleplay_user_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE CurrentRoleplay
+        ADD CONSTRAINT currentroleplay_user_fk
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
     ''')
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE CurrentRoleplay
-            ADD CONSTRAINT IF NOT EXISTS currentroleplay_conv_fk
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE CurrentRoleplay DROP CONSTRAINT IF EXISTS currentroleplay_conv_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE CurrentRoleplay
+        ADD CONSTRAINT currentroleplay_conv_fk
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        ON DELETE CASCADE
     ''')
 
     # Events:
@@ -408,24 +424,28 @@ def create_all_tables():
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE Events
-            ADD CONSTRAINT IF NOT EXISTS events_user_fk
-            FOREIGN KEY (user_id) REFERENCES users(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE Events DROP CONSTRAINT IF EXISTS events_user_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE Events
+        ADD CONSTRAINT events_user_fk
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
     ''')
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE Events
-            ADD CONSTRAINT IF NOT EXISTS events_conv_fk
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE Events DROP CONSTRAINT IF EXISTS events_conv_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE Events
+        ADD CONSTRAINT events_conv_fk
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        ON DELETE CASCADE
     ''')
 
     # PlannedEvents:
@@ -440,24 +460,28 @@ def create_all_tables():
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE PlannedEvents
-            ADD CONSTRAINT IF NOT EXISTS plannedevents_user_fk
-            FOREIGN KEY (user_id) REFERENCES users(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE PlannedEvents DROP CONSTRAINT IF EXISTS plannedevents_user_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE PlannedEvents
+        ADD CONSTRAINT plannedevents_user_fk
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
     ''')
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE PlannedEvents
-            ADD CONSTRAINT IF NOT EXISTS plannedevents_conv_fk
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE PlannedEvents DROP CONSTRAINT IF EXISTS plannedevents_conv_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE PlannedEvents
+        ADD CONSTRAINT plannedevents_conv_fk
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        ON DELETE CASCADE
     ''')
 
     # PlayerInventory:
@@ -472,24 +496,28 @@ def create_all_tables():
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE PlayerInventory
-            ADD CONSTRAINT IF NOT EXISTS playerinventory_user_fk
-            FOREIGN KEY (user_id) REFERENCES users(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE PlayerInventory DROP CONSTRAINT IF EXISTS playerinventory_user_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE PlayerInventory
+        ADD CONSTRAINT playerinventory_user_fk
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
     ''')
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE PlayerInventory
-            ADD CONSTRAINT IF NOT EXISTS playerinventory_conv_fk
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE PlayerInventory DROP CONSTRAINT IF EXISTS playerinventory_conv_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE PlayerInventory
+        ADD CONSTRAINT playerinventory_conv_fk
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        ON DELETE CASCADE
     ''')
 
     # Quests:
@@ -504,24 +532,28 @@ def create_all_tables():
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE Quests
-            ADD CONSTRAINT IF NOT EXISTS quests_user_fk
-            FOREIGN KEY (user_id) REFERENCES users(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE Quests DROP CONSTRAINT IF EXISTS quests_user_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE Quests
+        ADD CONSTRAINT quests_user_fk
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
     ''')
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE Quests
-            ADD CONSTRAINT IF NOT EXISTS quests_conv_fk
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE Quests DROP CONSTRAINT IF EXISTS quests_conv_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE Quests
+        ADD CONSTRAINT quests_conv_fk
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        ON DELETE CASCADE
     ''')
 
     # Locations:
@@ -536,24 +568,28 @@ def create_all_tables():
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE Locations
-            ADD CONSTRAINT IF NOT EXISTS locations_user_fk
-            FOREIGN KEY (user_id) REFERENCES users(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE Locations DROP CONSTRAINT IF EXISTS locations_user_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE Locations
+        ADD CONSTRAINT locations_user_fk
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
     ''')
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE Locations
-            ADD CONSTRAINT IF NOT EXISTS locations_conv_fk
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE Locations DROP CONSTRAINT IF EXISTS locations_conv_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE Locations
+        ADD CONSTRAINT locations_conv_fk
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        ON DELETE CASCADE
     ''')
 
     # SocialLinks:
@@ -568,24 +604,28 @@ def create_all_tables():
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE SocialLinks
-            ADD CONSTRAINT IF NOT EXISTS sociallinks_user_fk
-            FOREIGN KEY (user_id) REFERENCES users(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE SocialLinks DROP CONSTRAINT IF EXISTS sociallinks_user_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE SocialLinks
+        ADD CONSTRAINT sociallinks_user_fk
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
     ''')
     cursor.execute('''
         DO $$
         BEGIN
-            ALTER TABLE SocialLinks
-            ADD CONSTRAINT IF NOT EXISTS sociallinks_conv_fk
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
+            ALTER TABLE SocialLinks DROP CONSTRAINT IF EXISTS sociallinks_conv_fk;
+        EXCEPTION WHEN undefined_object THEN END;
         $$
+    ''')
+    cursor.execute('''
+        ALTER TABLE SocialLinks
+        ADD CONSTRAINT sociallinks_conv_fk
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+        ON DELETE CASCADE
     ''')
 
     conn.commit()
