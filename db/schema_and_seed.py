@@ -13,18 +13,14 @@ from logic.stats_logic import (
 
 def create_all_tables():
     """
-    Creates all the core tables if they do not exist yet.
-    Then adds user_id and conversation_id columns to each table for multi-user,
-    multi-conversation scoping, with ON DELETE CASCADE references.
+    Creates all core tables with user_id, conversation_id columns from the start,
+    so we don't need separate ALTER TABLE statements later.
     """
 
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1) The base tables
-    # (Same as your original, no changes needed in the CREATE TABLE ... IF NOT EXISTS)
-
-    # --------------- EXAMPLE: CREATE TABLES IF NOT EXISTS ---------------
+    # 1) Settings (Global or not? If truly global, omit user_id/conversation_id here)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Settings (
             id SERIAL PRIMARY KEY,
@@ -36,13 +32,30 @@ def create_all_tables():
         );
     ''')
 
+    # 2) CurrentRoleplay (with user_id, conversation_id so each user+conversation can store distinct keys)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS CurrentRoleplay (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
+            -- Instead of one PK on "key", we can do a composite:
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+
+            PRIMARY KEY (user_id, conversation_id, key),
+
+            -- user_id references
+            FOREIGN KEY (user_id)
+                REFERENCES users(id)
+                ON DELETE CASCADE,
+
+            -- conversation_id references
+            FOREIGN KEY (conversation_id)
+                REFERENCES conversations(id)
+                ON DELETE CASCADE
         );
     ''')
 
+    # 3) StatDefinitions (presumably global, no user/conversation)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS StatDefinitions (
           id SERIAL PRIMARY KEY,
@@ -56,6 +69,7 @@ def create_all_tables():
         );
     ''')
 
+    # 4) GameRules (global as well)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS GameRules (
           id SERIAL PRIMARY KEY,
@@ -65,11 +79,98 @@ def create_all_tables():
         );
     ''')
 
+    # 5) users (so we can reference user_id below)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          username VARCHAR(50) NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+    ''')
+
+    # 6) conversations (belongs to a user)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS conversations (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          conversation_name VARCHAR(100) NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW(),
+
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+    ''')
+
+    # 7) messages (belongs to a conversation)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS messages (
+          id SERIAL PRIMARY KEY,
+          conversation_id INTEGER NOT NULL,
+          sender VARCHAR(50) NOT NULL,
+          content TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW(),
+
+          FOREIGN KEY (conversation_id)
+              REFERENCES conversations(id)
+              ON DELETE CASCADE
+        );
+    ''')
+
+    # 8) folders (optional)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS folders (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            folder_name TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+    ''')
+
+    # Add folder_id to conversations
+    cursor.execute('''
+        ALTER TABLE conversations
+        ADD COLUMN IF NOT EXISTS folder_id INTEGER;
+    ''')
+    # Add a foreign key for folder_id
+    cursor.execute('''
+        DO $$
+        BEGIN
+            ALTER TABLE conversations DROP CONSTRAINT IF EXISTS fk_conversations_folder;
+        EXCEPTION WHEN undefined_object THEN
+            -- no constraint yet
+        END;
+        $$
+    ''')
+    cursor.execute('''
+        DO $$
+        BEGIN
+            ALTER TABLE conversations
+            ADD CONSTRAINT fk_conversations_folder
+            FOREIGN KEY (folder_id)
+            REFERENCES folders(id)
+            ON DELETE CASCADE;
+        EXCEPTION WHEN duplicate_object THEN
+        END;
+        $$
+    ''')
+
+    # ----------------------------------------------------------------
+    # Now define the per-user, per-conversation tables
+    # (We build them with user_id + conversation_id from the start)
+    # ----------------------------------------------------------------
+
+    # 9) NPCStats
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCStats (
             npc_id SERIAL PRIMARY KEY,
+
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+
             npc_name TEXT NOT NULL,
-            introduced BOOLEAN default FALSE,
+            introduced BOOLEAN DEFAULT FALSE,
 
             archetypes JSONB,
 
@@ -92,13 +193,21 @@ def create_all_tables():
             affiliations JSONB,
 
             schedule JSONB,
-            current_location TEXT
+            current_location TEXT,
+
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
+    # 10) PlayerStats
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerStats (
            id SERIAL PRIMARY KEY,
+
+           user_id INTEGER NOT NULL,
+           conversation_id INTEGER NOT NULL,
+
            player_name TEXT NOT NULL,
            corruption INT CHECK (corruption BETWEEN 0 AND 100),
            confidence INT CHECK (confidence BETWEEN 0 AND 100),
@@ -107,10 +216,14 @@ def create_all_tables():
            dependency INT CHECK (dependency BETWEEN 0 AND 100),
            lust INT CHECK (lust BETWEEN 0 AND 100),
            mental_resilience INT CHECK (mental_resilience BETWEEN 0 AND 100),
-           physical_endurance INT CHECK (physical_endurance BETWEEN 0 AND 100)
+           physical_endurance INT CHECK (physical_endurance BETWEEN 0 AND 100),
+
+           FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+           FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
+    # 11) Archetypes (global, no user/conversation)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Archetypes (
             id SERIAL PRIMARY KEY,
@@ -122,6 +235,7 @@ def create_all_tables():
         );
     ''')
 
+    # 12) Activities (global, no user/conversation)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Activities (
           id SERIAL PRIMARY KEY,
@@ -133,64 +247,111 @@ def create_all_tables():
         );
     ''')
 
+    # 13) PlayerInventory
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerInventory (
             id SERIAL PRIMARY KEY,
+
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+
             player_name TEXT NOT NULL,
             item_name TEXT NOT NULL,
             item_description TEXT,
             item_effect TEXT,
             quantity INT DEFAULT 1,
             category TEXT,
-            UNIQUE (player_name, item_name)
+
+            UNIQUE (user_id, conversation_id, player_name, item_name),
+
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
+    # 14) Locations
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Locations (
             id SERIAL PRIMARY KEY,
+
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+
             name TEXT NOT NULL,
             description TEXT,
-            open_hours JSONB
+            open_hours JSONB,
+
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
+    # 15) Events
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Events (
             id SERIAL PRIMARY KEY,
+
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+
             event_name TEXT NOT NULL,
             description TEXT,
             start_time TEXT NOT NULL,
             end_time TEXT NOT NULL,
-            location TEXT NOT NULL
+            location TEXT NOT NULL,
+
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
+    # 16) Quests
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Quests (
             quest_id SERIAL PRIMARY KEY,
+
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+
             quest_name TEXT,
             status TEXT NOT NULL DEFAULT 'In Progress',
             progress_detail TEXT,
             quest_giver TEXT,
-            reward TEXT
+            reward TEXT,
+
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
+    # 17) PlannedEvents
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlannedEvents (
           event_id SERIAL PRIMARY KEY,
+
+          user_id INTEGER NOT NULL,
+          conversation_id INTEGER NOT NULL,
+
           npc_id INT REFERENCES NPCStats(npc_id),
           day INT NOT NULL,
           time_of_day TEXT NOT NULL,
           override_location TEXT NOT NULL,
-          UNIQUE(npc_id, day, time_of_day)
+
+          UNIQUE(npc_id, day, time_of_day),
+
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
+    # 18) SocialLinks
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS SocialLinks (
             link_id SERIAL PRIMARY KEY,
+
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+
             entity1_type TEXT NOT NULL,
             entity1_id INT NOT NULL,
             entity2_type TEXT NOT NULL,
@@ -199,438 +360,16 @@ def create_all_tables():
             link_type TEXT,
             link_level INT DEFAULT 0,
             link_history JSONB,
-            UNIQUE (entity1_type, entity1_id, entity2_type, entity2_id)
+
+            UNIQUE (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id),
+
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS PlayerPerks (
-            id SERIAL PRIMARY KEY,
-            player_name TEXT NOT NULL,
-            perk_name TEXT NOT NULL,
-            perk_description TEXT,
-            perk_effect TEXT,
-            UNIQUE (player_name, perk_name)
-        );
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-          id SERIAL PRIMARY KEY,
-          username VARCHAR(50) NOT NULL UNIQUE,
-          password_hash TEXT NOT NULL,
-          created_at TIMESTAMP DEFAULT NOW()
-        );
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS conversations (
-          id SERIAL PRIMARY KEY,
-          user_id INTEGER NOT NULL REFERENCES users(id),
-          conversation_name VARCHAR(100) NOT NULL,
-          created_at TIMESTAMP DEFAULT NOW()
-        );
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-          id SERIAL PRIMARY KEY,
-          conversation_id INTEGER NOT NULL REFERENCES conversations(id),
-          sender VARCHAR(50) NOT NULL,
-          content TEXT NOT NULL,
-          created_at TIMESTAMP DEFAULT NOW()
-        );
-    ''')
-
-    # -- Fix the problematic constraint code below --
-    # Instead of "ADD CONSTRAINT IF NOT EXISTS", do "DROP ... IF EXISTS" then "ADD CONSTRAINT"
-    # --------------
-    # 1) Drop old constraint if present
-    cursor.execute('''
-        ALTER TABLE messages
-        DROP CONSTRAINT IF EXISTS messages_conversation_id_fkey
-    ''')
-
-    # 2) Now add the constraint normally, without IF NOT EXISTS
-    cursor.execute('''
-        ALTER TABLE messages
-        ADD CONSTRAINT messages_conversation_id_fkey
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        ON DELETE CASCADE
-    ''')
-
-    # folders table + folder_id in conversations
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS folders (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL REFERENCES users(id),
-            folder_name TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT NOW()
-        );
-    ''')
-
-    cursor.execute('''
-        ALTER TABLE conversations
-        ADD COLUMN IF NOT EXISTS folder_id INTEGER
-    ''')
-
-    # We'll drop old constraint then add again
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE conversations DROP CONSTRAINT IF EXISTS fk_conversations_folder;
-        EXCEPTION WHEN undefined_object THEN
-            -- no constraint yet
-        END;
-        $$
-    ''')
-
-    # Add constraint plainly, no IF NOT EXISTS
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE conversations
-            ADD CONSTRAINT fk_conversations_folder
-            FOREIGN KEY (folder_id)
-            REFERENCES folders(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-            -- constraint might already exist
-        END;
-        $$
-    ''')
-
-    # --------------------------------------------------------------------
-    # Now add user_id AND conversation_id to each table for multi-user & multi-conversation scoping
-
-    # NPCStats:
-    cursor.execute('''
-        ALTER TABLE NPCStats
-        ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        ALTER TABLE NPCStats
-        ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL
-    ''')
-    # Drop then add constraint(s) plainly
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE NPCStats DROP CONSTRAINT IF EXISTS npcstats_user_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE NPCStats
-        ADD CONSTRAINT npcstats_user_fk
-        FOREIGN KEY (user_id) REFERENCES users(id)
-        ON DELETE CASCADE
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE NPCStats DROP CONSTRAINT IF EXISTS npcstats_conv_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE NPCStats
-        ADD CONSTRAINT npcstats_conv_fk
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        ON DELETE CASCADE
-    ''')
-
-    # PlayerStats:
-    cursor.execute('''
-        ALTER TABLE PlayerStats
-        ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        ALTER TABLE PlayerStats
-        ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE PlayerStats DROP CONSTRAINT IF EXISTS playerstats_user_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE PlayerStats
-        ADD CONSTRAINT playerstats_user_fk
-        FOREIGN KEY (user_id) REFERENCES users(id)
-        ON DELETE CASCADE
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE PlayerStats DROP CONSTRAINT IF EXISTS playerstats_conv_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE PlayerStats
-        ADD CONSTRAINT playerstats_conv_fk
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        ON DELETE CASCADE
-    ''')
-
-    # CurrentRoleplay:
-    cursor.execute('''
-        ALTER TABLE CurrentRoleplay
-        ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        ALTER TABLE CurrentRoleplay
-        ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE CurrentRoleplay DROP CONSTRAINT IF EXISTS currentroleplay_user_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE CurrentRoleplay
-        ADD CONSTRAINT currentroleplay_user_fk
-        FOREIGN KEY (user_id) REFERENCES users(id)
-        ON DELETE CASCADE
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE CurrentRoleplay DROP CONSTRAINT IF EXISTS currentroleplay_conv_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE CurrentRoleplay
-        ADD CONSTRAINT currentroleplay_conv_fk
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        ON DELETE CASCADE
-    ''')
-
-    # Events:
-    cursor.execute('''
-        ALTER TABLE Events
-        ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        ALTER TABLE Events
-        ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE Events DROP CONSTRAINT IF EXISTS events_user_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE Events
-        ADD CONSTRAINT events_user_fk
-        FOREIGN KEY (user_id) REFERENCES users(id)
-        ON DELETE CASCADE
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE Events DROP CONSTRAINT IF EXISTS events_conv_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE Events
-        ADD CONSTRAINT events_conv_fk
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        ON DELETE CASCADE
-    ''')
-
-    # PlannedEvents:
-    cursor.execute('''
-        ALTER TABLE PlannedEvents
-        ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        ALTER TABLE PlannedEvents
-        ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE PlannedEvents DROP CONSTRAINT IF EXISTS plannedevents_user_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE PlannedEvents
-        ADD CONSTRAINT plannedevents_user_fk
-        FOREIGN KEY (user_id) REFERENCES users(id)
-        ON DELETE CASCADE
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE PlannedEvents DROP CONSTRAINT IF EXISTS plannedevents_conv_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE PlannedEvents
-        ADD CONSTRAINT plannedevents_conv_fk
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        ON DELETE CASCADE
-    ''')
-
-    # PlayerInventory:
-    cursor.execute('''
-        ALTER TABLE PlayerInventory
-        ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        ALTER TABLE PlayerInventory
-        ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE PlayerInventory DROP CONSTRAINT IF EXISTS playerinventory_user_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE PlayerInventory
-        ADD CONSTRAINT playerinventory_user_fk
-        FOREIGN KEY (user_id) REFERENCES users(id)
-        ON DELETE CASCADE
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE PlayerInventory DROP CONSTRAINT IF EXISTS playerinventory_conv_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE PlayerInventory
-        ADD CONSTRAINT playerinventory_conv_fk
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        ON DELETE CASCADE
-    ''')
-
-    # Quests:
-    cursor.execute('''
-        ALTER TABLE Quests
-        ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        ALTER TABLE Quests
-        ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE Quests DROP CONSTRAINT IF EXISTS quests_user_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE Quests
-        ADD CONSTRAINT quests_user_fk
-        FOREIGN KEY (user_id) REFERENCES users(id)
-        ON DELETE CASCADE
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE Quests DROP CONSTRAINT IF EXISTS quests_conv_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE Quests
-        ADD CONSTRAINT quests_conv_fk
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        ON DELETE CASCADE
-    ''')
-
-    # Locations:
-    cursor.execute('''
-        ALTER TABLE Locations
-        ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        ALTER TABLE Locations
-        ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE Locations DROP CONSTRAINT IF EXISTS locations_user_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE Locations
-        ADD CONSTRAINT locations_user_fk
-        FOREIGN KEY (user_id) REFERENCES users(id)
-        ON DELETE CASCADE
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE Locations DROP CONSTRAINT IF EXISTS locations_conv_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE Locations
-        ADD CONSTRAINT locations_conv_fk
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        ON DELETE CASCADE
-    ''')
-
-    # SocialLinks:
-    cursor.execute('''
-        ALTER TABLE SocialLinks
-        ADD COLUMN IF NOT EXISTS user_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        ALTER TABLE SocialLinks
-        ADD COLUMN IF NOT EXISTS conversation_id INTEGER NOT NULL
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE SocialLinks DROP CONSTRAINT IF EXISTS sociallinks_user_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE SocialLinks
-        ADD CONSTRAINT sociallinks_user_fk
-        FOREIGN KEY (user_id) REFERENCES users(id)
-        ON DELETE CASCADE
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE SocialLinks DROP CONSTRAINT IF EXISTS sociallinks_conv_fk;
-        EXCEPTION WHEN undefined_object THEN END;
-        $$
-    ''')
-    cursor.execute('''
-        ALTER TABLE SocialLinks
-        ADD CONSTRAINT sociallinks_conv_fk
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-        ON DELETE CASCADE
     ''')
 
     conn.commit()
     conn.close()
-
 
 def seed_initial_data():
     """
@@ -642,7 +381,6 @@ def seed_initial_data():
     insert_missing_activities()
     insert_missing_archetypes()
     print("All default data seeded successfully.")
-
 
 def initialize_all_data():
     create_all_tables()
