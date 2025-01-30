@@ -12,7 +12,7 @@ def get_chatgpt_response(user_input: str, model="gpt-4o") -> str:
     'developer'/'user' from the doc snippet.
     """
     try:
-        completion = openai.ChatCompletion.create(
+        completion = openai.chat.completions.create(
             model="gpt-4o",
             # If your environment supports store=, keep it; else remove it:
             store=True,
