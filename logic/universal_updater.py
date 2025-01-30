@@ -286,8 +286,9 @@ def apply_universal_updates(data: dict):
                             player_name, item_name, item_description, item_effect, category, quantity
                         )
                         VALUES (%s, %s, %s, %s, %s, %s, %s, 1)
-                        ON CONFLICT (player_name, item_name) DO UPDATE
-                            SET quantity=PlayerInventory.quantity+1
+                        ON CONFLICT (user_id, conversation_id, player_name, item_name)
+                        DO UPDATE
+                            SET quantity = PlayerInventory.quantity + 1
                     """, (user_id, conv_id, p_n, item_name, item_desc, item_fx, category))
                 elif isinstance(item, str):
                     cursor.execute("""
@@ -296,8 +297,9 @@ def apply_universal_updates(data: dict):
                             player_name, item_name, quantity
                         )
                         VALUES (%s, %s, %s, %s, 1)
-                        ON CONFLICT (player_name, item_name) DO UPDATE
-                            SET quantity=PlayerInventory.quantity+1
+                        ON CONFLICT (user_id, conversation_id, player_name, item_name)
+                        DO UPDATE
+                            SET quantity = PlayerInventory.quantity + 1
                     """, (user_id, conv_id, p_n, item))
 
             for item in removed:
