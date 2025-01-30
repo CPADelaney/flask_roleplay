@@ -179,7 +179,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id):
     # 6) PlayerInventory (scoped by user_id, conversation_id, player_name)
     # ----------------------------------------------------------------
     cursor.execute("""
-        SELECT item_name, item_description, item_effect,
+        SELECT player_name, item_name, item_description, item_effect,
                quantity, category
         FROM PlayerInventory
         WHERE user_id=%s
