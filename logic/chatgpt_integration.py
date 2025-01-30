@@ -6,7 +6,7 @@ from logic.prompts import SYSTEM_PROMPT, DB_SCHEMA_PROMPT
 
 openai.api_key = os.getenv("GPTAPI")
 
-def get_chatgpt_response(user_input: str) -> str:
+def get_chatgpt_response(user_input: str, model="gpt-4o") -> str:
     """
     Calls the ChatCompletion endpoint with 'gpt-4o' and the roles
     'developer'/'user' from the doc snippet.
