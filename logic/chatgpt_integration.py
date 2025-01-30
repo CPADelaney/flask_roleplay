@@ -16,7 +16,6 @@ def get_chatgpt_response(user_input: str, model="gpt-4o") -> str:
         completion = client.chat.completions.create(
             model="gpt-4o",
             # If your environment supports store=, keep it; else remove it:
-            store=True,
             messages=[
                 # 1) The 'developer' role for your system-level instructions
                 {"role": "developer", "content": SYSTEM_PROMPT},
