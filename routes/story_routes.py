@@ -165,7 +165,7 @@ def next_storybeat():
         combined_input = f"{aggregator_text}\n\nUser Input: {user_input}"
 
         # 12) Call GPT
-        gpt_reply = get_chatgpt_response(combined_input, model="gpt-4o")
+        gpt_reply = get_chatgpt_response(combined_input)
 
         # 13) Store GPT message
         cur.execute("""
