@@ -1,3 +1,5 @@
+# routes/new_game.py
+
 import logging
 from flask import Blueprint, request, jsonify, session
 import random
