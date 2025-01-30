@@ -1,7 +1,7 @@
 import json
 from db.connection import get_db_connection
 
-def get_aggregated_roleplay_context(user_id, conversation_id, player_name="Chase"):
+def get_aggregated_roleplay_context(user_id, conversation_id):
     """
     Gathers data from multiple tables, all scoped by (user_id, conversation_id) plus player_name where needed.
     Returns a single dict representing the entire roleplay state.
@@ -48,8 +48,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name="Chase
         FROM PlayerStats
         WHERE user_id=%s
           AND conversation_id=%s
-          AND player_name=%s
-    """, (user_id, conversation_id, player_name))
+    """, (user_id, conversation_id))
     row = cursor.fetchone()
     if row:
         (corr, conf, wlp, obed, dep, lst, mres, pend) = row
@@ -166,8 +165,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name="Chase
         FROM PlayerPerks
         WHERE user_id=%s
           AND conversation_id=%s
-          AND player_name=%s
-    """, (user_id, conversation_id, player_name))
+    """, (user_id, conversation_id))
     perk_rows = cursor.fetchall()
     player_perks = []
     for (p_name, p_desc, p_fx) in perk_rows:
@@ -181,13 +179,12 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name="Chase
     # 6) PlayerInventory (scoped by user_id, conversation_id, player_name)
     # ----------------------------------------------------------------
     cursor.execute("""
-        SELECT player_name, item_name, item_description, item_effect,
+        SELECT item_name, item_description, item_effect,
                quantity, category
         FROM PlayerInventory
         WHERE user_id=%s
           AND conversation_id=%s
-          AND player_name=%s
-    """, (user_id, conversation_id, player_name))
+    """, (user_id, conversation_id)
     inv_rows = cursor.fetchall()
     inventory_list = []
     for (p_n, iname, idesc, ieffect, qty, cat) in inv_rows:
