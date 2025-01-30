@@ -4,7 +4,7 @@ import openai
 
 from logic.prompts import SYSTEM_PROMPT, DB_SCHEMA_PROMPT
 
-openai.api_key = os.getenv("GPTAPI")
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 def get_chatgpt_response(user_input: str, model="gpt-4o") -> str:
     """
