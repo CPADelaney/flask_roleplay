@@ -456,16 +456,15 @@
 
   function appendMessage(m, autoScroll = true) {
     const chatWindow = document.getElementById("chatWindow");
-    const loadMoreElem = document.getElementById("loadMore");
     const bubble = createBubble(m);
   
-    chatWindow.insertBefore(bubble, loadMoreElem.nextSibling);
+    // Put new message at the bottom
+    chatWindow.appendChild(bubble);
   
     if (autoScroll) {
       chatWindow.scrollTop = chatWindow.scrollHeight;
     }
   
-    // Return the newly inserted element
     return bubble;
   }
 
