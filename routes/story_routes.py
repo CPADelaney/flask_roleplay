@@ -241,21 +241,32 @@ def force_obedience_to_100(user_id, conversation_id, player_name):
 
 def build_aggregator_text(aggregator_data):
     """
-    Merges aggregator_data into user-friendly text for GPT.
-    The rest is your existing logic, unchanged except no scoping needed here.
+    Merges aggregator_data into user-friendly text for GPT,
+    including events, social links, inventory, etc.
     """
+
     lines = []
+    # Pull values from aggregator_data with defaults to avoid KeyErrors
     day = aggregator_data.get("day", 1)
     tod = aggregator_data.get("timeOfDay", "Morning")
     player_stats = aggregator_data.get("playerStats", {})
     npc_stats = aggregator_data.get("npcStats", [])
     current_rp = aggregator_data.get("currentRoleplay", {})
+    social_links = aggregator_data.get("socialLinks", [])
+    player_perks = aggregator_data.get("playerPerks", [])
+    inventory = aggregator_data.get("inventory", [])
+    events_list = aggregator_data.get("events", [])
+    planned_events_list = aggregator_data.get("plannedEvents", [])
+    game_rules_list = aggregator_data.get("gameRules", [])
+    quests_list = aggregator_data.get("quests", [])
+    stat_definitions_list = aggregator_data.get("statDefinitions", [])
 
+    # Day/Time
     lines.append(f"=== DAY {day}, {tod.upper()} ===")
 
     # Player stats
+    lines.append("\n=== PLAYER STATS ===")
     if player_stats:
-        lines.append("=== PLAYER STATS ===")
         lines.append(
             f"Name: {player_stats.get('name','Unknown')}, "
             f"Corruption: {player_stats.get('corruption',0)}, "
@@ -285,13 +296,13 @@ def build_aggregator_text(aggregator_data):
             likes = npc.get("likes", [])
             dislikes = npc.get("dislikes", [])
 
-            lines.append(f"Hobbies: {', '.join(hobbies)}" if hobbies else "Hobbies: None")
-            lines.append(f"Personality: {', '.join(personality)}" if personality else "Personality: None")
-            lines.append(f"Likes: {', '.join(likes)} | Dislikes: {', '.join(dislikes)}\n")
+            lines.append(f"  Hobbies: {', '.join(hobbies)}" if hobbies else "  Hobbies: None")
+            lines.append(f"  Personality: {', '.join(personality)}" if personality else "  Personality: None")
+            lines.append(f"  Likes: {', '.join(likes)} | Dislikes: {', '.join(dislikes)}\n")
     else:
         lines.append("(No NPCs found)")
 
-    # Current roleplay
+    # Current roleplay data
     lines.append("\n=== CURRENT ROLEPLAY ===")
     if current_rp:
         for k, v in current_rp.items():
@@ -299,11 +310,102 @@ def build_aggregator_text(aggregator_data):
     else:
         lines.append("(No current roleplay data)")
 
-    # Potential activities
+    # Potential activities from aggregator_data
     if "activitySuggestions" in aggregator_data:
         lines.append("\n=== NPC POTENTIAL ACTIVITIES ===")
         for suggestion in aggregator_data["activitySuggestions"]:
             lines.append(f"- {suggestion}")
         lines.append("NPCs can adopt, combine, or ignore these ideas.\n")
+
+    # Social Links
+    lines.append("\n=== SOCIAL LINKS ===")
+    if social_links:
+        for link in social_links:
+            lines.append(
+                f"Link {link['link_id']}: "
+                f"{link['entity1_type']}({link['entity1_id']}) <-> {link['entity2_type']}({link['entity2_id']}); "
+                f"Type={link['link_type']}, Level={link['link_level']}"
+            )
+            history = link.get("link_history", [])
+            if history:
+                lines.append(f"  History: {history}")
+    else:
+        lines.append("(No social links found)")
+
+    # Player Perks
+    lines.append("\n=== PLAYER PERKS ===")
+    if player_perks:
+        for perk in player_perks:
+            lines.append(
+                f"Perk: {perk['perk_name']} | Desc: {perk['perk_description']} | Effect: {perk['perk_effect']}"
+            )
+    else:
+        lines.append("(No perks found)")
+
+    # Inventory
+    lines.append("\n=== INVENTORY ===")
+    if inventory:
+        for item in inventory:
+            lines.append(
+                f"{item['player_name']}'s Item: {item['item_name']} (x{item['quantity']}) - "
+                f"{item.get('item_description','No desc')} "
+                f"[Effect: {item.get('item_effect','none')}], Category: {item.get('category','misc')}"
+            )
+    else:
+        lines.append("(No inventory items found)")
+
+    # Events
+    lines.append("\n=== EVENTS ===")
+    if events_list:
+        for ev in events_list:
+            lines.append(
+                f"Event #{ev['event_id']}: {ev['event_name']} @ {ev['location']}, "
+                f"{ev['start_time']}-{ev['end_time']} | {ev['description']}"
+            )
+    else:
+        lines.append("(No events found)")
+
+    # Planned Events
+    lines.append("\n=== PLANNED EVENTS ===")
+    if planned_events_list:
+        for pev in planned_events_list:
+            lines.append(
+                f"PlannedEvent #{pev['event_id']}: NPC {pev['npc_id']} on Day {pev['day']} {pev['time_of_day']} "
+                f"@ {pev['override_location']}"
+            )
+    else:
+        lines.append("(No planned events found)")
+
+    # Quests
+    lines.append("\n=== QUESTS ===")
+    if quests_list:
+        for q in quests_list:
+            lines.append(
+                f"Quest #{q['quest_id']}: {q['quest_name']} [Status: {q['status']}] - {q['progress_detail']}. "
+                f"Giver={q['quest_giver']}, Reward={q['reward']}"
+            )
+    else:
+        lines.append("(No quests found)")
+
+    # Game Rules
+    lines.append("\n=== GAME RULES ===")
+    if game_rules_list:
+        for gr in game_rules_list:
+            lines.append(
+                f"Rule: {gr['rule_name']} => If({gr['condition']}), then({gr['effect']})"
+            )
+    else:
+        lines.append("(No game rules found)")
+
+    # Stat Definitions
+    lines.append("\n=== STAT DEFINITIONS ===")
+    if stat_definitions_list:
+        for sd in stat_definitions_list:
+            lines.append(
+                f"{sd['stat_name']} [{sd['range_min']}..{sd['range_max']}]: {sd['definition']}; "
+                f"Effects={sd['effects']}; Triggers={sd['progression_triggers']}"
+            )
+    else:
+        lines.append("(No stat definitions found)")
 
     return "\n".join(lines)
