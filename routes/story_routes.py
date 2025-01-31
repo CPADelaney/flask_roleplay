@@ -340,7 +340,7 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     lines.append("\n=== NPC STATS ===")
     introduced_npcs = [npc for npc in npc_stats if npc.get("introduced") is True]
     if introduced_npcs:
-        for npc in introduced_npcs
+        for npc in introduced_npcs:
             lines.append(
                 f"NPC: {npc.get('npc_name','Unnamed')} "
                 f"| Sex={npc.get('sex','Unknown')} "
