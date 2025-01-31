@@ -464,39 +464,79 @@
     userInputElem.value = "";
     if (!userText) return;
 
+    // Append the user's message immediately
+    const userMsgObj = {
+      sender: "user",
+      content: userText,
+    };
+    appendMessage(userMsgObj, true);  // 'autoScroll = true'
+
+    // Show a temporary GPT "typing..." bubble
+    const tempGptMsgObj = {
+      sender: "GPT",
+      content: "...",  // or "Typing..."
+    };
+    const gptTypingBubble = appendMessage(tempGptMsgObj, true);
+
     // Example additions to universal_update
     pendingUniversalUpdates.character_stat_updates.stats.obedience = 80;
     pendingUniversalUpdates.inventory_updates.added_items.push("Chains of Submission");
-    
+
     const payload = {
       user_input: userText,
       conversation_id: currentConvId,
       player_name: "Chase",
-      universal_update: pendingUniversalUpdates
+      universal_update: pendingUniversalUpdates,
     };
-  
+
     try {
       const res = await fetch("/story/next_storybeat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
-  
+
       if (!res.ok) {
         console.error("Server error:", data);
         alert("Message send failed!");
+        // Optionally remove or update the 'typing...' bubble to show an error
+        gptTypingBubble.innerHTML = `<strong>GPT:</strong> [Error retrieving response]`;
         return;
       }
       resetPendingUniversalUpdates();
       currentConvId = data.conversation_id;
-      renderChat(data.messages);
+
+      // 1) Remove or replace the "typing..." bubble with GPT’s actual text
+      gptTypingBubble.remove(); // remove the placeholder entirely
+
+      // 2) Append the actual GPT message from the server
+      // data.story_output is the GPT text (based on your route code).
+      const realGptMsgObj = {
+        sender: "GPT",
+        content: data.story_output || "(No response?)",
+      };
+      appendMessage(realGptMsgObj, true);
+
+      // 3) Also store the entire conversation if you wish
+      // but no longer *need* to fully re-render, since we've already appended
+      // you can do: renderChat(data.messages); 
+      // or just rely on new messages appended dynamically
+
+      // If you do want updated conversation, you can do:
+      // renderChat(data.messages);
+      // but that might duplicate the user message, so your call.
+
       await loadConversations();
+
     } catch (err) {
       console.error("sendMessage error:", err);
+      // Show an error in GPT bubble
+      gptTypingBubble.innerHTML = `<strong>GPT:</strong> [Error retrieving response]`;
     }
   }
+
 
   // =====================
   // Context Menu
