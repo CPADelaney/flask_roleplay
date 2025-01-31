@@ -221,19 +221,6 @@ def gather_rule_knowledge():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1) PlotTriggers
-    cursor.execute("SELECT stage, title, description, examples FROM PlotTriggers")
-    trig_list = []
-    for row in cursor.fetchall():
-        stage, title, desc, ex_json = row
-        ex = json.loads(ex_json) if ex_json else []
-        trig_list.append({
-            "stage": stage,
-            "title": title,
-            "description": desc,
-            "examples": ex
-        })
-
     # 2) Intensity Tiers
     cursor.execute("""
         SELECT tier_name, key_features, activity_examples, permanent_effects
