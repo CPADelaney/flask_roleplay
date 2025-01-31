@@ -21,7 +21,7 @@ def generate_mega_setting_logic(user_id, conversation_id):
     cursor.execute("""
         SELECT id, name, mood_tone, enhanced_features, stat_modifiers, activity_examples
         FROM Settings
-    """, (user_id, conversation_id))
+    """)
     rows = cursor.fetchall()
     conn.close()
 
