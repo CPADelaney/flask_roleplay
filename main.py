@@ -26,7 +26,7 @@ def create_app():
     CORS(app)
 
     # Register your blueprint modules
-    app.register_blueprint(new_game_bp, url_prefix="/new_game")
+    app.register_blueprint(new_game_bp)
     app.register_blueprint(player_input_bp, url_prefix="/player")
     app.register_blueprint(settings_bp, url_prefix="/settings")
     app.register_blueprint(memory_bp, url_prefix="/memory")
