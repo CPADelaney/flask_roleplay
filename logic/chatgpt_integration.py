@@ -37,6 +37,7 @@ def build_message_history(conversation_id: int, aggregator_text: str, user_input
 
     # 1) Your "always enforced" system-level instructions
     messages.append({"role": "system", "content": SYSTEM_PROMPT})
+    messages.append({"role": "system", "content": DB_SCHEMA_PROMPT})
 
     # 2) The aggregator text (some dev/system-level context)
     messages.append({"role": "developer", "content": aggregator_text})
