@@ -137,7 +137,7 @@ def start_new_game():
 
         # 9) Generate environment & store in CurrentRoleplay
         logging.info("Generating new mega setting via generate_mega_setting_logic()")
-        mega_data = generate_mega_setting_logic(user_id, conversation_id)
+        mega_data = generate_mega_setting_logic()
         if "error" in mega_data:
             mega_data["mega_name"] = "No environment available"
 
