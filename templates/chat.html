@@ -434,7 +434,7 @@
   function renderChat(messages) {
     const chatWindow = document.getElementById("chatWindow");
     chatWindow.innerHTML = `<span id="loadMore" onclick="loadPreviousMessages()" style="display:none;">Load older messages...</span>`;
-    messages.slice().reverse().forEach(msg => {
+    messages.slice().forEach(msg => {
       appendMessage(msg, false);
     });
     chatWindow.scrollTop = chatWindow.scrollHeight;
@@ -443,7 +443,7 @@
   function prependMessages(messages) {
     const chatWindow = document.getElementById("chatWindow");
     const loadMoreElem = document.getElementById("loadMore");
-    messages.slice().reverse().forEach(msg => {
+    messages.slice().forEach(msg => {
       const bubble = createBubble(msg);
       chatWindow.insertBefore(bubble, loadMoreElem.nextSibling);
     });
