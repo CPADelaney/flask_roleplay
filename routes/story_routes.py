@@ -338,24 +338,60 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
 
     # 3) NPC Stats
     lines.append("\n=== NPC STATS ===")
-    if npc_stats:
-        for npc in npc_stats:
+    introduced_npcs = [npc for npc in npc_stats if npc.get("introduced") is True]
+    if introduced_npcs:
+        for npc in introduced_npcs
             lines.append(
-                f"NPC: {npc.get('npc_name','Unnamed')} | "
-                f"Dom={npc.get('dominance',0)}, Cru={npc.get('cruelty',0)}, "
+                f"NPC: {npc.get('npc_name','Unnamed')} "
+                f"| Sex={npc.get('sex','Unknown')} "
+                f"| Archetypes={npc.get('archetypes',[])} "
+                f"| Dom={npc.get('dominance',0)}, Cru={npc.get('cruelty',0)}, "
                 f"Close={npc.get('closeness',0)}, Trust={npc.get('trust',0)}, "
                 f"Respect={npc.get('respect',0)}, Int={npc.get('intensity',0)}"
             )
+    
+            # Hobbies, personality, likes, dislikes
             hobbies = npc.get("hobbies", [])
             personality = npc.get("personality_traits", [])
             likes = npc.get("likes", [])
             dislikes = npc.get("dislikes", [])
-
+    
             lines.append(f"  Hobbies: {', '.join(hobbies)}" if hobbies else "  Hobbies: None")
             lines.append(f"  Personality: {', '.join(personality)}" if personality else "  Personality: None")
-            lines.append(f"  Likes: {', '.join(likes)} | Dislikes: {', '.join(dislikes)}\n")
+            lines.append(f"  Likes: {', '.join(likes)} | Dislikes: {', '.join(dislikes)}")
+    
+            # Memory
+            npc_memory = npc.get("memory", [])
+            if npc_memory:
+                if isinstance(npc_memory, list):
+                    # If it's a list of memory entries, print them all or a subset
+                    lines.append(f"  Memory: {npc_memory}")
+                else:
+                    lines.append(f"  Memory: {npc_memory}")
+            else:
+                lines.append("  Memory: (None)")
+    
+            # Affiliations
+            affiliations = npc.get("affiliations", [])
+            lines.append(f"  Affiliations: {', '.join(affiliations)}" if affiliations else "  Affiliations: None")
+    
+            # Full schedule as JSON
+            schedule = npc.get("schedule", {})
+            if schedule:
+                schedule_json = json.dumps(schedule, indent=2)
+                lines.append("  Schedule:")
+                # Add the JSON dump on separate lines for readability
+                for line in schedule_json.splitlines():
+                    lines.append("    " + line)
+            else:
+                lines.append("  Schedule: (None)")
+    
+            # Current location
+            current_loc = npc.get("current_location", "Unknown")
+            lines.append(f"  Current Location: {current_loc}\n")
     else:
         lines.append("(No NPCs found)")
+
 
     # 4) Current roleplay data
     lines.append("\n=== CURRENT ROLEPLAY ===")
