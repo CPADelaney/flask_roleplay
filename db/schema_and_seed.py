@@ -388,6 +388,19 @@ def create_all_tables():
         );
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS IntensityTiers (
+            id SERIAL PRIMARY KEY,
+            tier_name TEXT NOT NULL,        -- e.g. "Low Intensity (0–30)"
+            range_min INT NOT NULL,         -- e.g. 0
+            range_max INT NOT NULL,         -- e.g. 30
+            description TEXT NOT NULL,      -- short text describing the tier
+            key_features JSONB NOT NULL,    -- an array of bullet points
+            activity_examples JSONB,        -- optional array of examples
+            permanent_effects JSONB         -- optional for maximum tier, else {}
+        );
+    ''')
+
     conn.commit()
     conn.close()
 
