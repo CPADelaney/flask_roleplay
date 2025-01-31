@@ -500,7 +500,7 @@
 
     // Show a temporary GPT "typing..." bubble
     const tempGptMsgObj = {
-      sender: "GPT",
+      sender: "Nyx",
       content: "...",  // or "Typing..."
     };
     const gptTypingBubble = appendMessage(tempGptMsgObj, true);
@@ -541,7 +541,7 @@
       // 2) Append the actual GPT message from the server
       // data.story_output is the GPT text (based on your route code).
       const realGptMsgObj = {
-        sender: "GPT",
+        sender: "Nyx",
         content: data.story_output || "(No response?)",
       };
       appendMessage(realGptMsgObj, true);
