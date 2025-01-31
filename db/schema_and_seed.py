@@ -5,6 +5,7 @@ from db.connection import get_db_connection
 from routes.activities import insert_missing_activities
 from routes.archetypes import insert_missing_archetypes
 from routes.settings_routes import insert_missing_settings
+from logic.seed_intensity_tiers import create_and_seed_intensity_tiers
 from logic.stats_logic import (
     insert_stat_definitions,
     insert_or_update_game_rules,
@@ -410,9 +411,10 @@ def seed_initial_data():
     """
     insert_or_update_game_rules()
     insert_stat_definitions()
-    insert_missing_settings()  # Provide them here
+    insert_missing_settings() 
     insert_missing_activities()
     insert_missing_archetypes()
+    create_and_seed_intensity_tiers()
     print("All default data seeded successfully.")
 
 def initialize_all_data():
