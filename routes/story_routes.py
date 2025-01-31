@@ -243,6 +243,22 @@ def gather_rule_knowledge():
             "activity_examples": aex,
             "permanent_effects": peff
         })
+
+    # 3) Interactions
+    cursor.execute("""
+        SELECT interaction_name, detailed_rules, task_examples, agency_overrides
+        FROM Interactions
+    """)
+    interactions_list = []
+    for row in cursor.fetchall():
+        iname, drules, tex, aov = row
+        interactions_list.append({
+            "interaction_name": iname,
+            "detailed_rules": drules,
+            "task_examples": tex,
+            "agency_overrides": aov
+        })
+
     conn.close()
 
     # Basic textual summary from your doc
@@ -259,6 +275,7 @@ def gather_rule_knowledge():
         "rule_enforcement_summary": rule_enforcement_summary,
         "plot_triggers": trig_list,
         "intensity_tiers": tier_list,
+        "interactions": interactions_list,
         "meltdown_synergy": meltdown_info
     }
 
@@ -494,6 +511,15 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
                 lines.append(f"  Activities: {tier.get('activity_examples','')}")
         else:
             lines.append("No intensity tiers found.")
+
+        interactions = rule_knowledge.get("interactions", [])
+        if interactions:
+            lines.append("\n-- INTERACTIONS --")
+            for intr in interactions:
+                lines.append(f"{intr['interaction_name']}: {intr.get('detailed_rules','')}")
+                lines.append(f"  Tasks: {intr.get('task_examples','')}")
+        else:
+            lines.append("No interactions data found.")
 
         meltdown_info = rule_knowledge.get("meltdown_synergy", None)
         if meltdown_info:
