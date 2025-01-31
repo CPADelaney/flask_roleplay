@@ -349,14 +349,12 @@
 
   async function startNewGame() {
     try {
-      const res = await fetch("/start_new_game", {
+      const res = await fetch("/new_game/start_new_game", {  // <-- Add "/new_game" prefix
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        // send at least an empty object so the body is valid JSON
         body: JSON.stringify({})
-      });
-      const data = await res.json();
+      });it res.json();
       if (!res.ok) {
         alert("Error starting new game: " + (data.error || res.status));
         return;
