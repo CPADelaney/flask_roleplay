@@ -349,31 +349,31 @@
 
   async function startNewGame() {
     try {
-      const res = await fetch("/new_game/start_new_game", {  // <-- Add "/new_game" prefix
+      const res = await fetch("/new_game/start_new_game", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
+        // send at least an empty object so the body is valid JSON
         body: JSON.stringify({})
-      });it res.json();
+      });
+  
+      // The correct line:
+      const data = await res.json();
+  
       if (!res.ok) {
         alert("Error starting new game: " + (data.error || res.status));
         return;
       }
-      // data has { conversation_id, environment_name, chase_schedule, etc. }
-
-      // Store the conversation_id for your global or local usage
+  
       currentConvId = data.conversation_id;
       alert("New game started! conversation_id=" + currentConvId);
-
-      // If you want to re-load conversations or messages, do so here:
-      // await loadConversations(); // if you still want a list
-      // or directly selectConversation(currentConvId);
-
+  
     } catch (err) {
       console.error("startNewGame error:", err);
       alert("Failed to start new game!");
     }
   }
+
 
   function renderConvoList(conversations) {
     const convListDiv = document.getElementById("convList");
