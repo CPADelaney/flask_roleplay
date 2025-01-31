@@ -212,6 +212,11 @@ def next_storybeat():
             }
         }), 200
 
+    except Exception as e:
+        # This block must appear at the same indentation level as try:
+        logging.exception("[next_storybeat] Error")
+        return jsonify({"error": str(e)}), 500
+
 def force_obedience_to_100(user_id, conversation_id, player_name):
     """
     A direct approach to set player's Obedience=100 
