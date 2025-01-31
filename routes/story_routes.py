@@ -166,7 +166,7 @@ def next_storybeat():
         combined_input = f"{aggregator_text}\n\nUser Input: {user_input}"
 
         # 13) Convert to text + JSON
-        gpt_reply_dict = get_chatgpt_response(combined_input)
+        gpt_reply_dict = get_chatgpt_response(conv_id, aggregator_text, user_input)
         gpt_text = gpt_reply_dict["response"]
         structured_json_str = json.dumps(gpt_reply_dict)
         
