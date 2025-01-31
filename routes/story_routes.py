@@ -1,4 +1,5 @@
 import logging
+import json
 from flask import Blueprint, request, jsonify, session
 from db.connection import get_db_connection
 from logic.universal_updater import apply_universal_updates
