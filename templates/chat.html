@@ -349,7 +349,7 @@
 
   async function startNewGame() {
     try {
-      const res = await fetch("/new_game/start_new_game", {
+      const res = await fetch("/start_new_game", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
