@@ -13,7 +13,9 @@ This module demonstrates:
 from flask import Blueprint, request, jsonify
 from db.connection import get_db_connection
 import json, random
-import openai  # Only needed if you're calling GPT from here
+import openai 
+from logic.chatgpt_integration import get_openai_client
+
 """
 # If meltdown logic or memory logic are used
 from logic.meltdown_logic import meltdown_dialog_gpt, record_meltdown_dialog
@@ -304,34 +306,37 @@ def apply_effect(effect_str, player_name, npc_id=None):
                     chosen_intensity_tier = None
 
         # 3) If effect says "no defiance possible," treat it like endgame
-        if "no defiance possible" in effect_lower:
-            cursor.execute("""
-                SELECT title, examples
-                FROM PlotTriggers
-                WHERE stage='Endgame'
-            """)
-            rows = cursor.fetchall()
-            if rows:
-                chosen = random.choice(rows)
-                t_title, ex_json = chosen
-                ex_list = json.loads(ex_json) if ex_json else []
-                picked_example = random.choice(ex_list) if ex_list else "(No example found)"
-                endgame_line = f"[ENDGAME TRIGGER] {t_title}: {picked_example}"
-                result["plotTriggerEvent"] = endgame_line
+  #      if "no defiance possible" in effect_lower:
+  #          cursor.execute("""
+  #              SELECT title, examples
+  #              FROM PlotTriggers
+  #              WHERE stage='Endgame'
+  #          """)
+ #           rows = cursor.fetchall()
+   #         if rows:
+   #             chosen = random.choice(rows)
+  #              t_title, ex_json = chosen
+  #              ex_list = json.loads(ex_json) if ex_json else []
+  #              picked_example = random.choice(ex_list) if ex_list else "(No example found)"
+  #              endgame_line = f"[ENDGAME TRIGGER] {t_title}: {picked_example}"
+  #              result["plotTriggerEvent"] = endgame_line
 
-                # store in memory
-                store_roleplay_segment({"key": "EndgameTrigger", "value": endgame_line})
+   #             # store in memory
+   #             store_roleplay_segment({"key": "EndgameTrigger", "value": endgame_line})
 
-        # 4) GPT-based scenario if "punishment" is in effect text
         if "punishment" in effect_lower:
             system_prompt = f"""
-            You are a punishment scenario generator. 
+            You are a punishment scenario generator.
             The player's stats suggest intensity tier: {result['intensityTier']}.
             Provide a short brand-new humiliating scenario for effect: '{effect_str}'.
             """
             try:
-                gpt_resp = openai.ChatCompletion.create(
-                    model="gpt-4",
+                # Acquire the client from your chatgpt_integration module
+                client = get_openai_client()
+        
+                # Now call the ChatCompletion endpoint via client.chat.completions.create
+                gpt_resp = client.chat.completions.create(
+                    model="gpt-4",  # or whichever model you're using
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": "Generate a unique punishment scenario."}
@@ -341,8 +346,10 @@ def apply_effect(effect_str, player_name, npc_id=None):
                 )
                 scenario = gpt_resp.choices[0].message.content.strip()
                 result["punishmentScenario"] = scenario
+        
             except Exception as e:
                 result["punishmentScenario"] = f"(GPT error: {e})"
+
 
         # 5) meltdown synergy if meltdown triggered
     #    if "meltdown" in effect_lower:
@@ -356,7 +363,7 @@ def apply_effect(effect_str, player_name, npc_id=None):
 
         # 7) Memory log
         mem_text = f"Effect triggered: {effect_str}. (Intensity: {result['intensityTier']})"
-        store_roleplay_segment({"key": f"Effect_{player_name}", "value": mem_text})
+      #  store_roleplay_segment({"key": f"Effect_{player_name}", "value": mem_text})
         result["memoryLog"] = mem_text
 
         conn.commit()
