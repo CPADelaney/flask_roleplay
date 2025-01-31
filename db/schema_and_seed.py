@@ -110,6 +110,8 @@ def create_all_tables():
           content TEXT NOT NULL,
           created_at TIMESTAMP DEFAULT NOW(),
 
+          structured_content JSONB,
+
           FOREIGN KEY (conversation_id)
               REFERENCES conversations(id)
               ON DELETE CASCADE
