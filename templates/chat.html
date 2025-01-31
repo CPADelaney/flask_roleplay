@@ -178,8 +178,7 @@
     <div id="leftPanelInner">
       <h3>Conversations</h3>
       <div>
-        <input type="text" id="newConvName" class="inline-input" placeholder="Conversation name..."/>
-        <button type="button" onclick="createConversation()">Create</button>
+        <button type="button" onclick="startNewGame()">New Game</button>
       </div>
       <div id="convList" style="margin-top:10px;"></div>
     </div>
@@ -348,29 +347,31 @@
     }
   }
 
-  async function createConversation() {
-    const convNameInput = document.getElementById("newConvName");
-    const convName = convNameInput.value.trim();
-    if (!convName) {
-      alert("Please enter a conversation name!");
-      return;
-    }
+  async function startNewGame() {
     try {
-      const res = await fetch("/multiuser/conversations", {
+      const res = await fetch("/start_new_game", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ conversation_name: convName })
+        credentials: "include"
       });
       const data = await res.json();
       if (!res.ok) {
-        alert("Error creating conversation: " + (data.error || res.status));
+        alert("Error starting new game: " + (data.error || res.status));
         return;
       }
-      convNameInput.value = "";
-      await loadConversations();
+      // data has { conversation_id, environment_name, chase_schedule, etc. }
+
+      // Store the conversation_id for your global or local usage
+      currentConvId = data.conversation_id;
+      alert("New game started! conversation_id=" + currentConvId);
+
+      // If you want to re-load conversations or messages, do so here:
+      // await loadConversations(); // if you still want a list
+      // or directly selectConversation(currentConvId);
+
     } catch (err) {
-      console.error("createConversation error:", err);
+      console.error("startNewGame error:", err);
+      alert("Failed to start new game!");
     }
   }
 
