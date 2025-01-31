@@ -56,7 +56,7 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
     messages = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
 
     response = client.chat.completions.create(
-        model="gpt-4o",
+        model="o3-mini-2025-01-31",
         messages=messages,
         temperature=0.2,
         max_tokens=1000,
