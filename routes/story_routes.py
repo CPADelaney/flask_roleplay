@@ -163,8 +163,6 @@ def next_storybeat():
         # Build aggregator text from aggregator_data
         aggregator_text = build_aggregator_text(aggregator_data)
 
-        combined_input = f"{aggregator_text}\n\nUser Input: {user_input}"
-
         # 13) Convert to text + JSON
         gpt_reply_dict = get_chatgpt_response(conv_id, aggregator_text, user_input)
         gpt_text = gpt_reply_dict["response"]
