@@ -164,17 +164,24 @@ def next_storybeat():
 
         combined_input = f"{aggregator_text}\n\nUser Input: {user_input}"
 
-        # 12) Call GPT
-        gpt_reply = get_chatgpt_response(combined_input)
-
-        # 13) Store GPT message
+        # 13) Convert to text + JSON
+        gpt_reply_dict = get_chatgpt_response(combined_input)
+        gpt_text = gpt_reply_dict["response"]
+        structured_json_str = json.dumps(gpt_reply_dict)
+        
+        # 14) Insert GPT message with text and JSON
         cur.execute("""
-            INSERT INTO messages (conversation_id, sender, content)
-            VALUES (%s, %s, %s)
-        """, (conv_id, "GPT", gpt_reply))
+            INSERT INTO messages (conversation_id, sender, content, structured_content)
+            VALUES (%s, %s, %s, %s)
+        """, (
+            conv_id,
+            "GPT",
+            gpt_text,
+            structured_json_str
+        ))
         conn.commit()
-
-        # 14) Gather full conversation
+        
+        # 15) Gather the conversation history
         cur.execute("""
             SELECT sender, content, created_at
             FROM messages
@@ -189,14 +196,14 @@ def next_storybeat():
                 "content": r[1],
                 "created_at": r[2].isoformat()
             })
-
+        
         cur.close()
         conn.close()
-
-        # 15) Return final
+        
+        # 16) Return final JSON
         return jsonify({
             "conversation_id": conv_id,
-            "story_output": gpt_reply,
+            "story_output": gpt_text,    # <--- or use 'gpt_reply_dict'
             "messages": conversation_history,
             "updates": {
                 "current_day": new_day,
@@ -204,11 +211,6 @@ def next_storybeat():
                 "internal_changes": updates_dict
             }
         }), 200
-
-    except Exception as e:
-        logging.exception("[next_storybeat] Error")
-        return jsonify({"error": str(e)}), 500
-
 
 def force_obedience_to_100(user_id, conversation_id, player_name):
     """
