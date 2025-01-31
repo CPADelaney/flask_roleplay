@@ -458,10 +458,15 @@
     const chatWindow = document.getElementById("chatWindow");
     const loadMoreElem = document.getElementById("loadMore");
     const bubble = createBubble(m);
+  
     chatWindow.insertBefore(bubble, loadMoreElem.nextSibling);
+  
     if (autoScroll) {
       chatWindow.scrollTop = chatWindow.scrollHeight;
     }
+  
+    // Return the newly inserted element
+    return bubble;
   }
 
   function createBubble(m) {
