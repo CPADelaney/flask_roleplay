@@ -7,7 +7,7 @@ from db.connection import get_db_connection
 
 settings_bp = Blueprint('settings_bp', __name__)
 
-def generate_mega_setting_logic(user_id, conversation_id):
+def generate_mega_setting_logic():
     """
     This function merges random 'Settings' rows for (user_id, conversation_id)
     into a single "mega setting". Returns a Python dict with results.
