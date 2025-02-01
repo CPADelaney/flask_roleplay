@@ -441,7 +441,7 @@ def seed_initial_data():
     insert_missing_archetypes()
     create_and_seed_intensity_tiers()
     create_and_seed_plot_triggers()     
-    create_and_seed_interactions_tiers()
+    create_and_seed_interactions()
     print("All default data seeded successfully.")
 
 def initialize_all_data():
