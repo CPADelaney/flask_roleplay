@@ -412,6 +412,19 @@ def create_all_tables():
         );
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlotTriggers (
+            id SERIAL PRIMARY KEY,
+            trigger_name TEXT UNIQUE NOT NULL,
+            stage_name TEXT,         -- e.g. "Early Stage", "Mid-Stage Escalation", etc.
+            description TEXT,        -- main textual explanation or short summary
+            key_features JSONB,      -- store bullet points or important highlights
+            stat_dynamics JSONB,     -- e.g. "Corruption rises, Willpower erodes"
+            examples JSONB,          -- event or scenario examples
+            triggers JSONB           -- if you want to store stat-based triggers or any extra details
+        );
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -425,6 +438,7 @@ def seed_initial_data():
     insert_missing_activities()
     insert_missing_archetypes()
     create_and_seed_intensity_tiers()
+    create_and_seed_plot_triggers()     
     create_and_seed_interactions_tiers()
     print("All default data seeded successfully.")
 
