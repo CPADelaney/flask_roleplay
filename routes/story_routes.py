@@ -157,7 +157,6 @@ def next_storybeat():
 
         # 12) Build aggregator text
         aggregator_text = build_aggregator_text(aggregator_data, rule_knowledge=rule_knowledge)
-        # aggregator_text = build_aggregator_text(aggregator_data)  # or pass rule_knowledge if desired
 
         # 13) GPT call
         gpt_reply_dict = get_chatgpt_response(conv_id, aggregator_text, user_input)
@@ -221,6 +220,44 @@ def gather_rule_knowledge():
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    # 1) PlotTriggers
+    # We'll store each row's data so we can present them later
+    # Adjust the column names to match your actual schema
+    cursor.execute("""
+        SELECT trigger_name, stage_name, description, key_features, stat_dynamics, examples, triggers
+        FROM PlotTriggers
+    """)
+    trig_list = []
+    for row in cursor.fetchall():
+        (trig_name, stage, desc, kfeat, sdyn, ex, trigz) = row
+        # parse JSON if needed
+        try:
+            kfeat = json.loads(kfeat) if kfeat else []
+        except:
+            kfeat = []
+        try:
+            sdyn = json.loads(sdyn) if sdyn else []
+        except:
+            sdyn = []
+        try:
+            ex = json.loads(ex) if ex else []
+        except:
+            ex = []
+        try:
+            trigz = json.loads(trigz) if trigz else {}
+        except:
+            trigz = {}
+
+        trig_list.append({
+            "title": trig_name,         # e.g. "Early Stage", "Mid-Stage Escalation"
+            "stage": stage,
+            "description": desc,
+            "key_features": kfeat,
+            "stat_dynamics": sdyn,
+            "examples": ex,
+            "triggers": trigz
+        })
+
     # 2) Intensity Tiers
     cursor.execute("""
         SELECT tier_name, key_features, activity_examples, permanent_effects
@@ -237,6 +274,11 @@ def gather_rule_knowledge():
             aex = json.loads(aex) if aex else []
         except:
             aex = []
+        try:
+            peff = json.loads(peff) if peff else {}
+        except:
+            peff = {}
+
         tier_list.append({
             "tier_name": tname,
             "key_features": kfeat,
@@ -252,6 +294,18 @@ def gather_rule_knowledge():
     interactions_list = []
     for row in cursor.fetchall():
         iname, drules, tex, aov = row
+        try:
+            drules = json.loads(drules) if drules else {}
+        except:
+            drules = {}
+        try:
+            tex = json.loads(tex) if tex else {}
+        except:
+            tex = {}
+        try:
+            aov = json.loads(aov) if aov else {}
+        except:
+            aov = {}
         interactions_list.append({
             "interaction_name": iname,
             "detailed_rules": drules,
@@ -267,17 +321,42 @@ def gather_rule_knowledge():
         "evaluated against stats, and if true, an effect like 'Locks Independent Choices' is applied. "
         "This can raise Obedience, trigger punishments, meltdown synergy, or endgame events."
     )
-#    meltdown_info = (
- #       "Meltdowns occur if certain conditions are met. The meltdown logic triggers GPT to produce a meltdown dialog, etc."
-#    )
+
+    # Optionally reintroduce meltdown info
+ #   meltdown_info = (
+  #      "Meltdowns occur if certain conditions are met. The meltdown logic triggers GPT to produce meltdown dialog, etc."
+    )
 
     return {
         "rule_enforcement_summary": rule_enforcement_summary,
         "plot_triggers": trig_list,
         "intensity_tiers": tier_list,
-        "interactions": interactions_list,
-        "meltdown_synergy": meltdown_info
+        "interactions": interactions_list
+ #       "meltdown_synergy": meltdown_info
     }
+
+
+def force_obedience_to_100(user_id, conversation_id, player_name):
+    """
+    A direct approach to set player's Obedience=100 
+    for user_id + conversation_id + player_name.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE PlayerStats
+            SET obedience=100
+            WHERE user_id=%s
+              AND conversation_id=%s
+              AND player_name=%s
+        """, (user_id, conversation_id, player_name))
+        conn.commit()
+    except:
+        conn.rollback()
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def build_aggregator_text(aggregator_data, rule_knowledge=None):
@@ -286,7 +365,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     including events, social links, inventory, etc.
     If rule_knowledge is provided, appends advanced rule data as well.
     """
-
     lines = []
     # Pull values from aggregator_data with defaults to avoid KeyErrors
     day = aggregator_data.get("day", 1)
@@ -323,7 +401,7 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     else:
         lines.append("No player stats found.")
 
-    # 3) NPC Stats
+    # 3) NPC Stats (only introduced NPCs)
     lines.append("\n=== NPC STATS ===")
     introduced_npcs = [npc for npc in npc_stats if npc.get("introduced") is True]
     if introduced_npcs:
@@ -336,49 +414,41 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
                 f"Close={npc.get('closeness',0)}, Trust={npc.get('trust',0)}, "
                 f"Respect={npc.get('respect',0)}, Int={npc.get('intensity',0)}"
             )
-    
-            # Hobbies, personality, likes, dislikes
+
             hobbies = npc.get("hobbies", [])
             personality = npc.get("personality_traits", [])
             likes = npc.get("likes", [])
             dislikes = npc.get("dislikes", [])
-    
+
             lines.append(f"  Hobbies: {', '.join(hobbies)}" if hobbies else "  Hobbies: None")
             lines.append(f"  Personality: {', '.join(personality)}" if personality else "  Personality: None")
             lines.append(f"  Likes: {', '.join(likes)} | Dislikes: {', '.join(dislikes)}")
-    
-            # Memory
+
             npc_memory = npc.get("memory", [])
             if npc_memory:
                 if isinstance(npc_memory, list):
-                    # If it's a list of memory entries, print them all or a subset
                     lines.append(f"  Memory: {npc_memory}")
                 else:
                     lines.append(f"  Memory: {npc_memory}")
             else:
                 lines.append("  Memory: (None)")
-    
-            # Affiliations
+
             affiliations = npc.get("affiliations", [])
             lines.append(f"  Affiliations: {', '.join(affiliations)}" if affiliations else "  Affiliations: None")
-    
-            # Full schedule as JSON
+
             schedule = npc.get("schedule", {})
             if schedule:
                 schedule_json = json.dumps(schedule, indent=2)
                 lines.append("  Schedule:")
-                # Add the JSON dump on separate lines for readability
                 for line in schedule_json.splitlines():
                     lines.append("    " + line)
             else:
                 lines.append("  Schedule: (None)")
-    
-            # Current location
+
             current_loc = npc.get("current_location", "Unknown")
             lines.append(f"  Current Location: {current_loc}\n")
     else:
         lines.append("(No NPCs found)")
-
 
     # 4) Current roleplay data
     lines.append("\n=== CURRENT ROLEPLAY ===")
@@ -490,41 +560,56 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     if rule_knowledge:
         lines.append("\n=== ADVANCED RULE ENFORCEMENT & KNOWLEDGE ===")
 
+        # Summary
         lines.append("\nRule Enforcement Summary:")
         lines.append(rule_knowledge.get("rule_enforcement_summary", "(No info)"))
 
-        triggers = rule_knowledge.get("plot_triggers", [])
-        if triggers:
+        # Plot Triggers
+        plot_trigs = rule_knowledge.get("plot_triggers", [])
+        if plot_trigs:
             lines.append("\n-- PLOT TRIGGERS --")
-            for trig in triggers:
-                lines.append(f"Stage: {trig['stage']}, Title: {trig['title']} => {trig['description']}")
+            for trig in plot_trigs:
+                lines.append(f"Trigger Name: {trig['title']}")
+                lines.append(f"Stage: {trig['stage']}")
+                lines.append(f"Description: {trig['description']}")
+                lines.append(f"Key Features: {trig['key_features']}")
+                lines.append(f"Stat Dynamics: {trig['stat_dynamics']}")
                 if trig.get("examples"):
-                    lines.append(f"  Examples: {', '.join(trig['examples'])}")
+                    lines.append(f"  Examples: {json.dumps(trig['examples'])}")
+                if trig.get("triggers"):
+                    lines.append(f"  Additional Triggers: {json.dumps(trig['triggers'])}")
+                lines.append("")  # blank line
         else:
             lines.append("No plot triggers found.")
 
+        # Intensity Tiers
         tiers = rule_knowledge.get("intensity_tiers", [])
         if tiers:
             lines.append("\n-- INTENSITY TIERS --")
             for tier in tiers:
-                lines.append(f"{tier['tier_name']}: {tier.get('key_features','')}")
-                lines.append(f"  Activities: {tier.get('activity_examples','')}")
+                lines.append(f"{tier['tier_name']}")
+                lines.append(f"  Key Features: {json.dumps(tier['key_features'])}")
+                lines.append(f"  Activities: {json.dumps(tier['activity_examples'])}")
+                lines.append(f"  Permanent Effects: {json.dumps(tier['permanent_effects'])}\n")
         else:
             lines.append("No intensity tiers found.")
 
+        # Interactions
         interactions = rule_knowledge.get("interactions", [])
         if interactions:
             lines.append("\n-- INTERACTIONS --")
             for intr in interactions:
-                lines.append(f"{intr['interaction_name']}: {intr.get('detailed_rules','')}")
-                lines.append(f"  Tasks: {intr.get('task_examples','')}")
+                lines.append(f"Interaction Name: {intr['interaction_name']}")
+                lines.append(f"Detailed Rules: {json.dumps(intr['detailed_rules'])}")
+                lines.append(f"Task Examples: {json.dumps(intr['task_examples'])}")
+                lines.append(f"Agency Overrides: {json.dumps(intr['agency_overrides'])}\n")
         else:
             lines.append("No interactions data found.")
 
-        meltdown_info = rule_knowledge.get("meltdown_synergy", None)
-        if meltdown_info:
-            lines.append("\nMeltdown Synergy Info:")
-            lines.append(meltdown_info)
+  #      meltdown_info = rule_knowledge.get("meltdown_synergy", None)
+  #      if meltdown_info:
+  #          lines.append("\nMeltdown Synergy Info:")
+   #         lines.append(meltdown_info)
 
     # Return final string
     return "\n".join(lines)
