@@ -325,7 +325,7 @@ def gather_rule_knowledge():
     # Optionally reintroduce meltdown info
  #   meltdown_info = (
   #      "Meltdowns occur if certain conditions are met. The meltdown logic triggers GPT to produce meltdown dialog, etc."
-    )
+   # )
 
     return {
         "rule_enforcement_summary": rule_enforcement_summary,
