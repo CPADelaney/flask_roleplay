@@ -534,7 +534,7 @@
         console.error("Server error:", data);
         alert("Message send failed!");
         // Optionally remove or update the 'typing...' bubble to show an error
-        gptTypingBubble.innerHTML = `<strong>GPT:</strong> [Error retrieving response]`;
+        gptTypingBubble.innerHTML = `<strong>Nyx:</strong> [Error retrieving response]`;
         return;
       }
       resetPendingUniversalUpdates();
@@ -565,7 +565,7 @@
     } catch (err) {
       console.error("sendMessage error:", err);
       // Show an error in GPT bubble
-      gptTypingBubble.innerHTML = `<strong>GPT:</strong> [Error retrieving response]`;
+      gptTypingBubble.innerHTML = `<strong>Nyx:</strong> [Error retrieving response]`;
     }
   }
 
