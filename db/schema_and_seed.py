@@ -6,6 +6,8 @@ from routes.activities import insert_missing_activities
 from routes.archetypes import insert_missing_archetypes
 from routes.settings_routes import insert_missing_settings
 from logic.seed_intensity_tiers import create_and_seed_intensity_tiers
+from logic.seed_plot_triggers import create_and_seed_plot_triggers()     
+from logic.seed_interaction_tiers import create_and_seed_interactions_tiers()
 from logic.stats_logic import (
     insert_stat_definitions,
     insert_or_update_game_rules,
