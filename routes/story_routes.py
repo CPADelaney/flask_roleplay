@@ -169,7 +169,7 @@ def next_storybeat():
             VALUES (%s, %s, %s, %s)
         """, (
             conv_id,
-            "GPT",
+            "Nyx",
             gpt_text,
             structured_json_str
         ))
