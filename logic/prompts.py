@@ -319,9 +319,4 @@ Remember:
     ... appropriate keys ...
   }
 }
-
-Now proceed.
-"""
-
-
 """
