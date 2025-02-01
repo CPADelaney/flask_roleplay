@@ -425,6 +425,7 @@ def seed_initial_data():
     insert_missing_activities()
     insert_missing_archetypes()
     create_and_seed_intensity_tiers()
+    create_and_seed_interactions_tiers()
     print("All default data seeded successfully.")
 
 def initialize_all_data():
