@@ -402,6 +402,16 @@ def create_all_tables():
         );
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Interactions (
+            id SERIAL PRIMARY KEY,
+            interaction_name TEXT UNIQUE NOT NULL,   -- e.g. "Weighted Success/Failure Rules"
+            detailed_rules JSONB NOT NULL,          -- big chunk describing how you handle success/failure
+            task_examples JSONB,                    -- e.g. "non_npc_challenges", "npc_driven_tasks"
+            agency_overrides JSONB                  -- e.g. thresholds for Obedience, Corruption, etc.
+        );
+    ''')
+
     conn.commit()
     conn.close()
 
