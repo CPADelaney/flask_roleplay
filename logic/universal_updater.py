@@ -251,21 +251,38 @@ def apply_universal_updates(data: dict):
                 VALUES (%s, %s, %s, %s, %s)
             """, (user_id, conv_id, loc_name, desc, json.dumps(open_hours)))
 
-        # 9) event_list_updates
+        # 9) event_list_updates => normal Events or PlannedEvents
         event_updates = data.get("event_list_updates", [])
         for ev in event_updates:
-            ev_name = ev.get("event_name", "UnnamedEvent")
-            ev_desc = ev.get("description", "")
-            ev_start = ev.get("start_time", "TBD Start")
-            ev_end = ev.get("end_time", "TBD End")
-            ev_loc = ev.get("location", "Unknown")
-            cursor.execute("""
-                INSERT INTO Events (
-                  user_id, conversation_id,
-                  event_name, description, start_time, end_time, location
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (user_id, conv_id, ev_name, ev_desc, ev_start, ev_end, ev_loc))
+            if "npc_id" in ev and "day" in ev and "time_of_day" in ev:
+                # It's a PlannedEvent
+                npc_id = ev["npc_id"]
+                day = ev["day"]
+                tod = ev["time_of_day"]
+                ov_loc = ev.get("override_location", "Unknown")
+                cursor.execute("""
+                    INSERT INTO PlannedEvents (
+                        user_id, conversation_id,
+                        npc_id, day, time_of_day, override_location
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (user_id, conv_id, npc_id, day, tod, ov_loc))
+            else:
+                # It's a normal Event
+                ev_name = ev.get("event_name", "UnnamedEvent")
+                ev_desc = ev.get("description", "")
+                ev_start = ev.get("start_time", "TBD Start")
+                ev_end = ev.get("end_time", "TBD End")
+                ev_loc = ev.get("location", "Unknown")
+
+                cursor.execute("""
+                    INSERT INTO Events (
+                        user_id, conversation_id,
+                        event_name, description, start_time, end_time, location
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (user_id, conv_id, ev_name, ev_desc, ev_start, ev_end, ev_loc))
+
 
         # 10) inventory_updates
         inv_updates = data.get("inventory_updates", {})
@@ -324,13 +341,42 @@ def apply_universal_updates(data: dict):
             qid = qu.get("quest_id")
             status = qu.get("status", "In Progress")
             detail = qu.get("progress_detail", "")
+            qgiver = qu.get("quest_giver", "")
+            reward = qu.get("reward", "")
+            qname  = qu.get("quest_name", None)
+
+            # If your Quests table includes user_id, conversation_id columns,
+            # you might do an insert if it doesn't exist, or an update if it does.
+            # Example approach:
             if qid:
-                # we might do: WHERE quest_id=%s AND user_id=%s AND conversation_id=%s
+                # Attempt an update first
                 cursor.execute("""
                     UPDATE Quests
-                    SET status=%s, progress_detail=%s
-                    WHERE quest_id=%s
-                """, (status, detail, qid))
+                    SET status=%s, progress_detail=%s, quest_giver=%s, reward=%s
+                    WHERE quest_id=%s AND user_id=%s AND conversation_id=%s
+                """, (status, detail, qgiver, reward, qid, user_id, conv_id))
+                if cursor.rowcount == 0:
+                    # No row existed => we could insert a new record
+                    # You might store quest_name if provided
+                    cursor.execute("""
+                        INSERT INTO Quests (
+                            user_id, conversation_id, quest_id,
+                            quest_name, status, progress_detail,
+                            quest_giver, reward
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (user_id, conv_id, qid, qname, status, detail, qgiver, reward))
+            else:
+                # If no quest_id given => we can insert a new quest
+                cursor.execute("""
+                    INSERT INTO Quests (
+                        user_id, conversation_id,
+                        quest_name, status, progress_detail,
+                        quest_giver, reward
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (user_id, conv_id, qname or "Unnamed Quest", status, detail, qgiver, reward))
+
 
         # 12) social_links
         rel_links = data.get("social_links", [])
@@ -342,15 +388,14 @@ def apply_universal_updates(data: dict):
             if not e1_type or not e1_id or not e2_type or not e2_id:
                 continue
 
-            # If you store user_id, conversation_id in SocialLinks, you must pass them
-            # to get_social_link(...) or create_social_link(...). 
-            # For simplicity we just show the pattern:
             existing = get_social_link(e1_type, e1_id, e2_type, e2_id, user_id, conv_id)
             if not existing:
                 new_link_id = create_social_link(
-                    e1_type, e1_id, e2_type, e2_id,
+                    e1_type, e1_id,
+                    e2_type, e2_id,
                     link_type=link_data.get("link_type", "neutral"),
                     link_level=link_data.get("level_change", 0),
+                    # Now pass user_id & conversation_id so it is saved in the row
                     user_id=user_id,
                     conversation_id=conv_id
                 )
@@ -359,7 +404,14 @@ def apply_universal_updates(data: dict):
             else:
                 ltype = link_data.get("link_type")
                 lvl_change = link_data.get("level_change", 0)
-                update_link_type_and_level(existing["link_id"], new_type=ltype, level_change=lvl_change)
+                # Also pass user_id, conversation_id if your update function needs them
+                update_link_type_and_level(
+                    existing["link_id"],
+                    new_type=ltype,
+                    level_change=lvl_change,
+                    user_id=user_id,
+                    conversation_id=conv_id
+                )
                 if "new_event" in link_data:
                     add_link_event(existing["link_id"], link_data["new_event"])
 
@@ -369,20 +421,21 @@ def apply_universal_updates(data: dict):
             perk_name = perk.get("perk_name")
             perk_desc = perk.get("perk_description", "")
             perk_fx   = perk.get("perk_effect", "")
-
-            # We'll default the player_name if not in the perk object
-            player_name = data.get("player_name", "Chase")
+            player_name = perk.get("player_name", "Chase")  # or from data if not present
 
             if perk_name:
-                # Also might store user_id, conversation_id in PlayerPerks if it's scoping
+                # Insert or update row in PlayerPerks *with user_id, conversation_id*
                 cursor.execute("""
-                    INSERT INTO PlayerPerks (player_name, perk_name, perk_description, perk_effect)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (player_name, perk_name) DO NOTHING
-                """, (player_name, perk_name, perk_desc, perk_fx))
-
-        conn.commit()
-        return {"message": "Universal update successful"}
+                    INSERT INTO PlayerPerks (
+                        user_id, conversation_id,
+                        player_name, perk_name, perk_description, perk_effect
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                """, (
+                    user_id, conv_id,
+                    player_name, perk_name, perk_desc, perk_fx
+                ))
 
     except Exception as e:
         conn.rollback()
