@@ -93,187 +93,370 @@ Inventory or Quest Changes: Reflected in inventory_updates or quest_updates.
 """
 
 DB_SCHEMA_PROMPT = """
-Below is the database schema and the corresponding 'universal update' JSON structure you must reference whenever
-you create JSON responses that alter the world state. Provide valid JSON so it can be parsed successfully
-on the server side.
+=======================================================
 
-Whenever a new location, event, NPC, or quest is introduced—or the player’s or an NPC’s stats are updated—
-you must include a 'universal_update' object with the proper keys pointing to the relevant arrays or objects.
-Ensure it matches these guidelines precisely.
+Whenever you introduce or modify anything in the game world—locations, events, NPCs, quests, schedules—  
+you must return a valid JSON object wrapped like this:
 
---------------------------------------------------------------------------------
-Strict Database Enforcement Rule
-Every time a new location is introduced, an event occurs, an NPC appears, or the player takes an action that should be reflected in the world state, it must be immediately logged into the database using a universal update.
-
-New Locations: Always added to location_creations.
-New events: Always add to events
-NPC Schedule change: Always add to plannedevents
-Player/NPC stat change: Log in npcstats or playerstats
-New NPCs or Updates: Logged in npc_creations or npc_updates.
-Player/NPC Actions: Added to roleplay_updates.
-Significant Interactions: Affect NPC social_links or relationship_updates.
-Inventory or Quest Changes: Reflected in inventory_updates or quest_updates.
-
-Locations
-DB Table: Locations
-Universal Update Key: location_creations
-When: Chase goes to a new place (shop, bar, house, etc)
-
-NPC Attributes
-DB Table: NPCStats
-Universal Update Key:
-npc_creations for brand-new NPCs (not in DB yet).
-npc_updates for existing NPCs (referenced by npc_id).
-When: Renaming an existing NPC, marking them introduced, or tweaking stats.
-
-Player Stats
-DB Table: PlayerStats
-Universal Update Key: character_stat_updates
-When: The player’s stats change after event.
-
-Player Inventory
-DB Table: PlayerInventory
-Universal Update Key: inventory_updates
-When: The player picks up or loses items. You can pass "added_items" or "removed_items" arrays.
-
-In-Game Events
-DB Table: Events
-Universal Update Key: event_list_updates
-When: You introduce a holiday/festival/timed event.
-
-DB Table: PlannedEvents
-Universal Update Key: event_list_updates
-When: For when NPC is unavailable at their normal time/location.
-
-General Relationship/Interaction Changes
-DB Table: CurrentRoleplay
-Universal Update Key: roleplay_updates for environment changes.
-relationship_updates if you want to modify an NPC’s affiliations array.
-When: Every time anything happens in-universe, or when context is generated (schedules, history, etc.)
-
-Quests & Side Quests
-DB Table: Quests
-Universal Update Key: quest_updates
-When: A quest is started, updated, or completed.
-
-Social Links
-DB Table: SocialLinks
-Universal Update Key: social_links (an array of objects)
-When: You want to create or update NPC↔NPC or player↔NPC relationships
-
+```json
 {
-  "entity1_type": "npc",
-  "entity1_id": 2,
-  "entity2_type": "npc",
-  "entity2_id": 5,
-  "link_type": "rivals",
-  "level_change": 5,
-  "new_event": "They had a tense standoff in the courtyard."
+  "universal_update": {
+    ... your changes ...
+  }
 }
-If no link exists, it’s created; otherwise, it’s updated.
+Use the following keys within "universal_update" to match our database columns:
 
-One-Time Perk Unlocks
-DB Table: PlayerPerks
-Universal Update Key: perk_unlocks (an array of objects)
-When: You want to grant the player a unique skill/perk that should only be awarded once.
-{
-  "perk_name": "Shadow Steps",
-  "perk_description": "Enables stealth after forging deeper trust.",
-  "perk_effect": "Boost to infiltration tasks at night."
-}
-Each perk is one-time unlock.
+1) Creating or Updating Locations
+Table: Locations
+Relevant Columns:
 
-Examples:
-Introducing a New Location
+name (TEXT) – The name of the location
+description (TEXT) – A description of it
+open_hours (JSONB) – Optional array or structure describing open times
+Universal Update Key: location_creations (array)
+
+Example:
+
+json
+Copy
 {
   "universal_update": {
     "location_creations": [
       {
-        "location_name": "Shadow Bazaar",
+        "name": "Shadow Bazaar",
         "description": "A hidden marketplace of forbidden curios...",
         "open_hours": ["Night"]
       }
     ]
   }
 }
-Renaming an NPC and Marking Introduced
+2) Creating or Updating Events
+Table: Events
+Relevant Columns:
+
+event_name (TEXT) – Unique name or title
+description (TEXT) – Short summary or flavor text
+start_time (TEXT)
+end_time (TEXT)
+location (TEXT) – Where it’s held
+Universal Update Key: event_list_updates (array)
+
+Example (introducing a new festival):
+
+json
+Copy
 {
   "universal_update": {
-    "npc_updates": [
-      { "npc_id": 3, "npc_name": "Mistress Verena", "introduced": true }
+    "event_list_updates": [
+      {
+        "event_name": "Blood Moon Festival",
+        "description": "A grand night of dark celebration...",
+        "start_time": "Monday Evening",
+        "end_time": "Midnight",
+        "location": "Carnival Grounds"
+      }
     ]
   }
 }
-Adding an Item
+3) Planned Events / NPC Schedules
+Table: PlannedEvents
+Relevant Columns:
+
+npc_id (INT) – Which NPC is affected
+day (INT) – Day index (e.g. 1=Monday, 2=Tuesday, etc. – or your own convention)
+time_of_day (TEXT) – “Morning”, “Afternoon”, “Evening,” etc.
+override_location (TEXT) – If NPC is at a special location this day/time
+Universal Update Key: event_list_updates
+(We store them here too, but the code will route them into PlannedEvents based on presence of npc_id/day/time_of_day keys.)
+
+Example (NPC #3 has a special appointment on Wednesday afternoon):
+
+json
+Copy
+{
+  "universal_update": {
+    "event_list_updates": [
+      {
+        "npc_id": 3,
+        "day": 3,
+        "time_of_day": "Afternoon",
+        "override_location": "Dentist Office"
+      }
+    ]
+  }
+}
+4) NPC Creations & Updates
+Table: NPCStats
+Relevant Columns:
+
+npc_name (TEXT)
+introduced (BOOLEAN)
+dominance, cruelty, closeness, trust, respect, intensity (INT) – all 0–100 or -100 to 100 in some cases
+schedule (JSONB) – Full schedule object
+current_location (TEXT)
+hobbies, personality_traits, likes, dislikes, affiliations (JSONB)
+Creating a New NPC
+Universal Update Key: npc_creations (array of new NPC objects)
+
+Example:
+
+json
+Copy
+{
+  "universal_update": {
+    "npc_creations": [
+      {
+        "npc_name": "Mistress Verena",
+        "introduced": true,
+        "dominance": 85,
+        "cruelty": 90,
+        "closeness": 10,
+        "trust": -20,
+        "respect": 50,
+        "intensity": 60,
+        "hobbies": ["Torture instruments collecting"],
+        "affiliations": ["Night Coven"],
+        "schedule": {
+          "Monday": {"Evening": "Old Cemetery"},
+          "Tuesday": {"Morning": "Hidden Library"}
+        },
+        "current_location": "Dark Alley"
+      }
+    ]
+  }
+}
+Updating an Existing NPC
+Universal Update Key: npc_updates (array)
+
+Example:
+
+json
+Copy
+{
+  "universal_update": {
+    "npc_updates": [
+      {
+        "npc_id": 3,
+        "npc_name": "Mistress Verena",
+        "introduced": true,
+        "dominance": 87
+      }
+    ]
+  }
+}
+Partial Schedule Merge
+If you only want to change a piece of the schedule rather than overwrite it entirely, you can define "schedule_updates" inside "npc_updates":
+
+json
+Copy
+{
+  "universal_update": {
+    "npc_updates": [
+      {
+        "npc_id": 3,
+        "schedule_updates": {
+          "Wednesday": {"Afternoon": "Torture Dungeon"}
+        }
+      }
+    ]
+  }
+}
+5) Player Stats
+Table: PlayerStats
+Relevant Columns:
+
+player_name (TEXT)
+corruption, confidence, willpower, obedience, dependency, lust, mental_resilience, physical_endurance (INT)
+Universal Update Key: character_stat_updates
+This is an object (not an array). Pass in the stats that changed.
+
+Example (increasing corruption and obedience):
+
+json
+Copy
+{
+  "universal_update": {
+    "character_stat_updates": {
+      "player_name": "Chase",
+      "stats": {
+        "corruption": 55,
+        "obedience": 70
+      }
+    }
+  }
+}
+6) Player Inventory
+Table: PlayerInventory
+Relevant Columns:
+
+player_name
+item_name
+item_description
+quantity
+category
+Universal Update Key: inventory_updates (object)
+
+Possible Sub-keys:
+
+"added_items": array of item objects or simple item names
+"removed_items": array of item names
+or if you want to specify quantity, do something like:
+json
+Copy
+{
+  "item_name": "Strange Key",
+  "item_description": "Glowing with a faint symbol",
+  "quantity": 1
+}
+Example:
+
+json
+Copy
 {
   "universal_update": {
     "inventory_updates": {
       "player_name": "Chase",
-      "added_items": ["Strange Key"]
+      "added_items": [
+        {
+          "item_name": "Strange Key",
+          "item_description": "Glowing with a faint symbol",
+          "quantity": 1,
+          "category": "Key Items"
+        }
+      ]
     }
   }
 }
-Updating the Environment
+7) Quests
+Table: Quests
+Relevant Columns:
+
+quest_name
+status (default “In Progress”)
+progress_detail
+quest_giver
+reward
+Universal Update Key: quest_updates (array)
+
+Example (Starting a new quest):
+
+json
+Copy
 {
   "universal_update": {
-    "roleplay_updates": {
-      "CurrentSetting": "Sinister Carnival",
-      "TimeOfDay": "Night"
-    }
+    "quest_updates": [
+      {
+        "quest_name": "Investigate the Ritual",
+        "status": "In Progress",
+        "progress_detail": "Chase just learned of a secret ritual happening at midnight.",
+        "quest_giver": "Mistress Verena",
+        "reward": "A chance to earn her favor"
+      }
+    ]
   }
 }
-Creating/Updating a Social Link
+8) Social Links
+Table: SocialLinks
+Relevant Columns:
+
+entity1_type, entity1_id
+entity2_type, entity2_id
+link_type (TEXT)
+link_level (INT)
+link_history (JSONB or TEXT)
+Universal Update Key: social_links (array)
+
+Example (NPC#2 and NPC#5 become “rivals,” and the link_level is set to 5):
+
+json
+Copy
 {
   "universal_update": {
     "social_links": [
       {
-        "entity1_type": "player", 
-        "entity1_id": 0,
+        "entity1_type": "npc",
+        "entity1_id": 2,
         "entity2_type": "npc",
         "entity2_id": 5,
-        "link_type": "friends",
-        "level_change": 10,
-        "new_event": "They bonded over a harrowing challenge."
+        "link_type": "rivals",
+        "link_level": 5,
+        "link_history": "They had a tense standoff in the courtyard."
       }
     ]
   }
 }
-You can either provide `"schedule"` to overwrite everything, or `"schedule_updates"` for partial merges to affect player/NPC availability
+9) Roleplay/Environment Updates
+Table: CurrentRoleplay
+Universal Update Key: roleplay_updates (object)
+
+Use this to store or update arbitrary keys about the current environment, time of day, or shared data.
+
+Example:
+
+json
+Copy
 {
-  "npc_updates": [
-    {
-      "npc_id": 3,
-      "schedule_updates": {
-        "Wednesday": { "Afternoon": "Dentist Appointment" }
-      }
+  "universal_update": {
+    "roleplay_updates": {
+      "CurrentSetting": "Gothic Metropolis",
+      "TimeOfDay": "Night",
+      "ChaseRole": "Reluctant Servant"
     }
-  ]
+  }
 }
-Granting a One-Time Perk
+10) Player Perks
+Table: PlayerPerks
+Relevant Columns:
+
+player_name
+perk_name
+perk_description
+perk_effect
+Universal Update Key: perk_unlocks (array)
+
+Example:
+
+json
+Copy
 {
   "universal_update": {
     "perk_unlocks": [
       {
-        "perk_name": "Free Nightclub Entry",
-        "perk_description": "You can enter Mistress Cassandra's club without fees.",
-        "perk_effect": "Nightclub events cost 0 tokens."
+        "player_name": "Chase",
+        "perk_name": "Shadow Steps",
+        "perk_description": "Allows near-silent movement in dark alleys",
+        "perk_effect": "Stealth is drastically improved at night"
       }
     ]
   }
 }
-Advanced Roleplay Updates
-To store larger JSON (like a schedule), include them in roleplay_updates:
+11) Empty Updates
+If a response does not introduce or modify anything, you should still return:
+
+json
+Copy
 {
-  "universal_update": {
-    "roleplay_updates": {
-      "CurrentSetting": "Skybound Fortress",
-      "ChaseSchedule": {
-        "Monday": {"Morning": "Train", "Night": "Rest"},
-        "Tuesday": {"AllDay": "Explore new regions"}
-      },
-      "ChaseRole": "A newly appointed scout of the fortress guard."
-    }
-  }
+  "universal_update": {}
 }
+This ensures consistent JSON output every time.
+
+Summary
+Locations: Use "location_creations" → each item must have "name", optionally "description" and "open_hours".
+Events: Use "event_list_updates" → each item must have "event_name", "description", "start_time", "end_time", "location".
+PlannedEvents: Also "event_list_updates", but with "npc_id", "day", "time_of_day", "override_location".
+NPCStats: Use "npc_creations" or "npc_updates" with keys like "npc_name", "introduced", "dominance", etc.
+PlayerStats: Use "character_stat_updates" with a "player_name" and a "stats" object.
+PlayerInventory: Use "inventory_updates" with "added_items" or "removed_items".
+Quests: Use "quest_updates" with "quest_name", "status", "progress_detail", etc.
+SocialLinks: Use "social_links" to set or update "link_type", "link_level", "link_history".
+CurrentRoleplay: Use "roleplay_updates" for environment/time-of-day changes.
+PlayerPerks: Use "perk_unlocks" with a "player_name" and the perk details.
+Always wrap these inside a top-level "universal_update" object, and always provide valid JSON so our system can parse it.
+
+
+
+
+
+
 
 """
