@@ -97,6 +97,7 @@ def next_storybeat():
 
         # 7) aggregator_data => from aggregator
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
+
         logging.info(f"[next_storybeat] aggregator_data keys: {aggregator_data.keys()}")
 
         # Possibly generate a new environment
