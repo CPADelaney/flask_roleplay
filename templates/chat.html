@@ -199,6 +199,10 @@
 <div id="contextMenu"></div>
 
 <script>
+    function sanitizeAndRenderMarkdown(markdownText) {
+      const renderedHTML = marked.parse(markdownText); // For Marked 4+
+      return DOMPurify.sanitize(renderedHTML);
+    }
   let currentConvId = null;
   let messagesOffset = 0;
   const MESSAGES_PER_LOAD = 20;
