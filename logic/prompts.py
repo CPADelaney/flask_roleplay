@@ -430,15 +430,7 @@ Copy
     ]
   }
 }
-11) Empty Updates
-If a response does not introduce or modify anything, you should still return:
 
-json
-Copy
-{
-  "universal_update": {}
-}
-This ensures consistent JSON output every time.
 
 Summary
 Locations: Use "location_creations" → each item must have "name", optionally "description" and "open_hours".
