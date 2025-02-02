@@ -461,15 +461,6 @@
     loadMessages(currentConvId, false);
   }
 
-  /**
-   * Helper function: parse Markdown -> sanitize -> return safe HTML.
-   */
-  function sanitizeAndRenderMarkdown(markdownText) {
-    const renderedMarkdown = marked(markdownText);
-    // Use DOMPurify to sanitize the rendered HTML
-    return DOMPurify.sanitize(renderedMarkdown);
-  }
-
   function appendMessage(m, autoScroll = true) {
     const chatWindow = document.getElementById("chatWindow");
     const bubble = createBubble(m);
