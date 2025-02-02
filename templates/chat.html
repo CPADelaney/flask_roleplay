@@ -355,17 +355,27 @@
         body: JSON.stringify({})
       });
       const data = await res.json();
+  
       if (!res.ok) {
         alert("Error starting new game: " + (data.error || res.status));
         return;
       }
+  
       currentConvId = data.conversation_id;
       alert("New game started! conversation_id=" + currentConvId);
+  
+      // 1) Refresh the conversation list
+      await loadConversations();
+  
+      // 2) Automatically open the new conversation
+      selectConversation(currentConvId);
+  
     } catch (err) {
       console.error("startNewGame error:", err);
       alert("Failed to start new game!");
     }
   }
+
 
   function renderConvoList(conversations) {
     const convListDiv = document.getElementById("convList");
