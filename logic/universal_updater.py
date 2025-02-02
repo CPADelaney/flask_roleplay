@@ -6,21 +6,14 @@ from logic.social_links import (
 )
 
 def apply_universal_updates(data: dict):
-    """
-    Applies the 'universal update' logic to the database using the JSON structure
-    described in data. This handles NPC creations/updates, location creations,
-    roleplay state changes, events, inventory, quests, social links, perk unlocks,
-    and full/partial schedule changes for NPCs, all scoped by user_id & conversation_id.
-    """
-
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        # 1) Pull user_id, conversation_id from the data
         user_id = data.get("user_id")
         conv_id = data.get("conversation_id")
         if not user_id or not conv_id:
-            return {"error": "Missing user_id or conversation_id in payload."}
+            # Return an error dict if missing IDs
+            return {"error": "Missing user_id or conversation_id in universal_update"}
 
         # 2) roleplay_updates
         # Now we store them in CurrentRoleplay, referencing user_id, conversation_id, key, value
@@ -437,8 +430,12 @@ def apply_universal_updates(data: dict):
                     player_name, perk_name, perk_desc, perk_fx
                 ))
 
+        conn.commit()
+        return {"message": "Universal update successful"}
+
     except Exception as e:
         conn.rollback()
         return {"error": str(e)}
     finally:
+        cursor.close()
         conn.close()
