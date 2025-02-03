@@ -163,7 +163,30 @@ def next_storybeat():
 
         # 13) GPT call
         gpt_reply_dict = get_chatgpt_response(conv_id, aggregator_text, user_input)
-        gpt_text = gpt_reply_dict["response"]
+        
+        if gpt_reply_dict["type"] == "function_call":
+            # The model is returning structured JSON for universal_update
+            if gpt_reply_dict["function_name"] == "apply_universal_update":
+                # Merge user_id & conv_id
+                function_args = gpt_reply_dict["function_args"]
+                function_args["user_id"] = user_id
+                function_args["conversation_id"] = conv_id
+        
+                # Now call apply_universal_updates directly
+                update_result = apply_universal_updates(function_args)
+                if "error" in update_result:
+                    # If there's an error, handle it
+                    # But let's proceed to produce some textual response anyway
+                    gpt_text = "An error occurred updating the game data."
+                else:
+                    # The function call succeeded—maybe we want a short textual response or let GPT do a follow-up
+                    gpt_text = "Game data updated successfully by GPT's function call."
+            else:
+                # Unknown function call
+                gpt_text = f"Function call {gpt_reply_dict['function_name']} is not recognized."
+        else:
+            # Normal text response
+            gpt_text = gpt_reply_dict["response"]
         structured_json_str = json.dumps(gpt_reply_dict)
 
         # 14) Insert GPT message
