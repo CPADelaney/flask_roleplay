@@ -302,8 +302,8 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
         function_call="auto"
     )
 
-    msg = response["choices"][0]["message"]
-    tokens_used = response["usage"]["total_tokens"]
+    msg = response.choices[0].message
+    tokens_used = response.usage.total_tokens
 
     # Check if GPT called the function
     if "function_call" in msg:
