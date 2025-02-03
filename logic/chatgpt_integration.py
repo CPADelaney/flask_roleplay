@@ -4,7 +4,7 @@ import json
 import logging
 import openai
 from db.connection import get_db_connection
-from logic.prompts import SYSTEM_PROMPT, DB_SCHEMA_PROMPT
+from logic.prompts import SYSTEM_PROMPT
 
 
 UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
