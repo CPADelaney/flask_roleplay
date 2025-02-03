@@ -278,7 +278,7 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
     messages = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
 
     # The big difference: we pass `functions` and `function_call="auto"`
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-4o-mini-2024-07-18",
         messages=messages,
         temperature=0.2,
