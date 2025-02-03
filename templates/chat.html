@@ -517,10 +517,6 @@
     };
     const gptTypingBubble = appendMessage(tempGptMsgObj, true);
 
-    // Example additions to universal_update
-    pendingUniversalUpdates.character_stat_updates.stats.obedience = 80;
-    pendingUniversalUpdates.inventory_updates.added_items.push("Chains of Submission");
-
     const payload = {
       user_input: userText,
       conversation_id: currentConvId,
