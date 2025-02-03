@@ -17,12 +17,13 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                 "type": "object",
                 "description": "Updates to the CurrentRoleplay table, arbitrary key-value pairs.",
             },
-            "npc_creations": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "npc_name": {"type": "string"},
+                  "npc_creations": {
+                    "type": "array",
+                    "description": "Create new NPCs with stats/hobbies/affiliations, etc.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "npc_name": { "type": "string" },
                         "introduced": {"type": "boolean"},
                         "dominance": {"type": "number"},
                         "cruelty": {"type": "number"},
@@ -36,7 +37,13 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "dislikes": {"type": "array", "items": {"type": "string"}},
                         "affiliations": {"type": "array", "items": {"type": "string"}},
                         "schedule": {"type": "object"},
-                        "memory": {"type": ["array", "string"]},
+                        "memory": {
+                          "description": "NPC memory can be a string or an array of strings.",
+                          "anyOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" } }
+                          ]
+                        },
                         "monica_level": {"type": "number"},
                         "sex": {"type": "string"},
                     },
@@ -44,12 +51,13 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                 },
                 "description": "Create new NPCs with stats/hobbies/affiliations, etc."
             },
-            "npc_updates": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "npc_id": {"type": "number"},
+                  "npc_updates": {
+                    "type": "array",
+                    "description": "Update existing NPCs by npc_id.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "npc_id": { "type": "number" },
                         "npc_name": {"type": "string"},
                         "introduced": {"type": "boolean"},
                         "dominance": {"type": "number"},
@@ -60,7 +68,13 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "intensity": {"type": "number"},
                         "monica_level": {"type": "number"},
                         "sex": {"type": "string"},
-                        "memory": {"type": ["array", "string"]},
+                        "memory": {
+                          "description": "NPC memory can be a string or an array of strings.",
+                          "anyOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "string" } }
+                          ]
+                        },
                         "schedule": {"type": "object"},
                         "schedule_updates": {"type": "object"},
                     },
