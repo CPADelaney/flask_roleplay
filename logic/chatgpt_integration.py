@@ -306,12 +306,11 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
     tokens_used = response.usage.total_tokens
 
     # Check if GPT called the function
-    if "function_call" in msg:
-        fn_call = msg["function_call"]
-        fn_name = fn_call["name"]
-        fn_args = fn_call.get("arguments", "{}")
+    if msg.function_call is not None:
+        fn_name = msg.function_call.name
+        fn_args_str = msg.function_call.arguments or "{}"
         try:
-            parsed_args = json.loads(fn_args)
+            parsed_args = json.loads(fn_args_str)
         except Exception as e:
             logging.exception("Error parsing function call arguments")
             parsed_args = {}
@@ -320,15 +319,15 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
             "type": "function_call",
             "function_name": fn_name,
             "function_args": parsed_args,
-            "response": None,  # There's no plain text content in a function call
+            "response": None,
             "tokens_used": tokens_used
         }
     else:
-        # Normal text
+        # Normal text response
         return {
             "type": "text",
             "function_name": None,
             "function_args": None,
-            "response": msg["content"],
+            "response": msg.content,  # Access content as an attribute
             "tokens_used": tokens_used
         }
