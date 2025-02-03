@@ -1,6 +1,7 @@
 import os
 from flask import Flask, render_template, request, session, jsonify, redirect
 from flask_cors import CORS
+import logging
 
 # Your blueprint imports
 from routes.new_game import new_game_bp
@@ -157,5 +158,5 @@ def create_app():
 app = create_app()
 
 if __name__ == "__main__":
-    # Run the Flask app
+    logging.basicConfig(level=logging.INFO)
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
