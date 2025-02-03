@@ -275,7 +275,6 @@ def build_message_history(conversation_id: int, aggregator_text: str, user_input
     messages = []
     # system instructions
     messages.append({"role": "system", "content": SYSTEM_PROMPT})
-    messages.append({"role": "system", "content": DB_SCHEMA_PROMPT})
     # aggregator text as developer or system
     messages.append({"role": "system", "content": aggregator_text})
 
