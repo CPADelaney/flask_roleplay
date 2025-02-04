@@ -224,8 +224,8 @@ def start_new_game():
         # 9) aggregator_data => from aggregator
         aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
         aggregator_text = build_aggregator_text(aggregator_data)
-    
-        # 10) GPT call for the game’s opening line
+        
+        # 2) GPT call for the game’s opening line
         opening_user_prompt = (
             "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, "
             "briefly recount the new environment’s background or history from the aggregator data, "
@@ -237,23 +237,62 @@ def start_new_game():
             "Stay fully in character, with no disclaimers or system explanations. "
             "Conclude with a menacing or teasing invitation for Chase to proceed."
         )
-        gpt_reply_dict = get_chatgpt_response(conversation_id, aggregator_text, opening_user_prompt)
         
-        # 11) If function_call or otherwise no text, we store a short placeholder
-        nyx_text = gpt_reply_dict.get("response")
-        if not nyx_text:
-            # e.g., if "type" is function_call or "response" is empty
-            if gpt_reply_dict.get("type") == "function_call":
-                nyx_text = "[FUNCTION CALL MESSAGE]"
-            else:
-                nyx_text = "[No text returned from GPT]"
+        gpt_reply_dict = get_chatgpt_response(
+            conversation_id=conversation_id, 
+            aggregator_text=aggregator_text, 
+            user_input=opening_user_prompt
+        )
+        
+        # 3) If the reply is a function call (or otherwise lacks text), re-ask with function_call="none"
+        nyx_text = gpt_reply_dict.get("response")  # might be None if it's a function_call
+        
+        if gpt_reply_dict["type"] == "function_call" or not nyx_text:
+            logging.info("GPT tried a function call or gave no text for the intro. Re-calling with function_call='none'.")
+            # We'll craft a new 'messages' array here:
+        
+            # "original_messages" should replicate how we build the final messages array in get_chatgpt_response
+            original_messages = build_message_history(
+                conversation_id=conversation_id, 
+                aggregator_text=aggregator_text, 
+                user_input=opening_user_prompt,
+                limit=15
+            )
+            
+            # Append an extra user instruction to produce text only:
+            forced_messages = original_messages + [
+                {
+                    "role": "user",
+                    "content": "No function calls allowed for this introduction. Produce only text narrative."
+                }
+            ]
+        
+            fallback_response = openai.ChatCompletion.create(
+                model="gpt-4o",
+                messages=forced_messages,
+                function_call="none",  # ensures no function calls
+                temperature=0.7,
+            )
+        
+            # get the text from fallback response
+            fallback_text = fallback_response["choices"][0]["message"]["content"].strip()
+        
+            # store that as our final text
+            nyx_text = fallback_text or "[No text returned from GPT]"
+        
+            # also consider storing fallback_response in structured_json_str if you want
+            # but for simplicity, let's keep the original gpt_reply_dict for structured_content
+            # or create a new dict with the fallback info
         
         structured_json_str = json.dumps(gpt_reply_dict)
         
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO messages (conversation_id, sender, content, structured_content)
             VALUES (%s, %s, %s, %s)
-        """, (conversation_id, "Nyx", nyx_text, structured_json_str))
+            """,
+            (conversation_id, "Nyx", nyx_text, structured_json_str)
+        )
         conn.commit()
 
     
