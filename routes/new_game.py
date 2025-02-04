@@ -4,6 +4,7 @@ import random
 from db.connection import get_db_connection
 import openai
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
+from logic.chatgpt_integration import get_chatgpt_response
 from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_openai_client 
 
@@ -218,6 +219,39 @@ def start_new_game():
         success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
         logging.info(f"Success! Returning 200 with message: {success_msg}")
 
+        # (A) Create aggregator_data so GPT sees the new state
+        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
+        aggregator_text = build_aggregator_text(aggregator_data)
+    
+        # (B) GPT call for the game’s opening line
+        opening_user_prompt = "Begin the scenario now. Greet Chase with your sadistic style. Introduce the setting."
+        gpt_reply_dict = get_chatgpt_response(conversation_id, aggregator_text, opening_user_prompt)
+    
+        # (C) If it’s normal text, store it as a “Nyx” message
+        nyx_text = gpt_reply_dict.get("response", "Welcome to your new domain.")
+        structured_json_str = json.dumps(gpt_reply_dict)
+        cursor.execute("""
+            INSERT INTO messages (conversation_id, sender, content, structured_content)
+            VALUES (%s, %s, %s, %s)
+        """, (conversation_id, "Nyx", nyx_text, structured_json_str))
+        conn.commit()
+    
+        # (D) Return data
+        cursor.execute("""
+            SELECT sender, content, created_at
+            FROM messages
+            WHERE conversation_id=%s
+            ORDER BY id ASC
+        """, (conversation_id,))
+        rows = cursor.fetchall()
+        conversation_history = []
+        for r in rows:
+            conversation_history.append({
+                "sender": r[0],
+                "content": r[1],
+                "created_at": r[2].isoformat()
+            })
+
         return jsonify({
             "message": success_msg,
             "scenario_name": scenario_name,        # show the scenario name we used
@@ -226,6 +260,7 @@ def start_new_game():
             "chase_schedule": chase_schedule,
             "chase_role": chase_role,
             "conversation_id": conversation_id
+            "messages": conversation_history  # <-- add this
         }), 200
 
     except Exception as e:
@@ -286,3 +321,5 @@ def gpt_generate_scenario_name_and_quest():
             quest_blurb += line + " "
 
     return scenario_name, quest_blurb.strip()
+
+
