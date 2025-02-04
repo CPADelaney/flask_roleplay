@@ -302,9 +302,6 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
         function_call="auto"
     )
 
-    reasoning_content = response.choices[0].message.reasoning_content
-    content = response.choices[0].message.content
-
     msg = response.choices[0].message
     tokens_used = response.usage.total_tokens
 
