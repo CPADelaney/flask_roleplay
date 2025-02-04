@@ -502,8 +502,6 @@ def next_storybeat():
                 conversation_id=conv_id,
                 aggregator_text=build_aggregator_text(aggregator_data),
                 user_input=user_input,
-                functions=FUNCTION_SCHEMAS,      # <--- pass our new function schemas
-                function_call="auto"
             )
 
             if gpt_reply_dict["type"] == "function_call":
