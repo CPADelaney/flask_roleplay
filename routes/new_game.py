@@ -314,7 +314,7 @@ def gpt_generate_scenario_name_and_quest():
 
     # Increase temperature for more variation
     response = client.chat.completions.create(
-        model="gpt-4o-mini-2024-07-18",
+        model="o3-mini-2025-01-3",
         messages=messages,
         temperature=0.7,
         max_tokens=100,
