@@ -225,7 +225,7 @@ def start_new_game():
         aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
         aggregator_text = build_aggregator_text(aggregator_data)
         
-        # 2) GPT call for the game’s opening line
+        # 10) GPT call for the game’s opening line
         opening_user_prompt = (
             "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, "
             "briefly recount the new environment’s background or history from the aggregator data, "
@@ -238,32 +238,33 @@ def start_new_game():
             "Conclude with a menacing or teasing invitation for Chase to proceed."
         )
         
+        # 11) First GPT call via your wrapper (which may or may not pass function definitions)
         gpt_reply_dict = get_chatgpt_response(
             conversation_id=conversation_id, 
             aggregator_text=aggregator_text, 
             user_input=opening_user_prompt
         )
         
-        # 3) If the reply is a function call (or otherwise lacks text), re-ask with function_call="none"
-        nyx_text = gpt_reply_dict.get("response")  # might be None if it's a function_call
+        # 12) If the reply is a function call or no text, do a simpler second call
+        nyx_text = gpt_reply_dict.get("response")  # might be None if "type" is function_call
         
         if gpt_reply_dict["type"] == "function_call" or not nyx_text:
             logging.info("GPT tried a function call or gave no text for the intro. Re-calling with function_call='none'.")
-            # We'll craft a new 'messages' array here:
         
-            # "original_messages" should replicate how we build the final messages array in get_chatgpt_response
-            original_messages = build_message_history(
-                conversation_id=conversation_id, 
-                aggregator_text=aggregator_text, 
-                user_input=opening_user_prompt,
-                limit=15
-            )
-            
-            # Append an extra user instruction to produce text only:
-            forced_messages = original_messages + [
+            # Build a minimal second request:
+            #   - aggregator_text as system context
+            #   - a user message that says "No function calls ... produce only text" plus your original prompt
+            forced_messages = [
+                {
+                    "role": "system",
+                    "content": aggregator_text
+                },
                 {
                     "role": "user",
-                    "content": "No function calls allowed for this introduction. Produce only text narrative."
+                    "content": (
+                        "No function calls for the introduction. Produce only text narrative.\n\n"
+                        f"{opening_user_prompt}"
+                    )
                 }
             ]
         
@@ -274,16 +275,11 @@ def start_new_game():
                 temperature=0.7,
             )
         
-            # get the text from fallback response
+            # get the text from fallback_response
             fallback_text = fallback_response["choices"][0]["message"]["content"].strip()
+            nyx_text = fallback_text if fallback_text else "[No text returned from GPT]"
         
-            # store that as our final text
-            nyx_text = fallback_text or "[No text returned from GPT]"
-        
-            # also consider storing fallback_response in structured_json_str if you want
-            # but for simplicity, let's keep the original gpt_reply_dict for structured_content
-            # or create a new dict with the fallback info
-        
+        # 13) Store the final text into DB
         structured_json_str = json.dumps(gpt_reply_dict)
         
         cursor.execute(
@@ -295,8 +291,9 @@ def start_new_game():
         )
         conn.commit()
 
+
     
-        # 12) Return data, including conversation history
+        # 14) Return data, including conversation history
         cursor.execute("""
             SELECT sender, content, created_at
             FROM messages
