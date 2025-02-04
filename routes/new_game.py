@@ -238,15 +238,24 @@ def start_new_game():
             "Conclude with a menacing or teasing invitation for Chase to proceed."
         )
         gpt_reply_dict = get_chatgpt_response(conversation_id, aggregator_text, opening_user_prompt)
-    
-        # 11) Store GPT reply as “Nyx” message
-        nyx_text = gpt_reply_dict.get("response", "Welcome to your new domain.")
+        
+        # 11) If function_call or otherwise no text, we store a short placeholder
+        nyx_text = gpt_reply_dict.get("response")
+        if not nyx_text:
+            # e.g., if "type" is function_call or "response" is empty
+            if gpt_reply_dict.get("type") == "function_call":
+                nyx_text = "[FUNCTION CALL MESSAGE]"
+            else:
+                nyx_text = "[No text returned from GPT]"
+        
         structured_json_str = json.dumps(gpt_reply_dict)
+        
         cursor.execute("""
             INSERT INTO messages (conversation_id, sender, content, structured_content)
             VALUES (%s, %s, %s, %s)
         """, (conversation_id, "Nyx", nyx_text, structured_json_str))
         conn.commit()
+
     
         # 12) Return data, including conversation history
         cursor.execute("""
