@@ -271,7 +271,6 @@ def start_new_game():
             fallback_response = client.chat.completions.create(
                 model="gpt-4o",
                 messages=forced_messages,
-                function_call="none",  # ensures no function calls
                 temperature=0.7,
             )
         
