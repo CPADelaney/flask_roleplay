@@ -292,7 +292,7 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
 
     # The big difference: we pass `functions` and `function_call="auto"`
     response = client.chat.completions.create(
-        model="gpt-4o-mini-2024-07-18",
+        model="o3-mini-2025-01-3",
         messages=messages,
         temperature=0.2,
         max_tokens=1000,
