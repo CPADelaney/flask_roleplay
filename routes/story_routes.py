@@ -505,7 +505,7 @@ def next_storybeat():
                 conversation_id=conv_id,
                 aggregator_text=aggregator_text,
                 user_input=user_input,
-                tools=FUNCTION_SCHEMAS  # note 'tools' not 'functions'
+                FUNCTION_SCHEMAS=FUNCTION_SCHEMAS  
             )
 
             if gpt_reply_dict["type"] == "function_call":
@@ -559,7 +559,7 @@ def next_storybeat():
                     aggregator_text=aggregator_text,
                     user_input=user_input,
                     extra_function_msg=function_msg,
-                    tools=FUNCTION_SCHEMAS  # note 'tools' not 'functions'
+                    FUNCTION_SCHEMAS=FUNCTION_SCHEMAS
                 )
 
                 if gpt_reply_dict["type"] == "function_call":
