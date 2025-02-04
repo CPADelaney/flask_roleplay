@@ -1,7 +1,7 @@
 import logging
-import json             # <-- Import json explicitly
-import random           # <-- If we need randomness
-import time             # <-- For a time-based token
+import json             # Explicit import for json
+import random           # For randomness
+import time             # For time-based token
 from flask import Blueprint, request, jsonify, session
 import openai
 from db.connection import get_db_connection
@@ -17,7 +17,15 @@ new_game_bp = Blueprint('new_game_bp', __name__)
 def start_new_game():
     """
     Creates or re-initializes a game scenario *for the current user, in a specific conversation*.
-    ...
+      - If no conversation_id is provided, we call gpt_generate_scenario_name_and_quest()
+        to produce a unique name & short quest summary, then create a new conversation row.
+      - Otherwise, we reuse the conversation_id (only if owned by this user).
+      - We clear old game data from relevant tables.
+      - We reset or create the player's 'Chase' stats.
+      - We spawn 10 unintroduced NPCs.
+      - We set a new environment in CurrentRoleplay.
+      - Then we call GPT for an in-character "Nyx" intro message referencing aggregator data.
+      - We return the entire conversation + environment details to the front end.
     """
 
     logging.info("=== START: /start_new_game CALLED ===")
@@ -31,7 +39,7 @@ def start_new_game():
     cursor = conn.cursor()
 
     try:
-        # 2) Parse input
+        # 2) Parse request JSON
         data = request.get_json() or {}
         logging.info(f"Raw incoming JSON data: {data}")
         if "params" in data:
@@ -40,15 +48,15 @@ def start_new_game():
 
         conversation_id = data.get("conversation_id")
 
-        # If no conversation_id, ask GPT for scenario name
-        scenario_name = "New Game"  # fallback
+        # If no conversation_id, ask GPT for scenario name & short quest
+        scenario_name = "New Game"  # fallback name
         if not conversation_id:
             scenario_name, quest_blurb = gpt_generate_scenario_name_and_quest()
-            # e.g., scenario_name might be "Chains of Dusk"
+            logging.info(f"GPT scenario_name={scenario_name}, quest_blurb={quest_blurb}")
 
-        # Now handle conversation creation or reuse
+        # 3) Create or reuse conversation
         if not conversation_id:
-            # 3) Create a new conversation row
+            # Create a new conversation row with the GPT scenario_name
             cursor.execute("""
                 INSERT INTO conversations (user_id, conversation_name)
                 VALUES (%s, %s)
@@ -58,7 +66,7 @@ def start_new_game():
             logging.info(f"Created new conversation_id={conversation_id} for user_id={user_id}, name={scenario_name}")
             conn.commit()
         else:
-            # Verify the conversation belongs to this user
+            # Verify conversation belongs to user
             cursor.execute("""
                 SELECT id FROM conversations
                 WHERE id=%s AND user_id=%s
@@ -69,7 +77,7 @@ def start_new_game():
                 return jsonify({"error": "Conversation not found or unauthorized"}), 403
             logging.info(f"Using existing conversation_id={conversation_id} for user_id={user_id}")
 
-        # 4) Clear data from old game state
+        # 4) Clear old game data
         logging.info(f"Deleting old game state for user_id={user_id}, conversation_id={conversation_id}.")
         cursor.execute("DELETE FROM Events        WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
         cursor.execute("DELETE FROM PlannedEvents WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
@@ -86,7 +94,7 @@ def start_new_game():
         logging.info("Calling insert_missing_settings()")
         insert_missing_settings()
 
-        # 6) Reset or create 'Chase' in PlayerStats
+        # 6) Reset or create 'Chase'
         logging.info(f"Resetting PlayerStats for user_id={user_id}, conversation_id={conversation_id}, keep only 'Chase'.")
         cursor.execute("""
             DELETE FROM PlayerStats
@@ -231,7 +239,7 @@ def start_new_game():
         )
         gpt_reply_dict = get_chatgpt_response(conversation_id, aggregator_text, opening_user_prompt)
     
-        # 11) If it’s normal text, store it as a “Nyx” message
+        # 11) Store GPT reply as “Nyx” message
         nyx_text = gpt_reply_dict.get("response", "Welcome to your new domain.")
         structured_json_str = json.dumps(gpt_reply_dict)
         cursor.execute("""
@@ -264,7 +272,7 @@ def start_new_game():
             "chase_schedule": chase_schedule,
             "chase_role": chase_role,
             "conversation_id": conversation_id,
-            "messages": conversation_history  # Add missing comma
+            "messages": conversation_history  # <-- Ensure the comma is present
         }), 200
 
     except Exception as e:
@@ -304,10 +312,11 @@ def gpt_generate_scenario_name_and_quest():
         {"role": "system", "content": system_instructions}
     ]
 
+    # Increase temperature for more variation
     response = client.chat.completions.create(
         model="gpt-4o-mini-2024-07-18",
         messages=messages,
-        temperature=0.7,   # Slightly higher for more variation
+        temperature=0.7,
         max_tokens=100,
         frequency_penalty=0.3
     )
