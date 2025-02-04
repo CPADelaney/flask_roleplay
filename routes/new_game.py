@@ -143,10 +143,7 @@ def start_new_game():
             )
             logging.info(f"Created new unintroduced NPC {i+1}/10, ID={new_id}")
 
-        # 8) Optionally re-insert missing settings again if you want? (unclear if needed)
-        # insert_missing_settings() 
-
-        # 9) Generate environment & store in CurrentRoleplay
+        # 8) Generate environment & store in CurrentRoleplay
         logging.info("Generating new mega setting via generate_mega_setting_logic()")
         mega_data = generate_mega_setting_logic()
         if "error" in mega_data:
@@ -242,28 +239,38 @@ def start_new_game():
 # >>> HELPER FUNCTION: GPT call to get scenario name & quest
 def gpt_generate_scenario_name_and_quest():
     """
-    Calls GPT for a short scenario name (1–4 words)
+    Calls GPT for a short scenario name (1–8 words)
     and a short main quest (1-2 lines).
     Returns (scenario_name, quest_blurb).
     """
-
     client = get_openai_client()
+
     system_instructions = """
     You are setting up a new femdom daily-life sim scenario with a main quest. 
     Please produce:
     1) A single line starting with 'ScenarioName:' followed by a short (1–8 words) name. 
-    2) Then one or two lines summarizing the main quest. 
+    2) Then one or two lines summarizing the main quest.
+
     Example:
     ScenarioName: Chains of Twilight
     The main quest: retrieve the midnight relic from the Coven...
     """
+
+    # Build the messages list
+    messages = [
+        {"role": "system", "content": system_instructions}
+    ]
+
+    # Create a chat completion using those messages
     response = client.chat.completions.create(
         model="gpt-4o-mini-2024-07-18",
+        messages=messages,        # <-- This is crucial
         temperature=0.2,
         max_tokens=100,
-        frequency_penalty=0.0,
+        frequency_penalty=0.0
     )
 
+    # `response.choices[0].message.content` is typically the text
     msg = response.choices[0].message.content.strip()
 
     scenario_name = "New Game"
@@ -275,7 +282,7 @@ def gpt_generate_scenario_name_and_quest():
         if line.lower().startswith("scenarioname:"):
             scenario_name = line.split(":", 1)[1].strip()
         else:
-            # treat as quest blurb or ignore
+            # treat as quest blurb
             quest_blurb += line + " "
 
     return scenario_name, quest_blurb.strip()
