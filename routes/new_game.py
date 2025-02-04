@@ -259,7 +259,6 @@ def gpt_generate_scenario_name_and_quest():
     """
     response = client.chat.completions.create(
         model="gpt-4o-mini-2024-07-18",
-        messages=messages,
         temperature=0.2,
         max_tokens=1000,
         frequency_penalty=0.0,
