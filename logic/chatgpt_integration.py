@@ -297,7 +297,7 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
 
     # Pass the messages along with functions and function_call parameters
     response = client.chat.completions.create(
-        model="o3-mini",
+        model="o1",
         reasoning_effort="medium",
         messages=messages,
         temperature=0.2,
