@@ -343,7 +343,7 @@ def gpt_generate_scenario_name_and_quest():
     To ensure uniqueness, note token: {unique_token}.
 
     Please produce:
-    1) A single line starting with 'ScenarioName:' followed by a short (1–8 words) name. 
+    1) A single line starting with 'ScenarioName:' followed by a short, creative (1–8 words) name related to the main quest. Ensure the name uses data for the current scenario and not an old one.
     2) Then one or two lines summarizing the main quest.
 
     Example:
