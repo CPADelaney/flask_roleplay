@@ -318,8 +318,7 @@ def gpt_generate_scenario_name_and_quest():
         reasoning_effort="medium",
         messages=[
             {
-                "role": "user", 
-                "content": prompt
+                {"role": "system", "content": system_prompt}
             }
         ],
         temperature=0.7,
