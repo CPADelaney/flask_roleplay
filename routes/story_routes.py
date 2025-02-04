@@ -548,7 +548,8 @@ def next_storybeat():
                 conversation_id=conv_id,
                 aggregator_text=aggregator_text,
                 user_input=user_input,
-                FUNCTION_SCHEMAS=FUNCTION_SCHEMAS  
+                functions=[FUNCTION_SCHEMAS],
+                function_call="auto"
             )
 
             if gpt_reply_dict["type"] == "function_call":
@@ -602,7 +603,8 @@ def next_storybeat():
                     aggregator_text=aggregator_text,
                     user_input=user_input,
                     extra_function_msg=function_msg,
-                    FUNCTION_SCHEMAS=FUNCTION_SCHEMAS
+                    functions=[FUNCTION_SCHEMAS],
+                    function_call="auto"
                 )
 
                 if gpt_reply_dict["type"] == "function_call":
