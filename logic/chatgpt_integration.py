@@ -243,7 +243,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
 
 
 def get_openai_client():
-    api_key = os.getenv("ALT_KEY")
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY not found in environment")
     # You might just use openai, but if you want to keep a custom "OpenAI" usage, do so:
@@ -293,7 +293,7 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
 
     # Pass the messages along with functions and function_call parameters
     response = client.chat.completions.create(
-        model="deepseek-reasoner",
+        model="gpt-4o",
         messages=messages,
         temperature=0.2,
         max_tokens=1000,
