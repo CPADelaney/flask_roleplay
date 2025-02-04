@@ -8,7 +8,7 @@ from logic.chatgpt_integration import get_chatgpt_response
 from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_openai_client 
 from logic.aggregator import get_aggregated_roleplay_context
-from routes.story_routes import build_aggregated_text
+from routes.story_routes import build_aggregator_text
 
 new_game_bp = Blueprint('new_game_bp', __name__)
 
