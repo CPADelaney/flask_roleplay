@@ -3,21 +3,37 @@ from db.connection import get_db_connection
 
 def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     """
-    Gathers data from multiple tables, all scoped by (user_id, conversation_id) plus player_name where needed.
-    Returns a single dict representing the entire roleplay state.
+    Gathers data from multiple tables, merges them into a single aggregator dict,
+    and also manages an incremental 'GlobalSummary' to reduce context size.
 
-    This presumes:
-    - CurrentRoleplay, NPCStats, SocialLinks, etc. each have columns user_id, conversation_id.
-    - PlayerStats, PlayerPerks, PlayerInventory also have user_id, conversation_id, plus a 'player_name'.
-    - Some “global” tables like GameRules, StatDefinitions remain unscoped or partially scoped.
+    For unintroduced NPCs, we only store minimal info:
+      - npc_id, npc_name, location, day-slice schedule
+    That ensures the player can potentially encounter them in the world,
+    but we don't load the rest of their stats yet.
     """
 
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # ----------------------------------------------------------------
+    #----------------------------------------------------------------
+    # 0) Retrieve existing summary from CurrentRoleplay (if any)
+    #----------------------------------------------------------------
+    cursor.execute("""
+        SELECT value
+        FROM CurrentRoleplay
+        WHERE user_id=%s
+          AND conversation_id=%s
+          AND key='GlobalSummary'
+    """, (user_id, conversation_id))
+    row = cursor.fetchone()
+    existing_summary = row[0] if row else ""
+
+    #----------------------------------------------------------------
     # 1) Day/time from CurrentRoleplay
-    # ----------------------------------------------------------------
+    #----------------------------------------------------------------
+    current_day = "1"
+    time_of_day = "Morning"
+
     cursor.execute("""
         SELECT value
         FROM CurrentRoleplay
@@ -26,7 +42,8 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
           AND key='CurrentDay'
     """, (user_id, conversation_id))
     row = cursor.fetchone()
-    current_day = row[0] if row else "1"
+    if row:
+        current_day = row[0]
 
     cursor.execute("""
         SELECT value
@@ -36,11 +53,12 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
           AND key='TimeOfDay'
     """, (user_id, conversation_id))
     row = cursor.fetchone()
-    time_of_day = row[0] if row else "Morning"
+    if row:
+        time_of_day = row[0]
 
-    # ----------------------------------------------------------------
-    # 2) Player Stats (scoped by user_id, conversation_id, player_name)
-    # ----------------------------------------------------------------
+    #----------------------------------------------------------------
+    # 2) Player Stats
+    #----------------------------------------------------------------
     cursor.execute("""
         SELECT corruption, confidence, willpower,
                obedience, dependency, lust,
@@ -48,8 +66,10 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         FROM PlayerStats
         WHERE user_id=%s
           AND conversation_id=%s
-    """, (user_id, conversation_id))
+          AND player_name=%s
+    """, (user_id, conversation_id, player_name))
     row = cursor.fetchone()
+    player_stats = {}
     if row:
         (corr, conf, wlp, obed, dep, lst, mres, pend) = row
         player_stats = {
@@ -63,21 +83,18 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "mental_resilience": mres,
             "physical_endurance": pend
         }
-    else:
-        player_stats = {}
 
-    # ----------------------------------------------------------------
-    # 3) NPC Stats (Introduced & Unintroduced) 
-    #    (scoped by user_id, conversation_id)
-    # ----------------------------------------------------------------
-    npc_list = []
+    #----------------------------------------------------------------
+    # 3) NPC Stats (Introduced)
+    #----------------------------------------------------------------
+    introduced_npcs = []
 
-    # 3a) Introduced NPCs
     cursor.execute("""
         SELECT npc_id, npc_name,
                dominance, cruelty, closeness,
                trust, respect, intensity,
-               hobbies, personality_traits, likes, dislikes
+               hobbies, personality_traits, likes, dislikes,
+               schedule, current_location
         FROM NPCStats
         WHERE user_id=%s
           AND conversation_id=%s
@@ -85,8 +102,20 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         ORDER BY npc_id
     """, (user_id, conversation_id))
     introduced_rows = cursor.fetchall()
-    for (nid, nname, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks) in introduced_rows:
-        npc_list.append({
+    for (nid, nname, dom, cru, clos, tru, resp, inten,
+         hbs, pers, lks, dlks, sched, curr_loc) in introduced_rows:
+
+        # Trim schedule to the current day
+        trimmed_schedule = {}
+        if sched:
+            try:
+                full_sched = json.loads(sched)
+                if current_day in full_sched:
+                    trimmed_schedule[current_day] = full_sched[current_day]
+            except:
+                pass
+
+        introduced_npcs.append({
             "npc_id": nid,
             "npc_name": nname,
             "dominance": dom,
@@ -98,15 +127,18 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "hobbies": hbs or [],
             "personality_traits": pers or [],
             "likes": lks or [],
-            "dislikes": dlks or []
+            "dislikes": dlks or [],
+            "schedule": trimmed_schedule,
+            "current_location": curr_loc or "Unknown"
         })
 
-    # 3b) Unintroduced NPCs
+    #----------------------------------------------------------------
+    # 4) NPC Minimal Info (Unintroduced)
+    #----------------------------------------------------------------
+    unintroduced_npcs = []
     cursor.execute("""
         SELECT npc_id, npc_name,
-               dominance, cruelty, closeness,
-               trust, respect, intensity,
-               hobbies, personality_traits, likes, dislikes
+               schedule, current_location
         FROM NPCStats
         WHERE user_id=%s
           AND conversation_id=%s
@@ -114,25 +146,25 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         ORDER BY npc_id
     """, (user_id, conversation_id))
     unintroduced_rows = cursor.fetchall()
-    for (nid, nname, dom, cru, clos, tru, resp, inten, hbs, pers, lks, dlks) in unintroduced_rows:
-        npc_list.append({
+    for (nid, nname, sched, curr_loc) in unintroduced_rows:
+        trimmed_schedule = {}
+        if sched:
+            try:
+                full_sched = json.loads(sched)
+                if current_day in full_sched:
+                    trimmed_schedule[current_day] = full_sched[current_day]
+            except:
+                pass
+        unintroduced_npcs.append({
             "npc_id": nid,
             "npc_name": nname,
-            "dominance": dom,
-            "cruelty": cru,
-            "closeness": clos,
-            "trust": tru,
-            "respect": resp,
-            "intensity": inten,
-            "hobbies": hbs or [],
-            "personality_traits": pers or [],
-            "likes": lks or [],
-            "dislikes": dlks or []
+            "current_location": curr_loc or "Unknown",
+            "schedule": trimmed_schedule  # minimal day-by-day
         })
 
-    # ----------------------------------------------------------------
-    # 4) SocialLinks (scoped by user_id, conversation_id)
-    # ----------------------------------------------------------------
+    #----------------------------------------------------------------
+    # 5) Social Links
+    #----------------------------------------------------------------
     cursor.execute("""
         SELECT link_id, entity1_type, entity1_id,
                entity2_type, entity2_id,
@@ -157,9 +189,9 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "link_history": hist or []
         })
 
-    # ----------------------------------------------------------------
-    # 5) PlayerPerks (scoped by user_id, conversation_id, player_name)
-    # ----------------------------------------------------------------
+    #----------------------------------------------------------------
+    # 6) PlayerPerks
+    #----------------------------------------------------------------
     cursor.execute("""
         SELECT perk_name, perk_description, perk_effect
         FROM PlayerPerks
@@ -175,9 +207,9 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "perk_effect": p_fx
         })
 
-    # ----------------------------------------------------------------
-    # 6) PlayerInventory (scoped by user_id, conversation_id, player_name)
-    # ----------------------------------------------------------------
+    #----------------------------------------------------------------
+    # 7) Inventory
+    #----------------------------------------------------------------
     cursor.execute("""
         SELECT player_name, item_name, item_description, item_effect,
                quantity, category
@@ -197,9 +229,9 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "category": cat
         })
 
-    # ----------------------------------------------------------------
-    # 7) Events (scoped by user_id, conversation_id) if you want them unique
-    # ----------------------------------------------------------------
+    #----------------------------------------------------------------
+    # 8) Events
+    #----------------------------------------------------------------
     cursor.execute("""
         SELECT id, event_name, description, start_time, end_time, location
         FROM Events
@@ -218,9 +250,9 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "location": loc
         })
 
-    # ----------------------------------------------------------------
-    # 8) PlannedEvents (scoped by user_id, conversation_id)
-    # ----------------------------------------------------------------
+    #----------------------------------------------------------------
+    # 9) PlannedEvents
+    #----------------------------------------------------------------
     cursor.execute("""
         SELECT event_id, npc_id, day, time_of_day, override_location
         FROM PlannedEvents
@@ -238,9 +270,9 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "override_location": ov_loc
         })
 
-    # ----------------------------------------------------------------
-    # 9) Quests (scoped by user_id, conversation_id) if you want them separate
-    # ----------------------------------------------------------------
+    #----------------------------------------------------------------
+    # 10) Quests
+    #----------------------------------------------------------------
     cursor.execute("""
         SELECT quest_id, quest_name, status, progress_detail,
                quest_giver, reward
@@ -260,12 +292,9 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "reward": qreward
         })
 
-    # ----------------------------------------------------------------
-    # 10) Some tables might be "global" (GameRules, StatDefinitions) 
-    #     no user_id scoping
-    # ----------------------------------------------------------------
-
-    # 10a) GameRules
+    #----------------------------------------------------------------
+    # 11) Global tables: GameRules, StatDefinitions
+    #----------------------------------------------------------------
     cursor.execute("""
         SELECT rule_name, condition, effect
         FROM GameRules
@@ -279,7 +308,6 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "effect": eff
         })
 
-    # 10b) StatDefinitions
     cursor.execute("""
         SELECT id, scope, stat_name, range_min, range_max,
                definition, effects, progression_triggers
@@ -300,9 +328,9 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "progression_triggers": sprg
         })
 
-    # ----------------------------------------------------------------
-    # 11) CurrentRoleplay details
-    # ----------------------------------------------------------------
+    #----------------------------------------------------------------
+    # 12) CurrentRoleplay details
+    #----------------------------------------------------------------
     cursor.execute("""
         SELECT key, value
         FROM CurrentRoleplay
@@ -313,7 +341,6 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
 
     currentroleplay_data = {}
     for (k, v) in all_rows:
-        # If you store JSON in v, you might try to parse it:
         if k == "ChaseSchedule":
             try:
                 currentroleplay_data[k] = json.loads(v)
@@ -324,12 +351,13 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
 
     conn.close()
 
-    # ----------------------------------------------------------------
-    # 12) Build final aggregator response
-    # ----------------------------------------------------------------
+    #----------------------------------------------------------------
+    # 13) Build a final aggregator dictionary
+    #----------------------------------------------------------------
     aggregated = {
         "playerStats": player_stats,
-        "npcStats": npc_list,
+        "introducedNPCs": introduced_npcs,   # Full stats for introduced
+        "unintroducedNPCs": unintroduced_npcs,  # Minimal info for unintroduced
         "currentRoleplay": currentroleplay_data,
         "day": current_day,
         "timeOfDay": time_of_day,
@@ -343,4 +371,87 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         "statDefinitions": stat_def_list
     }
 
+    #----------------------------------------------------------------
+    # 14) Summarize new changes & update 'GlobalSummary' in DB
+    #----------------------------------------------------------------
+    new_changes_summary = build_changes_summary(aggregated)
+    if new_changes_summary.strip():
+        updated_summary = update_global_summary(existing_summary, new_changes_summary)
+        conn2 = get_db_connection()
+        c2 = conn2.cursor()
+        c2.execute("""
+            INSERT INTO CurrentRoleplay(user_id, conversation_id, key, value)
+            VALUES(%s, %s, 'GlobalSummary', %s)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, (user_id, conversation_id, updated_summary))
+        conn2.commit()
+        conn2.close()
+        existing_summary = updated_summary
+
+    aggregator_text = (
+        f"{existing_summary}\n\n"
+        f"Day {current_day}, {time_of_day}.\n"
+        "Scene Snapshot:\n"
+        f"{make_minimal_scene_info(aggregated)}"
+    )
+
+    aggregated["short_summary"] = existing_summary
+    aggregated["aggregator_text"] = aggregator_text
+
     return aggregated
+
+
+#--------------------- HELPER FUNCTIONS ---------------------#
+
+def build_changes_summary(aggregated):
+    """
+    Quick example: mention how many introduced/unintroduced NPCs, 
+    or any quest changes, etc.
+    """
+    lines = []
+
+    introduced_count = len(aggregated["introducedNPCs"])
+    unintroduced_count = len(aggregated["unintroducedNPCs"])
+
+    lines.append(f"Introduced NPCs: {introduced_count}, Unintroduced: {unintroduced_count}")
+
+    # Possibly mention major quest changes or new items, etc.
+    # For brevity, we'll skip that.
+    
+    text = "\n".join(lines)
+    if introduced_count == 0 and unintroduced_count == 0:
+        text = ""  # if no real changes
+    return text
+
+
+def update_global_summary(old_summary, new_stuff, max_len=3000):
+    combined = old_summary.strip() + "\n\n" + new_stuff.strip()
+    if len(combined) > max_len:
+        combined = combined[-max_len:]
+    return combined
+
+
+def make_minimal_scene_info(aggregated):
+    """
+    Provide a small snippet: day/time, maybe top 2 introduced NPCs + 
+    top 2 unintroduced with location, so GPT can handle chance encounters, etc.
+    """
+    lines = []
+    day = aggregated["day"]
+    tod = aggregated["timeOfDay"]
+    lines.append(f"- It is Day {day}, {tod}.\n")
+
+    # Introduced NPCs snippet
+    lines.append("Introduced NPCs in the area:")
+    for npc in aggregated["introducedNPCs"][:2]:
+        loc = npc.get("current_location", "Unknown")
+        lines.append(f"  - {npc['npc_name']} is at {loc}")
+
+    # Unintroduced snippet
+    lines.append("Unintroduced NPCs (possible random encounters):")
+    for npc in aggregated["unintroducedNPCs"][:2]:
+        loc = npc.get("current_location", "Unknown")
+        lines.append(f"  - ???: '{npc['npc_name']}' lurking around {loc}")
+
+    return "\n".join(lines)
