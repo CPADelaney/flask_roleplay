@@ -318,7 +318,7 @@ def gpt_generate_scenario_name_and_quest():
 
     # Increase temperature for more variation
     response = client.chat.completions.create(
-        model="deepseek-reasoner",
+        model="gpt-4o",
         messages=messages,
         temperature=0.7,
         max_tokens=100,
