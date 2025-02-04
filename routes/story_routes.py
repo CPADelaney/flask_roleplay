@@ -16,130 +16,85 @@ story_bp = Blueprint("story_bp", __name__)
 
 FUNCTION_SCHEMAS = [
     {
-        "type": "function",
-        "function": {
-            "name": "get_npc_details",
-            "description": "Retrieve full or partial NPC info from NPCStats by npc_id.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "npc_id": {"type": "number"}
-                },
-                "required": ["npc_id"],
-                "additionalProperties": False
+        "name": "get_npc_details",
+        "description": "Retrieve full or partial NPC info from NPCStats by npc_id.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "npc_id": {"type": "number"}
             },
-            "strict": True
+            "required": ["npc_id"]
         }
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_quest_details",
-            "description": "Retrieve quest info from the Quests table by quest_id.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "quest_id": {"type": "number"}
-                },
-                "required": ["quest_id"],
-                "additionalProperties": False
+        "name": "get_quest_details",
+        "description": "Retrieve quest info from the Quests table by quest_id.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "quest_id": {"type": "number"}
             },
-            "strict": True
+            "required": ["quest_id"]
         }
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_location_details",
-            "description": "Retrieve a location’s info by location_id or location_name.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location_id": {"type": "number"},
-                    "location_name": {"type": "string"}
-                },
-                "required": [],
-                "additionalProperties": False
-            },
-            "strict": True
+        "name": "get_location_details",
+        "description": "Retrieve a location’s info by location_id or location_name.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location_id": {"type": "number"},
+                "location_name": {"type": "string"}
+            }
         }
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_event_details",
-            "description": "Retrieve event info by event_id from the Events table.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "event_id": {"type": "number"}
-                },
-                "required": ["event_id"],
-                "additionalProperties": False
+        "name": "get_event_details",
+        "description": "Retrieve event info by event_id from the Events table.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "number"}
             },
-            "strict": True
+            "required": ["event_id"]
         }
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_inventory_item",
-            "description": "Lookup a specific item in the player's inventory by item_name.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "item_name": {"type": "string"}
-                },
-                "required": ["item_name"],
-                "additionalProperties": False
+        "name": "get_inventory_item",
+        "description": "Lookup a specific item in the player's inventory by item_name.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "item_name": {"type": "string"}
             },
-            "strict": True
+            "required": ["item_name"]
         }
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_intensity_tiers",
-            "description": "Retrieve the entire IntensityTiers data (key features, etc.).",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-                "additionalProperties": False
-            },
-            "strict": True
+        "name": "get_intensity_tiers",
+        "description": "Retrieve the entire IntensityTiers data (key features, etc.).",
+        "parameters": {
+            "type": "object",
+            "properties": {}
         }
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_plot_triggers",
-            "description": "Retrieve the entire list of PlotTriggers (with stage_name, description, etc.).",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-                "additionalProperties": False
-            },
-            "strict": True
+        "name": "get_plot_triggers",
+        "description": "Retrieve the entire list of PlotTriggers (with stage_name, description, etc.).",
+        "parameters": {
+            "type": "object",
+            "properties": {}
         }
     },
     {
-        "type": "function",
-        "function": {
-            "name": "get_interactions",
-            "description": "Retrieve all Interactions from the Interactions table (detailed_rules, etc.).",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-                "additionalProperties": False
-            },
-            "strict": True
+        "name": "get_interactions",
+        "description": "Retrieve all Interactions from the Interactions table (detailed_rules, etc.).",
+        "parameters": {
+            "type": "object",
+            "properties": {}
         }
     }
 ]
-
 def fetch_npc_details(user_id, conversation_id, npc_id):
     """
     Retrieve full or partial NPC info from NPCStats for a given npc_id.
@@ -463,6 +418,8 @@ def fetch_interactions():
     conn.close()
     return result
 
+story_bp = Blueprint("story_bp", __name__)
+
 @story_bp.route("/next_storybeat", methods=["POST"])
 def next_storybeat():
     try:
@@ -478,11 +435,10 @@ def next_storybeat():
         if not user_input:
             return jsonify({"error": "No user_input provided"}), 400
 
-        # Acquire DB connection
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # 1) Possibly create new conversation if conv_id not given
+        # 1) Possibly create a new conversation
         if not conv_id:
             cur.execute("""
                 INSERT INTO conversations (user_id, conversation_name)
@@ -492,7 +448,7 @@ def next_storybeat():
             conv_id = cur.fetchone()[0]
             conn.commit()
         else:
-            # Ensure conversation belongs to user
+            # Validate conversation ownership
             cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
             row = cur.fetchone()
             if not row:
@@ -502,16 +458,18 @@ def next_storybeat():
                 conn.close()
                 return jsonify({"error": f"Conversation {conv_id} not owned by this user"}), 403
 
-        # 2) Store user message
+        # 2) Insert user message
         cur.execute("""
             INSERT INTO messages (conversation_id, sender, content)
             VALUES (%s, %s, %s)
         """, (conv_id, "user", user_input))
         conn.commit()
 
-        # 3) If there's universal_update data, apply it
+        # 3) Possibly apply universal updates if posted in the request
+        #    (Not strictly necessary if you're letting GPT do it, but preserving logic.)
         universal_data = data.get("universal_update", {})
         if universal_data:
+            from logic.universal_updater import apply_universal_updates
             universal_data["user_id"] = user_id
             universal_data["conversation_id"] = conv_id
             update_result = apply_universal_updates(universal_data)
@@ -520,44 +478,36 @@ def next_storybeat():
                 conn.close()
                 return jsonify(update_result), 500
 
-        # 4) Check triggers in user_input
-        if "obedience=100" in user_input.lower():
-            force_obedience_to_100(user_id, conv_id, player_name)
-
-        # 5) aggregator => for GPT context
+        # 4) Possibly advance time
+        from logic.time_cycle import advance_time_and_update
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
-
-        # 6) Possibly advance time
-        new_day = aggregator_data.get("day", 1)
-        new_phase = aggregator_data.get("timeOfDay", "Morning")
         if data.get("advance_time", False):
             new_day, new_phase = advance_time_and_update(user_id, conv_id, increment=1)
+            aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
+        else:
+            new_day = aggregator_data.get("day", 1)
+            new_phase = aggregator_data.get("timeOfDay", "Morning")
 
-        # 7) Re-fetch aggregator after time updates
-        aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
-        rule_knowledge = gather_rule_knowledge()
-        aggregator_text = build_aggregator_text(aggregator_data, rule_knowledge=rule_knowledge)
-
-        # We'll store final GPT text & structured JSON
+        # 5) Attempt up to 3 function calls
         final_text = None
         structured_json_str = None
 
-        # 8) Attempt up to 3 function calls
         for attempt in range(3):
+            # call GPT
             gpt_reply_dict = get_chatgpt_response(
                 conversation_id=conv_id,
-                aggregator_text=aggregator_text,
+                aggregator_text=build_aggregator_text(aggregator_data),
                 user_input=user_input,
-                functions=[FUNCTION_SCHEMAS],
+                functions=FUNCTION_SCHEMAS,      # <--- pass our new function schemas
                 function_call="auto"
             )
 
             if gpt_reply_dict["type"] == "function_call":
-                # Model is trying to call a function
+                # The model wants to call one of the old fetch functions
                 fn_name = gpt_reply_dict["function_name"]
                 fn_args = gpt_reply_dict["function_args"]
 
-                # Decide how to handle each function call
+                # handle each function
                 if fn_name == "get_npc_details":
                     data_out = fetch_npc_details(user_id, conv_id, fn_args["npc_id"])
                 elif fn_name == "get_quest_details":
@@ -569,15 +519,9 @@ def next_storybeat():
                         fn_args.get("location_name")
                     )
                 elif fn_name == "get_event_details":
-                    data_out = fetch_event_details(
-                        user_id, conv_id,
-                        fn_args["event_id"]
-                    )
+                    data_out = fetch_event_details(user_id, conv_id, fn_args["event_id"])
                 elif fn_name == "get_inventory_item":
-                    data_out = fetch_inventory_item(
-                        user_id, conv_id,
-                        fn_args["item_name"]
-                    )
+                    data_out = fetch_inventory_item(user_id, conv_id, fn_args["item_name"])
                 elif fn_name == "get_intensity_tiers":
                     data_out = fetch_intensity_tiers()
                 elif fn_name == "get_plot_triggers":
@@ -585,56 +529,52 @@ def next_storybeat():
                 elif fn_name == "get_interactions":
                     data_out = fetch_interactions()
                 else:
-                    # Unknown function
                     final_text = f"Function call '{fn_name}' is not recognized."
                     structured_json_str = json.dumps(gpt_reply_dict)
                     break
 
-                # Now that we have data from the function, feed it back to GPT
+                # Re-invoke GPT with a function "response" message
                 function_msg = {
                     "role": "function",
                     "name": fn_name,
-                    "content": json.dumps(data_out)  # pass the results as JSON
+                    "content": json.dumps(data_out)
                 }
-
-                # Re-invoke GPT to incorporate the function result into a final response
+                # call GPT again so it can finish
                 gpt_reply_dict = get_chatgpt_response(
                     conversation_id=conv_id,
-                    aggregator_text=aggregator_text,
+                    aggregator_text=build_aggregator_text(aggregator_data),
                     user_input=user_input,
-                    extra_function_msg=function_msg,
-                    functions=[FUNCTION_SCHEMAS],
+                    extra_function_msg=function_msg,   # <--- pass the function result
+                    functions=FUNCTION_SCHEMAS,
                     function_call="auto"
                 )
 
                 if gpt_reply_dict["type"] == "function_call":
-                    # If GPT calls another function again, loop continues
+                    # GPT called another function again, let the loop continue
                     continue
                 else:
-                    # Normal text returned
+                    # Normal text response
                     final_text = gpt_reply_dict["response"]
                     structured_json_str = json.dumps(gpt_reply_dict)
                     break
-
             else:
-                # GPT returned normal text on the first try
+                # GPT returned normal text the first time
                 final_text = gpt_reply_dict["response"]
                 structured_json_str = json.dumps(gpt_reply_dict)
                 break
 
-        # If no final text after all attempts, fallback
         if not final_text:
             final_text = "[No final text returned after repeated function calls]"
             structured_json_str = json.dumps({"attempts": "exceeded"})
 
-        # 9) Store GPT response
+        # 6) Store GPT's response
         cur.execute("""
             INSERT INTO messages (conversation_id, sender, content, structured_content)
             VALUES (%s, %s, %s, %s)
         """, (conv_id, "Nyx", final_text, structured_json_str))
         conn.commit()
 
-        # 10) Gather entire conversation
+        # 7) Gather entire conversation
         cur.execute("""
             SELECT sender, content, created_at
             FROM messages
@@ -642,19 +582,14 @@ def next_storybeat():
             ORDER BY id ASC
         """, (conv_id,))
         rows = cur.fetchall()
-
-        conversation_history = []
-        for r in rows:
-            conversation_history.append({
-                "sender": r[0],
-                "content": r[1],
-                "created_at": r[2].isoformat()
-            })
+        conversation_history = [
+            {"sender": r[0], "content": r[1], "created_at": r[2].isoformat()} 
+            for r in rows
+        ]
 
         cur.close()
         conn.close()
 
-        # 11) Return final JSON
         return jsonify({
             "conversation_id": conv_id,
             "story_output": final_text,
@@ -668,6 +603,7 @@ def next_storybeat():
     except Exception as e:
         logging.exception("[next_storybeat] Error")
         return jsonify({"error": str(e)}), 500
+
 
 
 def gather_rule_knowledge():
