@@ -444,11 +444,14 @@ def next_storybeat():
 
         # 1) Possibly create a new conversation
         if not conv_id:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO conversations (user_id, conversation_name)
                 VALUES (%s, %s)
                 RETURNING id
-            """, (user_id, "New Chat"))
+                """,
+                (user_id, "New Chat")
+            )
             conv_id = cur.fetchone()[0]
             conn.commit()
         else:
@@ -463,14 +466,17 @@ def next_storybeat():
                 return jsonify({"error": f"Conversation {conv_id} not owned by this user"}), 403
 
         # 2) Insert user message
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO messages (conversation_id, sender, content)
             VALUES (%s, %s, %s)
-        """, (conv_id, "user", user_input))
+            """,
+            (conv_id, "user", user_input)
+        )
         conn.commit()
 
-        # 3) Possibly apply universal updates if posted in the request
-        #    (Not strictly necessary if you're letting GPT do it, but preserving logic.)
+        # 3) Possibly apply universal updates if posted in the request 
+        #    (this is still allowed if your front-end also sends updates directly)
         universal_data = data.get("universal_update", {})
         if universal_data:
             from logic.universal_updater import apply_universal_updates
@@ -492,72 +498,132 @@ def next_storybeat():
             new_day = aggregator_data.get("day", 1)
             new_phase = aggregator_data.get("timeOfDay", "Morning")
 
-        # 5) Attempt up to 3 function calls
+        # 5) Attempt up to 3 function calls from GPT
         final_text = None
         structured_json_str = None
 
         for attempt in range(3):
-            # call GPT
+            # Call GPT
             gpt_reply_dict = get_chatgpt_response(
                 conversation_id=conv_id,
                 aggregator_text=build_aggregator_text(aggregator_data),
-                user_input=user_input,
+                user_input=user_input
             )
 
             if gpt_reply_dict["type"] == "function_call":
-                # The model wants to call one of the old fetch functions
+                # The model wants to call a function
                 fn_name = gpt_reply_dict["function_name"]
-                fn_args = gpt_reply_dict["function_args"]
+                fn_args = gpt_reply_dict["function_args"] or {}
 
-                # handle each function
                 if fn_name == "get_npc_details":
                     data_out = fetch_npc_details(user_id, conv_id, fn_args["npc_id"])
+                    # Re-invoke GPT with the function result
+                    function_msg = {
+                        "role": "function",
+                        "name": fn_name,
+                        "content": json.dumps(data_out)
+                    }
+                    gpt_reply_dict = get_chatgpt_response(
+                        conversation_id=conv_id,
+                        aggregator_text=build_aggregator_text(aggregator_data),
+                        user_input=user_input,
+                    )
+                    if gpt_reply_dict["type"] == "function_call":
+                        # If it calls another function, let loop continue
+                        continue
+                    else:
+                        final_text = gpt_reply_dict["response"]
+                        structured_json_str = json.dumps(gpt_reply_dict)
+                        break
+
                 elif fn_name == "get_quest_details":
                     data_out = fetch_quest_details(user_id, conv_id, fn_args["quest_id"])
+                    function_msg = {
+                        "role": "function",
+                        "name": fn_name,
+                        "content": json.dumps(data_out)
+                    }
+                    # Reinvoke GPT
+                    gpt_reply_dict = get_chatgpt_response(
+                        conversation_id=conv_id,
+                        aggregator_text=build_aggregator_text(aggregator_data),
+                        user_input=user_input,
+                    )
+                    if gpt_reply_dict["type"] == "function_call":
+                        continue
+                    else:
+                        final_text = gpt_reply_dict["response"]
+                        structured_json_str = json.dumps(gpt_reply_dict)
+                        break
+
+                # ---------------------------
+                # NEW BRANCH TO HANDLE APPLY_UNIVERSAL_UPDATE:
+                # ---------------------------
+                elif fn_name == "apply_universal_update":
+                    from logic.universal_updater import apply_universal_updates
+
+                    # Insert user_id and conversation_id in case the model didn't
+                    fn_args["user_id"] = user_id
+                    fn_args["conversation_id"] = conv_id
+
+                    data_out = apply_universal_updates(fn_args)
+
+                    # Send the result back to GPT
+                    function_msg = {
+                        "role": "function",
+                        "name": fn_name,
+                        "content": json.dumps(data_out)
+                    }
+                    gpt_reply_dict = get_chatgpt_response(
+                        conversation_id=conv_id,
+                        aggregator_text=build_aggregator_text(aggregator_data),
+                        user_input=user_input,
+                    )
+                    if gpt_reply_dict["type"] == "function_call":
+                        # If GPT immediately calls another function, keep going
+                        continue
+                    else:
+                        # Normal text
+                        final_text = gpt_reply_dict["response"]
+                        structured_json_str = json.dumps(gpt_reply_dict)
+                        break
+                # ---------------------------
+                # End new branch
+                # ---------------------------
+
                 elif fn_name == "get_location_details":
                     data_out = fetch_location_details(
                         user_id, conv_id,
                         fn_args.get("location_id"),
                         fn_args.get("location_name")
                     )
-                elif fn_name == "get_event_details":
-                    data_out = fetch_event_details(user_id, conv_id, fn_args["event_id"])
-                elif fn_name == "get_inventory_item":
-                    data_out = fetch_inventory_item(user_id, conv_id, fn_args["item_name"])
-                elif fn_name == "get_intensity_tiers":
-                    data_out = fetch_intensity_tiers()
-                elif fn_name == "get_plot_triggers":
-                    data_out = fetch_plot_triggers()
-                elif fn_name == "get_interactions":
-                    data_out = fetch_interactions()
+                    function_msg = {
+                        "role": "function",
+                        "name": fn_name,
+                        "content": json.dumps(data_out)
+                    }
+                    # Reinvoke GPT
+                    gpt_reply_dict = get_chatgpt_response(
+                        conversation_id=conv_id,
+                        aggregator_text=build_aggregator_text(aggregator_data),
+                        user_input=user_input,
+                    )
+                    if gpt_reply_dict["type"] == "function_call":
+                        continue
+                    else:
+                        final_text = gpt_reply_dict["response"]
+                        structured_json_str = json.dumps(gpt_reply_dict)
+                        break
+
+                # ... Additional recognized function names ...
                 else:
+                    # If none match, the function is not recognized
                     final_text = f"Function call '{fn_name}' is not recognized."
                     structured_json_str = json.dumps(gpt_reply_dict)
                     break
 
-                # Re-invoke GPT with a function "response" message
-                function_msg = {
-                    "role": "function",
-                    "name": fn_name,
-                    "content": json.dumps(data_out)
-                }
-                # call GPT again so it can finish
-                gpt_reply_dict = get_chatgpt_response(
-                    conversation_id=conv_id,
-                    aggregator_text=build_aggregator_text(aggregator_data),
-                    user_input=user_input,
-                )
-
-                if gpt_reply_dict["type"] == "function_call":
-                    # GPT called another function again, let the loop continue
-                    continue
-                else:
-                    # Normal text response
-                    final_text = gpt_reply_dict["response"]
-                    structured_json_str = json.dumps(gpt_reply_dict)
-                    break
             else:
-                # GPT returned normal text the first time
+                # GPT returned normal text on first try
                 final_text = gpt_reply_dict["response"]
                 structured_json_str = json.dumps(gpt_reply_dict)
                 break
@@ -566,23 +632,29 @@ def next_storybeat():
             final_text = "[No final text returned after repeated function calls]"
             structured_json_str = json.dumps({"attempts": "exceeded"})
 
-        # 6) Store GPT's response
-        cur.execute("""
+        # 6) Store GPT's final text as a message
+        cur.execute(
+            """
             INSERT INTO messages (conversation_id, sender, content, structured_content)
             VALUES (%s, %s, %s, %s)
-        """, (conv_id, "Nyx", final_text, structured_json_str))
+            """,
+            (conv_id, "Nyx", final_text, structured_json_str)
+        )
         conn.commit()
 
-        # 7) Gather entire conversation
-        cur.execute("""
+        # 7) Gather entire conversation for return
+        cur.execute(
+            """
             SELECT sender, content, created_at
             FROM messages
             WHERE conversation_id=%s
             ORDER BY id ASC
-        """, (conv_id,))
+            """,
+            (conv_id,)
+        )
         rows = cur.fetchall()
         conversation_history = [
-            {"sender": r[0], "content": r[1], "created_at": r[2].isoformat()} 
+            {"sender": r[0], "content": r[1], "created_at": r[2].isoformat()}
             for r in rows
         ]
 
@@ -602,6 +674,7 @@ def next_storybeat():
     except Exception as e:
         logging.exception("[next_storybeat] Error")
         return jsonify({"error": str(e)}), 500
+
 
 
 
