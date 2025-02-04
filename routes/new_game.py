@@ -274,8 +274,7 @@ def start_new_game():
                 temperature=0.7,
             )
         
-            # get the text from fallback_response
-            fallback_text = fallback_response["choices"][0]["message"]["content"].strip()
+            fallback_text = fallback_response.choices[0].message.content.strip()
             nyx_text = fallback_text if fallback_text else "[No text returned from GPT]"
         
         # 13) Store the final text into DB
