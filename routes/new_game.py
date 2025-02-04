@@ -8,18 +8,16 @@ from logic.chatgpt_integration import get_chatgpt_response
 from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_openai_client 
 
+# You likely need to import these two from your aggregator logic:
+# from logic.aggregator import get_aggregated_roleplay_context, build_aggregator_text
+
 new_game_bp = Blueprint('new_game_bp', __name__)
 
 @new_game_bp.route('/start_new_game', methods=['POST'])
 def start_new_game():
     """
     Creates or re-initializes a game scenario *for the current user, in a specific conversation*.
-    - Accepts optional 'conversation_id' in JSON. If not provided, we create a new conversation row.
-    - Clears data in relevant tables (Events, NPCStats, etc.) where user_id=this user AND conversation_id=this conversation.
-    - Resets or creates 'Chase' in PlayerStats for (user_id, conversation_id).
-    - Spawns 10 new unintroduced NPCs for (user_id, conversation_id).
-    - Sets a new environment in CurrentRoleplay for (user_id, conversation_id).
-    - Returns environment info + a sample schedule + conversation_id.
+    ...
     """
 
     logging.info("=== START: /start_new_game CALLED ===")
@@ -42,17 +40,15 @@ def start_new_game():
 
         conversation_id = data.get("conversation_id")
 
-        # >>> NEW CODE <<< (Approach B)
-        # If conversation_id is not provided, we do a GPT call to get a scenario name + short main quest
+        # If no conversation_id, ask GPT for scenario name
         scenario_name = "New Game"  # fallback
         if not conversation_id:
             scenario_name, quest_blurb = gpt_generate_scenario_name_and_quest()
-            # e.g. scenario_name might be "Chains of Dusk"
-            # quest_blurb might be "Uncover the rumored relic that..."
+            # e.g., scenario_name might be "Chains of Dusk"
 
         # Now handle conversation creation or reuse
         if not conversation_id:
-            # Create a new conversation row with scenario_name
+            # 3) Create a new conversation row
             cursor.execute("""
                 INSERT INTO conversations (user_id, conversation_name)
                 VALUES (%s, %s)
@@ -73,7 +69,7 @@ def start_new_game():
                 return jsonify({"error": "Conversation not found or unauthorized"}), 403
             logging.info(f"Using existing conversation_id={conversation_id} for user_id={user_id}")
 
-        # 4) Clear data for this user+conversation from events, NPCStats, etc.
+        # 4) Clear data from old game state
         logging.info(f"Deleting old game state for user_id={user_id}, conversation_id={conversation_id}.")
         cursor.execute("DELETE FROM Events        WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
         cursor.execute("DELETE FROM PlannedEvents WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
@@ -86,11 +82,11 @@ def start_new_game():
         conn.commit()
         logging.info("Per-conversation tables cleared successfully.")
 
-        # 5) Insert missing settings if needed (if your 'Settings' is global, you can just call it once globally).
-        logging.info("Calling insert_missing_settings() (global or local).")
-        insert_missing_settings()  # or if it's global, it doesn't need user_id, conversation_id
+        # 5) Insert missing settings if needed
+        logging.info("Calling insert_missing_settings()")
+        insert_missing_settings()
 
-        # 6) Reset or create the 'Chase' PlayerStats for user_id+conversation_id
+        # 6) Reset or create 'Chase' in PlayerStats
         logging.info(f"Resetting PlayerStats for user_id={user_id}, conversation_id={conversation_id}, keep only 'Chase'.")
         cursor.execute("""
             DELETE FROM PlayerStats
@@ -133,9 +129,8 @@ def start_new_game():
         conn.commit()
         logging.info("PlayerStats reset complete.")
 
-        # 7) Spawn 10 new unintroduced NPCs in (user_id, conversation_id)
+        # 7) Spawn 10 new unintroduced NPCs
         logging.info("Spawning 10 new unintroduced NPCs.")
-        from logic.npc_creation import create_npc  # ensure it can handle user_id/conversation_id
         for i in range(10):
             new_id = create_npc(
                 user_id=user_id,
@@ -161,7 +156,6 @@ def start_new_game():
         """, (user_id, conversation_id, environment_name))
         conn.commit()
 
-        # Provide environment info
         environment_desc = (
             "An eclectic realm combining monstrous societies, futuristic tech, "
             "and archaic ruins floating across the sky. Strange energies swirl, "
@@ -219,15 +213,27 @@ def start_new_game():
         success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
         logging.info(f"Success! Returning 200 with message: {success_msg}")
 
-        # (A) Create aggregator_data so GPT sees the new state
+        # 9) aggregator_data => from aggregator
+        # (you need to have from logic.aggregator import get_aggregated_roleplay_context, build_aggregator_text)
         aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
         aggregator_text = build_aggregator_text(aggregator_data)
     
-        # (B) GPT call for the game’s opening line
-        opening_user_prompt = "Begin the scenario now. Greet Chase with your sadistic style. Introduce the setting."
+        # 10) GPT call for the game’s opening line
+        # You can expand this prompt to mention day1, setting history, npc intros, etc.
+        opening_user_prompt = (
+            "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, "
+            "briefly recount the new environment’s background or history from the aggregator data, "
+            "and announce that Day 1 has just begun. "
+            "Describe where the player is that morning (look at their schedule). "
+            "Reference the player's role or schedule (if relevant), "
+            "and highlight a couple of newly introduced NPCs in this realm if the main character already knows them. "
+            "If there's a main quest mentioned, hint at it ominously. "
+            "Stay fully in character, with no disclaimers or system explanations. "
+            "Conclude with a menacing or teasing invitation for Chase to proceed."
+        )
         gpt_reply_dict = get_chatgpt_response(conversation_id, aggregator_text, opening_user_prompt)
     
-        # (C) If it’s normal text, store it as a “Nyx” message
+        # 11) If it’s normal text, store it as a “Nyx” message
         nyx_text = gpt_reply_dict.get("response", "Welcome to your new domain.")
         structured_json_str = json.dumps(gpt_reply_dict)
         cursor.execute("""
@@ -236,7 +242,7 @@ def start_new_game():
         """, (conversation_id, "Nyx", nyx_text, structured_json_str))
         conn.commit()
     
-        # (D) Return data
+        # 12) Return data, including conversation history
         cursor.execute("""
             SELECT sender, content, created_at
             FROM messages
@@ -254,13 +260,13 @@ def start_new_game():
 
         return jsonify({
             "message": success_msg,
-            "scenario_name": scenario_name,        # show the scenario name we used
+            "scenario_name": scenario_name,
             "environment_name": environment_name,
             "environment_desc": environment_desc,
             "chase_schedule": chase_schedule,
             "chase_role": chase_role,
-            "conversation_id": conversation_id
-            "messages": conversation_history  # <-- add this
+            "conversation_id": conversation_id,
+            "messages": conversation_history  # <-- add missing comma
         }), 200
 
     except Exception as e:
@@ -271,7 +277,7 @@ def start_new_game():
         conn.close()
         logging.info("=== END: /start_new_game ===")
 
-# >>> HELPER FUNCTION: GPT call to get scenario name & quest
+
 def gpt_generate_scenario_name_and_quest():
     """
     Calls GPT for a short scenario name (1–8 words)
@@ -291,21 +297,18 @@ def gpt_generate_scenario_name_and_quest():
     The main quest: retrieve the midnight relic from the Coven...
     """
 
-    # Build the messages list
     messages = [
         {"role": "system", "content": system_instructions}
     ]
 
-    # Create a chat completion using those messages
     response = client.chat.completions.create(
         model="gpt-4o-mini-2024-07-18",
-        messages=messages,        # <-- This is crucial
+        messages=messages,
         temperature=0.2,
         max_tokens=100,
         frequency_penalty=0.0
     )
 
-    # `response.choices[0].message.content` is typically the text
     msg = response.choices[0].message.content.strip()
 
     scenario_name = "New Game"
@@ -317,9 +320,6 @@ def gpt_generate_scenario_name_and_quest():
         if line.lower().startswith("scenarioname:"):
             scenario_name = line.split(":", 1)[1].strip()
         else:
-            # treat as quest blurb
             quest_blurb += line + " "
 
     return scenario_name, quest_blurb.strip()
-
-
