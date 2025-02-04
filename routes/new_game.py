@@ -316,6 +316,12 @@ def gpt_generate_scenario_name_and_quest():
     response = client.chat.completions.create(
         model="o3-mini",
         reasoning_effort="medium",
+        messages=[
+            {
+                "role": "user", 
+                "content": prompt
+            }
+        ],
         temperature=0.7,
         max_tokens=100,
         frequency_penalty=0.3
