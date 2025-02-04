@@ -250,7 +250,7 @@ def start_new_game():
         
         if gpt_reply_dict["type"] == "function_call" or not nyx_text:
             logging.info("GPT tried a function call or gave no text for the intro. Re-calling with function_call='none'.")
-        
+            client = get_openai_client()
             # Build a minimal second request:
             #   - aggregator_text as system context
             #   - a user message that says "No function calls ... produce only text" plus your original prompt
