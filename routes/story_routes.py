@@ -9,33 +9,426 @@ from logic.aggregator import get_aggregated_roleplay_context
 from logic.time_cycle import advance_time_and_update
 from logic.activities_logic import filter_activities_for_npc, build_short_summary
 from routes.settings_routes import generate_mega_setting_logic
-from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory, get_player_inventory
+from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory
 from logic.chatgpt_integration import get_chatgpt_response
+from . import gather_rule_knowledge, force_obedience_to_100, build_aggregator_text
 
 story_bp = Blueprint("story_bp", __name__)
 
+FUNCTION_SCHEMAS = [
+    {
+        "name": "get_npc_details",
+        "description": "Retrieve full or partial NPC info from NPCStats by npc_id.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "npc_id": {"type": "number"}
+            },
+            "required": ["npc_id"]
+        }
+    },
+    {
+        "name": "get_quest_details",
+        "description": "Retrieve quest info from the Quests table by quest_id.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "quest_id": {"type": "number"}
+            },
+            "required": ["quest_id"]
+        }
+    },
+    {
+        "name": "get_location_details",
+        "description": "Retrieve a location’s info by location_id or location_name.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location_id": {"type": "number"},
+                "location_name": {"type": "string"}
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "get_event_details",
+        "description": "Retrieve event info by event_id from the Events table.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "number"}
+            },
+            "required": ["event_id"]
+        }
+    },
+    {
+        "name": "get_inventory_item",
+        "description": "Lookup a specific item in the player's inventory by item_name.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "item_name": {"type": "string"}
+            },
+            "required": ["item_name"]
+        }
+    },
+    {
+        "name": "get_intensity_tiers",
+        "description": "Retrieve the entire IntensityTiers data (key features, etc.).",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
+        "name": "get_plot_triggers",
+        "description": "Retrieve the entire list of PlotTriggers (with stage_name, description, etc.).",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
+        "name": "get_interactions",
+        "description": "Retrieve all Interactions from the Interactions table (detailed_rules, etc.).",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    }
+]
+
+def fetch_npc_details(user_id, conversation_id, npc_id):
+    """
+    Retrieve full or partial NPC info from NPCStats for a given npc_id.
+    Adjust the columns or JSON as needed.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Example: Grab select columns from NPCStats
+    cursor.execute("""
+        SELECT npc_name,
+               introduced,
+               dominance, cruelty, closeness,
+               trust, respect, intensity,
+               affiliations, schedule,
+               current_location
+        FROM NPCStats
+        WHERE user_id=%s
+          AND conversation_id=%s
+          AND npc_id=%s
+        LIMIT 1
+    """, (user_id, conversation_id, npc_id))
+    row = cursor.fetchone()
+    
+    if not row:
+        cursor.close()
+        conn.close()
+        return {"error": f"No NPC found with npc_id={npc_id}"}
+    
+    (nname, intro, dom, cru, clos, tru, resp, inten, affil, sched, cloc) = row
+    
+    # Convert JSONB columns to Python structures if they are stored as JSON
+    # e.g., "affiliations" or "schedule"
+    if affil is None:
+        affil = []
+    if sched is None:
+        sched = {}
+    
+    npc_data = {
+        "npc_id": npc_id,
+        "npc_name": nname,
+        "introduced": intro,
+        "dominance": dom,
+        "cruelty": cru,
+        "closeness": clos,
+        "trust": tru,
+        "respect": resp,
+        "intensity": inten,
+        "affiliations": affil,
+        "schedule": sched,
+        "current_location": cloc
+    }
+    
+    cursor.close()
+    conn.close()
+    
+    return npc_data
+
+
+def fetch_quest_details(user_id, conversation_id, quest_id):
+    """
+    Retrieve quest info from the Quests table by quest_id.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT quest_name, status, progress_detail, quest_giver, reward
+        FROM Quests
+        WHERE user_id=%s
+          AND conversation_id=%s
+          AND quest_id=%s
+        LIMIT 1
+    """, (user_id, conversation_id, quest_id))
+    
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        conn.close()
+        return {"error": f"No quest found with quest_id={quest_id}"}
+    
+    (qname, qstatus, qdetail, qgiver, qreward) = row
+    quest_data = {
+        "quest_id": quest_id,
+        "quest_name": qname,
+        "status": qstatus,
+        "progress_detail": qdetail,
+        "quest_giver": qgiver,
+        "reward": qreward
+    }
+    
+    cursor.close()
+    conn.close()
+    
+    return quest_data
+
+
+def fetch_location_details(user_id, conversation_id, location_id=None, location_name=None):
+    """
+    Retrieve location info by location_id or location_name from the Locations table.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    if location_id:
+        cursor.execute("""
+            SELECT location_name, description, open_hours
+            FROM Locations
+            WHERE user_id=%s
+              AND conversation_id=%s
+              AND id=%s
+            LIMIT 1
+        """, (user_id, conversation_id, location_id))
+    elif location_name:
+        cursor.execute("""
+            SELECT location_name, description, open_hours
+            FROM Locations
+            WHERE user_id=%s
+              AND conversation_id=%s
+              AND location_name=%s
+            LIMIT 1
+        """, (user_id, conversation_id, location_name))
+    else:
+        return {"error": "No location_id or location_name provided"}
+    
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        conn.close()
+        return {"error": "No matching location found"}
+    
+    (lname, ldesc, lhours) = row
+    if lhours is None:
+        lhours = []
+    
+    loc_data = {
+        "location_name": lname,
+        "description": ldesc,
+        "open_hours": lhours
+    }
+    
+    cursor.close()
+    conn.close()
+    
+    return loc_data
+
+
+def fetch_event_details(user_id, conversation_id, event_id):
+    """
+    Retrieve an event's info by event_id from the Events table.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT event_name, description, start_time, end_time, location
+        FROM Events
+        WHERE user_id=%s
+          AND conversation_id=%s
+          AND id=%s
+        LIMIT 1
+    """, (user_id, conversation_id, event_id))
+    
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        conn.close()
+        return {"error": f"No event found with id={event_id}"}
+    
+    (ename, edesc, stime, etime, eloc) = row
+    event_data = {
+        "event_id": event_id,
+        "event_name": ename,
+        "description": edesc,
+        "start_time": stime,
+        "end_time": etime,
+        "location": eloc
+    }
+    
+    cursor.close()
+    conn.close()
+    
+    return event_data
+
+
+def fetch_inventory_item(user_id, conversation_id, item_name):
+    """
+    Lookup a specific item in the player's inventory by item_name.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT player_name, item_description, item_effect, quantity, category
+        FROM PlayerInventory
+        WHERE user_id=%s
+          AND conversation_id=%s
+          AND item_name=%s
+        LIMIT 1
+    """, (user_id, conversation_id, item_name))
+    
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        conn.close()
+        return {"error": f"No item named '{item_name}' found in inventory"}
+    
+    (pname, idesc, ifx, qty, cat) = row
+    
+    item_data = {
+        "item_name": item_name,
+        "player_name": pname,
+        "item_description": idesc,
+        "item_effect": ifx,
+        "quantity": qty,
+        "category": cat
+    }
+    
+    cursor.close()
+    conn.close()
+    
+    return item_data
+
+
+def fetch_intensity_tiers():
+    """
+    If the model calls 'get_intensity_tiers' (which is purely global),
+    we can simply fetch them from IntensityTiers. No user_id scoping required.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT tier_name, key_features, activity_examples, permanent_effects
+        FROM IntensityTiers
+        ORDER BY id
+    """)
+    rows = cursor.fetchall()
+    
+    all_tiers = []
+    for (tname, kfeat, aex, peff) in rows:
+        if kfeat is None:
+            kfeat = []
+        if aex is None:
+            aex = []
+        if peff is None:
+            peff = {}
+        all_tiers.append({
+            "tier_name": tname,
+            "key_features": kfeat,
+            "activity_examples": aex,
+            "permanent_effects": peff
+        })
+    
+    cursor.close()
+    conn.close()
+    return all_tiers
+
+
+def fetch_plot_triggers():
+    """
+    If the model calls 'get_plot_triggers',
+    we can fetch from PlotTriggers table (also global).
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT trigger_name, stage_name, description,
+               key_features, stat_dynamics, examples, triggers
+        FROM PlotTriggers
+        ORDER BY id
+    """)
+    rows = cursor.fetchall()
+    
+    triggers = []
+    for r in rows:
+        (tname, stg, desc, kfeat, sdyn, ex, trigz) = r
+        # parse JSON if needed
+        if not kfeat: kfeat = []
+        if not sdyn: sdyn = []
+        if not ex: ex = []
+        if not trigz: trigz = {}
+        triggers.append({
+            "trigger_name": tname,
+            "stage_name": stg,
+            "description": desc,
+            "key_features": kfeat,
+            "stat_dynamics": sdyn,
+            "examples": ex,
+            "triggers": trigz
+        })
+    
+    cursor.close()
+    conn.close()
+    return triggers
+
+
+def fetch_interactions():
+    """
+    If model calls 'get_interactions'.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT interaction_name, detailed_rules, task_examples, agency_overrides
+        FROM Interactions
+        ORDER BY id
+    """)
+    rows = cursor.fetchall()
+    result = []
+    for (iname, drules, texamples, aover) in rows:
+        if not drules: drules = {}
+        if not texamples: texamples = {}
+        if not aover: aover = {}
+        result.append({
+            "interaction_name": iname,
+            "detailed_rules": drules,
+            "task_examples": texamples,
+            "agency_overrides": aover
+        })
+    cursor.close()
+    conn.close()
+    return result
+
+
 @story_bp.route("/next_storybeat", methods=["POST"])
 def next_storybeat():
-    """
-    Handles the main story logic, fully scoped by user_id + conversation_id:
-      1) Validates user login
-      2) Creates or reuses a conversation row (belongs to user_id)
-      3) Stores user's message
-      4) Applies universal_update
-      5) aggregator_data -> used by GPT
-      6) Optionally generate environment or set obedience=100
-      7) Optionally advance time
-      8) Calls GPT with aggregator_text + user_input
-      9) Stores GPT reply
-      10) Returns entire conversation + GPT output
-    """
     try:
-        # 1) Ensure user is logged in
         user_id = session.get("user_id")
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
 
-        # 2) Parse JSON input
         data = request.get_json() or {}
         user_input = data.get("user_input", "").strip()
         conv_id = data.get("conversation_id")
@@ -44,11 +437,10 @@ def next_storybeat():
         if not user_input:
             return jsonify({"error": "No user_input provided"}), 400
 
-        # Acquire DB connection
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # 3) If no conversation_id, create one for this user
+        # Possibly create new conversation
         if not conv_id:
             cur.execute("""
                 INSERT INTO conversations (user_id, conversation_name)
@@ -58,7 +450,6 @@ def next_storybeat():
             conv_id = cur.fetchone()[0]
             conn.commit()
         else:
-            # Ensure conversation belongs to user
             cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
             row = cur.fetchone()
             if not row:
@@ -68,140 +459,129 @@ def next_storybeat():
                 conn.close()
                 return jsonify({"error": f"Conversation {conv_id} not owned by this user"}), 403
 
-        # 4) Store user's message in DB
+        # store user message
         cur.execute("""
             INSERT INTO messages (conversation_id, sender, content)
             VALUES (%s, %s, %s)
         """, (conv_id, "user", user_input))
         conn.commit()
 
-        logging.info(f"[next_storybeat] user_id={user_id}, conv_id={conv_id}, player_name={player_name}, input={user_input}")
-
-        # 5) If there's universal_update data, apply it
+        # universal update
         universal_data = data.get("universal_update", {})
         if universal_data:
             universal_data["user_id"] = user_id
             universal_data["conversation_id"] = conv_id
-            logging.info("[next_storybeat] Applying universal update from payload.")
             update_result = apply_universal_updates(universal_data)
             if "error" in update_result:
                 cur.close()
                 conn.close()
                 return jsonify(update_result), 500
-        else:
-            logging.info("[next_storybeat] No universal update data found.")
 
-        # 6) Check triggers in user_input
-        user_lower = user_input.lower()
-        if "obedience=100" in user_lower:
-            logging.info("[next_storybeat] Forcing obedience=100 for player.")
+        # triggers (obedience=100, etc.)
+        if "obedience=100" in user_input.lower():
             force_obedience_to_100(user_id, conv_id, player_name)
 
-        # 7) aggregator_data => from aggregator
+        # aggregator
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
 
-        logging.info(f"[next_storybeat] aggregator_data keys: {aggregator_data.keys()}")
-
-        # Possibly generate a new environment
-        mega_setting_name_if_generated = None
-        current_setting = aggregator_data["currentRoleplay"].get("CurrentSetting")
-        if "generate environment" in user_lower or "mega setting" in user_lower:
-            if current_setting and "force" not in user_lower:
-                logging.info(f"[next_storybeat] Already have environment '{current_setting}', skipping new generation.")
-            else:
-                logging.info("[next_storybeat] Generating new mega setting.")
-                mega_data = generate_mega_setting_logic(user_id, conv_id)
-                mega_setting_name_if_generated = mega_data.get("mega_name", "No environment")
-                logging.info(f"[next_storybeat] New Mega Setting: {mega_setting_name_if_generated}")
-
-        # 8) Suggest possible NPC activities
-        npc_list = aggregator_data.get("npcStats", [])
-        user_stats = aggregator_data.get("playerStats", {})
-        setting_str = current_setting if current_setting else ""
-        npc_archetypes = []
-
-        # Example: detect "giant" in first NPC name
-        if npc_list and "giant" in npc_list[0].get("npc_name","").lower():
-            npc_archetypes = ["Giantess"]
-
-        chosen_activities = filter_activities_for_npc(
-            npc_archetypes=npc_archetypes,
-            user_stats=user_stats,
-            setting=setting_str
-        )
-        lines_for_gpt = [build_short_summary(act) for act in chosen_activities]
-        aggregator_data["activitySuggestions"] = lines_for_gpt
-
-        # 9) Track changes for the front-end
-        changed_stats = {"obedience": 100} if "obedience=100" in user_lower else {}
-        updates_dict = {
-            "new_mega_setting": mega_setting_name_if_generated,
-            "updated_player_stats": changed_stats,
-            "removed_npc_ids": [],
-            "added_npc": None,
-            "plot_event": None
-        }
-        logging.info(f"[next_storybeat] updates_dict = {updates_dict}")
-
-        # 10) Possibly advance time
+        # possibly advance time
+        new_day = aggregator_data.get("day", 1)
+        new_phase = aggregator_data.get("timeOfDay", "Morning")
         if data.get("advance_time", False):
-            logging.info("[next_storybeat] Advancing time by 1 block.")
             new_day, new_phase = advance_time_and_update(user_id, conv_id, increment=1)
-        else:
-            logging.info("[next_storybeat] Not advancing time.")
-            new_day = aggregator_data.get("day", 1)
-            new_phase = aggregator_data.get("timeOfDay", "Morning")
 
-        # 11) Re-fetch aggregator for updated state
+        # refetch aggregator
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
-
-        # If you want advanced rule knowledge appended, gather it here:
         rule_knowledge = gather_rule_knowledge()
-
-        # 12) Build aggregator text
         aggregator_text = build_aggregator_text(aggregator_data, rule_knowledge=rule_knowledge)
 
-        # 13) GPT call
-        gpt_reply_dict = get_chatgpt_response(conv_id, aggregator_text, user_input)
-        
-        if gpt_reply_dict["type"] == "function_call":
-            # The model is returning structured JSON for universal_update
-            if gpt_reply_dict["function_name"] == "apply_universal_update":
-                # Merge user_id & conv_id
-                function_args = gpt_reply_dict["function_args"]
-                function_args["user_id"] = user_id
-                function_args["conversation_id"] = conv_id
-        
-                # Now call apply_universal_updates directly
-                update_result = apply_universal_updates(function_args)
-                if "error" in update_result:
-                    # If there's an error, handle it
-                    # But let's proceed to produce some textual response anyway
-                    gpt_text = "An error occurred updating the game data."
-                else:
-                    # The function call succeeded—maybe we want a short textual response or let GPT do a follow-up
-                    gpt_text = "Game data updated successfully by GPT's function call."
-            else:
-                # Unknown function call
-                gpt_text = f"Function call {gpt_reply_dict['function_name']} is not recognized."
-        else:
-            # Normal text response
-            gpt_text = gpt_reply_dict["response"]
-        structured_json_str = json.dumps(gpt_reply_dict)
+        final_text = None
+        structured_json_str = None
 
-        # 14) Insert GPT message
+        # We'll allow up to 3 function calls
+        for attempt in range(3):
+            # We pass the multiple function schemas to GPT
+            gpt_reply_dict = get_chatgpt_response(
+                conversation_id=conv_id,
+                aggregator_text=aggregator_text,
+                user_input=user_input,
+                functions=FUNCTION_SCHEMAS  # This is key
+            )
+
+            # if gptReply says "type":"function_call", handle it
+            if gpt_reply_dict["type"] == "function_call":
+                fn_name = gpt_reply_dict["function_name"]
+                fn_args = gpt_reply_dict["function_args"]
+
+                # handle each function
+                if fn_name == "get_npc_details":
+                    data_out = fetch_npc_details(user_id, conv_id, fn_args["npc_id"])
+                elif fn_name == "get_quest_details":
+                    data_out = fetch_quest_details(user_id, conv_id, fn_args["quest_id"])
+                elif fn_name == "get_location_details":
+                    data_out = fetch_location_details(
+                        user_id, conv_id,
+                        fn_args.get("location_id"),
+                        fn_args.get("location_name")
+                    )
+                elif fn_name == "get_event_details":
+                    data_out = fetch_event_details(user_id, conv_id, fn_args["event_id"])
+                elif fn_name == "get_inventory_item":
+                    data_out = fetch_inventory_item(user_id, conv_id, fn_args["item_name"])
+                elif fn_name == "get_intensity_tiers":
+                    data_out = fetch_intensity_tiers()
+                elif fn_name == "get_plot_triggers":
+                    data_out = fetch_plot_triggers()
+                elif fn_name == "get_interactions":
+                    data_out = fetch_interactions()
+                else:
+                    # unknown function
+                    final_text = f"Function call {fn_name} not recognized."
+                    structured_json_str = json.dumps(gpt_reply_dict)
+                    break
+
+                # We have the data => create a "function" role msg
+                function_msg = {
+                    "role": "function",
+                    "name": fn_name,
+                    "content": json.dumps(data_out)
+                }
+
+                # re-call GPT => incorporate the function result
+                gpt_reply_dict = get_chatgpt_response(
+                    conversation_id=conv_id,
+                    aggregator_text=aggregator_text,
+                    user_input=user_input,
+                    extra_function_msg=function_msg,
+                    functions=FUNCTION_SCHEMAS
+                )
+                if gpt_reply_dict["type"] != "function_call":
+                    # finally we got normal text
+                    final_text = gpt_reply_dict["response"]
+                    structured_json_str = json.dumps(gpt_reply_dict)
+                    break
+                else:
+                    # second function call => loop continues
+                    pass
+
+            else:
+                # normal text
+                final_text = gpt_reply_dict["response"]
+                structured_json_str = json.dumps(gpt_reply_dict)
+                break
+
+        if not final_text:
+            final_text = "[No final text returned after repeated function calls]"
+            structured_json_str = json.dumps({"attempts":"exceeded"})
+
+        # store GPT message
         cur.execute("""
             INSERT INTO messages (conversation_id, sender, content, structured_content)
             VALUES (%s, %s, %s, %s)
-        """, (
-            conv_id,
-            "Nyx",
-            gpt_text,
-            structured_json_str
-        ))
+        """, (conv_id, "Nyx", final_text, structured_json_str))
         conn.commit()
 
-        # 15) Gather conversation
+        # gather entire conversation
         cur.execute("""
             SELECT sender, content, created_at
             FROM messages
@@ -209,7 +589,6 @@ def next_storybeat():
             ORDER BY id ASC
         """, (conv_id,))
         rows = cur.fetchall()
-
         conversation_history = []
         for r in rows:
             conversation_history.append({
@@ -221,15 +600,13 @@ def next_storybeat():
         cur.close()
         conn.close()
 
-        # 16) Return final JSON
         return jsonify({
             "conversation_id": conv_id,
-            "story_output": gpt_text,
+            "story_output": final_text,
             "messages": conversation_history,
             "updates": {
                 "current_day": new_day,
-                "time_of_day": new_phase,
-                "internal_changes": updates_dict
+                "time_of_day": new_phase
             }
         }), 200
 
