@@ -7,9 +7,7 @@ from routes.settings_routes import insert_missing_settings, generate_mega_settin
 from logic.chatgpt_integration import get_chatgpt_response
 from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_openai_client 
-
-# You likely need to import these two from your aggregator logic:
-# from logic.aggregator import get_aggregated_roleplay_context, build_aggregator_text
+from logic.aggregator import get_aggregated_roleplay_context, build_aggregator_text
 
 new_game_bp = Blueprint('new_game_bp', __name__)
 
