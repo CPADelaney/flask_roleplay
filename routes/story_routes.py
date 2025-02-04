@@ -16,83 +16,126 @@ story_bp = Blueprint("story_bp", __name__)
 
 FUNCTION_SCHEMAS = [
     {
-        "name": "get_npc_details",
-        "description": "Retrieve full or partial NPC info from NPCStats by npc_id.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "npc_id": {"type": "number"}
+        "type": "function",
+        "function": {
+            "name": "get_npc_details",
+            "description": "Retrieve full or partial NPC info from NPCStats by npc_id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "npc_id": {"type": "number"}
+                },
+                "required": ["npc_id"],
+                "additionalProperties": False
             },
-            "required": ["npc_id"]
+            "strict": True
         }
     },
     {
-        "name": "get_quest_details",
-        "description": "Retrieve quest info from the Quests table by quest_id.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "quest_id": {"type": "number"}
+        "type": "function",
+        "function": {
+            "name": "get_quest_details",
+            "description": "Retrieve quest info from the Quests table by quest_id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "quest_id": {"type": "number"}
+                },
+                "required": ["quest_id"],
+                "additionalProperties": False
             },
-            "required": ["quest_id"]
+            "strict": True
         }
     },
     {
-        "name": "get_location_details",
-        "description": "Retrieve a location’s info by location_id or location_name.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "location_id": {"type": "number"},
-                "location_name": {"type": "string"}
+        "type": "function",
+        "function": {
+            "name": "get_location_details",
+            "description": "Retrieve a location’s info by location_id or location_name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location_id": {"type": "number"},
+                    "location_name": {"type": "string"}
+                },
+                "required": [],
+                "additionalProperties": False
             },
-            "required": []
+            "strict": True
         }
     },
     {
-        "name": "get_event_details",
-        "description": "Retrieve event info by event_id from the Events table.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "event_id": {"type": "number"}
+        "type": "function",
+        "function": {
+            "name": "get_event_details",
+            "description": "Retrieve event info by event_id from the Events table.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "number"}
+                },
+                "required": ["event_id"],
+                "additionalProperties": False
             },
-            "required": ["event_id"]
+            "strict": True
         }
     },
     {
-        "name": "get_inventory_item",
-        "description": "Lookup a specific item in the player's inventory by item_name.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "item_name": {"type": "string"}
+        "type": "function",
+        "function": {
+            "name": "get_inventory_item",
+            "description": "Lookup a specific item in the player's inventory by item_name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_name": {"type": "string"}
+                },
+                "required": ["item_name"],
+                "additionalProperties": False
             },
-            "required": ["item_name"]
+            "strict": True
         }
     },
     {
-        "name": "get_intensity_tiers",
-        "description": "Retrieve the entire IntensityTiers data (key features, etc.).",
-        "parameters": {
-            "type": "object",
-            "properties": {}
+        "type": "function",
+        "function": {
+            "name": "get_intensity_tiers",
+            "description": "Retrieve the entire IntensityTiers data (key features, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False
+            },
+            "strict": True
         }
     },
     {
-        "name": "get_plot_triggers",
-        "description": "Retrieve the entire list of PlotTriggers (with stage_name, description, etc.).",
-        "parameters": {
-            "type": "object",
-            "properties": {}
+        "type": "function",
+        "function": {
+            "name": "get_plot_triggers",
+            "description": "Retrieve the entire list of PlotTriggers (with stage_name, description, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False
+            },
+            "strict": True
         }
     },
     {
-        "name": "get_interactions",
-        "description": "Retrieve all Interactions from the Interactions table (detailed_rules, etc.).",
-        "parameters": {
-            "type": "object",
-            "properties": {}
+        "type": "function",
+        "function": {
+            "name": "get_interactions",
+            "description": "Retrieve all Interactions from the Interactions table (detailed_rules, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False
+            },
+            "strict": True
         }
     }
 ]
