@@ -282,7 +282,7 @@ def create_all_tables():
             user_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL,
 
-            name TEXT NOT NULL,
+            location_name TEXT NOT NULL,
             description TEXT,
             open_hours JSONB,
 
