@@ -421,6 +421,143 @@ def fetch_interactions():
     return result
 
 
+from flask import Blueprint, request, jsonify, session
+import logging
+import json
+
+from db.connection import get_db_connection
+from logic.universal_updater import apply_universal_updates
+from logic.aggregator import get_aggregated_roleplay_context
+from logic.time_cycle import advance_time_and_update
+from logic.chatgpt_integration import get_chatgpt_response
+from logic.inventory_logic import fetch_inventory_item
+from logic.some_custom_logic import (
+    fetch_npc_details,
+    fetch_quest_details,
+    fetch_location_details,
+    fetch_event_details,
+    fetch_intensity_tiers,
+    fetch_plot_triggers,
+    fetch_interactions
+)
+from .helpers import force_obedience_to_100, gather_rule_knowledge, build_aggregator_text
+
+story_bp = Blueprint("story_bp", __name__)
+
+# Example function schemas (put them in your codebase somewhere)
+# Each entry in FUNCTION_SCHEMAS is a dict describing a "function" for GPT
+FUNCTION_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_npc_details",
+            "description": "Retrieve NPC details by NPC ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "npc_id": {
+                        "type": "number",
+                        "description": "The ID of the NPC you want details for"
+                    }
+                },
+                "required": ["npc_id"]
+            },
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_quest_details",
+            "description": "Retrieve quest details by quest ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "quest_id": {"type": "number"}
+                },
+                "required": ["quest_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_location_details",
+            "description": "Retrieve location info by ID or name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location_id": {"type": "number"},
+                    "location_name": {"type": "string"}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_event_details",
+            "description": "Fetch event details by event ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "number"}
+                },
+                "required": ["event_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_inventory_item",
+            "description": "Fetch item details from player's inventory by item name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_name": {"type": "string"}
+                },
+                "required": ["item_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_intensity_tiers",
+            "description": "Fetch a summary of all intensity tiers.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_plot_triggers",
+            "description": "Fetch a summary of all plot triggers.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_interactions",
+            "description": "Fetch a summary of all interactions data.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    }
+    # Add more function schemas as needed
+]
+
+
 @story_bp.route("/next_storybeat", methods=["POST"])
 def next_storybeat():
     try:
@@ -436,10 +573,11 @@ def next_storybeat():
         if not user_input:
             return jsonify({"error": "No user_input provided"}), 400
 
+        # Acquire DB connection
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Possibly create new conversation
+        # 1) Possibly create new conversation if conv_id not given
         if not conv_id:
             cur.execute("""
                 INSERT INTO conversations (user_id, conversation_name)
@@ -449,6 +587,7 @@ def next_storybeat():
             conv_id = cur.fetchone()[0]
             conn.commit()
         else:
+            # Ensure conversation belongs to user
             cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
             row = cur.fetchone()
             if not row:
@@ -458,14 +597,14 @@ def next_storybeat():
                 conn.close()
                 return jsonify({"error": f"Conversation {conv_id} not owned by this user"}), 403
 
-        # store user message
+        # 2) Store user message
         cur.execute("""
             INSERT INTO messages (conversation_id, sender, content)
             VALUES (%s, %s, %s)
         """, (conv_id, "user", user_input))
         conn.commit()
 
-        # universal update
+        # 3) If there's universal_update data, apply it
         universal_data = data.get("universal_update", {})
         if universal_data:
             universal_data["user_id"] = user_id
@@ -476,43 +615,43 @@ def next_storybeat():
                 conn.close()
                 return jsonify(update_result), 500
 
-        # triggers (obedience=100, etc.)
+        # 4) Check triggers in user_input
         if "obedience=100" in user_input.lower():
             force_obedience_to_100(user_id, conv_id, player_name)
 
-        # aggregator
+        # 5) aggregator => for GPT context
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
 
-        # possibly advance time
+        # 6) Possibly advance time
         new_day = aggregator_data.get("day", 1)
         new_phase = aggregator_data.get("timeOfDay", "Morning")
         if data.get("advance_time", False):
             new_day, new_phase = advance_time_and_update(user_id, conv_id, increment=1)
 
-        # refetch aggregator
+        # 7) Re-fetch aggregator after time updates
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
         rule_knowledge = gather_rule_knowledge()
         aggregator_text = build_aggregator_text(aggregator_data, rule_knowledge=rule_knowledge)
 
+        # We'll store final GPT text & structured JSON
         final_text = None
         structured_json_str = None
 
-        # We'll allow up to 3 function calls
+        # 8) Attempt up to 3 function calls
         for attempt in range(3):
-            # We pass the multiple function schemas to GPT
             gpt_reply_dict = get_chatgpt_response(
                 conversation_id=conv_id,
                 aggregator_text=aggregator_text,
                 user_input=user_input,
-                functions=FUNCTION_SCHEMAS  # This is key
+                functions=FUNCTION_SCHEMAS  # pass function definitions
             )
 
-            # if gptReply says "type":"function_call", handle it
             if gpt_reply_dict["type"] == "function_call":
+                # Model is trying to call a function
                 fn_name = gpt_reply_dict["function_name"]
                 fn_args = gpt_reply_dict["function_args"]
 
-                # handle each function
+                # Decide how to handle each function call
                 if fn_name == "get_npc_details":
                     data_out = fetch_npc_details(user_id, conv_id, fn_args["npc_id"])
                 elif fn_name == "get_quest_details":
@@ -524,9 +663,15 @@ def next_storybeat():
                         fn_args.get("location_name")
                     )
                 elif fn_name == "get_event_details":
-                    data_out = fetch_event_details(user_id, conv_id, fn_args["event_id"])
+                    data_out = fetch_event_details(
+                        user_id, conv_id,
+                        fn_args["event_id"]
+                    )
                 elif fn_name == "get_inventory_item":
-                    data_out = fetch_inventory_item(user_id, conv_id, fn_args["item_name"])
+                    data_out = fetch_inventory_item(
+                        user_id, conv_id,
+                        fn_args["item_name"]
+                    )
                 elif fn_name == "get_intensity_tiers":
                     data_out = fetch_intensity_tiers()
                 elif fn_name == "get_plot_triggers":
@@ -534,19 +679,19 @@ def next_storybeat():
                 elif fn_name == "get_interactions":
                     data_out = fetch_interactions()
                 else:
-                    # unknown function
-                    final_text = f"Function call {fn_name} not recognized."
+                    # Unknown function
+                    final_text = f"Function call '{fn_name}' is not recognized."
                     structured_json_str = json.dumps(gpt_reply_dict)
                     break
 
-                # We have the data => create a "function" role msg
+                # Now that we have data from the function, feed it back to GPT
                 function_msg = {
                     "role": "function",
                     "name": fn_name,
-                    "content": json.dumps(data_out)
+                    "content": json.dumps(data_out)  # pass the results as JSON
                 }
 
-                # re-call GPT => incorporate the function result
+                # Re-invoke GPT to incorporate the function result into a final response
                 gpt_reply_dict = get_chatgpt_response(
                     conversation_id=conv_id,
                     aggregator_text=aggregator_text,
@@ -554,33 +699,35 @@ def next_storybeat():
                     extra_function_msg=function_msg,
                     functions=FUNCTION_SCHEMAS
                 )
-                if gpt_reply_dict["type"] != "function_call":
-                    # finally we got normal text
+
+                if gpt_reply_dict["type"] == "function_call":
+                    # If GPT calls another function again, loop continues
+                    continue
+                else:
+                    # Normal text returned
                     final_text = gpt_reply_dict["response"]
                     structured_json_str = json.dumps(gpt_reply_dict)
                     break
-                else:
-                    # second function call => loop continues
-                    pass
 
             else:
-                # normal text
+                # GPT returned normal text on the first try
                 final_text = gpt_reply_dict["response"]
                 structured_json_str = json.dumps(gpt_reply_dict)
                 break
 
+        # If no final text after all attempts, fallback
         if not final_text:
             final_text = "[No final text returned after repeated function calls]"
-            structured_json_str = json.dumps({"attempts":"exceeded"})
+            structured_json_str = json.dumps({"attempts": "exceeded"})
 
-        # store GPT message
+        # 9) Store GPT response
         cur.execute("""
             INSERT INTO messages (conversation_id, sender, content, structured_content)
             VALUES (%s, %s, %s, %s)
         """, (conv_id, "Nyx", final_text, structured_json_str))
         conn.commit()
 
-        # gather entire conversation
+        # 10) Gather entire conversation
         cur.execute("""
             SELECT sender, content, created_at
             FROM messages
@@ -588,6 +735,7 @@ def next_storybeat():
             ORDER BY id ASC
         """, (conv_id,))
         rows = cur.fetchall()
+
         conversation_history = []
         for r in rows:
             conversation_history.append({
@@ -599,6 +747,7 @@ def next_storybeat():
         cur.close()
         conn.close()
 
+        # 11) Return final JSON
         return jsonify({
             "conversation_id": conv_id,
             "story_output": final_text,
