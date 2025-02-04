@@ -37,17 +37,26 @@ def start_new_game():
             data = data["params"]
             logging.info(f"After unwrapping 'params': {data}")
 
-        # 3) Determine conversation_id
         conversation_id = data.get("conversation_id")
+
+        # >>> NEW CODE <<< (Approach B)
+        # If conversation_id is not provided, we do a GPT call to get a scenario name + short main quest
+        scenario_name = "New Game"  # fallback
         if not conversation_id:
-            # Create a new conversation row for this user
+            scenario_name, quest_blurb = gpt_generate_scenario_name_and_quest()
+            # e.g. scenario_name might be "Chains of Dusk"
+            # quest_blurb might be "Uncover the rumored relic that..."
+
+        # Now handle conversation creation or reuse
+        if not conversation_id:
+            # Create a new conversation row with scenario_name
             cursor.execute("""
                 INSERT INTO conversations (user_id, conversation_name)
                 VALUES (%s, %s)
                 RETURNING id
-            """, (user_id, "New Game"))
+            """, (user_id, scenario_name))
             conversation_id = cursor.fetchone()[0]
-            logging.info(f"Created new conversation_id={conversation_id} for user_id={user_id}")
+            logging.info(f"Created new conversation_id={conversation_id} for user_id={user_id}, name={scenario_name}")
             conn.commit()
         else:
             # Verify the conversation belongs to this user
@@ -212,6 +221,7 @@ def start_new_game():
 
         return jsonify({
             "message": success_msg,
+            "scenario_name": scenario_name,        # show the scenario name we used
             "environment_name": environment_name,
             "environment_desc": environment_desc,
             "chase_schedule": chase_schedule,
@@ -226,3 +236,47 @@ def start_new_game():
     finally:
         conn.close()
         logging.info("=== END: /start_new_game ===")
+
+# >>> HELPER FUNCTION: GPT call to get scenario name & quest
+def gpt_generate_scenario_name_and_quest():
+    """
+    Calls GPT for a short scenario name (1–4 words)
+    and a short main quest (1-2 lines).
+    Returns (scenario_name, quest_blurb).
+    """
+
+    client = get_openai_client()
+    system_instructions = """
+    You are setting up a new femdom daily-life sim scenario with a main quest. 
+    Please produce:
+    1) A single line starting with 'ScenarioName:' followed by a short (1–8 words) name. 
+    2) Then one or two lines summarizing the main quest. 
+    Example:
+    ScenarioName: Chains of Twilight
+    The main quest: retrieve the midnight relic from the Coven...
+    """
+    response = client.chat.completions.create(
+        model="gpt-4o-mini-2024-07-18",
+        messages=messages,
+        temperature=0.2,
+        max_tokens=1000,
+        frequency_penalty=0.0,
+        functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
+        function_call="auto"
+    )
+
+    msg = response.choices[0].message.content.strip()
+
+    scenario_name = "New Game"
+    quest_blurb = ""
+
+    lines = msg.splitlines()
+    for line in lines:
+        line = line.strip()
+        if line.lower().startswith("scenarioname:"):
+            scenario_name = line.split(":", 1)[1].strip()
+        else:
+            # treat as quest blurb or ignore
+            quest_blurb += line + " "
+
+    return scenario_name, quest_blurb.strip()
