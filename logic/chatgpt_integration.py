@@ -285,15 +285,21 @@ def build_message_history(conversation_id: int, aggregator_text: str, user_input
     messages.append({"role": "user", "content": user_input})
     return messages
 
+import json
+import logging
+from openai import OpenAI
+
 def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input: str) -> dict:
     client = get_openai_client()
 
+    # Build the conversation history as a list of message dicts
     messages = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
 
-    # The big difference: we pass `functions` and `function_call="auto"`
+    # Pass the messages along with functions and function_call parameters
     response = client.chat.completions.create(
         model="o3-mini",
         reasoning_effort="medium",
+        messages=messages,
         temperature=0.2,
         max_tokens=1000,
         frequency_penalty=0.0,
@@ -310,7 +316,7 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
         fn_args_str = msg.function_call.arguments or "{}"
         try:
             parsed_args = json.loads(fn_args_str)
-        except Exception as e:
+        except Exception:
             logging.exception("Error parsing function call arguments")
             parsed_args = {}
 
@@ -322,11 +328,12 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
             "tokens_used": tokens_used
         }
     else:
-        # Normal text response
+        # Return a normal text response
         return {
             "type": "text",
             "function_name": None,
             "function_args": None,
-            "response": msg.content,  # Access content as an attribute
+            "response": msg.content,
             "tokens_used": tokens_used
         }
+
