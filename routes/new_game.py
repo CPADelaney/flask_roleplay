@@ -260,10 +260,8 @@ def gpt_generate_scenario_name_and_quest():
     response = client.chat.completions.create(
         model="gpt-4o-mini-2024-07-18",
         temperature=0.2,
-        max_tokens=1000,
+        max_tokens=100,
         frequency_penalty=0.0,
-        functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
-        function_call="auto"
     )
 
     msg = response.choices[0].message.content.strip()
