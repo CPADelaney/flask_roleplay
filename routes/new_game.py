@@ -2,6 +2,7 @@ import logging
 from flask import Blueprint, request, jsonify, session
 import random
 from db.connection import get_db_connection
+import openai
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
 from logic.npc_creation import create_npc
 
