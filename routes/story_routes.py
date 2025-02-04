@@ -475,8 +475,7 @@ def next_storybeat():
         )
         conn.commit()
 
-        # 3) Possibly apply universal updates if posted in the request 
-        #    (this is still allowed if your front-end also sends updates directly)
+        # 3) Possibly apply universal updates if posted in the request
         universal_data = data.get("universal_update", {})
         if universal_data:
             from logic.universal_updater import apply_universal_updates
@@ -498,36 +497,50 @@ def next_storybeat():
             new_day = aggregator_data.get("day", 1)
             new_phase = aggregator_data.get("timeOfDay", "Morning")
 
+        # -- This uses aggregator_data["aggregator_text"] that your aggregator builds,
+        #    which is intentionally short & updated in build_changes_summary() + make_minimal_scene_info().
+        #    It includes a rolling "GlobalSummary" plus a short snippet.
+        aggregator_text = aggregator_data.get("aggregator_text", "")
+        if not aggregator_text:
+            aggregator_text = "No aggregator text available."
+
+        logging.debug("[next_storybeat] aggregator_text:\n%s", aggregator_text)
+
         # 5) Attempt up to 3 function calls from GPT
         final_text = None
         structured_json_str = None
 
         for attempt in range(3):
+            logging.debug("[next_storybeat] GPT attempt #%d with user_input=%r", attempt, user_input)
+
             # Call GPT
             gpt_reply_dict = get_chatgpt_response(
                 conversation_id=conv_id,
-                aggregator_text=build_aggregator_text(aggregator_data),
+                aggregator_text=aggregator_text,
                 user_input=user_input
             )
+            logging.debug("[next_storybeat] GPT reply (attempt %d): %s", attempt, gpt_reply_dict)
 
             if gpt_reply_dict["type"] == "function_call":
-                # The model wants to call a function
                 fn_name = gpt_reply_dict["function_name"]
                 fn_args = gpt_reply_dict["function_args"] or {}
 
+                # Example function calls:
                 if fn_name == "get_npc_details":
                     data_out = fetch_npc_details(user_id, conv_id, fn_args["npc_id"])
-                    # Re-invoke GPT with the function result
                     function_msg = {
                         "role": "function",
                         "name": fn_name,
                         "content": json.dumps(data_out)
                     }
+                    # Re-invoke GPT
                     gpt_reply_dict = get_chatgpt_response(
                         conversation_id=conv_id,
-                        aggregator_text=build_aggregator_text(aggregator_data),
+                        aggregator_text=aggregator_text,
                         user_input=user_input,
                     )
+                    logging.debug("[next_storybeat] GPT reply after function '%s': %s", fn_name, gpt_reply_dict)
+
                     if gpt_reply_dict["type"] == "function_call":
                         # If it calls another function, let loop continue
                         continue
@@ -543,12 +556,13 @@ def next_storybeat():
                         "name": fn_name,
                         "content": json.dumps(data_out)
                     }
-                    # Reinvoke GPT
                     gpt_reply_dict = get_chatgpt_response(
                         conversation_id=conv_id,
-                        aggregator_text=build_aggregator_text(aggregator_data),
+                        aggregator_text=aggregator_text,
                         user_input=user_input,
                     )
+                    logging.debug("[next_storybeat] GPT reply after function '%s': %s", fn_name, gpt_reply_dict)
+
                     if gpt_reply_dict["type"] == "function_call":
                         continue
                     else:
@@ -556,19 +570,11 @@ def next_storybeat():
                         structured_json_str = json.dumps(gpt_reply_dict)
                         break
 
-                # ---------------------------
-                # NEW BRANCH TO HANDLE APPLY_UNIVERSAL_UPDATE:
-                # ---------------------------
                 elif fn_name == "apply_universal_update":
-                    from logic.universal_updater import apply_universal_updates
-
-                    # Insert user_id and conversation_id in case the model didn't
                     fn_args["user_id"] = user_id
                     fn_args["conversation_id"] = conv_id
 
                     data_out = apply_universal_updates(fn_args)
-
-                    # Send the result back to GPT
                     function_msg = {
                         "role": "function",
                         "name": fn_name,
@@ -576,20 +582,17 @@ def next_storybeat():
                     }
                     gpt_reply_dict = get_chatgpt_response(
                         conversation_id=conv_id,
-                        aggregator_text=build_aggregator_text(aggregator_data),
+                        aggregator_text=aggregator_text,
                         user_input=user_input,
                     )
+                    logging.debug("[next_storybeat] GPT reply after function '%s': %s", fn_name, gpt_reply_dict)
+
                     if gpt_reply_dict["type"] == "function_call":
-                        # If GPT immediately calls another function, keep going
                         continue
                     else:
-                        # Normal text
                         final_text = gpt_reply_dict["response"]
                         structured_json_str = json.dumps(gpt_reply_dict)
                         break
-                # ---------------------------
-                # End new branch
-                # ---------------------------
 
                 elif fn_name == "get_location_details":
                     data_out = fetch_location_details(
@@ -602,12 +605,13 @@ def next_storybeat():
                         "name": fn_name,
                         "content": json.dumps(data_out)
                     }
-                    # Reinvoke GPT
                     gpt_reply_dict = get_chatgpt_response(
                         conversation_id=conv_id,
-                        aggregator_text=build_aggregator_text(aggregator_data),
+                        aggregator_text=aggregator_text,
                         user_input=user_input,
                     )
+                    logging.debug("[next_storybeat] GPT reply after function '%s': %s", fn_name, gpt_reply_dict)
+
                     if gpt_reply_dict["type"] == "function_call":
                         continue
                     else:
@@ -617,13 +621,12 @@ def next_storybeat():
 
                 # ... Additional recognized function names ...
                 else:
-                    # If none match, the function is not recognized
                     final_text = f"Function call '{fn_name}' is not recognized."
                     structured_json_str = json.dumps(gpt_reply_dict)
                     break
 
             else:
-                # GPT returned normal text on first try
+                # GPT returned normal text on the first try
                 final_text = gpt_reply_dict["response"]
                 structured_json_str = json.dumps(gpt_reply_dict)
                 break
@@ -674,7 +677,6 @@ def next_storybeat():
     except Exception as e:
         logging.exception("[next_storybeat] Error")
         return jsonify({"error": str(e)}), 500
-
 
 
 
