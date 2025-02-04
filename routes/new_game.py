@@ -1,13 +1,13 @@
 import logging
-import json
+import json             # <-- Import json explicitly
+import random           # <-- If we need randomness
+import time             # <-- For a time-based token
 from flask import Blueprint, request, jsonify, session
-import random
-from db.connection import get_db_connection
 import openai
+from db.connection import get_db_connection
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
-from logic.chatgpt_integration import get_chatgpt_response
+from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.npc_creation import create_npc
-from logic.chatgpt_integration import get_openai_client 
 from logic.aggregator import get_aggregated_roleplay_context
 from routes.story_routes import build_aggregator_text
 
@@ -214,12 +214,10 @@ def start_new_game():
         logging.info(f"Success! Returning 200 with message: {success_msg}")
 
         # 9) aggregator_data => from aggregator
-        # (you need to have from logic.aggregator import get_aggregated_roleplay_context, build_aggregator_text)
         aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
         aggregator_text = build_aggregator_text(aggregator_data)
     
         # 10) GPT call for the game’s opening line
-        # You can expand this prompt to mention day1, setting history, npc intros, etc.
         opening_user_prompt = (
             "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, "
             "briefly recount the new environment’s background or history from the aggregator data, "
@@ -266,7 +264,7 @@ def start_new_game():
             "chase_schedule": chase_schedule,
             "chase_role": chase_role,
             "conversation_id": conversation_id,
-            "messages": conversation_history  # <-- add missing comma
+            "messages": conversation_history  # Add missing comma
         }), 200
 
     except Exception as e:
@@ -286,8 +284,13 @@ def gpt_generate_scenario_name_and_quest():
     """
     client = get_openai_client()
 
-    system_instructions = """
+    # Add a random token to encourage unique naming
+    unique_token = f"{random.randint(1000,9999)}_{int(time.time())}"
+
+    system_instructions = f"""
     You are setting up a new femdom daily-life sim scenario with a main quest. 
+    To ensure uniqueness, note token: {unique_token}.
+
     Please produce:
     1) A single line starting with 'ScenarioName:' followed by a short (1–8 words) name. 
     2) Then one or two lines summarizing the main quest.
@@ -304,12 +307,13 @@ def gpt_generate_scenario_name_and_quest():
     response = client.chat.completions.create(
         model="gpt-4o-mini-2024-07-18",
         messages=messages,
-        temperature=0.2,
+        temperature=0.7,   # Slightly higher for more variation
         max_tokens=100,
-        frequency_penalty=0.0
+        frequency_penalty=0.3
     )
 
     msg = response.choices[0].message.content.strip()
+    logging.info(f"[gpt_generate_scenario_name_and_quest] Raw GPT output: {msg}")
 
     scenario_name = "New Game"
     quest_blurb = ""
