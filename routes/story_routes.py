@@ -14,7 +14,7 @@ from logic.time_cycle import advance_time_and_update
 from logic.activities_logic import filter_activities_for_npc, build_short_summary
 from routes.settings_routes import generate_mega_setting_logic
 from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory
-from logic.chatgpt_integration import get_chatgpt_response
+from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
 
 story_bp = Blueprint("story_bp", __name__)
 
@@ -548,9 +548,6 @@ def next_storybeat():
                     conversation_id=conv_id,
                     aggregator_text=build_aggregator_text(aggregator_data),
                     user_input=user_input,
-                    extra_function_msg=function_msg,   # <--- pass the function result
-                    functions=FUNCTION_SCHEMAS,
-                    function_call="auto"
                 )
 
                 if gpt_reply_dict["type"] == "function_call":
