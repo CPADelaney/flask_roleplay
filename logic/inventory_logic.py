@@ -1,5 +1,43 @@
 from db.connection import get_db_connection
 
+def fetch_inventory_item(user_id, conversation_id, item_name):
+    """
+    Lookup a specific item in the player's inventory by item_name.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT player_name, item_description, item_effect, quantity, category
+        FROM PlayerInventory
+        WHERE user_id=%s
+          AND conversation_id=%s
+          AND item_name=%s
+        LIMIT 1
+    """, (user_id, conversation_id, item_name))
+    
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        conn.close()
+        return {"error": f"No item named '{item_name}' found in inventory"}
+    
+    (pname, idesc, ifx, qty, cat) = row
+    
+    item_data = {
+        "item_name": item_name,
+        "player_name": pname,
+        "item_description": idesc,
+        "item_effect": ifx,
+        "quantity": qty,
+        "category": cat
+    }
+    
+    cursor.close()
+    conn.close()
+    
+    return item_data
+
 def add_item_to_inventory(user_id, conversation_id, player_name,
                           item_name, description=None, effect=None,
                           category=None, quantity=1):
