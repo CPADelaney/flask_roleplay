@@ -293,7 +293,7 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
 
     # Pass the messages along with functions and function_call parameters
     response = client.chat.completions.create(
-        model="deepseek-chat",
+        model="deepseek-reasoner",
         messages=messages,
         temperature=0.2,
         max_tokens=1000,
@@ -301,6 +301,9 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
         functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
         function_call="auto"
     )
+
+    reasoning_content = response.choices[0].message.reasoning_content
+    content = response.choices[0].message.content
 
     msg = response.choices[0].message
     tokens_used = response.usage.total_tokens
