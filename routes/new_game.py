@@ -312,15 +312,15 @@ def gpt_generate_scenario_name_and_quest():
         {"role": "system", "content": system_instructions}
     ]
 
+    messages = [
+        {"role": "system", "content": system_instructions}
+    ]
+
     # Increase temperature for more variation
     response = client.chat.completions.create(
         model="o1",
         reasoning_effort="medium",
-        messages=[
-            {
-                {"role": "system", "content": system_prompt}
-            }
-        ],
+        messages=messages,
         temperature=0.7,
         max_tokens=100,
         frequency_penalty=0.3
