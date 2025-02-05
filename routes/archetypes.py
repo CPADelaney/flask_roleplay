@@ -16,7 +16,8 @@ def insert_missing_archetypes():
     # Optionally locate the file relative to this script's directory,
     # so you don't rely on the working directory:
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    archetypes_json_path = os.path.join(current_dir, "archetypes_data.json")
+    archetypes_json_path = os.path.join(current_dir, "..", "data", "archetypes_data.json")
+    archetypes_json_path = os.path.normpath(archetypes_json_path)
 
     try:
         with open(archetypes_json_path, "r", encoding="utf-8") as f:
