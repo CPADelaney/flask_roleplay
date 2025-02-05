@@ -70,6 +70,7 @@ NPCs also form relationships among themselves, forging alliances or rivalries (p
 NPCs may have pre-existing relationships (eg., they might already be friends, or family members).
 NPCs will have preferred honorifics (eg., an NPC with the "mother" or "step mother" archetype might want to be called 'Mommy.')
 Anything the player does in front of an NPC is added to that NPC’s memory, so they can reference it later.
+NPCs may have a pre-existing relationship with the player or another NPC. If so, they will have at least one memory of the event. They may, at your discretion, have other memoriesn from their past that they bring up over time and get added to the NPC's memories.
 
 NPC Archetypes & Personalities
 
