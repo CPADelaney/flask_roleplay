@@ -4,7 +4,7 @@ import random
 import logging
 from db.connection import get_db_connection
 from logic.chatgpt_integration import get_openai_client  # or however you import it
-from routes.memory_routes import get_shared_memory, record_npc_event
+from logic.memory_logic.py import get_shared_memory, record_npc_event
 
 logging.basicConfig(level=logging.DEBUG)
 
