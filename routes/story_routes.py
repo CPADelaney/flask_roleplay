@@ -1,5 +1,3 @@
-# routes/story_routes.py
-
 import logging
 import openai
 import os
@@ -100,6 +98,7 @@ FUNCTION_SCHEMAS = [
         }
     }
 ]
+
 def fetch_npc_details(user_id, conversation_id, npc_id):
     """
     Retrieve full or partial NPC info from NPCStats for a given npc_id.
@@ -108,7 +107,6 @@ def fetch_npc_details(user_id, conversation_id, npc_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Example: Grab select columns from NPCStats
     cursor.execute("""
         SELECT npc_name,
                introduced,
@@ -131,8 +129,6 @@ def fetch_npc_details(user_id, conversation_id, npc_id):
     
     (nname, intro, dom, cru, clos, tru, resp, inten, affil, sched, cloc) = row
     
-    # Convert JSONB columns to Python structures if they are stored as JSON
-    # e.g., "affiliations" or "schedule"
     if affil is None:
         affil = []
     if sched is None:
@@ -157,7 +153,6 @@ def fetch_npc_details(user_id, conversation_id, npc_id):
     conn.close()
     
     return npc_data
-
 
 def fetch_quest_details(user_id, conversation_id, quest_id):
     """
@@ -195,7 +190,6 @@ def fetch_quest_details(user_id, conversation_id, quest_id):
     conn.close()
     
     return quest_data
-
 
 def fetch_location_details(user_id, conversation_id, location_id=None, location_name=None):
     """
@@ -246,7 +240,6 @@ def fetch_location_details(user_id, conversation_id, location_id=None, location_
     
     return loc_data
 
-
 def fetch_event_details(user_id, conversation_id, event_id):
     """
     Retrieve an event's info by event_id from the Events table.
@@ -283,7 +276,6 @@ def fetch_event_details(user_id, conversation_id, event_id):
     conn.close()
     
     return event_data
-
 
 def fetch_inventory_item(user_id, conversation_id, item_name):
     """
@@ -323,7 +315,6 @@ def fetch_inventory_item(user_id, conversation_id, item_name):
     
     return item_data
 
-
 def fetch_intensity_tiers():
     """
     If the model calls 'get_intensity_tiers' (which is purely global),
@@ -357,7 +348,6 @@ def fetch_intensity_tiers():
     conn.close()
     return all_tiers
 
-
 def fetch_plot_triggers():
     """
     If the model calls 'get_plot_triggers',
@@ -376,11 +366,22 @@ def fetch_plot_triggers():
     triggers = []
     for r in rows:
         (tname, stg, desc, kfeat, sdyn, ex, trigz) = r
-        # parse JSON if needed
-        if not kfeat: kfeat = []
-        if not sdyn: sdyn = []
-        if not ex: ex = []
-        if not trigz: trigz = {}
+        try:
+            kfeat = json.loads(kfeat) if kfeat else []
+        except:
+            kfeat = []
+        try:
+            sdyn = json.loads(sdyn) if sdyn else []
+        except:
+            sdyn = []
+        try:
+            ex = json.loads(ex) if ex else []
+        except:
+            ex = []
+        try:
+            trigz = json.loads(trigz) if trigz else {}
+        except:
+            trigz = {}
         triggers.append({
             "trigger_name": tname,
             "stage_name": stg,
@@ -394,7 +395,6 @@ def fetch_plot_triggers():
     cursor.close()
     conn.close()
     return triggers
-
 
 def fetch_interactions():
     """
@@ -410,9 +410,18 @@ def fetch_interactions():
     rows = cursor.fetchall()
     result = []
     for (iname, drules, texamples, aover) in rows:
-        if not drules: drules = {}
-        if not texamples: texamples = {}
-        if not aover: aover = {}
+        try:
+            drules = json.loads(drules) if drules else {}
+        except:
+            drules = {}
+        try:
+            texamples = json.loads(texamples) if texamples else {}
+        except:
+            texamples = {}
+        try:
+            aover = json.loads(aover) if aover else {}
+        except:
+            aover = {}
         result.append({
             "interaction_name": iname,
             "detailed_rules": drules,
@@ -475,9 +484,11 @@ def next_storybeat():
             (conv_id, "user", user_input)
         )
         conn.commit()
+
+        # 3) Create an NPC (this call now stores synthesized archetype summaries)
         npc_id = create_npc(user_id, conv_id, npc_name="Nyx", sex="female", reroll_extra=True)
 
-        # 3) Possibly apply universal updates if posted in the request
+        # 4) Possibly apply universal updates if provided in the request
         universal_data = data.get("universal_update", {})
         if universal_data:
             from logic.universal_updater import apply_universal_updates
@@ -489,7 +500,7 @@ def next_storybeat():
                 conn.close()
                 return jsonify(update_result), 500
 
-        # 4) Possibly advance time
+        # 5) Possibly advance time and get aggregator context
         from logic.time_cycle import advance_time_and_update
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
         if data.get("advance_time", False):
@@ -499,16 +510,37 @@ def next_storybeat():
             new_day = aggregator_data.get("day", 1)
             new_phase = aggregator_data.get("timeOfDay", "Morning")
 
-        # -- This uses aggregator_data["aggregator_text"] that your aggregator builds,
-        #    which is intentionally short & updated in build_changes_summary() + make_minimal_scene_info().
-        #    It includes a rolling "GlobalSummary" plus a short snippet.
+        # -- Retrieve the basic aggregator text built by the aggregator logic.
         aggregator_text = aggregator_data.get("aggregator_text", "")
         if not aggregator_text:
             aggregator_text = "No aggregator text available."
 
-        logging.debug("[next_storybeat] aggregator_text:\n%s", aggregator_text)
+        # ---------------------------------------------------------------------
+        # NEW: Append additional NPC context (memories and synthesized archetype extras)
+        # ---------------------------------------------------------------------
+        cur.execute("""
+            SELECT npc_name, memory, archetype_extras_summary
+            FROM NPCStats
+            WHERE user_id=%s AND conversation_id=%s AND introduced=TRUE
+        """, (user_id, conv_id))
+        npc_context_rows = cur.fetchall()
+        npc_context_summary = ""
+        for row in npc_context_rows:
+            npc_name, memory_json, extras_summary = row
+            mem_text = ""
+            if memory_json:
+                try:
+                    mem_list = json.loads(memory_json)
+                    mem_text = " ".join(mem_list)
+                except:
+                    mem_text = str(memory_json)
+            extra_text = extras_summary if extras_summary else ""
+            npc_context_summary += f"{npc_name}: {mem_text} {extra_text}\n"
+        if npc_context_summary:
+            aggregator_text += "\nNPC Context:\n" + npc_context_summary
+        logging.debug("[next_storybeat] Updated aggregator_text with NPC context:\n%s", aggregator_text)
 
-        # 5) Attempt up to 3 function calls from GPT
+        # 6) Attempt up to 3 function calls from GPT
         final_text = None
         structured_json_str = None
 
@@ -544,7 +576,6 @@ def next_storybeat():
                     logging.debug("[next_storybeat] GPT reply after function '%s': %s", fn_name, gpt_reply_dict)
 
                     if gpt_reply_dict["type"] == "function_call":
-                        # If it calls another function, let loop continue
                         continue
                     else:
                         final_text = gpt_reply_dict["response"]
@@ -621,14 +652,12 @@ def next_storybeat():
                         structured_json_str = json.dumps(gpt_reply_dict)
                         break
 
-                # ... Additional recognized function names ...
                 else:
                     final_text = f"Function call '{fn_name}' is not recognized."
                     structured_json_str = json.dumps(gpt_reply_dict)
                     break
 
             else:
-                # GPT returned normal text on the first try
                 final_text = gpt_reply_dict["response"]
                 structured_json_str = json.dumps(gpt_reply_dict)
                 break
@@ -637,7 +666,7 @@ def next_storybeat():
             final_text = "[No final text returned after repeated function calls]"
             structured_json_str = json.dumps({"attempts": "exceeded"})
 
-        # 6) Store GPT's final text as a message
+        # 7) Store GPT's final text as a message
         cur.execute(
             """
             INSERT INTO messages (conversation_id, sender, content, structured_content)
@@ -647,7 +676,7 @@ def next_storybeat():
         )
         conn.commit()
 
-        # 7) Gather entire conversation for return
+        # 8) Gather entire conversation for return
         cur.execute(
             """
             SELECT sender, content, created_at
@@ -681,7 +710,6 @@ def next_storybeat():
         return jsonify({"error": str(e)}), 500
 
 
-
 def gather_rule_knowledge():
     """
     Fetch or build short text summaries from rule_enforcement.py logic,
@@ -691,8 +719,6 @@ def gather_rule_knowledge():
     cursor = conn.cursor()
 
     # 1) PlotTriggers
-    # We'll store each row's data so we can present them later
-    # Adjust the column names to match your actual schema
     cursor.execute("""
         SELECT trigger_name, stage_name, description, key_features, stat_dynamics, examples, triggers
         FROM PlotTriggers
@@ -700,7 +726,6 @@ def gather_rule_knowledge():
     trig_list = []
     for row in cursor.fetchall():
         (trig_name, stage, desc, kfeat, sdyn, ex, trigz) = row
-        # parse JSON if needed
         try:
             kfeat = json.loads(kfeat) if kfeat else []
         except:
@@ -719,7 +744,7 @@ def gather_rule_knowledge():
             trigz = {}
 
         trig_list.append({
-            "title": trig_name,         # e.g. "Early Stage", "Mid-Stage Escalation"
+            "title": trig_name,
             "stage": stage,
             "description": desc,
             "key_features": kfeat,
@@ -785,24 +810,17 @@ def gather_rule_knowledge():
 
     conn.close()
 
-    # Basic textual summary from your doc
     rule_enforcement_summary = (
         "Conditions are parsed (e.g. 'Lust > 90 or Dependency > 80'), "
         "evaluated against stats, and if true, an effect like 'Locks Independent Choices' is applied. "
         "This can raise Obedience, trigger punishments, meltdown synergy, or endgame events."
     )
 
-    # Optionally reintroduce meltdown info
- #   meltdown_info = (
-  #      "Meltdowns occur if certain conditions are met. The meltdown logic triggers GPT to produce meltdown dialog, etc."
-   # )
-
     return {
         "rule_enforcement_summary": rule_enforcement_summary,
         "plot_triggers": trig_list,
         "intensity_tiers": tier_list,
         "interactions": interactions_list
- #       "meltdown_synergy": meltdown_info
     }
 
 
@@ -836,7 +854,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     If rule_knowledge is provided, appends advanced rule data as well.
     """
     lines = []
-    # Pull values from aggregator_data with defaults to avoid KeyErrors
     day = aggregator_data.get("day", 1)
     tod = aggregator_data.get("timeOfDay", "Morning")
     player_stats = aggregator_data.get("playerStats", {})
@@ -851,10 +868,7 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     quests_list = aggregator_data.get("quests", [])
     stat_definitions_list = aggregator_data.get("statDefinitions", [])
 
-    # 1) Day/Time
     lines.append(f"=== DAY {day}, {tod.upper()} ===")
-
-    # 2) Player Stats
     lines.append("\n=== PLAYER STATS ===")
     if player_stats:
         lines.append(
@@ -871,7 +885,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     else:
         lines.append("No player stats found.")
 
-    # 3) NPC Stats (only introduced NPCs)
     lines.append("\n=== NPC STATS ===")
     introduced_npcs = [npc for npc in npc_stats if npc.get("introduced") is True]
     if introduced_npcs:
@@ -879,7 +892,8 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
             lines.append(
                 f"NPC: {npc.get('npc_name','Unnamed')} "
                 f"| Sex={npc.get('sex','Unknown')} "
-                f"| Archetypes={npc.get('archetypes',[])} "
+                f"| Archetypes={npc.get('archetype_summary',[])} "
+                f"| Archetypes={npc.get('archetype_extras_summary',[])} "
                 f"| Dom={npc.get('dominance',0)}, Cru={npc.get('cruelty',0)}, "
                 f"Close={npc.get('closeness',0)}, Trust={npc.get('trust',0)}, "
                 f"Respect={npc.get('respect',0)}, Int={npc.get('intensity',0)}"
@@ -889,7 +903,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
             personality = npc.get("personality_traits", [])
             likes = npc.get("likes", [])
             dislikes = npc.get("dislikes", [])
-
             lines.append(f"  Hobbies: {', '.join(hobbies)}" if hobbies else "  Hobbies: None")
             lines.append(f"  Personality: {', '.join(personality)}" if personality else "  Personality: None")
             lines.append(f"  Likes: {', '.join(likes)} | Dislikes: {', '.join(dislikes)}")
@@ -920,7 +933,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     else:
         lines.append("(No NPCs found)")
 
-    # 4) Current roleplay data
     lines.append("\n=== CURRENT ROLEPLAY ===")
     if current_rp:
         for k, v in current_rp.items():
@@ -928,14 +940,12 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     else:
         lines.append("(No current roleplay data)")
 
-    # 5) Potential activities
     if "activitySuggestions" in aggregator_data:
         lines.append("\n=== NPC POTENTIAL ACTIVITIES ===")
         for suggestion in aggregator_data["activitySuggestions"]:
             lines.append(f"- {suggestion}")
         lines.append("NPCs can adopt, combine, or ignore these ideas.\n")
 
-    # 6) Social Links
     lines.append("\n=== SOCIAL LINKS ===")
     if social_links:
         for link in social_links:
@@ -950,7 +960,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     else:
         lines.append("(No social links found)")
 
-    # 7) Player Perks
     lines.append("\n=== PLAYER PERKS ===")
     if player_perks:
         for perk in player_perks:
@@ -960,7 +969,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     else:
         lines.append("(No perks found)")
 
-    # 8) Inventory
     lines.append("\n=== INVENTORY ===")
     if inventory:
         for item in inventory:
@@ -972,7 +980,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     else:
         lines.append("(No inventory items found)")
 
-    # 9) Events
     lines.append("\n=== EVENTS ===")
     if events_list:
         for ev in events_list:
@@ -983,7 +990,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     else:
         lines.append("(No events found)")
 
-    # 10) Planned Events
     lines.append("\n=== PLANNED EVENTS ===")
     if planned_events_list:
         for pev in planned_events_list:
@@ -994,7 +1000,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     else:
         lines.append("(No planned events found)")
 
-    # 11) Quests
     lines.append("\n=== QUESTS ===")
     if quests_list:
         for q in quests_list:
@@ -1005,7 +1010,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     else:
         lines.append("(No quests found)")
 
-    # 12) Game Rules
     lines.append("\n=== GAME RULES ===")
     if game_rules_list:
         for gr in game_rules_list:
@@ -1015,7 +1019,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     else:
         lines.append("(No game rules found)")
 
-    # 13) Stat Definitions
     lines.append("\n=== STAT DEFINITIONS ===")
     if stat_definitions_list:
         for sd in stat_definitions_list:
@@ -1026,15 +1029,11 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     else:
         lines.append("(No stat definitions found)")
 
-    # 14) If you want advanced rule knowledge appended
     if rule_knowledge:
         lines.append("\n=== ADVANCED RULE ENFORCEMENT & KNOWLEDGE ===")
-
-        # Summary
         lines.append("\nRule Enforcement Summary:")
         lines.append(rule_knowledge.get("rule_enforcement_summary", "(No info)"))
 
-        # Plot Triggers
         plot_trigs = rule_knowledge.get("plot_triggers", [])
         if plot_trigs:
             lines.append("\n-- PLOT TRIGGERS --")
@@ -1048,11 +1047,10 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
                     lines.append(f"  Examples: {json.dumps(trig['examples'])}")
                 if trig.get("triggers"):
                     lines.append(f"  Additional Triggers: {json.dumps(trig['triggers'])}")
-                lines.append("")  # blank line
+                lines.append("")
         else:
             lines.append("No plot triggers found.")
 
-        # Intensity Tiers
         tiers = rule_knowledge.get("intensity_tiers", [])
         if tiers:
             lines.append("\n-- INTENSITY TIERS --")
@@ -1064,7 +1062,6 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
         else:
             lines.append("No intensity tiers found.")
 
-        # Interactions
         interactions = rule_knowledge.get("interactions", [])
         if interactions:
             lines.append("\n-- INTERACTIONS --")
@@ -1076,10 +1073,4 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
         else:
             lines.append("No interactions data found.")
 
-  #      meltdown_info = rule_knowledge.get("meltdown_synergy", None)
-  #      if meltdown_info:
-  #          lines.append("\nMeltdown Synergy Info:")
-   #         lines.append(meltdown_info)
-
-    # Return final string
     return "\n".join(lines)
