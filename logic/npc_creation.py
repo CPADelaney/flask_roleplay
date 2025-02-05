@@ -43,7 +43,6 @@ DATA = {
     "personalities": []
 }
 
-# Load the data
 for key, path in DATA_FILES.items():
     raw = load_data(path)
     if key == "hobbies":
@@ -86,18 +85,15 @@ def combine_archetype_stats(archetype_rows):
     }
     count = len(archetype_rows)
     if count == 0:
-        # No archetypes => fallback random
         for k in sums.keys():
             sums[k] = random.randint(0, 30)
         return sums
 
     for (arc_id, arc_name, bs_json) in archetype_rows:
-        # baseline_stats might be a string or a dict
         if isinstance(bs_json, str):
             bs = json.loads(bs_json)
         else:
             bs = bs_json or {}
-
         for stat_key in sums.keys():
             rng_key = f"{stat_key}_range"
             mod_key = f"{stat_key}_modifier"
@@ -106,22 +102,19 @@ def combine_archetype_stats(archetype_rows):
                 mod = bs[mod_key]
                 val = random.randint(low, high) + mod
             else:
-                val = random.randint(0, 30)  # fallback
+                val = random.randint(0, 30)
             sums[stat_key] += val
 
-    # average & clamp
     for sk in sums.keys():
         sums[sk] = sums[sk] / count
-        # trust/respect can be negative, so clamp -100..100
         if sk in ["trust", "respect"]:
             sums[sk] = clamp(int(sums[sk]), -100, 100)
         else:
             sums[sk] = clamp(int(sums[sk]), 0, 100)
-
     return sums
 
 def archetypes_to_json(rows):
-    """ Convert (id, name, baseline_stats) => [ {"id": id, "name": name}, ... ] """
+    """Convert (id, name, baseline_stats) => [ {"id": id, "name": name}, ... ]"""
     arr = []
     for (aid, aname, _bs) in rows:
         arr.append({"id": aid, "name": aname})
@@ -132,29 +125,23 @@ def archetypes_to_json(rows):
 ###################
 def get_archetype_synergy_description(archetypes_list):
     """
-    Call GPT to produce a cohesive short paragraph describing how these 
-    archetypes blend into a single personality/backstory.
+    Calls GPT to produce a cohesive short backstory and personality summary
+    for an NPC who combines these archetypes.
     """
     if not archetypes_list:
         return "No special archetype synergy."
-
     archetype_names = [a["name"] for a in archetypes_list]
     system_instructions = f"""
-    You are writing a short personality/backstory summary for an NPC who combines 
-    these archetypes: {', '.join(archetype_names)}.
-
-    They exist in a femdom context. 
-    Please produce a short 1-2 paragraphs explaining how these archetypes fuse 
-    into a single personality with interesting quirks that feel cohesive 
-    (not random or contradictory). Also use them to create a backstory. Keep it concise.
+    You are writing a short personality/backstory summary for an NPC who combines these archetypes: {', '.join(archetype_names)}.
+    They exist in a femdom context.
+    Please produce 1-2 paragraphs that explain how these archetypes fuse into a single cohesive personality, and include a brief backstory.
+    Keep it concise.
     """
-
     gpt_client = get_openai_client()
     messages = [{"role": "system", "content": system_instructions}]
-
     try:
         response = gpt_client.chat.completions.create(
-            model="gpt-4o",  # or whichever model you use
+            model="gpt-4o",
             messages=messages,
             temperature=0.7,
             max_tokens=300
@@ -166,31 +153,25 @@ def get_archetype_synergy_description(archetypes_list):
 
 def get_archetype_extras_summary(archetypes_list):
     """
-    Produces a short summary that fuses the extra details 
-    (progression_rules, unique_traits, preferred_kinks) of the chosen archetypes.
+    Produces a concise summary that fuses extra details (progression_rules,
+    unique_traits, preferred_kinks) of the chosen archetypes.
     """
     if not archetypes_list:
         return "No extra details available."
-    
     extras_text_list = []
     for arc in archetypes_list:
         pr = " ".join(arc.get("progression_rules", []))
         ut = " ".join(arc.get("unique_traits", []))
         pk = " ".join(arc.get("preferred_kinks", []))
         extras_text_list.append(f"{arc['name']}:\nProgression: {pr}\nTraits: {ut}\nKinks: {pk}")
-    
     combined_extras = "\n\n".join(extras_text_list)
-    
     system_instructions = f"""
     You are a creative writer tasked with summarizing the following extra details from a set of archetypes in a femdom context:
     {combined_extras}
-    
-    Please produce a concise description that fuses these details into a cohesive overview, highlighting how these extra characteristics reinforce the overall dominant personality and how they are used.
+    Please produce a concise description (3-5 sentences) that fuses these details into a cohesive overview, highlighting how they reinforce the overall dominant personality and how they are used.
     """
-    
     gpt_client = get_openai_client()
     messages = [{"role": "system", "content": system_instructions}]
-    
     try:
         response = gpt_client.chat.completions.create(
             model="gpt-4o",
@@ -216,12 +197,10 @@ def create_npc(
     total_archetypes=4
 ):
     """
-    Creates a new NPC in NPCStats with multiple archetypes logic,
-    scoping by user_id + conversation_id.
-
-    - If sex='male', we skip archetypes or do minimal random.
-    - total_archetypes: how many normal archetypes to pick.
-    - reroll_extra: if True, we add 1 from REROLL_IDS (62..72).
+    Creates a new NPC in NPCStats with multiple archetypes logic.
+    For female NPCs, it randomly selects archetypes (with an optional extra from REROLL_IDS),
+    computes combined stats, and calls GPT to produce both a synergy backstory and
+    an extra details summary.
     """
     if not npc_name:
         npc_name = f"NPC_{random.randint(1000,9999)}"
@@ -233,13 +212,11 @@ def create_npc(
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1) Pick archetypes or skip if male
     chosen_arcs_rows = []
     chosen_arcs_list_for_json = []  # for GPT functions
     final_stats = {}
 
     if sex.lower() == "male":
-        # Fallback minimal random stats
         final_stats = {
             "dominance": random.randint(0,30),
             "cruelty":   random.randint(0,30),
@@ -249,10 +226,8 @@ def create_npc(
             "intensity": random.randint(0,30)
         }
     else:
-        # Gather all archetypes
         cursor.execute("SELECT id, name, baseline_stats FROM Archetypes")
         all_arcs = cursor.fetchall()
-
         if not all_arcs:
             logging.warning("[create_npc] No archetypes in DB. Using pure-random for female.")
             final_stats = {
@@ -266,25 +241,21 @@ def create_npc(
         else:
             reroll_pool  = [row for row in all_arcs if row[0] in REROLL_IDS]
             normal_pool  = [row for row in all_arcs if row[0] not in REROLL_IDS]
-
             if len(normal_pool) < total_archetypes:
                 chosen_arcs_rows = normal_pool
             else:
                 chosen_arcs_rows = random.sample(normal_pool, total_archetypes)
-
             if reroll_extra and reroll_pool:
                 chosen_arcs_rows.append(random.choice(reroll_pool))
-
             final_stats = combine_archetype_stats(chosen_arcs_rows)
     
-    # For GPT synergy functions & storing
     chosen_arcs_json_str = archetypes_to_json(chosen_arcs_rows)
     try:
         chosen_arcs_list_for_json = json.loads(chosen_arcs_json_str)
     except:
         chosen_arcs_list_for_json = []
 
-    # 2) If female, get synergy text and extras summary from GPT
+    # Get both synergy text and extra details summary
     synergy_text = ""
     extras_summary = ""
     if sex.lower() == "female" and chosen_arcs_list_for_json:
@@ -294,7 +265,6 @@ def create_npc(
         synergy_text = "No synergy text (male or no archetypes)."
         extras_summary = "No extra archetype details available."
 
-    # 3) Insert the NPC row into NPCStats
     try:
         cursor.execute(
             """
@@ -324,15 +294,13 @@ def create_npc(
                 final_stats["dominance"], final_stats["cruelty"],
                 final_stats["closeness"], final_stats["trust"],
                 final_stats["respect"], final_stats["intensity"],
-                chosen_arcs_json_str,  # the basic JSON array of archetypes (id & name)
-                synergy_text,          # synergy text (backstory summary)
-                extras_summary         # extra details summary
+                chosen_arcs_json_str,  # basic JSON array (id & name)
+                synergy_text,          # backstory synergy from GPT
+                extras_summary         # extra details summary from GPT
             )
         )
-
         new_id = cursor.fetchone()[0]
         conn.commit()
-
         logging.info(
             f"[create_npc] Inserted npc_id={new_id} with stats={final_stats}. "
             f"Archetypes count={len(chosen_arcs_rows)} synergy={synergy_text[:50]}"
@@ -343,9 +311,7 @@ def create_npc(
         conn.close()
         raise
 
-    # 4) Assign random flavor (hobbies, personalities, likes, dislikes)
     assign_npc_flavor(user_id, conversation_id, new_id)
-
     conn.close()
     return new_id
 
@@ -354,8 +320,8 @@ def create_npc(
 ###################
 def assign_npc_flavor(user_id, conversation_id, npc_id: int):
     """
-    Randomly pick e.g. 3 hobbies, 5 personalities, 3 likes, 3 dislikes 
-    from JSON data, then store them in NPCStats.
+    Randomly pick 3 hobbies, 5 personalities, 3 likes, 3 dislikes from JSON data,
+    then store them in NPCStats.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
