@@ -18,7 +18,7 @@ from routes.multiuser_routes import multiuser_bp
 
 # DB connection helper
 from db.connection import get_db_connection
-
+openai.api_request_timeout = 120
 
 def create_app():
     app = Flask(__name__)
