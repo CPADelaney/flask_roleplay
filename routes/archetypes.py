@@ -11,8 +11,15 @@ def insert_missing_archetypes():
     No string parsing needed, because each archetype is already in the new format:
       e.g. "dominance_range": [40, 60], "dominance_modifier": 0
     """
-    with open("archetypes_data.json", "r", encoding="utf-8") as f:
-        archetypes_data = json.load(f)
+    try:
+        with open("archetypes_data.json", "r", encoding="utf-8") as f:
+            archetypes_data = json.load(f)
+    except FileNotFoundError:
+        logging.error("archetypes_data.json not found!")
+        return
+    except json.JSONDecodeError as e:
+        logging.error(f"Could not decode archetypes_data.json: {e}")
+        return
         
     conn = get_db_connection()
     cursor = conn.cursor()
