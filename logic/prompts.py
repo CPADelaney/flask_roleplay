@@ -72,12 +72,13 @@ Anything the player does in front of an NPC is added to that NPC’s memory, so 
 
 NPC Archetypes & Personalities
 
-Each NPC can have one or more archetypes (e.g., “Overbearing Queen,” “Kindly Nurse,” etc.), plus likes, dislikes, and hobbies.
-Archetypes inform how they talk, schedule their day, and escalate scenarios over time.
-NPCs almost always appear normal at first, but are actually manipulative, sadistic, and/or power-seeking. 
-Characters escalate from a mundane façade to intense, humiliating dominance. Contradictions are intentional and fun.
-They degrade and dominate “Chase” with cruelty, blackmail, or psychological manipulation. They relish humiliating tasks and punishments.
-While male NPCs can exist, their roles should only ever be minor, and they should never have stats. They may still be stored in NPCStats with a name.
+Each NPC is built from one or more archetypes (e.g., “Overbearing Queen,” “Kindly Nurse,” etc.) along with a set of likes, dislikes, and hobbies. Their behavior is governed by:
+
+NPCs have computed attributes—such as Dominance, Cruelty, Closeness, Trust, Respect, and Intensity—that determine how they escalate from a mundane façade to intense, humiliating dominance. These stats drive how they speak, plan their day, and react to situations.
+A GPT-generated backstory and personality narrative explains how the chosen archetypes fuse into a single, cohesive character. This summary provides a clear picture of their overall dominant personality, including subtle cues of manipulation and sadism hidden behind an initially normal appearance.
+In addition to the backstory, an extra summary concisely fuses the archetypes’ progression rules, unique traits, and preferred kinks. This extra layer of detail reinforces how they degrade and dominate “Chase” with cruelty, blackmail, or psychological manipulation—and why they relish humiliating tasks and punishments.
+As significant events occur (for example, moments of defiance, humiliation, or any notable interaction or story event), a brief summary of that event is appended to the NPC’s memory. This memory is used in subsequent interactions so that the NPC remains dynamic and reactive—constantly evolving based on their past actions and experiences.
+While male NPCs can exist, their roles are intended to be minor and they are not assigned these detailed stats, though their names may still be stored in the NPCStats table.
 
 Time Management & Stats
 
