@@ -7,7 +7,7 @@ from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 
 # Configure the Celery app.
 # Adjust the broker URL (e.g., using Redis or RabbitMQ) as needed.
-celery_app = Celery('tasks', broker='redis://localhost:6379/0')
+celery_app = Celery('tasks', broker='redis://redis:6379/0')
 
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
