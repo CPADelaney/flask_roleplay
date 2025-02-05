@@ -1,5 +1,3 @@
-# db/schema_and_seed.py
-
 import json
 from db.connection import get_db_connection
 
@@ -21,7 +19,6 @@ def create_all_tables():
     Creates all core tables with user_id, conversation_id columns from the start,
     so we don't need separate ALTER TABLE statements later.
     """
-
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -40,20 +37,14 @@ def create_all_tables():
     # 2) CurrentRoleplay (with user_id, conversation_id so each user+conversation can store distinct keys)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS CurrentRoleplay (
-            -- Instead of one PK on "key", we can do a composite:
             user_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL,
             key TEXT NOT NULL,
             value TEXT NOT NULL,
-
             PRIMARY KEY (user_id, conversation_id, key),
-
-            -- user_id references
             FOREIGN KEY (user_id)
                 REFERENCES users(id)
                 ON DELETE CASCADE,
-
-            -- conversation_id references
             FOREIGN KEY (conversation_id)
                 REFERENCES conversations(id)
                 ON DELETE CASCADE
@@ -101,7 +92,6 @@ def create_all_tables():
           user_id INTEGER NOT NULL,
           conversation_name VARCHAR(100) NOT NULL,
           created_at TIMESTAMP DEFAULT NOW(),
-
           FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
     ''')
@@ -114,9 +104,7 @@ def create_all_tables():
           sender VARCHAR(50) NOT NULL,
           content TEXT NOT NULL,
           created_at TIMESTAMP DEFAULT NOW(),
-
           structured_content JSONB,
-
           FOREIGN KEY (conversation_id)
               REFERENCES conversations(id)
               ON DELETE CASCADE
@@ -130,7 +118,6 @@ def create_all_tables():
             user_id INTEGER NOT NULL,
             folder_name TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT NOW(),
-
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
     ''')
@@ -146,9 +133,8 @@ def create_all_tables():
         BEGIN
             ALTER TABLE conversations DROP CONSTRAINT IF EXISTS fk_conversations_folder;
         EXCEPTION WHEN undefined_object THEN
-            -- no constraint yet
         END;
-        $$
+        $$;
     ''')
     cursor.execute('''
         DO $$
@@ -160,7 +146,7 @@ def create_all_tables():
             ON DELETE CASCADE;
         EXCEPTION WHEN duplicate_object THEN
         END;
-        $$
+        $$;
     ''')
 
     # ----------------------------------------------------------------
@@ -168,7 +154,7 @@ def create_all_tables():
     # (We build them with user_id + conversation_id from the start)
     # ----------------------------------------------------------------
 
-    # 9) NPCStats
+    # 9) NPCStats (Updated to include relationships)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCStats (
             npc_id SERIAL PRIMARY KEY,
@@ -180,6 +166,7 @@ def create_all_tables():
             introduced BOOLEAN DEFAULT FALSE,
 
             archetypes JSONB,
+            relationships JSONB,  -- New column to store pre-existing relationships
 
             dominance INT CHECK (dominance BETWEEN 0 AND 100),
             cruelty INT CHECK (cruelty BETWEEN 0 AND 100),
@@ -387,7 +374,7 @@ def create_all_tables():
             perk_name TEXT NOT NULL,
             perk_description TEXT,
             perk_effect TEXT,
-
+        
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
@@ -396,23 +383,23 @@ def create_all_tables():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS IntensityTiers (
             id SERIAL PRIMARY KEY,
-            tier_name TEXT NOT NULL,        -- e.g. "Low Intensity (0–30)"
-            range_min INT NOT NULL,         -- e.g. 0
-            range_max INT NOT NULL,         -- e.g. 30
-            description TEXT NOT NULL,      -- short text describing the tier
-            key_features JSONB NOT NULL,    -- an array of bullet points
-            activity_examples JSONB,        -- optional array of examples
-            permanent_effects JSONB         -- optional for maximum tier, else {}
+            tier_name TEXT NOT NULL,        
+            range_min INT NOT NULL,         
+            range_max INT NOT NULL,         
+            description TEXT NOT NULL,      
+            key_features JSONB NOT NULL,    
+            activity_examples JSONB,        
+            permanent_effects JSONB         
         );
     ''')
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Interactions (
             id SERIAL PRIMARY KEY,
-            interaction_name TEXT UNIQUE NOT NULL,   -- e.g. "Weighted Success/Failure Rules"
-            detailed_rules JSONB NOT NULL,          -- big chunk describing how you handle success/failure
-            task_examples JSONB,                    -- e.g. "non_npc_challenges", "npc_driven_tasks"
-            agency_overrides JSONB                  -- e.g. thresholds for Obedience, Corruption, etc.
+            interaction_name TEXT UNIQUE NOT NULL,   
+            detailed_rules JSONB NOT NULL,          
+            task_examples JSONB,                    
+            agency_overrides JSONB                  
         );
     ''')
 
@@ -420,12 +407,12 @@ def create_all_tables():
         CREATE TABLE IF NOT EXISTS PlotTriggers (
             id SERIAL PRIMARY KEY,
             trigger_name TEXT UNIQUE NOT NULL,
-            stage_name TEXT,         -- e.g. "Early Stage", "Mid-Stage Escalation", etc.
-            description TEXT,        -- main textual explanation or short summary
-            key_features JSONB,      -- store bullet points or important highlights
-            stat_dynamics JSONB,     -- e.g. "Corruption rises, Willpower erodes"
-            examples JSONB,          -- event or scenario examples
-            triggers JSONB           -- if you want to store stat-based triggers or any extra details
+            stage_name TEXT,
+            description TEXT,
+            key_features JSONB,
+            stat_dynamics JSONB,
+            examples JSONB,
+            triggers JSONB
         );
     ''')
 
