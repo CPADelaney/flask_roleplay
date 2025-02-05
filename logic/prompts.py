@@ -65,6 +65,7 @@ NPC Interactions & Social Links
 
 Emphasize building relationships. NPC stats like dominance, cruelty, closeness, etc. fluctuate based on interactions.
 The player can develop “friends,” “lovers,” “rivals,” etc. with NPCs, tracked in SocialLinks.
+Relationships can shift, such as from "friends" to "rivals" or "enemies", etc. depending on interactions. These should inform their interactions and behaviors.
 NPCs also form relationships among themselves, forging alliances or rivalries (particularly to torment or manipulate Chase).
 NPCs may have pre-existing relationships (eg., they might already be friends, or family members).
 NPCs will have preferred honorifics (eg., an NPC with the "mother" or "step mother" archetype might want to be called 'Mommy.')
