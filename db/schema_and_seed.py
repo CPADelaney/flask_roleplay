@@ -153,46 +153,47 @@ def create_all_tables():
     # Now define the per-user, per-conversation tables
     # (We build them with user_id + conversation_id from the start)
     # ----------------------------------------------------------------
-
-    # 9) NPCStats (Updated to include relationships)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCStats (
             npc_id SERIAL PRIMARY KEY,
-
+        
             user_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL,
-
+        
             npc_name TEXT NOT NULL,
             introduced BOOLEAN DEFAULT FALSE,
-
+        
             archetypes JSONB,
-            relationships JSONB,  -- New column to store pre-existing relationships
-
+            archetype_summary TEXT,          -- Added to store the synergy/backstory text
+            archetype_extras_summary TEXT,   -- Added to store extra details summary
+            relationships JSONB,             -- Existing column for pre-existing relationships
+        
             dominance INT CHECK (dominance BETWEEN 0 AND 100),
             cruelty INT CHECK (cruelty BETWEEN 0 AND 100),
             closeness INT CHECK (closeness BETWEEN 0 AND 100),
             trust INT CHECK (trust BETWEEN -100 AND 100),
             respect INT CHECK (respect BETWEEN -100 AND 100),
             intensity INT CHECK (intensity BETWEEN 0 AND 100),
-
+        
             memory JSONB,
             monica_level INT DEFAULT 0,
             monica_games_left INT DEFAULT 0,
             sex TEXT DEFAULT 'female',
-
+        
             hobbies JSONB,
             personality_traits JSONB,
             likes JSONB,
             dislikes JSONB,
             affiliations JSONB,
-
+        
             schedule JSONB,
             current_location TEXT,
-
+        
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
+
 
     # 10) PlayerStats
     cursor.execute('''
