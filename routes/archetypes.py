@@ -1,26 +1,33 @@
-from flask import Blueprint, jsonify
+import os
+import logging
 import json
-import random
+from flask import Blueprint, jsonify
 from db.connection import get_db_connection
+
+logging.basicConfig(level=logging.DEBUG)
 
 archetypes_bp = Blueprint('archetypes', __name__)
 
 def insert_missing_archetypes():
     """
     Inserts or updates Archetypes with final "range + modifier" style baseline_stats.
-    No string parsing needed, because each archetype is already in the new format:
-      e.g. "dominance_range": [40, 60], "dominance_modifier": 0
+    Loads the data from an external "archetypes_data.json" file.
     """
+    # Optionally locate the file relative to this script's directory,
+    # so you don't rely on the working directory:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    archetypes_json_path = os.path.join(current_dir, "archetypes_data.json")
+
     try:
-        with open("archetypes_data.json", "r", encoding="utf-8") as f:
+        with open(archetypes_json_path, "r", encoding="utf-8") as f:
             archetypes_data = json.load(f)
     except FileNotFoundError:
-        logging.error("archetypes_data.json not found!")
+        logging.error(f"archetypes_data.json not found at path: {archetypes_json_path}")
         return
     except json.JSONDecodeError as e:
         logging.error(f"Could not decode archetypes_data.json: {e}")
         return
-        
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -31,7 +38,6 @@ def insert_missing_archetypes():
     for arc in archetypes_data:
         name = arc["name"]
 
-        # Convert the new structure to JSON
         bs_json = json.dumps(arc["baseline_stats"])
         prog_rules_json = json.dumps(arc.get("progression_rules", []))
         setting_ex_json = json.dumps(arc.get("setting_examples", []))
@@ -43,7 +49,7 @@ def insert_missing_archetypes():
                     (name, baseline_stats, progression_rules, setting_examples, unique_traits)
                 VALUES (%s, %s, %s, %s, %s)
             """, (name, bs_json, prog_rules_json, setting_ex_json, unique_traits_json))
-            print(f"Inserted archetype: {name}")
+            logging.info(f"Inserted archetype: {name}")
         else:
             cursor.execute("""
                 UPDATE Archetypes
@@ -53,7 +59,7 @@ def insert_missing_archetypes():
                     unique_traits = %s
                 WHERE name = %s
             """, (bs_json, prog_rules_json, setting_ex_json, unique_traits_json, name))
-            print(f"Updated existing archetype: {name}")
+            logging.info(f"Updated existing archetype: {name}")
 
     conn.commit()
     conn.close()
@@ -68,13 +74,14 @@ def insert_archetypes_route():
         insert_missing_archetypes()
         return jsonify({"message": "Archetypes inserted/updated successfully"}), 200
     except Exception as e:
+        logging.exception("Error inserting archetypes.")
         return jsonify({"error": str(e)}), 500
 
 
 def assign_archetypes_to_npc(npc_id):
     """
     Picks 4 random archetypes from the DB and stores them in NPCStats.archetypes (JSON).
-    Example usage: 
+    Example usage:
         npc_id = create_npc_in_db(...)
         assign_archetypes_to_npc(npc_id)
     """
@@ -87,8 +94,9 @@ def assign_archetypes_to_npc(npc_id):
         conn.close()
         raise ValueError("No archetypes found in DB.")
 
-    four = random.sample(archetype_rows, min(4, len(archetype_rows)))
-    assigned_list = [{"id": row[0], "name": row[1]} for row in four]
+    import random
+    assigned = random.sample(archetype_rows, min(4, len(archetype_rows)))
+    assigned_list = [{"id": row[0], "name": row[1]} for row in assigned]
 
     cursor.execute("""
         UPDATE NPCStats
