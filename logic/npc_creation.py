@@ -4,6 +4,7 @@ import random
 import logging
 from db.connection import get_db_connection
 from logic.chatgpt_integration import get_openai_client  # or however you import it
+from routes.memory_routes import get_shared_memory, record_npc_event
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -184,41 +185,6 @@ def get_archetype_extras_summary(archetypes_list):
         logging.error(f"[get_archetype_extras_summary] GPT error: {e}")
         return "An extra archetype summary could not be generated."
 
-def get_shared_memory(relationship, npc_name):
-    """
-    Given a relationship dict (with keys: type, target, target_name) and the NPC's name,
-    call GPT to generate a short memory describing a shared event or history.
-    The memory should fit within a femdom context and be consistent with the current setting.
-    """
-    # Import the mega setting generator from your settings module
-    from routes.settings_routes import generate_mega_setting_logic
-    setting_info = generate_mega_setting_logic()
-    mega_description = setting_info.get("mega_description", "an undefined setting")
-
-    target = relationship.get("target", "player")
-    target_name = relationship.get("target_name", "the player")
-    rel_type = relationship.get("type", "related")
-    system_instructions = f"""
-    The NPC {npc_name} has a pre-existing relationship as a {rel_type} with {target_name}.
-    The current setting is: {mega_description}.
-    In a femdom narrative, generate a short memory (1-2 sentences) describing a shared event or experience between {npc_name} and {target_name} that reflects their history.
-    The memory should be concise, vivid, and fit naturally within the setting.
-    """
-    gpt_client = get_openai_client()
-    messages = [{"role": "system", "content": system_instructions}]
-    try:
-        response = gpt_client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=150
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logging.error(f"[get_shared_memory] GPT error: {e}")
-        return "Shared memory could not be generated."
-
-
 ###################
 # 7) Create NPC
 ###################
@@ -230,7 +196,7 @@ def create_npc(
     sex="female",
     reroll_extra=False,
     total_archetypes=4,
-    preexisting_relationship=None  # New parameter for relationships
+    relationships=None  # New parameter for pre-existing relationships
 ):
     """
     Creates a new NPC in NPCStats with multiple archetypes logic.
@@ -238,8 +204,9 @@ def create_npc(
     computes combined stats, and calls GPT to produce both a synergy backstory and
     an extra details summary.
     
-    Additionally, if a pre-existing relationship is provided (e.g., {"type": "mother", "target": "player", "target_name": "Chase"}),
-    it stores this relationship and generates an initial shared memory from that relationship.
+    Additionally, if a list of relationship dictionaries is provided (each with keys such as
+    'type', 'target', and 'target_name'), generate a GPT-based shared memory for each relationship
+    and append it to the NPC's memory.
     """
     if not npc_name:
         npc_name = f"NPC_{random.randint(1000,9999)}"
@@ -294,7 +261,6 @@ def create_npc(
     except:
         chosen_arcs_list_for_json = []
 
-    # Get both synergy text and extra details summary
     synergy_text = ""
     extras_summary = ""
     if sex.lower() == "female" and chosen_arcs_list_for_json:
@@ -303,16 +269,6 @@ def create_npc(
     else:
         synergy_text = "No synergy text (male or no archetypes)."
         extras_summary = "No extra archetype details available."
-
-    # Handle pre-existing relationship: if provided, generate a shared memory entry.
-    relationships = []
-    initial_memory = []
-    if preexisting_relationship:
-        relationships.append(preexisting_relationship)
-        # Generate a shared memory string via GPT using the relationship info.
-        shared_mem = get_shared_memory(preexisting_relationship, npc_name)
-        initial_memory.append(shared_mem)
-    # Otherwise, relationships remains empty and initial memory is empty.
 
     try:
         cursor.execute(
@@ -324,7 +280,6 @@ def create_npc(
                 archetypes,
                 archetype_summary,
                 archetype_extras_summary,
-                relationships,
                 memory, monica_level
             )
             VALUES (
@@ -334,8 +289,7 @@ def create_npc(
                 %s,
                 %s,
                 %s,
-                %s,
-                %s, 0
+                '[]'::jsonb, 0
             )
             RETURNING npc_id
             """,
@@ -345,11 +299,9 @@ def create_npc(
                 final_stats["dominance"], final_stats["cruelty"],
                 final_stats["closeness"], final_stats["trust"],
                 final_stats["respect"], final_stats["intensity"],
-                chosen_arcs_json_str,  # basic JSON array (id & name)
-                synergy_text,          # backstory synergy from GPT
-                extras_summary,        # extra details summary from GPT
-                json.dumps(relationships),  # store relationship data
-                json.dumps(initial_memory)  # initialize memory with shared memory if any
+                chosen_arcs_json_str,
+                synergy_text,
+                extras_summary
             )
         )
         new_id = cursor.fetchone()[0]
@@ -364,6 +316,12 @@ def create_npc(
         conn.close()
         raise
 
+    # If there are any pre-existing relationships, generate and record shared memories
+    if relationships:
+        for rel in relationships:
+            memory_text = get_shared_memory(rel, npc_name)
+            record_npc_event(user_id, conversation_id, new_id, memory_text)
+
     assign_npc_flavor(user_id, conversation_id, new_id)
     conn.close()
     return new_id
@@ -373,7 +331,7 @@ def create_npc(
 ###################
 def assign_npc_flavor(user_id, conversation_id, npc_id: int):
     """
-    Randomly pick 3 hobbies, 5 personalities, 3 likes, 3 dislikes from JSON data,
+    Randomly pick 3 hobbies, 5 personalities, 3 likes, and 3 dislikes from JSON data,
     then store them in NPCStats.
     """
     conn = get_db_connection()
