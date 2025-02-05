@@ -196,14 +196,14 @@ def create_npc(
     sex="female",
     reroll_extra=False,
     total_archetypes=4,
-    relationships=None  # New parameter for pre-existing relationships
+    relationships=None  # New parameter: a list of relationship dicts
 ):
     """
     Creates a new NPC in NPCStats with multiple archetypes logic.
     For female NPCs, it randomly selects archetypes (with an optional extra from REROLL_IDS),
     computes combined stats, and calls GPT to produce both a synergy backstory and
     an extra details summary.
-    
+
     Additionally, if a list of relationship dictionaries is provided (each with keys such as
     'type', 'target', and 'target_name'), generate a GPT-based shared memory for each relationship
     and append it to the NPC's memory.
@@ -326,9 +326,7 @@ def create_npc(
     conn.close()
     return new_id
 
-###################
 # 8) NPC Flavor
-###################
 def assign_npc_flavor(user_id, conversation_id, npc_id: int):
     """
     Randomly pick 3 hobbies, 5 personalities, 3 likes, and 3 dislikes from JSON data,
