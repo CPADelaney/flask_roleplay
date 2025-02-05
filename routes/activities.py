@@ -1594,85 +1594,83 @@ def insert_missing_activities():
                 "Matriarchy Kingdom: Substance administration is legally sanctioned or socially normalized, leaving you with no legal recourse."
             ]
         },
-          {
-    "name": "Blackmail",
-    "purpose": [
-      "To extract obedience by threatening to reveal your darkest secrets or compromising information."
-    ],
-    "stat_integration": [
-      "Obedience: Rises as fear of exposure increases.",
-      "Shame: Escalates with each revelation of personal secrets."
-    ],
-    "intensity_tiers": [
-      "Low: Subtle hints at potential exposure.",
-      "Moderate: Mild threats to share sensitive details.",
-      "High: Forced compliance under threat of significant personal loss.",
-      "Maximum: Public disclosure of your most damning secrets."
-    ],
-    "setting_variants": [
-      "Corporate espionage, high-society scandals, or underground blackmail networks."
-    ]
-  },
-  {
-    "name": "Scent Play",
-    "purpose": [
-      "To dominate through sensory control, using personal scents to mark and degrade you."
-    ],
-    "stat_integration": [
-      "Dependency: Increases as you become fixated on the imposed scent.",
-      "Shame: Amplified by forced scent worship."
-    ],
-    "intensity_tiers": [
-      "Low: Mild teasing with a subtle hint of scent.",
-      "Moderate: Forced exposure to a strong personal odor.",
-      "High: Invasive scent marking with direct contact, such as licking or inhaling.",
-      "Maximum: Public, ritualistic display of scent worship as total submission."
-    ],
-    "setting_variants": [
-      "Private fetish parties, elite underground clubs, or decadent secret gatherings."
-    ]
-  },
-  {
-    "name": "Hypnosis",
-    "purpose": [
-      "To induce a trance-like state that strips away your resistance and enforces unwavering obedience."
-    ],
-    "stat_integration": [
-      "Willpower: Significantly reduced during hypnotic sessions.",
-      "Obedience: Sharply increased under hypnotic control."
-    ],
-    "intensity_tiers": [
-      "Low: Brief, suggestive trance moments.",
-      "Moderate: Short-term hypnosis that compels minor acts of obedience.",
-      "High: Extended hypnotic sessions with forced, degrading commands.",
-      "Maximum: Deep, lasting conditioning that permanently alters your behavior."
-    ],
-    "setting_variants": [
-      "Clinical hypnosis settings, occult ritual environments, or high-tech neural reconditioning labs."
-    ]
-  },
-  {
-    "name": "Infantilization",
-    "purpose": [
-      "To reduce you to a childlike state, erasing your adult agency and reinforcing your subservience."
-    ],
-    "stat_integration": [
-      "Obedience: Increases as you regress into childlike dependence.",
-      "Shame: Amplifies with every act of forced regression."
-    ],
-    "intensity_tiers": [
-      "Low: Pet names and minor childlike requests.",
-      "Moderate: Compelled to behave in childish manners in private settings.",
-      "High: Forced to wear infantilizing clothing and perform childish tasks publicly.",
-      "Maximum: Complete infantilization, stripping you of all adult identity in a humiliating public display."
-    ],
-    "setting_variants": [
-      "Domestic play, secret parties, or public events with a twist of taboo role reversal."
-    ]
-  }
-]
-    ]
-
+        {
+            "name": "Blackmail",
+            "purpose": [
+              "To extract obedience by threatening to reveal your darkest secrets or compromising information."
+            ],
+            "stat_integration": [
+              "Obedience: Rises as fear of exposure increases.",
+              "Shame: Escalates with each revelation of personal secrets."
+            ],
+            "intensity_tiers": [
+              "Low: Subtle hints at potential exposure.",
+              "Moderate: Mild threats to share sensitive details.",
+              "High: Forced compliance under threat of significant personal loss.",
+              "Maximum: Public disclosure of your most damning secrets."
+            ],
+            "setting_variants": [
+              "Corporate espionage, high-society scandals, or underground blackmail networks."
+            ]
+        },
+        {
+            "name": "Scent Play",
+            "purpose": [
+              "To dominate through sensory control, using personal scents to mark and degrade you."
+            ],
+            "stat_integration": [
+              "Dependency: Increases as you become fixated on the imposed scent.",
+              "Shame: Amplified by forced scent worship."
+            ],
+            "intensity_tiers": [
+              "Low: Mild teasing with a subtle hint of scent.",
+              "Moderate: Forced exposure to a strong personal odor.",
+              "High: Invasive scent marking with direct contact, such as licking or inhaling.",
+              "Maximum: Public, ritualistic display of scent worship as total submission."
+            ],
+            "setting_variants": [
+              "Private fetish parties, elite underground clubs, or decadent secret gatherings."
+            ]
+        },
+        {
+            "name": "Hypnosis",
+            "purpose": [
+              "To induce a trance-like state that strips away your resistance and enforces unwavering obedience."
+            ],
+            "stat_integration": [
+              "Willpower: Significantly reduced during hypnotic sessions.",
+              "Obedience: Sharply increased under hypnotic control."
+            ],
+            "intensity_tiers": [
+              "Low: Brief, suggestive trance moments.",
+              "Moderate: Short-term hypnosis that compels minor acts of obedience.",
+              "High: Extended hypnotic sessions with forced, degrading commands.",
+              "Maximum: Deep, lasting conditioning that permanently alters your behavior."
+            ],
+            "setting_variants": [
+              "Clinical hypnosis settings, occult ritual environments, or high-tech neural reconditioning labs."
+            ]
+        },
+        {
+            "name": "Infantilization",
+            "purpose": [
+              "To reduce you to a childlike state, erasing your adult agency and reinforcing your subservience."
+            ],
+            "stat_integration": [
+              "Obedience: Increases as you regress into childlike dependence.",
+              "Shame: Amplifies with every act of forced regression."
+            ],
+            "intensity_tiers": [
+              "Low: Pet names and minor childlike requests.",
+              "Moderate: Compelled to behave in childish manners in private settings.",
+              "High: Forced to wear infantilizing clothing and perform childish tasks publicly.",
+              "Maximum: Complete infantilization, stripping you of all adult identity in a humiliating public display."
+            ],
+            "setting_variants": [
+              "Domestic play, secret parties, or public events with a twist of taboo role reversal."
+            ]
+        }
+                   ]    
 
     # ---------------------------------
     # Actual insertion logic
