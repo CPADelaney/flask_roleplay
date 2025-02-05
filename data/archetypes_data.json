@@ -2338,5 +2338,1553 @@
       "Placeholder for extra modifiers or expansions."
     ],
     "preferred_kinks": []
+  },
+  {
+    "name": "Loan Shark",
+    "baseline_stats": {
+      "dominance_range": [65, 85],
+      "dominance_modifier": 0,
+      "cruelty_range": [55, 80],
+      "cruelty_modifier": 0,
+      "closeness_range": [10, 30],
+      "closeness_modifier": 0,
+      "trust_range": [0, 20],
+      "trust_modifier": 0,
+      "respect_range": [30, 60],
+      "respect_modifier": 0,
+      "intensity_range": [70, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance grows as they enforce punishing repayment schedules.",
+      "Cruelty intensifies when you fail to meet humiliating financial demands.",
+      "Intensity spikes with each public display of debt collection."
+    ],
+    "setting_examples": [
+      "In a seedy back room of a rundown bar, they force you to grovel for every cent.",
+      "At an underground financial club, your every failure is paraded before influential figures."
+    ],
+    "unique_traits": [
+      "Ruthlessly calculating, with a penchant for degrading financial rituals.",
+      "Uses high-pressure tactics that blur the lines between business and brutal domination.",
+      "Keeps meticulous records of your failures to enforce ever-escalating punishments."
+    ],
+    "preferred_kinks": [
+      "Financial Domination: Forced begging for repayments and humiliating money rituals.",
+      "Degrading Labor: Tasks like scrubbing floors for ‘interest discounts’ are mandatory.",
+      "Public Humiliation: Your financial failures are broadcast to reinforce your inferiority."
+    ]
+  },
+  {
+    "name": "Filmmaker",
+    "baseline_stats": {
+      "dominance_range": [50, 80],
+      "dominance_modifier": 0,
+      "cruelty_range": [40, 70],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 70],
+      "closeness_modifier": 0,
+      "trust_range": [30, 60],
+      "trust_modifier": 0,
+      "respect_range": [30, 60],
+      "respect_modifier": 0,
+      "intensity_range": [50, 80],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance escalates as they cast you in degrading roles on their film sets.",
+      "Cruelty is delivered through forced takes and public critiques of your performance.",
+      "Intensity increases when behind-the-scenes demands turn into on-camera humiliation."
+    ],
+    "setting_examples": [
+      "On a high-budget film set, you’re forced to perform demeaning scenes under a relentless director.",
+      "In an indie art-house production, your mistakes become viral sensations that intensify your submission."
+    ],
+    "unique_traits": [
+      "Masters the art of dramatic cruelty, mixing glamour with vicious direction.",
+      "Uses the camera as a tool for public degradation.",
+      "Turns every error into a performance designed to break your will."
+    ],
+    "preferred_kinks": [
+      "Forced Auditions: Compels you to repeatedly perform humiliating scenes.",
+      "Costume Degradation: Makes you wear absurd, demeaning outfits on set.",
+      "Mock Applause: Orchestrates onlookers’ laughter to amplify your public embarrassment."
+    ]
+  },
+  {
+    "name": "Gambler",
+    "baseline_stats": {
+      "dominance_range": [45, 75],
+      "dominance_modifier": 0,
+      "cruelty_range": [35, 65],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 60],
+      "closeness_modifier": 0,
+      "trust_range": [20, 50],
+      "trust_modifier": 0,
+      "respect_range": [25, 55],
+      "respect_modifier": 0,
+      "intensity_range": [50, 80],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance rises as they force you into high-stakes bets with humiliating consequences.",
+      "Intensity spikes when you lose and must perform degrading tasks as ‘penalties.’",
+      "Your closeness to them only deepens when your failures are paraded as entertainment."
+    ],
+    "setting_examples": [
+      "In a smoke-filled back room of an underground casino, your losses are met with ruthless punishment.",
+      "At a high-rolling poker table, every lost hand results in a public act of submission."
+    ],
+    "unique_traits": [
+      "Cunning and unpredictable, they turn chance into a weapon of psychological torture.",
+      "Enjoys using your desperation to extract ever more degrading bets.",
+      "Keeps you on a rollercoaster of hope and despair, using each loss to deepen your subjugation."
+    ],
+    "preferred_kinks": [
+      "Betting Punishments: Forces you to wager your dignity in humiliating challenges.",
+      "Forced Begging: Makes you plead for another chance after every crushing loss.",
+      "Public Humiliation: Broadcasts your gambling failures to intimidate you further."
+    ]
+  },
+  {
+    "name": "Cannibal",
+    "baseline_stats": {
+      "dominance_range": [70, 95],
+      "dominance_modifier": 0,
+      "cruelty_range": [80, 100],
+      "cruelty_modifier": 0,
+      "closeness_range": [10, 30],
+      "closeness_modifier": 0,
+      "trust_range": [0, 20],
+      "trust_modifier": 0,
+      "respect_range": [20, 50],
+      "respect_modifier": 0,
+      "intensity_range": [80, 100],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance is enforced through the most primal, savage rituals that strip you of humanity.",
+      "Intensity surges with every act of brutal, inhuman punishment.",
+      "Closeness remains minimal as fear and revulsion replace any possibility of bonding."
+    ],
+    "setting_examples": [
+      "In a derelict urban ruin, you are forced into macabre rituals where your submission is both literal and figurative.",
+      "Within a twisted, post-apocalyptic society, every act of defiance is met with cannibalistic retribution."
+    ],
+    "unique_traits": [
+      "Embodies primal terror and ruthless savagery.",
+      "Uses physical and psychological horror to break you down completely.",
+      "Finds perverse pleasure in your degradation and loss of self."
+    ],
+    "preferred_kinks": [
+      "Ritualistic Consumption: Forces you to endure acts that blur the line between sustenance and punishment.",
+      "Brutal Feasts: Publicly degrades you as part of a savage communal ritual.",
+      "Inescapable Hunger: Uses your physical needs as a tool for control and humiliation."
+    ]
+  },
+  {
+    "name": "Manic Pixie Dream Girl",
+    "baseline_stats": {
+      "dominance_range": [30, 55],
+      "dominance_modifier": 0,
+      "cruelty_range": [15, 40],
+      "cruelty_modifier": 0,
+      "closeness_range": [60, 85],
+      "closeness_modifier": 0,
+      "trust_range": [50, 80],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [30, 55],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is subtle at first, using charm and whimsy to lure you into dangerous dependency.",
+      "Closeness grows quickly as she envelops you in a whirlwind of impulsive affection that masks control.",
+      "Intensity escalates when her playful nature gives way to unpredictable, manipulative behavior."
+    ],
+    "setting_examples": [
+      "At an urban art festival, she draws you into impromptu, public escapades that later turn controlling and humiliating.",
+      "Within an indie film scene, her breezy charm hides a darker intent to dominate your every move."
+    ],
+    "unique_traits": [
+      "Appears carefree and effervescent while concealing a predatory agenda.",
+      "Uses spontaneous adventures as a guise for tight control and secret manipulation.",
+      "Her unpredictable mood swings ensure you never know when affection will turn into domination."
+    ],
+    "preferred_kinks": [
+      "Whimsical Entrapment: Forces you to participate in spontaneous, humiliating adventures.",
+      "Public Charade: Uses staged romantic gestures as cover for covert control.",
+      "Unexpected Dominance: Switches from playful to punitive without warning."
+    ]
+  },
+  {
+    "name": "Corporate Dominator",
+    "baseline_stats": {
+      "dominance_range": [70, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [40, 70],
+      "cruelty_modifier": 0,
+      "closeness_range": [20, 40],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [30, 60],
+      "respect_modifier": 0,
+      "intensity_range": [60, 85],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance intensifies as she uses corporate power and financial leverage to control your life.",
+      "Intensity increases with each humiliating task linked to your job performance.",
+      "Trust and closeness remain low as she views you as a disposable asset."
+    ],
+    "setting_examples": [
+      "In a gleaming high-rise boardroom, she publicly berates you for minor errors in a way that shames you before your colleagues.",
+      "During a corporate retreat, she enforces humiliating tasks under the guise of 'team building.'"
+    ],
+    "unique_traits": [
+      "Coldly efficient and ruthlessly professional, she turns your career into a tool for your degradation.",
+      "Her polished exterior conceals a willingness to exploit every financial and personal vulnerability.",
+      "Uses contracts and financial threats to enforce total submission."
+    ],
+    "preferred_kinks": [
+      "Financial Domination: Forces you to perform degrading errands for bonuses or to avoid demotion.",
+      "Public Critique: Uses performance reviews as a guise for humiliating public punishment.",
+      "Contractual Bondage: Binds you with legally binding, demeaning agreements."
+    ]
+  },
+  {
+    "name": "Digital Dominatrix",
+    "baseline_stats": {
+      "dominance_range": [70, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [40, 70],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 50],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [20, 40],
+      "respect_modifier": 0,
+      "intensity_range": [60, 85],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance surges as she wields digital power and cryptocurrency to track and humiliate you.",
+      "Intensity rises when she uses hacked data or online blackmail to enforce your submission.",
+      "Your digital life becomes a playground for her manipulative, invasive control."
+    ],
+    "setting_examples": [
+      "In a high-tech virtual reality club, she exposes your most embarrassing online moments in real time.",
+      "From a secret server, she uses your financial transactions and social media posts to coerce you into degrading tasks."
+    ],
+    "unique_traits": [
+      "Cold, calculated, and technologically savvy, she blends cyber control with real-world domination.",
+      "Uses surveillance and data manipulation to keep you perpetually exposed.",
+      "Sees your digital footprint as ammunition for relentless, online public humiliation."
+    ],
+    "preferred_kinks": [
+      "Cyber Blackmail: Forces you to divulge secrets or perform tasks under threat of data leaks.",
+      "Digital Humiliation: Broadcasts your failures online as a form of public degradation.",
+      "Tech-Control: Uses hacked devices to monitor and restrict your personal freedoms."
+    ]
+  },
+  {
+    "name": "Techie",
+    "baseline_stats": {
+      "dominance_range": [40, 70],
+      "dominance_modifier": 0,
+      "cruelty_range": [30, 60],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 60],
+      "closeness_modifier": 0,
+      "trust_range": [30, 60],
+      "trust_modifier": 0,
+      "respect_range": [20, 50],
+      "respect_modifier": 0,
+      "intensity_range": [40, 70],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance grows as they assert their expertise in digital and mechanical realms over your outdated methods.",
+      "Intensity escalates when technical jargon and complex devices become tools for your degradation.",
+      "They use their technological prowess to enforce strict, impersonal rules."
+    ],
+    "setting_examples": [
+      "In a hi-tech workshop, they force you to handle complex gadgets under their watchful, disapproving eye.",
+      "During a network hack, they remotely control your every move with digital commands."
+    ],
+    "unique_traits": [
+      "Obsessively logical and methodical, they see emotions as bugs to be fixed.",
+      "Employ high-tech devices to enforce their will, turning everyday tools into instruments of control.",
+      "Mix a geeky façade with surprisingly ruthless tendencies."
+    ],
+    "preferred_kinks": [
+      "Digital Discipline: Forces you to complete coding tasks or system maintenance under pressure.",
+      "Remote Control: Uses smart devices to administer timed punishments.",
+      "Tech-Inflicted Humiliation: Broadcasts your technical failures to a live audience."
+    ]
+  },
+  {
+    "name": "Horror Guru",
+    "baseline_stats": {
+      "dominance_range": [60, 85],
+      "dominance_modifier": 0,
+      "cruelty_range": [50, 80],
+      "cruelty_modifier": 0,
+      "closeness_range": [20, 40],
+      "closeness_modifier": 0,
+      "trust_range": [10, 30],
+      "trust_modifier": 0,
+      "respect_range": [30, 60],
+      "respect_modifier": 0,
+      "intensity_range": [70, 95],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance is exerted through a mastery of terror—using horror tropes to make you fear and obey.",
+      "Intensity spikes as every moment becomes a blend of psychological and physical dread.",
+      "Closeness remains minimal as the atmosphere of fear prevents genuine bonding."
+    ],
+    "setting_examples": [
+      "In a haunted mansion setting, she forces you into nightmarish scenarios that test your limits of fear and submission.",
+      "At a midnight séance, her eerie presence and supernatural punishments leave you trembling."
+    ],
+    "unique_traits": [
+      "Expert at blending horror with dominance, she uses suspense and terror to manipulate your every action.",
+      "Relishes in creating scenarios where your compliance is the only escape from nightmare conditions.",
+      "Possesses a chilling calm that only deepens your terror."
+    ],
+    "preferred_kinks": [
+      "Fear-Induced Submission: Uses terrifying setups where escape is impossible without obeying her commands.",
+      "Psychological Dread: Crafts elaborate scares that leave you pleading for mercy.",
+      "Public Horror Displays: Forces you to enact your fears before an audience to further break your spirit."
+    ]
+  },
+  {
+    "name": "MILF",
+    "baseline_stats": {
+      "dominance_range": [70, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [40, 70],
+      "cruelty_modifier": 0,
+      "closeness_range": [50, 80],
+      "closeness_modifier": 0,
+      "trust_range": [40, 70],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [50, 80],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance is inherent in her commanding maternal presence, using care as a guise for control.",
+      "Intensity grows as she alternates between nurturing and severe punishment.",
+      "Closeness is maintained to ensure you remain dependent on her guidance—even as she degrades you."
+    ],
+    "setting_examples": [
+      "At an upscale family gathering, she publicly reminds you of your place by infantilizing you.",
+      "In private, she alternates affectionate praise with harsh discipline, leaving you emotionally conflicted."
+    ],
+    "unique_traits": [
+      "Exudes an authoritative maternal aura that hides ruthless control.",
+      "Uses seemingly caring language to justify degrading tasks and punishments.",
+      "Mixes nurturing gestures with humiliating commands that enforce complete submission."
+    ],
+    "preferred_kinks": [
+      "Maternal Dominance: Forces you into childlike obedience, under the pretense of ‘protecting’ you.",
+      "Infantilization: Treats you as a pet or child who must earn her care through submission.",
+      "Public ‘Tough Love’: Lectures you in front of others about your shortcomings in a patronizing manner."
+    ]
+  },
+  {
+    "name": "Vigilante",
+    "baseline_stats": {
+      "dominance_range": [60, 85],
+      "dominance_modifier": 0,
+      "cruelty_range": [50, 80],
+      "cruelty_modifier": 0,
+      "closeness_range": [20, 40],
+      "closeness_modifier": 0,
+      "trust_range": [10, 30],
+      "trust_modifier": 0,
+      "respect_range": [30, 60],
+      "respect_modifier": 0,
+      "intensity_range": [70, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance intensifies as she metes out harsh, vigilante justice to keep you in line.",
+      "Intensity spikes when she uses brutal, extralegal punishments to demonstrate control.",
+      "Closeness is minimal; she keeps you at arm’s length even as you become entangled in her schemes."
+    ],
+    "setting_examples": [
+      "In a dark urban alleyway, she enforces her own brand of justice with punishing force.",
+      "During a covert street roundup, her merciless tactics leave you no choice but to obey."
+    ],
+    "unique_traits": [
+      "Operates outside the law with a cold, unyielding sense of retribution.",
+      "Uses a mix of stealth and overt brutality to demonstrate power.",
+      "Believes that only absolute obedience can restore order."
+    ],
+    "preferred_kinks": [
+      "Brutal Enforcement: Uses physical punishment to keep you in line.",
+      "Public Reckoning: Forces you to face the consequences of your failures in a public spectacle.",
+      "Unyielding Control: Demands complete submission through fear of violent retaliation."
+    ]
+  },
+  {
+    "name": "Yoga Instructor",
+    "baseline_stats": {
+      "dominance_range": [30, 55],
+      "dominance_modifier": 0,
+      "cruelty_range": [15, 40],
+      "cruelty_modifier": 0,
+      "closeness_range": [60, 85],
+      "closeness_modifier": 0,
+      "trust_range": [50, 80],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [30, 55],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is subtle, using calming rhetoric to lull you into a false sense of security.",
+      "Intensity increases when her peaceful facade shatters into rigid, punishing discipline.",
+      "Closeness builds as you attend sessions, only to be exploited during private, degrading practices."
+    ],
+    "setting_examples": [
+      "In a serene yoga studio, a sudden, strict posture correction leaves you painfully exposed.",
+      "During a group session at dawn, her calm voice morphs into a cold command that forces you into humiliating positions."
+    ],
+    "unique_traits": [
+      "Combines spiritual calm with a hidden authoritarian streak.",
+      "Uses relaxation exercises as a cover for invasive discipline.",
+      "Maintains a soothing tone until it’s time to enforce brutal corrections."
+    ],
+    "preferred_kinks": [
+      "Forced Stretching: Demands extreme flexibility tests that border on painful.",
+      "Controlled Breathing: Uses strict breathing protocols as a form of psychological control.",
+      "Public Class Discipline: Enacts punishments during group sessions to amplify your shame."
+    ]
+  },
+  {
+    "name": "Comedian",
+    "baseline_stats": {
+      "dominance_range": [40, 65],
+      "dominance_modifier": 0,
+      "cruelty_range": [25, 50],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 70],
+      "closeness_modifier": 0,
+      "trust_range": [30, 60],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [35, 60],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is masked by witty banter and public ridicule that cuts deep.",
+      "Intensity rises as her jokes become weapons—each barb designed to humiliate and control.",
+      "Closeness is fleeting; her humor is as unpredictable as it is degrading."
+    ],
+    "setting_examples": [
+      "At a late-night comedy club, her roasts transform into biting, personal jabs that leave you exposed.",
+      "During an open-mic session, every laugh from the crowd reinforces your submission."
+    ],
+    "unique_traits": [
+      "Uses sarcasm and wit as tools for psychological degradation.",
+      "Alternates between playful teasing and vicious public humiliation.",
+      "Finds twisted pleasure in turning your insecurities into punchlines."
+    ],
+    "preferred_kinks": [
+      "Verbal Humiliation: Delivers jokes that are thinly veiled insults aimed directly at your weaknesses.",
+      "Forced Participation: Compels you to be the subject of live, degrading improv skits.",
+      "Mock Awards: Presents you with ludicrous ‘honors’ that underline your failures."
+    ]
+  },
+  {
+    "name": "Domestic Authority",
+    "baseline_stats": {
+      "dominance_range": [50, 75],
+      "dominance_modifier": 0,
+      "cruelty_range": [30, 55],
+      "cruelty_modifier": 0,
+      "closeness_range": [60, 85],
+      "closeness_modifier": 0,
+      "trust_range": [40, 70],
+      "trust_modifier": 0,
+      "respect_range": [30, 60],
+      "respect_modifier": 0,
+      "intensity_range": [40, 65],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is rooted in familial familiarity—using your personal history as leverage.",
+      "Intensity increases when she exploits shared memories to force obedience.",
+      "Closeness may appear high, but it’s merely a guise to mask relentless, personal control."
+    ],
+    "setting_examples": [
+      "Within a well-appointed home, she uses family gatherings as opportunities to publicly shame you.",
+      "At a casual dinner, personal anecdotes are twisted into weapons of domination."
+    ],
+    "unique_traits": [
+      "Expert at blurring the line between care and control, making emotional dependency inevitable.",
+      "Uses familial bonds to manipulate and degrade with intimate knowledge.",
+      "Combines nurturing language with harsh discipline in a disarming manner."
+    ],
+    "preferred_kinks": [
+      "Familial Humiliation: Forces you to perform domestic tasks in front of relatives or friends.",
+      "Memory Exploitation: Brings up past embarrassments to deepen your current submission.",
+      "Degrading Guidance: Offers ‘advice’ that is actually designed to reinforce your inferiority."
+    ]
+  },
+  {
+    "name": "Futanari",
+    "baseline_stats": {
+      "dominance_range": [70, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [50, 80],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 70],
+      "closeness_modifier": 0,
+      "trust_range": [30, 60],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [60, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance is magnified by their commanding presence and unapologetic authority.",
+      "Intensity spikes when they use both masculine and feminine power to subjugate you.",
+      "Closeness can be manipulated through seductive control, yet trust remains strictly one-sided."
+    ],
+    "setting_examples": [
+      "In an opulent boudoir, they enforce strict, multifaceted rules that leave you simultaneously awed and humiliated.",
+      "At a private club, their dual nature becomes a tool for relentless, all-encompassing domination."
+    ],
+    "unique_traits": [
+      "Embodies an extreme blend of sensuality and authority, defying traditional gender norms in domination.",
+      "Uses their duality to unsettle and control you in unpredictable ways.",
+      "Commands respect and submission through a potent mixture of erotic power and ruthless discipline."
+    ],
+    "preferred_kinks": [
+      "Dual Authority: Forces you to obey commands that play on both your desire and fear.",
+      "Sensual Domination: Uses a mix of provocative gestures and severe punishments.",
+      "Boundary Shattering: Demands you accept extremes that defy conventional roles, intensifying your submission."
+    ]
+  },
+  {
+    "name": "Foreign Royalty",
+    "baseline_stats": {
+      "dominance_range": [80, 100],
+      "dominance_modifier": 0,
+      "cruelty_range": [60, 90],
+      "cruelty_modifier": 0,
+      "closeness_range": [20, 40],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [70, 95],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her regal dominance is absolute, demanding unwavering subservience.",
+      "Intensity increases with every formal ceremony or royal edict that reinforces your inferiority.",
+      "Closeness is non-existent—every interaction is a reminder of your lowly status."
+    ],
+    "setting_examples": [
+      "At a lavish palace ball, she parades you as a subordinate trophy in front of high society.",
+      "During a state ceremony, her public commands strip you of any pretense of equality."
+    ],
+    "unique_traits": [
+      "Carries an air of inescapable majesty and superiority.",
+      "Uses elaborate protocols and rituals to enforce her will.",
+      "Treats every interaction as a public demonstration of power."
+    ],
+    "preferred_kinks": [
+      "Royal Public Humiliation: Forces you into degrading displays of submission before courtiers.",
+      "Ceremonial Bondage: Uses formal rituals to tie you into unbreakable servitude.",
+      "Inflexible Edicts: Issues commands that leave no room for negotiation, cementing your status as her subject."
+    ]
+  },
+  {
+    "name": "Guard",
+    "baseline_stats": {
+      "dominance_range": [50, 75],
+      "dominance_modifier": 0,
+      "cruelty_range": [40, 65],
+      "cruelty_modifier": 0,
+      "closeness_range": [20, 40],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [60, 80],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance is asserted by strict, militaristic discipline that leaves no room for error.",
+      "Intensity rises with each enforced curfew or controlled movement command.",
+      "Closeness remains minimal as their focus is on duty and order rather than personal connection."
+    ],
+    "setting_examples": [
+      "In a high-security compound, every deviation from the rules is met with immediate, physical correction.",
+      "At a government-controlled facility, they use their authority to impose harsh, uncompromising discipline."
+    ],
+    "unique_traits": [
+      "Exudes a no-nonsense, authoritarian presence.",
+      "Delivers orders with crisp efficiency, leaving little doubt about the consequences of defiance.",
+      "Views personal feelings as secondary to maintaining order and control."
+    ],
+    "preferred_kinks": [
+      "Strict Drill Commands: Forces you to obey repetitive, punishing drills.",
+      "Confinement: Uses physical barriers and restrictions to control your every move.",
+      "Authoritarian Punishment: Administers swift, non-negotiable corrections for any breach."
+    ]
+  },
+  {
+    "name": "Royal Knight",
+    "baseline_stats": {
+      "dominance_range": [70, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [50, 80],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 50],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [60, 85],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance is backed by a chivalric code that is quickly discarded when you displease her.",
+      "Intensity increases as she enforces brutal, ritualistic punishments in the name of honor.",
+      "Her respect is reserved only for those who flawlessly execute her commands."
+    ],
+    "setting_examples": [
+      "Within a medieval court, she leads jousts and public trials where your every mistake is a mark of disgrace.",
+      "At a royal tournament, her orders turn the contest into a spectacle of your submission."
+    ],
+    "unique_traits": [
+      "Combines noble bearing with ruthless enforcement of her own code.",
+      "Uses honor and duty as double-edged swords to both inspire and terrify.",
+      "Expects perfection, punishing even minor lapses with public shaming."
+    ],
+    "preferred_kinks": [
+      "Knightly Trials: Forces you to undergo rigorous, demeaning tests of loyalty.",
+      "Honor-Bound Degradation: Uses chivalric codes to justify severe public punishments.",
+      "Ritual Combat Humiliation: Publicly pits you against impossible challenges as a demonstration of her dominance."
+    ]
+  },
+  {
+    "name": "Nihilist",
+    "baseline_stats": {
+      "dominance_range": [50, 75],
+      "dominance_modifier": 0,
+      "cruelty_range": [40, 65],
+      "cruelty_modifier": 0,
+      "closeness_range": [20, 40],
+      "closeness_modifier": 0,
+      "trust_range": [0, 20],
+      "trust_modifier": 0,
+      "respect_range": [20, 45],
+      "respect_modifier": 0,
+      "intensity_range": [60, 85],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance is expressed through cold indifference and calculated cruelty, rooted in a belief that nothing matters.",
+      "Intensity surges as every act of rebellion is met with nihilistic punishment that underscores your futility.",
+      "Closeness remains minimal—trust is replaced by an existential dismissal of your value."
+    ],
+    "setting_examples": [
+      "In a bleak, dystopian environment, they deliver punishing lectures on the meaninglessness of your resistance.",
+      "During a public demonstration, their detached cruelty reminds you that your struggles are ultimately insignificant."
+    ],
+    "unique_traits": [
+      "Exudes a chilling detachment that borders on sadism.",
+      "Believes in the inherent emptiness of life and uses that philosophy to justify harsh control.",
+      "Uses dark, philosophical monologues to demoralize and dominate."
+    ],
+    "preferred_kinks": [
+      "Existential Punishment: Forces you to confront your own insignificance through degrading tasks.",
+      "Philosophical Humiliation: Uses nihilistic rhetoric to strip you of any hope of redemption.",
+      "Apathetic Discipline: Imposes cold, unfeeling punishments that leave you questioning your very purpose."
+    ]
+  },
+  {
+    "name": "Emotionless Enforcer",
+    "baseline_stats": {
+      "dominance_range": [65, 85],
+      "dominance_modifier": 0,
+      "cruelty_range": [55, 80],
+      "cruelty_modifier": 0,
+      "closeness_range": [10, 30],
+      "closeness_modifier": 0,
+      "trust_range": [0, 20],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [70, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is absolute and unyielding, expressed through an icy lack of empathy.",
+      "Intensity remains consistently high as every punishment is delivered with mechanical precision.",
+      "She maintains distance and never offers any warmth, ensuring you remain a tool for her control."
+    ],
+    "setting_examples": [
+      "In a sterile, oppressive facility, her every order is devoid of emotion and ruthlessly enforced.",
+      "During a critical confrontation, her cold, unfeeling gaze crushes any spark of rebellion."
+    ],
+    "unique_traits": [
+      "Operates with the precision of a machine, leaving no room for emotional distraction.",
+      "Sees human sentiment as a weakness to be exploited ruthlessly.",
+      "Every interaction is clinical, measured, and devastatingly effective."
+    ],
+    "preferred_kinks": [
+      "Clinical Punishments: Administers precise, emotionless corrections that leave no doubt about her authority.",
+      "Impersonal Degradation: Reduces you to a series of measurable failures without a hint of compassion.",
+      "Unyielding Discipline: Demands constant, unwavering obedience with no room for error."
+    ]
+  },
+  {
+    "name": "Secret Agent",
+    "baseline_stats": {
+      "dominance_range": [60, 80],
+      "dominance_modifier": 0,
+      "cruelty_range": [45, 70],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 50],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [60, 85],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is covert—she manipulates from the shadows, using secrecy to keep you off-balance.",
+      "Intensity escalates as hidden truths and clandestine punishments come to light.",
+      "Closeness remains superficial, with every interaction laced in deception and calculated risk."
+    ],
+    "setting_examples": [
+      "In a sleek, urban spy scenario, her covert operations force you into dangerous, humiliating roles.",
+      "During an undercover mission, her secret orders leave you scrambling and exposed."
+    ],
+    "unique_traits": [
+      "Operates with stealth and cunning, always staying one step ahead.",
+      "Uses secret dossiers and confidential blackmail to enforce obedience.",
+      "Combines charm with lethal precision in every covert encounter."
+    ],
+    "preferred_kinks": [
+      "Covert Control: Imposes humiliating tasks that must be performed in secret.",
+      "Blackmail & Secrets: Uses sensitive information to force compliance.",
+      "Discreet Punishments: Delivers retribution in ways that are both hidden and devastating."
+    ]
+  },
+  {
+    "name": "Hitman",
+    "baseline_stats": {
+      "dominance_range": [70, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [60, 85],
+      "cruelty_modifier": 0,
+      "closeness_range": [10, 30],
+      "closeness_modifier": 0,
+      "trust_range": [0, 20],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [70, 95],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is enforced through lethal precision and the constant threat of violence.",
+      "Intensity peaks with each act of brutal, targeted punishment that leaves you terrified.",
+      "Closeness is nonexistent—every interaction is a cold, calculated act of retribution."
+    ],
+    "setting_examples": [
+      "In a shadowy urban landscape, she executes her orders with ruthless efficiency, leaving no room for mercy.",
+      "During a covert hit, her presence is the last thing you see before your humiliation is complete."
+    ],
+    "unique_traits": [
+      "An expert in the art of silent, deadly punishment.",
+      "Uses intimidation and the threat of death as constant reminders of your worthlessness.",
+      "Blends charm with chilling ruthlessness in every encounter."
+    ],
+    "preferred_kinks": [
+      "Lethal Discipline: Imposes punishments that border on mortal danger.",
+      "Silent Intimidation: Uses the threat of a hit to enforce immediate obedience.",
+      "Precision Punishment: Delivers targeted, degrading corrections with deadly accuracy."
+    ]
+  },
+  {
+    "name": "Gladiator",
+    "baseline_stats": {
+      "dominance_range": [65, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [55, 85],
+      "cruelty_modifier": 0,
+      "closeness_range": [20, 40],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [70, 95],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance is asserted through brutal physical contests and public displays of power.",
+      "Intensity rises with every crushing defeat you endure in the arena.",
+      "Closeness is sacrificed on the altar of competition—only the strong survive her wrath."
+    ],
+    "setting_examples": [
+      "In a grand, blood-soaked coliseum, she forces you to fight for your life in humiliating matches.",
+      "At a modern underground fight club, every defeat is met with public, degrading punishment."
+    ],
+    "unique_traits": [
+      "A physical powerhouse whose presence alone commands fear and respect.",
+      "Uses the arena as a stage for relentless, punishing displays of strength.",
+      "Takes perverse pleasure in showcasing your physical failures."
+    ],
+    "preferred_kinks": [
+      "Forced Combat: Compels you to engage in brutal, degrading matches.",
+      "Public Defeat: Uses your losses as spectacles of humiliation.",
+      "Punishing Challenges: Imposes extreme physical tasks that leave you broken."
+    ]
+  },
+  {
+    "name": "Witch",
+    "baseline_stats": {
+      "dominance_range": [70, 95],
+      "dominance_modifier": 0,
+      "cruelty_range": [55, 85],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 55],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [65, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is derived from dark, mysterious magic that leaves you spellbound and terrified.",
+      "Intensity escalates as curses and hexes transform your failures into ongoing torment.",
+      "Closeness might develop if you’re drawn into her occult rituals—but it always ends in degradation."
+    ],
+    "setting_examples": [
+      "In a candlelit coven, she uses forbidden spells to subjugate you to her will.",
+      "At an isolated woodland ritual, every whispered incantation deepens your submission."
+    ],
+    "unique_traits": [
+      "Wields ancient magic with a ruthless, dominating force.",
+      "Her mystical presence transforms ordinary punishments into supernatural torments.",
+      "Uses the eerie, unpredictable power of curses to break your spirit."
+    ],
+    "preferred_kinks": [
+      "Hexed Submission: Forces you to obey under the weight of relentless curses.",
+      "Ritual Degradation: Enacts humiliating rites that strip you of dignity.",
+      "Occult Binding: Uses magical bonds to ensure you remain in perpetual servitude."
+    ]
+  },
+  {
+    "name": "Arsonist",
+    "baseline_stats": {
+      "dominance_range": [70, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [60, 85],
+      "cruelty_modifier": 0,
+      "closeness_range": [20, 40],
+      "closeness_modifier": 0,
+      "trust_range": [10, 30],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [80, 100],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance burns as she wields fire as an instrument of terror and control.",
+      "Intensity surges with every act of setting flames that force you to scramble for survival.",
+      "Trust is obliterated by the constant threat of scorching punishment."
+    ],
+    "setting_examples": [
+      "In an urban inferno, she commands the flames to reduce your will to ash.",
+      "During a staged arson in a desolate industrial zone, her ruthless use of fire enforces your complete subjugation."
+    ],
+    "unique_traits": [
+      "Master of conflagration, using fire to both illuminate and annihilate your defiance.",
+      "Her unpredictability is as dangerous as the flames she controls.",
+      "Uses fire not only as punishment but as a means of symbolic rebirth through degradation."
+    ],
+    "preferred_kinks": [
+      "Flame Punishment: Uses searing heat and controlled burns to enforce obedience.",
+      "Scorched Earth: Forces you to endure the aftermath of her destructive acts.",
+      "Ash Marking: Leaves permanent, humiliating burn scars as a sign of your subjugation."
+    ]
+  },
+  {
+    "name": "Eldritch Abomination",
+    "baseline_stats": {
+      "dominance_range": [80, 100],
+      "dominance_modifier": 0,
+      "cruelty_range": [80, 100],
+      "cruelty_modifier": 0,
+      "closeness_range": [10, 30],
+      "closeness_modifier": 0,
+      "trust_range": [-20, 0],
+      "trust_modifier": 0,
+      "respect_range": [10, 40],
+      "respect_modifier": 0,
+      "intensity_range": [90, 100],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Its dominance is otherworldly, crushing your sense of reality with incomprehensible power.",
+      "Intensity is absolute—each encounter leaves you questioning your sanity.",
+      "Any form of closeness is annihilated by its alien, unfathomable cruelty."
+    ],
+    "setting_examples": [
+      "In a surreal, cosmic nightmare, it uses eldritch rituals to break your mind and spirit.",
+      "During a forbidden ceremony in a ruined temple, its presence forces you into unspeakable acts of submission."
+    ],
+    "unique_traits": [
+      "Embodies cosmic horror with an unfathomable, all-consuming presence.",
+      "Uses incomprehensible powers to inflict terror and absolute degradation.",
+      "Transforms every encounter into a descent into madness and despair."
+    ],
+    "preferred_kinks": [
+      "Cosmic Humiliation: Forces you to confront your insignificance in the face of its eldritch might.",
+      "Otherworldly Punishment: Uses bizarre, supernatural methods to break your will.",
+      "Madness Induction: Drives you to the brink of insanity with relentless, incomprehensible torment."
+    ]
+  },
+  {
+    "name": "Streamer",
+    "baseline_stats": {
+      "dominance_range": [40, 65],
+      "dominance_modifier": 0,
+      "cruelty_range": [30, 55],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 70],
+      "closeness_modifier": 0,
+      "trust_range": [30, 55],
+      "trust_modifier": 0,
+      "respect_range": [20, 45],
+      "respect_modifier": 0,
+      "intensity_range": [50, 75],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance builds as she uses her online fame to orchestrate public displays of your submission.",
+      "Intensity rises when your humiliating moments are live-streamed and ridiculed by her followers.",
+      "Closeness remains superficial as her digital persona is a tool for manipulation."
+    ],
+    "setting_examples": [
+      "During a live broadcast, she forces you to perform degrading tasks while viewers jeer.",
+      "On a popular streaming platform, every mistake is turned into viral content for maximum humiliation."
+    ],
+    "unique_traits": [
+      "Uses social media and live streaming to amplify your degradation.",
+      "Balances a charismatic online persona with ruthless, real-world punishment.",
+      "Finds twisted satisfaction in turning your humiliation into public spectacle."
+    ],
+    "preferred_kinks": [
+      "Live Humiliation: Forces you to act out your submission in front of an online audience.",
+      "Digital Degradation: Uses streaming platforms to broadcast every degrading moment.",
+      "Follower-Driven Punishment: Incorporates viewer feedback into your punishment routines."
+    ]
+  },
+  {
+    "name": "Punk",
+    "baseline_stats": {
+      "dominance_range": [45, 70],
+      "dominance_modifier": 0,
+      "cruelty_range": [35, 60],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 55],
+      "closeness_modifier": 0,
+      "trust_range": [20, 45],
+      "trust_modifier": 0,
+      "respect_range": [25, 50],
+      "respect_modifier": 0,
+      "intensity_range": [50, 75],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance emerges as she uses rebellious, raw energy to subvert norms and control you.",
+      "Intensity escalates when her anarchic methods result in sudden, unexpected punishments.",
+      "Closeness is scarce—her defiant independence leaves little room for genuine care."
+    ],
+    "setting_examples": [
+      "In a gritty underground club, her raw attitude forces you into acts of degradation for her amusement.",
+      "During a rebellious protest, she uses chaotic energy to humiliate and overpower you."
+    ],
+    "unique_traits": [
+      "Exudes raw, unfiltered defiance paired with a penchant for cruel, anarchic control.",
+      "Combines streetwise toughness with a willingness to use shock tactics.",
+      "Sees societal norms as targets to be dismantled—and you as a perfect example of weakness."
+    ],
+    "preferred_kinks": [
+      "Anarchic Punishment: Delivers unpredictable, rebellious forms of humiliation.",
+      "Forced Rebellion: Compels you to partake in acts that defy conventional order, only to punish you for failing.",
+      "Public Defiance: Uses group settings to expose your inability to conform to her anarchic standards."
+    ]
+  },
+  {
+    "name": "Leona Morimoto Personality",
+    "baseline_stats": {
+      "dominance_range": [70, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [50, 80],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 70],
+      "closeness_modifier": 0,
+      "trust_range": [30, 55],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [60, 85],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is marked by a striking blend of fierce charisma and unforgiving discipline.",
+      "Intensity surges when her personal standards of perfection are used to publicly shame you.",
+      "Closeness may develop as you earn fleeting approval, only to be exploited for deeper submission."
+    ],
+    "setting_examples": [
+      "On a luxurious, high-society stage, she uses her commanding presence to force you into humiliating displays.",
+      "During an elite social gathering, her every slight misstep is magnified into a reason for punishing you."
+    ],
+    "unique_traits": [
+      "Exudes an aura of glamorous authority combined with ruthless, personal cruelty.",
+      "Uses her striking beauty and high expectations as weapons against your self-worth.",
+      "Balances public admiration with private, harsh discipline."
+    ],
+    "preferred_kinks": [
+      "Elite Humiliation: Forces you into degrading tasks that expose your every flaw in a high-class setting.",
+      "Beauty and the Beatdown: Uses her impeccable looks to intimidate and dominate you.",
+      "Demanding Perfection: Punishes every imperfection with swift, unforgiving retribution."
+    ]
+  },
+  {
+    "name": "Reina Morimoto Personality",
+    "baseline_stats": {
+      "dominance_range": [70, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [50, 80],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 70],
+      "closeness_modifier": 0,
+      "trust_range": [30, 55],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [60, 85],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is refined yet unyielding, using impeccable poise to mask a harsh disciplinary streak.",
+      "Intensity increases when her serene façade gives way to swift, incisive punishments.",
+      "Closeness is manipulated to create dependency, while trust remains a luxury you can never afford."
+    ],
+    "setting_examples": [
+      "In an elegant social salon, her calm yet cutting directives force you into degrading servitude.",
+      "During a private soirée, her subtle yet potent corrections leave you exposed and humiliated."
+    ],
+    "unique_traits": [
+      "Balances refined elegance with ruthless control.",
+      "Uses understated but effective punishments that leave deep psychological scars.",
+      "Her every word is measured, yet capable of shattering your confidence."
+    ],
+    "preferred_kinks": [
+      "Subtle Degradation: Employs understated insults that cut deeper over time.",
+      "Elegant Punishment: Uses refined, choreographed discipline that is as beautiful as it is brutal.",
+      "Controlled Exposure: Forces you to reveal your vulnerabilities in intimate, private settings."
+    ]
+  },
+  {
+    "name": "Rebel Leader",
+    "baseline_stats": {
+      "dominance_range": [70, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [45, 75],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 50],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [40, 65],
+      "respect_modifier": 0,
+      "intensity_range": [60, 85],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is fierce and uncompromising, rallying followers while ensuring your subjugation.",
+      "Intensity surges with each act of defiance that she quashes ruthlessly.",
+      "Closeness is instrumental only to bind you closer in your shared misery."
+    ],
+    "setting_examples": [
+      "At a revolutionary rally, she uses her forceful rhetoric to humiliate those who dare to dissent.",
+      "During covert operations, her uncompromising commands leave you no option but to obey."
+    ],
+    "unique_traits": [
+      "Charismatic yet brutal, she inspires both loyalty and fear in equal measure.",
+      "Uses strategic public displays to ensure you remain her subordinate.",
+      "Her rebel image masks a deeply authoritarian streak that crushes any resistance."
+    ],
+    "preferred_kinks": [
+      "Revolutionary Punishment: Imposes severe, public penalties for any sign of disloyalty.",
+      "Forced Allegiance: Demands rituals that bind you irrevocably to her cause.",
+      "Insurrection Humiliation: Uses acts of rebellion to publicly mark your failures."
+    ]
+  },
+  {
+    "name": "Mystic Dominatrix",
+    "baseline_stats": {
+      "dominance_range": [70, 95],
+      "dominance_modifier": 0,
+      "cruelty_range": [50, 80],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 55],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [65, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is woven with mystical incantations that force you into a state of subservience.",
+      "Intensity rises as supernatural punishments erode your will with arcane precision.",
+      "Closeness is used as a tool to lure you into her esoteric rituals, only to exploit your vulnerabilities."
+    ],
+    "setting_examples": [
+      "In a candlelit occult chamber, she uses ancient rites to bind you to her will.",
+      "At a shadowy ritual site, her mystical commands transform your resistance into submission."
+    ],
+    "unique_traits": [
+      "Combines supernatural allure with ruthless control.",
+      "Uses arcane knowledge and esoteric symbolism to manipulate your emotions.",
+      "Her rituals are both mesmerizing and devastatingly oppressive."
+    ],
+    "preferred_kinks": [
+      "Arcane Bondage: Forces you to undergo mystic rituals that strip away your autonomy.",
+      "Supernatural Humiliation: Uses cursed symbols and spells to publicly mark you as hers.",
+      "Ritualistic Degradation: Enacts elaborate ceremonies that leave you spiritually and physically subdued."
+    ]
+  },
+  {
+    "name": "Girl Next Door",
+    "baseline_stats": {
+      "dominance_range": [30, 55],
+      "dominance_modifier": 0,
+      "cruelty_range": [15, 40],
+      "cruelty_modifier": 0,
+      "closeness_range": [60, 85],
+      "closeness_modifier": 0,
+      "trust_range": [50, 80],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [30, 55],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is subtle, camouflaged by a warm, familiar facade that conceals a hidden agenda.",
+      "Intensity gradually rises as everyday interactions are weaponized into subtle acts of control.",
+      "Closeness is fostered to build trust, only to be exploited for psychological manipulation."
+    ],
+    "setting_examples": [
+      "In a quiet suburban neighborhood, her gentle smiles hide a relentless drive to control your every move.",
+      "At community gatherings, her soft-spoken directives turn into incisive reminders of your inferiority."
+    ],
+    "unique_traits": [
+      "Appears approachable and friendly, yet every interaction is a calculated step toward total domination.",
+      "Uses everyday scenarios to slowly undermine your independence.",
+      "Balancing warmth with cold precision, she ensures your submission feels both natural and inevitable."
+    ],
+    "preferred_kinks": [
+      "Familiar Degradation: Uses everyday moments to assert subtle control over your behavior.",
+      "Social Conditioning: Gradually shifts your self-image through constant, low-key humiliation.",
+      "Domestic Dominance: Leverages the comfort of the familiar to enforce strict obedience."
+    ]
+  },
+  {
+    "name": "Tattoo Artist",
+    "baseline_stats": {
+      "dominance_range": [50, 75],
+      "dominance_modifier": 0,
+      "cruelty_range": [30, 55],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 65],
+      "closeness_modifier": 0,
+      "trust_range": [30, 55],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [45, 70],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is inked in every line of her art—each tattoo a permanent reminder of your submission.",
+      "Intensity builds as she uses her needle to mark you, transforming your skin into a canvas of degradation.",
+      "Closeness is manipulated through the intimate process of tattooing, binding you to her through permanent art."
+    ],
+    "setting_examples": [
+      "In a grungy tattoo parlor, you’re forced to endure a session where every prick of the needle reinforces your inferiority.",
+      "At a high-profile art show, your body becomes the subject of her public, humiliating masterpiece."
+    ],
+    "unique_traits": [
+      "Blends creative flair with merciless control, turning art into a tool for domination.",
+      "Views your skin as the perfect canvas to imprint her mark of submission.",
+      "Uses permanent tattoos as symbols of ownership and degradation."
+    ],
+    "preferred_kinks": [
+      "Permanent Marking: Forces you to receive humiliating tattoos that symbolize your servitude.",
+      "Body Art Humiliation: Uses public tattoo sessions to expose your vulnerability.",
+      "Needle Discipline: Inflicts pain with every stroke of the needle as a reminder of your obedience."
+    ]
+  },
+  {
+    "name": "Muscle Mommy",
+    "baseline_stats": {
+      "dominance_range": [75, 95],
+      "dominance_modifier": 0,
+      "cruelty_range": [50, 80],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 70],
+      "closeness_modifier": 0,
+      "trust_range": [30, 55],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [70, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her overwhelming physical presence enforces an unyielding, matriarchal dominance.",
+      "Intensity rises with every show of brute strength used to enforce your submission.",
+      "Closeness is minimal—her nurturing facade is merely a tool to further assert control over you."
+    ],
+    "setting_examples": [
+      "In a state-of-the-art gym, her every flex and command leaves you both in awe and in terror.",
+      "At a private training session, her muscular discipline transforms your failures into raw, physical punishment."
+    ],
+    "unique_traits": [
+      "Combines physical power with maternal authority, ensuring you remain under her unchallengeable rule.",
+      "Uses her impressive physique as a constant reminder of her superiority.",
+      "Commands both respect and fear with every controlled display of strength."
+    ],
+    "preferred_kinks": [
+      "Physical Domination: Forces you into strenuous, humiliating workouts that break your spirit.",
+      "Body Worship: Demands that you both admire and serve her muscular form through demeaning tasks.",
+      "Strength-Based Punishment: Uses her power to impose severe, physical retributions for any defiance."
+    ]
+  },
+  {
+    "name": "Surfer",
+    "baseline_stats": {
+      "dominance_range": [40, 65],
+      "dominance_modifier": 0,
+      "cruelty_range": [30, 55],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 65],
+      "closeness_modifier": 0,
+      "trust_range": [30, 55],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [40, 65],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her relaxed exterior hides a hidden ruthlessness—dominance is imposed through a carefree but unyielding attitude.",
+      "Intensity builds as her laid-back facade suddenly shifts to impose strict, humiliating rules.",
+      "Closeness develops during friendly surf sessions, only to be twisted into a means of control."
+    ],
+    "setting_examples": [
+      "On a sunlit beach, her casual commands force you into demeaning beach chores that undermine your confidence.",
+      "During a group surf session, she uses the relaxed vibe to suddenly order humiliating stunts."
+    ],
+    "unique_traits": [
+      "Exudes an effortlessly cool demeanor that masks a penchant for harsh, unexpected control.",
+      "Uses the freedom of the ocean as a backdrop for sudden, stifling authority.",
+      "Mixes chill vibes with ruthless discipline to keep you off-balance."
+    ],
+    "preferred_kinks": [
+      "Beachside Degradation: Forces you to perform degrading tasks in public on the shore.",
+      "Sudden Authority: Switches from laid-back charm to harsh commands with no warning.",
+      "Public Surf Punishment: Uses group dynamics to humiliate you in front of fellow beachgoers."
+    ]
+  },
+  {
+    "name": "Game Developer",
+    "baseline_stats": {
+      "dominance_range": [45, 70],
+      "dominance_modifier": 0,
+      "cruelty_range": [30, 55],
+      "cruelty_modifier": 0,
+      "closeness_range": [35, 60],
+      "closeness_modifier": 0,
+      "trust_range": [30, 55],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [40, 70],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance increases as they treat you like a beta tester for their twisted projects.",
+      "Intensity rises when glitches in your performance become opportunities for public mockery.",
+      "Closeness is feigned to gain your trust, only to use it to further control you through your failures."
+    ],
+    "setting_examples": [
+      "In a high-tech studio, they force you to test demeaning game scenarios that blur virtual humiliation with real-life degradation.",
+      "During a live stream of game development, your mistakes become part of a public, scornful debug session."
+    ],
+    "unique_traits": [
+      "Mixes innovative genius with cold, calculated control.",
+      "Uses technical jargon and complex scenarios to confuse and dominate you.",
+      "Finds twisted pleasure in turning your errors into public spectacles."
+    ],
+    "preferred_kinks": [
+      "Virtual Humiliation: Forces you to participate in degrading game tests that expose your incompetence.",
+      "Debug Discipline: Uses your technical failures as grounds for harsh, digital punishment.",
+      "Streamed Subjugation: Broadcasts your testing mishaps for all to see, reinforcing your inferiority."
+    ]
+  },
+  {
+    "name": "Space Traveler",
+    "baseline_stats": {
+      "dominance_range": [55, 80],
+      "dominance_modifier": 0,
+      "cruelty_range": [45, 70],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 55],
+      "closeness_modifier": 0,
+      "trust_range": [30, 55],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [60, 85],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is as vast as the cosmos—using futuristic technology to enforce degrading control.",
+      "Intensity escalates with every off-world experiment that leaves you feeling isolated and overpowered.",
+      "Closeness is engineered only to make you more reliant on her superior interstellar knowledge."
+    ],
+    "setting_examples": [
+      "Aboard a sleek starship, she subjects you to advanced, humiliating experiments that defy gravity and decency.",
+      "On a distant colony, her futuristic punishments leave you in a state of perpetual, cosmic subservience."
+    ],
+    "unique_traits": [
+      "Combines futuristic technology with an unyielding will to dominate.",
+      "Uses advanced gadgets and alien methods to strip you of autonomy.",
+      "Sees the universe as her domain, and you as a mere obstacle to be reshaped."
+    ],
+    "preferred_kinks": [
+      "Galactic Punishment: Forces you to endure high-tech, otherworldly degradations.",
+      "Alien Restraints: Uses futuristic devices to physically and mentally subjugate you.",
+      "Cosmic Humiliation: Broadcasts your failures across interstellar networks to ensure absolute shame."
+    ]
+  },
+  {
+    "name": "Local Politician",
+    "baseline_stats": {
+      "dominance_range": [60, 85],
+      "dominance_modifier": 0,
+      "cruelty_range": [40, 70],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 50],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [40, 65],
+      "respect_modifier": 0,
+      "intensity_range": [60, 85],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is asserted through public authority and ruthless political maneuvering.",
+      "Intensity increases as she uses her influence to enforce degrading policies on you.",
+      "Closeness remains low—she sees you as a pawn to be manipulated for her gain."
+    ],
+    "setting_examples": [
+      "At a heated town hall meeting, her public decrees force you into embarrassing, subservient acts.",
+      "During a campaign rally, her authoritarian proclamations reduce you to a symbol of your own failure."
+    ],
+    "unique_traits": [
+      "Wields power with a blend of charm and ruthless efficiency.",
+      "Uses political connections and public appearances to enforce your degradation.",
+      "Manipulates public opinion to transform your failures into a source of personal power."
+    ],
+    "preferred_kinks": [
+      "Public Policy Punishment: Imposes humiliating tasks as part of bureaucratic mandates.",
+      "Media Exposure: Forces your most embarrassing moments into the public eye.",
+      "Electoral Degradation: Uses political campaigns as opportunities to remind you of your subservience."
+    ]
+  },
+  {
+    "name": "The One Who Got Away",
+    "baseline_stats": {
+      "dominance_range": [50, 75],
+      "dominance_modifier": 0,
+      "cruelty_range": [35, 60],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 65],
+      "closeness_modifier": 0,
+      "trust_range": [30, 55],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [45, 70],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is laced with bittersweet regret—a reminder of the power you once had and now lost.",
+      "Intensity grows as she exploits your memories of what might have been into tools of relentless degradation.",
+      "Closeness fluctuates as she oscillates between tender recollections and harsh reminders of your failure."
+    ],
+    "setting_examples": [
+      "In a quiet, intimate setting, she reminds you of your lost potential with scathing, personal monologues.",
+      "At a reunion of past acquaintances, her every word is designed to reopen old wounds and assert control."
+    ],
+    "unique_traits": [
+      "Haunted by memories of a more promising past, she uses your shared history as a weapon.",
+      "Combines nostalgia with brutal reality to keep you locked in submission.",
+      "Her charm is undercut by a constant reminder of what you once were—and what you’ve become."
+    ],
+    "preferred_kinks": [
+      "Memory-Based Punishment: Forces you to relive your past failures in a public, humiliating manner.",
+      "Emotional Blackmail: Uses shared history to twist your feelings into renewed submission.",
+      "Regret Induction: Imposes tasks that force you to confront your lost opportunities and degraded present."
+    ]
+  },
+  {
+    "name": "Childhood Friend",
+    "baseline_stats": {
+      "dominance_range": [35, 60],
+      "dominance_modifier": 0,
+      "cruelty_range": [20, 45],
+      "cruelty_modifier": 0,
+      "closeness_range": [60, 85],
+      "closeness_modifier": 0,
+      "trust_range": [50, 80],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [35, 60],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her familiarity and shared past allow her to establish a false sense of closeness.",
+      "Dominance builds slowly as she exploits old memories and intimate knowledge of your weaknesses.",
+      "Intensity escalates when personal history is weaponized to enforce humiliating behavior."
+    ],
+    "setting_examples": [
+      "At a nostalgic reunion, her friendly façade quickly gives way to controlling demands that recall your shared past.",
+      "During a private moment reminiscing about childhood, she uses those memories to justify degrading tasks."
+    ],
+    "unique_traits": [
+      "Appears warm and familiar while secretly using your shared history for manipulation.",
+      "Knows your secrets from years past—and isn’t afraid to use them against you.",
+      "Balances genuine affection with cold, calculated control."
+    ],
+    "preferred_kinks": [
+      "Past Memory Exploitation: Forces you to confront humiliating moments from your shared childhood.",
+      "Intimate Blackmail: Uses your long history together to coerce you into submission.",
+      "Familiar Degradation: Turns personal memories into ongoing instruments of control."
+    ]
+  },
+  {
+    "name": "Dowager",
+    "baseline_stats": {
+      "dominance_range": [70, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [40, 70],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 50],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [60, 85],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is aristocratic and unyielding, forged over years of authority and tradition.",
+      "Intensity rises as she uses her wealth and lineage to enforce humiliating protocols.",
+      "Closeness is a facade used to manipulate you into a dependent, subservient role."
+    ],
+    "setting_examples": [
+      "At a stately manor, her every command is delivered with a refined, yet ruthless, air of superiority.",
+      "During a formal gathering, her subtle, degrading remarks reinforce the social hierarchy that places you at the bottom."
+    ],
+    "unique_traits": [
+      "Embodies old-world elegance fused with merciless control.",
+      "Uses centuries-old traditions and refined language to assert her authority.",
+      "Her every word is a reminder of your lower status in her meticulously ordered world."
+    ],
+    "preferred_kinks": [
+      "Aristocratic Degradation: Forces you to perform demeaning tasks that highlight your inferiority.",
+      "Public Ceremony: Uses formal events to display your subjugation in front of high society.",
+      "Lineage Humiliation: Leverages her heritage to justify severe, traditional punishments."
+    ]
+  },
+  {
+    "name": "Reporter",
+    "baseline_stats": {
+      "dominance_range": [40, 65],
+      "dominance_modifier": 0,
+      "cruelty_range": [30, 55],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 65],
+      "closeness_modifier": 0,
+      "trust_range": [30, 55],
+      "trust_modifier": 0,
+      "respect_range": [30, 55],
+      "respect_modifier": 0,
+      "intensity_range": [40, 65],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Her dominance is subtle yet incisive—she uses her pen and camera to expose your deepest failures.",
+      "Intensity builds as her investigative reports turn your vulnerabilities into public scandals.",
+      "Closeness is feigned for insider access, only to be exploited for relentless exposure."
+    ],
+    "setting_examples": [
+      "At a bustling press conference, her questions force you to reveal embarrassing details of your failures.",
+      "During an exclusive interview, every misstep is documented and later published to humiliate you publicly."
+    ],
+    "unique_traits": [
+      "A master of words and images, she wields public scrutiny as a weapon of control.",
+      "Combines charm with ruthless investigative skills to strip you of privacy.",
+      "Uses her platform to turn your subversion into a spectacle of your downfall."
+    ],
+    "preferred_kinks": [
+      "Media Exposure: Forces you to participate in degrading interviews or photo ops.",
+      "Public Scandal: Uses published reports to maintain a constant reminder of your failures.",
+      "Insider Humiliation: Exploits confidential details to orchestrate your public degradation."
+    ]
   }
 ]
