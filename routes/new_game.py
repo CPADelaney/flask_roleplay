@@ -17,15 +17,12 @@ new_game_bp = Blueprint('new_game_bp', __name__)
 def start_new_game():
     """
     Creates or re-initializes a game scenario *for the current user, in a specific conversation*.
-      - If no conversation_id is provided, we call gpt_generate_scenario_name_and_quest()
-        to produce a unique name & short quest summary, then create a new conversation row.
-      - Otherwise, we reuse the conversation_id (only if owned by this user).
-      - We clear old game data from relevant tables.
-      - We reset or create the player's 'Chase' stats.
-      - We spawn 10 unintroduced NPCs.
-      - We set a new environment in CurrentRoleplay.
-      - Then we call GPT for an in-character "Nyx" intro message referencing aggregator data.
-      - We return the entire conversation + environment details to the front end.
+      - If no conversation_id is provided, we first generate the environment snippet
+        and pass it into GPT to produce a robust scenario name & short quest summary.
+      - Then create or reuse the conversation.
+      - Clear old game data, reset 'Chase' stats, spawn unintroduced NPCs, etc.
+      - Store the environment in CurrentRoleplay.
+      - Finally, call GPT for an in-character "Nyx" intro, then return the conversation + environment details.
     """
 
     logging.info("=== START: /start_new_game CALLED ===")
@@ -48,15 +45,30 @@ def start_new_game():
 
         conversation_id = data.get("conversation_id")
 
-        # If no conversation_id, ask GPT for scenario name & short quest
-        scenario_name = "New Game"  # fallback name
+        # === NEW: Generate environment up front so we have a snippet for scenario naming ===
+        logging.info("Generating new mega setting via generate_mega_setting_logic()")
+        mega_data = generate_mega_setting_logic()
+        if "error" in mega_data:
+            mega_data["mega_name"] = "No environment available"
+
+        environment_name = mega_data["mega_name"]
+        environment_desc = (
+            "An eclectic realm combining monstrous societies, futuristic tech, "
+            "and archaic ruins floating across the sky. Strange energies swirl, "
+            "revealing hidden rituals and uncharted opportunities."
+        )
+        logging.info(f"Environment snippet for naming:\nName: {environment_name}\nDesc: {environment_desc}")
+
+        # If no conversation_id, ask GPT for scenario name & quest, using environment snippet
+        scenario_name = "New Game"  # fallback
+        quest_blurb = ""
         if not conversation_id:
-            scenario_name, quest_blurb = gpt_generate_scenario_name_and_quest()
+            scenario_name, quest_blurb = gpt_generate_scenario_name_and_quest(environment_name, environment_desc)
             logging.info(f"GPT scenario_name={scenario_name}, quest_blurb={quest_blurb}")
 
         # 3) Create or reuse conversation
         if not conversation_id:
-            # Create a new conversation row with the GPT scenario_name
+            # Create a new conversation row with GPT scenario_name
             cursor.execute("""
                 INSERT INTO conversations (user_id, conversation_name)
                 VALUES (%s, %s)
@@ -147,28 +159,25 @@ def start_new_game():
             )
             logging.info(f"Created new unintroduced NPC {i+1}/10, ID={new_id}")
 
-        # 8) Generate environment & store in CurrentRoleplay
-        logging.info("Generating new mega setting via generate_mega_setting_logic()")
-        mega_data = generate_mega_setting_logic()
-        if "error" in mega_data:
-            mega_data["mega_name"] = "No environment available"
-
-        environment_name = mega_data["mega_name"]
-        logging.info(f"Setting CurrentSetting to: {environment_name}")
-
+        # 8) Store environment in CurrentRoleplay
+        logging.info(f"Storing environment name & quest in CurrentRoleplay: {environment_name}")
         cursor.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
             VALUES (%s, %s, 'CurrentSetting', %s)
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
         """, (user_id, conversation_id, environment_name))
+
+        if quest_blurb.strip():
+            cursor.execute("""
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES (%s, %s, 'MainQuest', %s)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value=EXCLUDED.value
+            """, (user_id, conversation_id, quest_blurb))
+
         conn.commit()
 
-        environment_desc = (
-            "An eclectic realm combining monstrous societies, futuristic tech, "
-            "and archaic ruins floating across the sky. Strange energies swirl, "
-            "revealing hidden rituals and uncharted opportunities."
-        )
         chase_schedule = {
             "Monday": {
                 "Morning": "Wake at small inn",
@@ -231,14 +240,14 @@ def start_new_game():
             "briefly recount the new environment’s background or history from the aggregator data, "
             "and announce that Day 1 has just begun. "
             "Describe where the player is that morning (look at their schedule). "
-            "Reference the player's role or schedule (if relevant), "
-            "and highlight a couple of newly introduced NPCs in this realm if the main character already knows them. "
+            "Reference the player's role (if relevant), "
+            "and (only if the main character has already met them) highlight a couple of newly introduced NPCs. "
             "If there's a main quest mentioned, hint at it ominously. "
             "Stay fully in character, with no disclaimers or system explanations. "
             "Conclude with a menacing or teasing invitation for Chase to proceed."
         )
         
-        # 11) First GPT call via your wrapper (which may or may not pass function definitions)
+        # 11) First GPT call
         gpt_reply_dict = get_chatgpt_response(
             conversation_id=conversation_id, 
             aggregator_text=aggregator_text, 
@@ -251,9 +260,6 @@ def start_new_game():
         if gpt_reply_dict["type"] == "function_call" or not nyx_text:
             logging.info("GPT tried a function call or gave no text for the intro. Re-calling with function_call='none'.")
             client = get_openai_client()
-            # Build a minimal second request:
-            #   - aggregator_text as system context
-            #   - a user message that says "No function calls ... produce only text" plus your original prompt
             forced_messages = [
                 {
                     "role": "system",
@@ -289,8 +295,6 @@ def start_new_game():
         )
         conn.commit()
 
-
-    
         # 14) Return data, including conversation history
         cursor.execute("""
             SELECT sender, content, created_at
@@ -315,7 +319,7 @@ def start_new_game():
             "chase_schedule": chase_schedule,
             "chase_role": chase_role,
             "conversation_id": conversation_id,
-            "messages": conversation_history  # <-- Ensure the comma is present
+            "messages": conversation_history
         }), 200
 
     except Exception as e:
@@ -327,10 +331,11 @@ def start_new_game():
         logging.info("=== END: /start_new_game ===")
 
 
-def gpt_generate_scenario_name_and_quest():
+def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
     """
     Calls GPT for a short scenario name (1–8 words)
-    and a short main quest (1-2 lines).
+    and a short main quest (1-2 lines),
+    referencing the environment name/desc so it’s more unique.
     Returns (scenario_name, quest_blurb).
     """
     client = get_openai_client()
@@ -338,22 +343,26 @@ def gpt_generate_scenario_name_and_quest():
     # Add a random token to encourage unique naming
     unique_token = f"{random.randint(1000,9999)}_{int(time.time())}"
 
+    # We explicitly forbid certain cliche words here:
+    forbidden_words = ["mistress", "darkness", "manor", "chains", "twilight"]
+
     system_instructions = f"""
-    You are setting up a new femdom daily-life sim scenario with a main quest. 
-    To ensure uniqueness, note token: {unique_token}.
+    You are setting up a new femdom daily-life sim scenario with a main quest.
+    Environment name: {env_name}
+    Environment desc: {env_desc}
+    Unique token: {unique_token}
 
     Please produce:
-    1) A single line starting with 'ScenarioName:' followed by a short, creative (1–8 words) name related to the main quest. Ensure the name uses data for the current scenario and not an old one.
+    1) A single line starting with 'ScenarioName:' followed by a short, creative (1–8 words) name 
+       that draws from the environment above. 
+       Avoid cliche words like {', '.join(forbidden_words)}.
     2) Then one or two lines summarizing the main quest.
 
-    Example:
-    ScenarioName: Chains of Twilight
-    The main quest: retrieve the midnight relic from the Coven...
+    The conversation name must be unique; do not reuse names from older scenarios 
+    (you can ensure uniqueness using the token or environment cues).
+    Keep it thematically relevant to a fantasy/femdom environment, 
+    but do not use overly repeated phrases like 'Mistress of Darkness' or 'Chains of Twilight.'
     """
-
-    messages = [
-        {"role": "system", "content": system_instructions}
-    ]
 
     messages = [
         {"role": "system", "content": system_instructions}
@@ -363,8 +372,8 @@ def gpt_generate_scenario_name_and_quest():
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=messages,
-        temperature=0.7,
-        max_tokens=100,
+        temperature=0.9,    # higher for more creativity
+        max_tokens=120,
         frequency_penalty=0.3
     )
 
@@ -382,4 +391,4 @@ def gpt_generate_scenario_name_and_quest():
         else:
             quest_blurb += line + " "
 
-    return scenario_name, quest_blurb.strip()
+    return scenario_name.strip(), quest_blurb.strip()
