@@ -1,3 +1,5 @@
+# logic/memory_logic.py
+
 import os
 import json
 import random
@@ -66,7 +68,7 @@ def record_npc_event(user_id, conversation_id, npc_id, event_description):
     finally:
         conn.close()
 
-@memory_bp.route('/store_roleplay_segment', methods=['POST'])
+@memory_bp.route('/store_roleplay_segment', methods=['POST'], endpoint="store_roleplay_segment_endpoint")
 def store_roleplay_segment():
     """
     Stores or updates a key-value pair in the CurrentRoleplay table,
@@ -106,7 +108,6 @@ def store_roleplay_segment():
         if 'conn' in locals():
             conn.close()
 
-# New endpoint to update an NPC's memory with a GPT-generated shared memory event.
 @memory_bp.route('/update_npc_memory', methods=['POST'])
 def update_npc_memory():
     """
@@ -120,8 +121,9 @@ def update_npc_memory():
              "target_name": "Chase"      # name of the target (player or NPC)
          }
       }
-    The function retrieves the NPC's name, uses GPT (via get_shared_memory) to generate a shared memory
-    based on the relationship and the current setting, and appends that memory to the NPC's memory field.
+    Retrieves the NPC's name along with their synthesized archetype summaries
+    (backstory synergy and extra details), then calls GPT to generate a shared memory.
+    The generated memory is appended to the NPC's memory field.
     """
     user_id = session.get("user_id")
     if not user_id:
@@ -134,22 +136,23 @@ def update_npc_memory():
     if not conversation_id or not npc_id or not relationship:
         return jsonify({"error": "Missing conversation_id, npc_id, or relationship data"}), 400
 
-    # Retrieve the NPC's name from the database
+    # Retrieve the NPC's name and synthesized archetype fields
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT npc_name FROM NPCStats
+        SELECT npc_name, archetype_summary, archetype_extras_summary
+        FROM NPCStats
         WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
     """, (npc_id, user_id, conversation_id))
     row = cursor.fetchone()
     if not row:
         conn.close()
         return jsonify({"error": f"NPC with id {npc_id} not found"}), 404
-    npc_name = row[0]
+    npc_name, archetype_summary, archetype_extras_summary = row
     conn.close()
 
-    # Generate a shared memory using GPT that references the current setting.
-    memory_text = get_shared_memory(relationship, npc_name)
+    # Generate a shared memory using GPT, now including the NPC's background details.
+    memory_text = get_shared_memory(relationship, npc_name, archetype_summary or "", archetype_extras_summary or "")
     try:
         record_npc_event(user_id, conversation_id, npc_id, memory_text)
     except Exception as e:
@@ -157,12 +160,12 @@ def update_npc_memory():
 
     return jsonify({"message": "NPC memory updated", "memory": memory_text}), 200
 
-# The existing get_shared_memory function (updated to reference current setting)
-def get_shared_memory(relationship, npc_name):
+def get_shared_memory(relationship, npc_name, archetype_summary="", archetype_extras_summary=""):
     """
     Given a relationship dict (with keys: type, target, target_name) and the NPC's name,
     calls GPT to generate a short memory describing a shared event or history.
-    The memory fits within a femdom context and references the current setting.
+    The memory fits within a femdom context, references the current setting,
+    and includes the NPC's synthesized background details.
     """
     from routes.settings_routes import generate_mega_setting_logic
     setting_info = generate_mega_setting_logic()
@@ -171,9 +174,15 @@ def get_shared_memory(relationship, npc_name):
     target = relationship.get("target", "player")
     target_name = relationship.get("target_name", "the player")
     rel_type = relationship.get("type", "related")
+    extra_context = ""
+    if archetype_summary:
+        extra_context += f"Background: {archetype_summary}. "
+    if archetype_extras_summary:
+        extra_context += f"Extra Details: {archetype_extras_summary}. "
     system_instructions = f"""
     The NPC {npc_name} has a pre-existing relationship as a {rel_type} with {target_name}.
     The current setting is: {mega_description}.
+    {extra_context}
     In a femdom narrative, generate a short memory (1-2 sentences) describing a shared event or experience between {npc_name} and {target_name} that reflects their history.
     The memory should be concise, vivid, and fit naturally within the setting.
     """
@@ -190,45 +199,3 @@ def get_shared_memory(relationship, npc_name):
     except Exception as e:
         logging.error(f"[get_shared_memory] GPT error: {e}")
         return "Shared memory could not be generated."
-
-# (The rest of your module remains unchanged.)
-
-@memory_bp.route('/store_roleplay_segment', methods=['POST'])
-def store_roleplay_segment():
-    """
-    Stores or updates a key-value pair in the CurrentRoleplay table,
-    scoped to user_id + conversation_id.
-    The payload should have:
-      { "conversation_id": X, "key": "abc", "value": "..." }
-    """
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
-
-    try:
-        payload = request.get_json() or {}
-        conversation_id = payload.get("conversation_id")
-        segment_key = payload.get("key")
-        segment_value = payload.get("value")
-
-        if not conversation_id:
-            return jsonify({"error": "No conversation_id provided"}), 400
-        if not segment_key or segment_value is None:
-            return jsonify({"error": "Missing 'key' or 'value'"}), 400
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO currentroleplay (user_id, conversation_id, key, value)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, (user_id, conversation_id, segment_key, segment_value))
-        conn.commit()
-        return jsonify({"message": "Stored successfully"}), 200
-    except Exception as e:
-        logging.error(f"Error in store_roleplay_segment: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
