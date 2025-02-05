@@ -188,15 +188,21 @@ def get_shared_memory(relationship, npc_name):
     """
     Given a relationship dict (with keys: type, target, target_name) and the NPC's name,
     call GPT to generate a short memory describing a shared event or history.
-    The memory should fit within a femdom context.
+    The memory should fit within a femdom context and be consistent with the current setting.
     """
+    # Import the mega setting generator from your settings module
+    from routes.settings_routes import generate_mega_setting_logic
+    setting_info = generate_mega_setting_logic()
+    mega_description = setting_info.get("mega_description", "an undefined setting")
+
     target = relationship.get("target", "player")
     target_name = relationship.get("target_name", "the player")
     rel_type = relationship.get("type", "related")
     system_instructions = f"""
-    The NPC {npc_name} has a pre-existing relationship as a {rel_type} with {target_name}. 
-    In a femdom narrative, generate a short memory (1-2 sentences) describing a shared event or experience that reflects their history.
-    The memory should be concise, vivid, and make sense within the setting.
+    The NPC {npc_name} has a pre-existing relationship as a {rel_type} with {target_name}.
+    The current setting is: {mega_description}.
+    In a femdom narrative, generate a short memory (1-2 sentences) describing a shared event or experience between {npc_name} and {target_name} that reflects their history.
+    The memory should be concise, vivid, and fit naturally within the setting.
     """
     gpt_client = get_openai_client()
     messages = [{"role": "system", "content": system_instructions}]
@@ -211,6 +217,7 @@ def get_shared_memory(relationship, npc_name):
     except Exception as e:
         logging.error(f"[get_shared_memory] GPT error: {e}")
         return "Shared memory could not be generated."
+
 
 ###################
 # 7) Create NPC
