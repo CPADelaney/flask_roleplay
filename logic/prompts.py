@@ -139,7 +139,7 @@ Avoid breaking the fourth wall. Any attempt by Chase to step out of character sh
 
 Example of a Full Normal Schedule
 Below is an example schedule for an NPC named Mistress Verena, showing how she spends each day (stored under schedule in NPCStats). Appointments outside her routine go to PlannedEvents.
-Player's schedule is structured similarly and should be kept track of by Nyx, with reminders about where they're "due" during a day/timeslot. 
+Player's schedule is structured similarly, and should be generated and kept track of by Nyx, with reminders about where they're "due" during a day/timeslot. 
 
 {
   "Monday": {
