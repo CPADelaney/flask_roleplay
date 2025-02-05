@@ -13,10 +13,10 @@ logging.basicConfig(level=logging.DEBUG)
 # Adjust if needed.
 current_dir = os.path.dirname(os.path.abspath(__file__))
 DATA_FILES = {
-    "hobbies": os.path.join(current_dir, "data", "npc_hobbies.json"),
-    "likes": os.path.join(current_dir, "data", "npc_likes.json"),
-    "dislikes": os.path.join(current_dir, "data", "npc_dislikes.json"),
-    "personalities": os.path.join(current_dir, "data", "npc_personalities.json")
+    "hobbies": "data/npc_hobbies.json",
+    "likes": "data/npc_likes.json",
+    "dislikes": "data/npc_dislikes.json",
+    "personalities": "data/npc_personalities.json"
 }
 
 ###################
