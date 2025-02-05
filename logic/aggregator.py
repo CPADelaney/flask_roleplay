@@ -395,8 +395,18 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         "Scene Snapshot:\n"
         f"{make_minimal_scene_info(aggregated)}"
     )
-
-    aggregated["short_summary"] = existing_summary
+    
+    # incorporate MegaSettingModifiers
+    modifiers_str = aggregated["currentRoleplay"].get("MegaSettingModifiers", "")
+    if modifiers_str:
+        aggregator_text += "\n\n=== MEGA SETTING MODIFIERS ===\n"
+        try:
+            mod_dict = json.loads(modifiers_str)
+            for k, v in mod_dict.items():
+                aggregator_text += f"- {k}: {v}\n"
+        except:
+            aggregator_text += "(Could not parse MegaSettingModifiers)\n"
+    
     aggregated["aggregator_text"] = aggregator_text
 
     return aggregated
@@ -444,7 +454,7 @@ def make_minimal_scene_info(aggregated):
 
     # Introduced NPCs snippet
     lines.append("Introduced NPCs in the area:")
-    for npc in aggregated["introducedNPCs"][:2]:
+    for npc in aggregated["introducedNPCs"][:4]:
         loc = npc.get("current_location", "Unknown")
         lines.append(f"  - {npc['npc_name']} is at {loc}")
 
