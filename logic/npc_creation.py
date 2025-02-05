@@ -11,7 +11,8 @@ logging.basicConfig(level=logging.DEBUG)
 ###################
 # Suppose these .json files are in "data/" subfolder, same directory as npc_creation.py
 # Adjust if needed.
-current_dir = os.path.dirname(os.path.abspath(__file__))
+archetypes_json_path = os.path.join(current_dir, "..", "data", "archetypes_data.json")
+archetypes_json_path = os.path.normpath(archetypes_json_path)
 DATA_FILES = {
     "hobbies": "data/npc_hobbies.json",
     "likes": "data/npc_likes.json",
