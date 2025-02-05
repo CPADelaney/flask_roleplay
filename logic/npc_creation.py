@@ -184,6 +184,34 @@ def get_archetype_extras_summary(archetypes_list):
         logging.error(f"[get_archetype_extras_summary] GPT error: {e}")
         return "An extra archetype summary could not be generated."
 
+def get_shared_memory(relationship, npc_name):
+    """
+    Given a relationship dict (with keys: type, target, target_name) and the NPC's name,
+    call GPT to generate a short memory describing a shared event or history.
+    The memory should fit within a femdom context.
+    """
+    target = relationship.get("target", "player")
+    target_name = relationship.get("target_name", "the player")
+    rel_type = relationship.get("type", "related")
+    system_instructions = f"""
+    The NPC {npc_name} has a pre-existing relationship as a {rel_type} with {target_name}. 
+    In a femdom narrative, generate a short memory (1-2 sentences) describing a shared event or experience that reflects their history.
+    The memory should be concise, vivid, and make sense within the setting.
+    """
+    gpt_client = get_openai_client()
+    messages = [{"role": "system", "content": system_instructions}]
+    try:
+        response = gpt_client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=150
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logging.error(f"[get_shared_memory] GPT error: {e}")
+        return "Shared memory could not be generated."
+
 ###################
 # 7) Create NPC
 ###################
@@ -194,13 +222,17 @@ def create_npc(
     introduced=False,
     sex="female",
     reroll_extra=False,
-    total_archetypes=4
+    total_archetypes=4,
+    preexisting_relationship=None  # New parameter for relationships
 ):
     """
     Creates a new NPC in NPCStats with multiple archetypes logic.
     For female NPCs, it randomly selects archetypes (with an optional extra from REROLL_IDS),
     computes combined stats, and calls GPT to produce both a synergy backstory and
     an extra details summary.
+    
+    Additionally, if a pre-existing relationship is provided (e.g., {"type": "mother", "target": "player", "target_name": "Chase"}),
+    it stores this relationship and generates an initial shared memory from that relationship.
     """
     if not npc_name:
         npc_name = f"NPC_{random.randint(1000,9999)}"
@@ -265,6 +297,16 @@ def create_npc(
         synergy_text = "No synergy text (male or no archetypes)."
         extras_summary = "No extra archetype details available."
 
+    # Handle pre-existing relationship: if provided, generate a shared memory entry.
+    relationships = []
+    initial_memory = []
+    if preexisting_relationship:
+        relationships.append(preexisting_relationship)
+        # Generate a shared memory string via GPT using the relationship info.
+        shared_mem = get_shared_memory(preexisting_relationship, npc_name)
+        initial_memory.append(shared_mem)
+    # Otherwise, relationships remains empty and initial memory is empty.
+
     try:
         cursor.execute(
             """
@@ -275,6 +317,7 @@ def create_npc(
                 archetypes,
                 archetype_summary,
                 archetype_extras_summary,
+                relationships,
                 memory, monica_level
             )
             VALUES (
@@ -284,7 +327,8 @@ def create_npc(
                 %s,
                 %s,
                 %s,
-                '[]'::jsonb, 0
+                %s,
+                %s, 0
             )
             RETURNING npc_id
             """,
@@ -296,7 +340,9 @@ def create_npc(
                 final_stats["respect"], final_stats["intensity"],
                 chosen_arcs_json_str,  # basic JSON array (id & name)
                 synergy_text,          # backstory synergy from GPT
-                extras_summary         # extra details summary from GPT
+                extras_summary,        # extra details summary from GPT
+                json.dumps(relationships),  # store relationship data
+                json.dumps(initial_memory)  # initialize memory with shared memory if any
             )
         )
         new_id = cursor.fetchone()[0]
