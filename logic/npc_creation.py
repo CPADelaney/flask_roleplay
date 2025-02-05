@@ -1,5 +1,6 @@
-import random
+import os
 import json
+import random
 import logging
 from db.connection import get_db_connection
 
@@ -8,11 +9,14 @@ logging.basicConfig(level=logging.DEBUG)
 ###################
 # 1) File Paths
 ###################
+# Suppose these .json files are in "data/" subfolder, same directory as npc_creation.py
+# Adjust if needed.
+current_dir = os.path.dirname(os.path.abspath(__file__))
 DATA_FILES = {
-    "hobbies": "data/npc_hobbies.json",
-    "likes": "data/npc_likes.json",
-    "dislikes": "data/npc_dislikes.json",
-    "personalities": "data/npc_personalities.json"
+    "hobbies": os.path.join(current_dir, "data", "npc_hobbies.json"),
+    "likes": os.path.join(current_dir, "data", "npc_likes.json"),
+    "dislikes": os.path.join(current_dir, "data", "npc_dislikes.json"),
+    "personalities": os.path.join(current_dir, "data", "npc_personalities.json")
 }
 
 ###################
@@ -21,7 +25,7 @@ DATA_FILES = {
 def load_data(file_path):
     """Loads JSON from file_path; returns Python data (dict or list)."""
     try:
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
         logging.error(f"Failed to load data from {file_path}: {e}")
@@ -30,7 +34,14 @@ def load_data(file_path):
 ###################
 # 3) Build Our DATA Dictionary
 ###################
-DATA = {}
+DATA = {
+    "hobbies": [],
+    "likes": [],
+    "dislikes": [],
+    "personalities": []
+}
+
+# Load the data
 for key, path in DATA_FILES.items():
     raw = load_data(path)
     if key == "hobbies":
@@ -47,7 +58,7 @@ logging.debug("DATA loaded. For example, hobbies => %s", DATA.get("hobbies"))
 ###################
 # 4) Reroll IDs & Clamping
 ###################
-REROLL_IDS = list(range(62, 73))  # All archetype IDs from 62..72
+REROLL_IDS = list(range(62, 73))  # e.g. archetype IDs from 62..72
 
 def clamp(value, min_val, max_val):
     """Utility to ensure a stat stays within [min_val..max_val]."""
@@ -81,6 +92,7 @@ def combine_archetype_stats(archetype_rows):
         return sums
 
     for (arc_id, arc_name, bs_json) in archetype_rows:
+        # baseline_stats might be a string or already a dict
         if isinstance(bs_json, str):
             bs = json.loads(bs_json)
         else:
@@ -94,7 +106,7 @@ def combine_archetype_stats(archetype_rows):
                 mod = bs[mod_key]
                 val = random.randint(low, high) + mod
             else:
-                val = random.randint(0, 30)
+                val = random.randint(0, 30)  # fallback
             sums[stat_key] += val
 
     # average & clamp
@@ -108,10 +120,7 @@ def combine_archetype_stats(archetype_rows):
     return sums
 
 def archetypes_to_json(rows):
-    """
-    Convert (id, name, baseline_stats) => 
-       [ {"id": id, "name": name}, ... ]
-    """
+    """ Convert (id, name, baseline_stats) => [ {"id": id, "name": name}, ... ] """
     arr = []
     for (aid, aname, _bs) in rows:
         arr.append({"id": aid, "name": aname})
@@ -136,7 +145,8 @@ def create_npc(user_id, conversation_id,
     """
     if not npc_name:
         npc_name = f"NPC_{random.randint(1000,9999)}"
-    logging.info(f"[create_npc] user_id={user_id}, conversation_id={conversation_id}, name={npc_name}, introduced={introduced}, sex={sex}")
+    logging.info(f"[create_npc] user_id={user_id}, conversation_id={conversation_id}, "
+                 f"name={npc_name}, introduced={introduced}, sex={sex}")
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -169,8 +179,8 @@ def create_npc(user_id, conversation_id,
             }
         else:
             # partition normal vs reroll
-            reroll_pool  = [row for row in all_arcs if row[0] in REROLL_IDS]
-            normal_pool  = [row for row in all_arcs if row[0] not in REROLL_IDS]
+            reroll_pool = [row for row in all_arcs if row[0] in REROLL_IDS]
+            normal_pool = [row for row in all_arcs if row[0] not in REROLL_IDS]
 
             # pick total_archetypes from normal
             if len(normal_pool) < total_archetypes:
@@ -178,28 +188,27 @@ def create_npc(user_id, conversation_id,
             else:
                 chosen_arcs = random.sample(normal_pool, total_archetypes)
 
-            # if reroll_extra, add 1 from reroll_pool
             if reroll_extra and reroll_pool:
                 chosen_arcs.append(random.choice(reroll_pool))
 
             final_stats = combine_archetype_stats(chosen_arcs)
 
-    # 3) Insert the NPC row in NPCStats with user_id, conversation_id
+    # 3) Insert the NPC row in NPCStats
     try:
         cursor.execute("""
             INSERT INTO NPCStats (
-              user_id, conversation_id,
-              npc_name, introduced, sex,
-              dominance, cruelty, closeness, trust, respect, intensity,
-              archetypes,
-              memory, monica_level
+                user_id, conversation_id,
+                npc_name, introduced, sex,
+                dominance, cruelty, closeness, trust, respect, intensity,
+                archetypes,
+                memory, monica_level
             )
             VALUES (
-              %s, %s,
-              %s, %s, %s,
-              %s, %s, %s, %s, %s, %s,
-              %s,
-              '[]'::jsonb, 0
+                %s, %s,
+                %s, %s, %s,
+                %s, %s, %s, %s, %s, %s,
+                %s,
+                '[]'::jsonb, 0
             )
             RETURNING npc_id
         """, (
@@ -232,8 +241,7 @@ def create_npc(user_id, conversation_id,
 def assign_npc_flavor(user_id, conversation_id, npc_id: int):
     """
     Randomly pick e.g. 3 hobbies, 5 personalities, 3 likes, 3 dislikes 
-    from JSON data, then store them in NPCStats 
-    for this user_id + conversation_id + npc_id.
+    from JSON data, then store them in NPCStats
     """
     conn = get_db_connection()
     cursor = conn.cursor()
