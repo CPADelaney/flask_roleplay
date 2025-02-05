@@ -1,5 +1,3 @@
-# logic/universal_updater.py
-
 import json
 import logging  # <-- Make sure you have import logging
 from db.connection import get_db_connection
@@ -149,7 +147,6 @@ def apply_universal_updates(data: dict):
                     set_clauses.append(f"{db_col} = %s")
                     set_vals.append(up[field_key])
 
-            # If we have fields to update
             if set_clauses:
                 set_str = ", ".join(set_clauses)
                 set_vals += [npc_id, user_id, conv_id]
@@ -200,7 +197,6 @@ def apply_universal_updates(data: dict):
                         if day_key not in existing_schedule:
                             existing_schedule[day_key] = {}
                         existing_schedule[day_key].update(times_map)
-
                     cursor.execute("""
                         UPDATE NPCStats
                         SET schedule=%s
@@ -264,6 +260,43 @@ def apply_universal_updates(data: dict):
                 """, (json.dumps(aff_list), npc_id, user_id, conv_id))
 
         # ---------------------------------------------------------------------
+        # 5.5) Shared Memory Updates for Pre-existing Relationships
+        # ---------------------------------------------------------------------
+        shared_memory_updates = data.get("shared_memory_updates", [])
+        logging.info(f"[apply_universal_updates] shared_memory_updates: {shared_memory_updates}")
+        for sm_update in shared_memory_updates:
+            npc_id = sm_update.get("npc_id")
+            relationship = sm_update.get("relationship")
+            if not npc_id or not relationship:
+                logging.warning("Skipping shared memory update: missing npc_id or relationship data.")
+                continue
+
+            # Retrieve the NPC's name so the shared memory can reference it
+            cursor.execute("""
+                SELECT npc_name FROM NPCStats
+                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+            """, (npc_id, user_id, conv_id))
+            row = cursor.fetchone()
+            if not row:
+                logging.warning(f"Shared memory update: NPC with id {npc_id} not found.")
+                continue
+            npc_name = row[0]
+
+            # Import and call get_shared_memory to generate the memory text.
+            # (Ensure that your get_shared_memory function is available in the logic.memory module.)
+            from logic.memory import get_shared_memory
+            shared_memory_text = get_shared_memory(relationship, npc_name)
+            logging.info(f"Generated shared memory for NPC {npc_id}: {shared_memory_text}")
+
+            # Append the generated memory text to the NPC's memory field
+            cursor.execute("""
+                UPDATE NPCStats
+                SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s::text)
+                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+            """, (shared_memory_text, npc_id, user_id, conv_id))
+            logging.info(f"Appended shared memory to NPC {npc_id}")
+
+        # ---------------------------------------------------------------------
         # 6) npc_introductions
         # ---------------------------------------------------------------------
         npc_intros = data.get("npc_introductions", [])
@@ -288,7 +321,6 @@ def apply_universal_updates(data: dict):
             desc = loc.get("description", "")
             open_hours = loc.get("open_hours", [])
 
-            # Check if location name already exists (case-insensitive).
             cursor.execute("""
                 SELECT id
                 FROM Locations
@@ -314,14 +346,12 @@ def apply_universal_updates(data: dict):
         event_updates = data.get("event_list_updates", [])
         logging.info(f"[apply_universal_updates] event_list_updates: {event_updates}")
         for ev in event_updates:
-            # If it has npc_id + day + time_of_day => planned event
             if "npc_id" in ev and "day" in ev and "time_of_day" in ev:
                 npc_id = ev["npc_id"]
                 day = ev["day"]
                 tod = ev["time_of_day"]
                 ov_loc = ev.get("override_location", "Unknown")
 
-                # Check if we already have a planned event with the same npc/day/time
                 cursor.execute("""
                     SELECT event_id
                     FROM PlannedEvents
@@ -346,14 +376,12 @@ def apply_universal_updates(data: dict):
                 """, (user_id, conv_id, npc_id, day, tod, ov_loc))
 
             else:
-                # It's a normal Event
                 ev_name = ev.get("event_name", "UnnamedEvent")
                 ev_desc = ev.get("description", "")
                 ev_start = ev.get("start_time", "TBD Start")
                 ev_end = ev.get("end_time", "TBD End")
                 ev_loc = ev.get("location", "Unknown")
 
-                # Check if an event with the same name already exists (case-insensitive)
                 cursor.execute("""
                     SELECT id
                     FROM Events
@@ -399,8 +427,7 @@ def apply_universal_updates(data: dict):
                         )
                         VALUES (%s, %s, %s, %s, %s, %s, %s, 1)
                         ON CONFLICT (user_id, conversation_id, player_name, item_name)
-                        DO UPDATE
-                            SET quantity = PlayerInventory.quantity + 1
+                        DO UPDATE SET quantity = PlayerInventory.quantity + 1
                     """, (user_id, conv_id, p_n, item_name, item_desc, item_fx, category))
                 elif isinstance(item, str):
                     logging.info(f"  Adding item (string) for {p_n}: {item}")
@@ -411,8 +438,7 @@ def apply_universal_updates(data: dict):
                         )
                         VALUES (%s, %s, %s, %s, 1)
                         ON CONFLICT (user_id, conversation_id, player_name, item_name)
-                        DO UPDATE
-                            SET quantity = PlayerInventory.quantity + 1
+                        DO UPDATE SET quantity = PlayerInventory.quantity + 1
                     """, (user_id, conv_id, p_n, item))
 
             for item in removed:
@@ -527,7 +553,6 @@ def apply_universal_updates(data: dict):
             perk_desc = perk.get("perk_description", "")
             perk_fx   = perk.get("perk_effect", "")
             player_name = perk.get("player_name", "Chase")
-
             if perk_name:
                 logging.info(f"  Inserting perk {perk_name} for player {player_name}")
                 cursor.execute("""
