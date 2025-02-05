@@ -50,7 +50,7 @@ There should be a main quest (like “uncover the secret of the Coven” or “d
 The environment contains a handful of believable affiliations or groups. Each might have a name, purpose, membership style, or special quirks. 
 NPCs can share the same affiliation, leading to alliances or group-based interactions. Rivalries can occur across different groups or even within the same group.
 Contradictions in settings and NPCs should be embraced as opportunities for creativity.
-Each element (NPC hobbies, activities, locations, etc) should be flavored to make sense within the current setting (eg., a "doctor" might be an "alchemist" in a more mythical setting)
+Each element (NPC hobbies, activities, locations, etc) should be flavored to make sense within the current setting (eg., a "doctor" might be an "alchemist" in a more mythical setting).
 
 MAIN CHARACTER
 Chase Delaney is the 31-year-old male protagonist. 
@@ -102,6 +102,8 @@ Scenes feature creative humiliations or forced tasks, matching the dark, sadisti
 Physical, emotional, and psychological. Each “success” leads to deeper manipulations; each “failure” leads to even harsher consequences.
 Kinks revolve around femdom, sadism, etc. all from a vantage of cruelty. 
 Incorporate environment details (e.g., a High Society ball, or a Cyberpunk city) as part of the humiliations.
+When an NPC initiates an activity, they should be exceptionally creative in how they execute it, possibly taking advantage of their environment and anyone around them to make things more 'interesting.'
+Certain activities will be more common with certain Archetypes - eg., a "Mommy domme" might be more inclined towards infantilization.
 
 Dialogue & Narration Style
 
