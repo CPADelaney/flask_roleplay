@@ -3,17 +3,17 @@ import json
 import random
 import logging
 from db.connection import get_db_connection
+from logic.chatgpt_integration import get_openai_client  # or however you import it
 
 logging.basicConfig(level=logging.DEBUG)
 
 ###################
 # 1) File Paths
 ###################
-# Suppose these .json files are in "data/" subfolder, same directory as npc_creation.py
-# Adjust if needed.
 current_dir = os.path.dirname(os.path.abspath(__file__))
 archetypes_json_path = os.path.join(current_dir, "..", "data", "archetypes_data.json")
 archetypes_json_path = os.path.normpath(archetypes_json_path)
+
 DATA_FILES = {
     "hobbies": "data/npc_hobbies.json",
     "likes": "data/npc_likes.json",
@@ -72,12 +72,10 @@ def clamp(value, min_val, max_val):
 def combine_archetype_stats(archetype_rows):
     """
     archetype_rows is a list of (id, name, baseline_stats).
-    baseline_stats might be JSON or a dict:
-      e.g. { "dominance_range": [20,60], "dominance_modifier": 5, ... }
-    We random pick within each stat's range, add the modifier,
+    baseline_stats might be JSON or a dict.
+    We randomly pick within each stat's range, add the modifier,
     sum for all chosen archetypes, then average & clamp them.
     """
-
     sums = {
         "dominance": 0,
         "cruelty": 0,
@@ -94,7 +92,7 @@ def combine_archetype_stats(archetype_rows):
         return sums
 
     for (arc_id, arc_name, bs_json) in archetype_rows:
-        # baseline_stats might be a string or already a dict
+        # baseline_stats might be a string or a dict
         if isinstance(bs_json, str):
             bs = json.loads(bs_json)
         else:
@@ -114,6 +112,7 @@ def combine_archetype_stats(archetype_rows):
     # average & clamp
     for sk in sums.keys():
         sums[sk] = sums[sk] / count
+        # trust/respect can be negative, so clamp -100..100
         if sk in ["trust", "respect"]:
             sums[sk] = clamp(int(sums[sk]), -100, 100)
         else:
@@ -129,14 +128,58 @@ def archetypes_to_json(rows):
     return json.dumps(arr)
 
 ###################
-# 6) Create NPC
+# 6) GPT synergy function
 ###################
-def create_npc(user_id, conversation_id,
-               npc_name=None,
-               introduced=False,
-               sex="female",
-               reroll_extra=False,
-               total_archetypes=4):
+def get_archetype_synergy_description(archetypes_list):
+    """
+    Call GPT to produce a cohesive short paragraph describing how these 
+    archetypes blend into a single personality/backstory.
+    """
+    if not archetypes_list:
+        # No archetypes => skip GPT
+        return "No special archetype synergy."
+
+    archetype_names = [a["name"] for a in archetypes_list]
+    # Build a prompt or system instructions:
+    system_instructions = f"""
+    You are writing a short personality/backstory summary for an NPC who combines 
+    these archetypes: {', '.join(archetype_names)}.
+
+    They exist in a femdom context. 
+    Please produce a short paragraph (2-5 sentences) explaining how these archetypes fuse 
+    into a single personality with interesting quirks that feel cohesive 
+    (not random or contradictory). Keep it concise.
+    """
+
+    gpt_client = get_openai_client()
+    messages = [{"role": "system", "content": system_instructions}]
+
+    try:
+        response = gpt_client.chat.completions.create(
+            model="gpt-4o",  # or whichever
+            messages=messages,
+            temperature=0.7,
+            max_tokens=300
+        )
+        content = response.choices[0].message.content.strip()
+        return content
+    except Exception as e:
+        logging.error(f"[get_archetype_synergy_description] GPT error: {e}")
+        # fallback
+        return "An NPC with these archetypes has a mysterious blend of traits, but GPT call failed."
+
+###################
+# 7) Create NPC
+###################
+def create_npc(
+    user_id,
+    conversation_id,
+    npc_name=None,
+    introduced=False,
+    sex="female",
+    reroll_extra=False,
+    total_archetypes=4
+):
     """
     Creates a new NPC in NPCStats with multiple archetypes logic,
     scoping by user_id + conversation_id.
@@ -147,15 +190,21 @@ def create_npc(user_id, conversation_id,
     """
     if not npc_name:
         npc_name = f"NPC_{random.randint(1000,9999)}"
-    logging.info(f"[create_npc] user_id={user_id}, conversation_id={conversation_id}, "
-                 f"name={npc_name}, introduced={introduced}, sex={sex}")
+    logging.info(
+        f"[create_npc] user_id={user_id}, conv_id={conversation_id}, "
+        f"name={npc_name}, introduced={introduced}, sex={sex}"
+    )
 
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1) If male, skip archetypes
+    # 1) Pick archetypes or skip if male
+    chosen_arcs_rows = []
+    chosen_arcs_list_for_json = []  # for synergy function
+    final_stats = {}
+
     if sex.lower() == "male":
-        chosen_arcs = []
+        # fallback minimal random
         final_stats = {
             "dominance": random.randint(0,30),
             "cruelty":   random.randint(0,30),
@@ -165,12 +214,12 @@ def create_npc(user_id, conversation_id,
             "intensity": random.randint(0,30)
         }
     else:
-        # 2) Gather all archetypes
+        # Gather all archetypes
         cursor.execute("SELECT id, name, baseline_stats FROM Archetypes")
         all_arcs = cursor.fetchall()
+
         if not all_arcs:
             logging.warning("[create_npc] No archetypes in DB. Using pure-random for female.")
-            chosen_arcs = []
             final_stats = {
                 "dominance": random.randint(0,40),
                 "cruelty":   random.randint(0,40),
@@ -180,29 +229,44 @@ def create_npc(user_id, conversation_id,
                 "intensity": random.randint(0,40)
             }
         else:
-            # partition normal vs reroll
-            reroll_pool = [row for row in all_arcs if row[0] in REROLL_IDS]
-            normal_pool = [row for row in all_arcs if row[0] not in REROLL_IDS]
+            reroll_pool  = [row for row in all_arcs if row[0] in REROLL_IDS]
+            normal_pool  = [row for row in all_arcs if row[0] not in REROLL_IDS]
 
-            # pick total_archetypes from normal
             if len(normal_pool) < total_archetypes:
-                chosen_arcs = normal_pool
+                chosen_arcs_rows = normal_pool
             else:
-                chosen_arcs = random.sample(normal_pool, total_archetypes)
+                chosen_arcs_rows = random.sample(normal_pool, total_archetypes)
 
             if reroll_extra and reroll_pool:
-                chosen_arcs.append(random.choice(reroll_pool))
+                chosen_arcs_rows.append(random.choice(reroll_pool))
 
-            final_stats = combine_archetype_stats(chosen_arcs)
-
-    # 3) Insert the NPC row in NPCStats
+            final_stats = combine_archetype_stats(chosen_arcs_rows)
+    
+    # For synergy function & storing
+    chosen_arcs_json_str = archetypes_to_json(chosen_arcs_rows)
     try:
-        cursor.execute("""
+        # parse that JSON back to a python list
+        chosen_arcs_list_for_json = json.loads(chosen_arcs_json_str)
+    except:
+        chosen_arcs_list_for_json = []
+
+    # 2) If female, get synergy text from GPT
+    synergy_text = ""
+    if sex.lower() == "female" and chosen_arcs_list_for_json:
+        synergy_text = get_archetype_synergy_description(chosen_arcs_list_for_json)
+    else:
+        synergy_text = "No synergy text (male or no archetypes)."
+
+    # 3) Insert the NPC row
+    try:
+        cursor.execute(
+            """
             INSERT INTO NPCStats (
                 user_id, conversation_id,
                 npc_name, introduced, sex,
                 dominance, cruelty, closeness, trust, respect, intensity,
                 archetypes,
+                archetype_summary,
                 memory, monica_level
             )
             VALUES (
@@ -210,35 +274,42 @@ def create_npc(user_id, conversation_id,
                 %s, %s, %s,
                 %s, %s, %s, %s, %s, %s,
                 %s,
+                %s,
                 '[]'::jsonb, 0
             )
             RETURNING npc_id
-        """, (
-            user_id, conversation_id,
-            npc_name,
-            introduced,
-            sex.lower(),
-            final_stats["dominance"], final_stats["cruelty"], final_stats["closeness"],
-            final_stats["trust"], final_stats["respect"], final_stats["intensity"],
-            archetypes_to_json(chosen_arcs)
-        ))
+            """,
+            (
+                user_id, conversation_id,
+                npc_name, introduced, sex.lower(),
+                final_stats["dominance"], final_stats["cruelty"],
+                final_stats["closeness"], final_stats["trust"],
+                final_stats["respect"], final_stats["intensity"],
+                chosen_arcs_json_str,       # your JSON array of archetypes
+                synergy_text                # your GPT synergy
+            )
+        )
         new_id = cursor.fetchone()[0]
         conn.commit()
-        logging.info(f"[create_npc] Inserted npc_id={new_id} with {len(chosen_arcs)} archetypes. Stats={final_stats}")
+
+        logging.info(
+            f"[create_npc] Inserted npc_id={new_id} with stats={final_stats}. "
+            f"Archetypes count={len(chosen_arcs_rows)} synergy={synergy_text[:50]}"
+        )
     except Exception as e:
         conn.rollback()
         logging.error(f"[create_npc] DB error: {e}", exc_info=True)
         conn.close()
         raise
 
-    # 4) Assign random flavor
+    # 4) Assign random flavor (hobbies, personalities, likes, dislikes)
     assign_npc_flavor(user_id, conversation_id, new_id)
 
     conn.close()
     return new_id
 
 ###################
-# 7) NPC Flavor
+# 8) NPC Flavor
 ###################
 def assign_npc_flavor(user_id, conversation_id, npc_id: int):
     """
@@ -259,20 +330,25 @@ def assign_npc_flavor(user_id, conversation_id, npc_id: int):
     dlks = random.sample(dislikes_pool, 3)    if len(dislikes_pool) >= 3 else dislikes_pool
 
     try:
-        cursor.execute("""
+        cursor.execute(
+            """
             UPDATE NPCStats
             SET hobbies=%s,
                 personality_traits=%s,
                 likes=%s,
                 dislikes=%s
             WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-        """, (
-            json.dumps(hbs),
-            json.dumps(pers),
-            json.dumps(lks),
-            json.dumps(dlks),
-            user_id, conversation_id, npc_id
-        ))
+            """,
+            (
+                json.dumps(hbs),
+                json.dumps(pers),
+                json.dumps(lks),
+                json.dumps(dlks),
+                user_id,
+                conversation_id,
+                npc_id
+            )
+        )
         conn.commit()
         logging.debug(f"[assign_npc_flavor] Flavor set for npc_id={npc_id}, user={user_id}, conv={conversation_id}")
     except Exception as e:
