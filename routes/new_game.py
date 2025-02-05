@@ -68,29 +68,26 @@ def start_new_game():
 
         # 3) Create or reuse conversation
         if not conversation_id:
-            # Create a new conversation row with GPT scenario_name
+            # 1) Create new conversation
             cursor.execute("""
                 INSERT INTO conversations (user_id, conversation_name)
                 VALUES (%s, %s)
                 RETURNING id
             """, (user_id, scenario_name))
             conversation_id = cursor.fetchone()[0]
-            logging.info(f"Created new conversation_id={conversation_id} for user_id={user_id}, name={scenario_name}")
             conn.commit()
+            logging.info(f"Created new conversation_id={conversation_id} for user_id={user_id}, name={scenario_name}")
         else:
-            # Verify conversation belongs to user
-            cursor.execute("""
-                SELECT id FROM conversations
-                WHERE id=%s AND user_id=%s
-            """, (conversation_id, user_id))
+            # 2) If conversation is provided, ensure it belongs to user
+            cursor.execute("SELECT id FROM conversations WHERE id=%s AND user_id=%s",
+                           (conversation_id, user_id))
             row = cursor.fetchone()
             if not row:
-                logging.error(f"Conversation {conversation_id} not found or not owned by user {user_id}.")
-                return jsonify({"error": "Conversation not found or unauthorized"}), 403
+                return jsonify({"error": f"Conversation {conversation_id} not found or unauthorized"}), 403
             logging.info(f"Using existing conversation_id={conversation_id} for user_id={user_id}")
-
-        # 4) Clear old game data
-        logging.info(f"Deleting old game state for user_id={user_id}, conversation_id={conversation_id}.")
+        
+        # 3) Clear old data FIRST
+        logging.info(f"Clearing data for user_id={user_id}, conversation_id={conversation_id}")
         cursor.execute("DELETE FROM Events        WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
         cursor.execute("DELETE FROM PlannedEvents WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
         cursor.execute("DELETE FROM PlayerInventory WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
@@ -100,7 +97,19 @@ def start_new_game():
         cursor.execute("DELETE FROM SocialLinks   WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
         cursor.execute("DELETE FROM CurrentRoleplay WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
         conn.commit()
-        logging.info("Per-conversation tables cleared successfully.")
+        
+        # 5) Now that everything is cleared, re-insert environment data, including MegaSettingModifiers
+        
+        # Actually define combined_modifiers_json
+        combined_modifiers_json = json.dumps(mega_data["stat_modifiers"])
+        
+        cursor.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES (%s, %s, 'MegaSettingModifiers', %s)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, (user_id, conversation_id, combined_modifiers_json))
+        conn.commit()
 
         # 5) Insert missing settings if needed
         logging.info("Calling insert_missing_settings()")
