@@ -5,3 +5,4 @@ python-dotenv==1.0.0    # For local .env file support (optional)
 flask-cors==4.0.0  # Add this line
 openai
 celery
+redis
