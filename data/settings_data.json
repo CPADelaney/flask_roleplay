@@ -482,5 +482,243 @@
     "activity_examples": [
       "Constructed on the spot to fit the narrative’s flow, ensuring maximum humiliation and submission."
     ]
+  },
+  {
+    "name": "Theater",
+    "mood_tone": "An ornate setting where every stage and backstage corner can become an arena for dramatic humiliation.",
+    "enhanced_features": [
+      "Spotlights and curtains let NPCs orchestrate public embarrassment in front of live audiences.",
+      "Actors use rehearsal excuses to position you in demeaning roles, ensuring you’re always on display."
+    ],
+    "stat_modifiers": {
+      "exposure": "spikes when forced to perform humiliating tasks under stage lights.",
+      "obedience": "increases as you rely on NPCs’ approval to avoid a ‘scene’ in front of onlookers."
+    },
+    "activity_examples": [
+      "Forced to audition in front of a critical crowd, reciting lines that highlight your inferiority.",
+      "Assigned to costume work, made to dress in embarrassing attire, then paraded on stage as an ‘extra.’",
+      "Clean-up duty during live shows, crawling around to pick up scattered props as the audience snickers."
+    ]
+  },
+  {
+    "name": "Abandoned Theater",
+    "mood_tone": "A decaying venue steeped in shadows and echoes of past performances, where isolation intensifies every threat.",
+    "enhanced_features": [
+      "Dark corridors and creaking floors amplify a sense of being trapped.",
+      "Ghostly or eerie backdrops let NPCs set sinister ‘scenes’ of torment, blurring reality and performance."
+    ],
+    "stat_modifiers": {
+      "fear": "soars due to the eerie atmosphere, making you more compliant.",
+      "dependency": "increases as NPCs become your only guide through the haunting space."
+    },
+    "activity_examples": [
+      "Guided through dark passageways, forced to recite apologies that echo off distant walls.",
+      "Told to sit alone on the ancient stage, under a single flickering spotlight, while NPCs watch from the shadows.",
+      "Forced to re-enact old play scenes with humiliating roles, as if haunted by past actors’ spirits."
+    ]
+  },
+  {
+    "name": "Cyberspace",
+    "mood_tone": "A digital frontier where NPCs can bend virtual realities to expose and shame you at any moment.",
+    "enhanced_features": [
+      "NPCs hack into your personal data, leveraging it for blackmail or public leaks.",
+      "Virtual environments offer infinite ways to orchestrate embarrassments, from glitchy prisons to forced illusions."
+    ],
+    "stat_modifiers": {
+      "closeness": "rises as NPCs monitor every digital interaction.",
+      "anonymity": "drops, leaving you vulnerable and easily exploited."
+    },
+    "activity_examples": [
+      "Forced to traverse glitchy mazes where each wrong turn broadcasts a humiliating avatar performance.",
+      "NPCs upload your private confessions to public forums, skyrocketing your shame stat.",
+      "Involuntary participation in a live-streamed game show, rigged to expose your every failure."
+    ]
+  },
+  {
+    "name": "Cabaret",
+    "mood_tone": "A sensual, theatrical den where laughter and mockery mingle with the scent of cheap perfume and strong drinks.",
+    "enhanced_features": [
+      "NPC performers single you out from the stage, turning flirtatious banter into humiliating put-downs.",
+      "Dim lighting and sultry music mask the cruelty lurking beneath each witty remark."
+    ],
+    "stat_modifiers": {
+      "exposure": "spikes if you’re brought on stage for impromptu acts.",
+      "shame": "intensifies with each mocking cheer from the audience."
+    },
+    "activity_examples": [
+      "NPC hostess inviting you up for a ‘special performance’ where you’re dressed in provocative costumes.",
+      "Carrying drinks to patrons while wearing a humiliating label or accessory, ensuring everyone sees your role.",
+      "Dancing clumsily in front of the audience under NPC direction, each misstep greeted with laughs."
+    ]
+  },
+  {
+    "name": "Graveyard",
+    "mood_tone": "A somber, eerie place where silence is a canvas for psychological intimidation and forced reflection on mortality.",
+    "enhanced_features": [
+      "NPCs exploit the stillness and darkness to corner you, using whispers and threats of ‘eternal rest.’",
+      "Tombstones and crypts become backdrops for unsettling commands and midnight ‘rituals.’"
+    ],
+    "stat_modifiers": {
+      "fear": "skyrockets when isolated among graves at night.",
+      "obedience": "rises as defiance risks attracting supernatural consequences."
+    },
+    "activity_examples": [
+      "Digging small graves as a punishment task while NPCs watch, referencing your ‘inevitable end.’",
+      "Reading scripted confessions aloud in front of tombstones, as if seeking forgiveness from the dead.",
+      "Chained to a headstone during the darkest hours, forced to confront your vulnerability under NPC’s watch."
+    ]
+  },
+  {
+    "name": "Golden Age of Piracy",
+    "mood_tone": "A rough, lawless era of high seas and wooden decks, where roguish NPCs thrive on fear and plunder.",
+    "enhanced_features": [
+      "Ship captains demand total obedience, using maritime punishments like keel-hauling or plank-walking threats.",
+      "Port towns teeming with rowdy sailors willing to shame you publicly for sport."
+    ],
+    "stat_modifiers": {
+      "dominance": "increases as pirate NPCs relish their absolute authority on the ship.",
+      "fear": "rises with every stormy night or threat of mutiny."
+    },
+    "activity_examples": [
+      "Swabbing the decks on hands and knees while pirates throw scraps and insults.",
+      "Forced to serve as the captain’s personal ‘table’ during rowdy feasts, trembling under tankards slammed on your back.",
+      "Being paraded in chains through a pirate-infested port, with jeering crowds mocking your captivity."
+    ]
+  },
+  {
+    "name": "Haunted House",
+    "mood_tone": "A creaking mansion of shifting shadows and lurking spirits, designed to erode courage and intensify submission.",
+    "enhanced_features": [
+      "Doors slam and lights flicker at the worst moments, heightening the sense of entrapment.",
+      "NPCs (or spectral forces) manipulate hidden passages to corner you in isolating rooms."
+    ],
+    "stat_modifiers": {
+      "fear": "soars whenever supernatural events occur without warning.",
+      "dependency": "increases as you rely on NPCs to guide you out or promise safety."
+    },
+    "activity_examples": [
+      "Searching dimly lit corridors for ‘escape keys,’ only to find them replaced by notes demanding humiliating acts.",
+      "Participating in midnight séances where you must confess your faults to appease restless spirits.",
+      "Locked in a dusty attic until you beg an NPC ghost-hunter for release, bartering your dignity for freedom."
+    ]
+  },
+  {
+    "name": "Speakeasy",
+    "mood_tone": "A clandestine 1920s haven of jazz, illicit drinks, and backroom deals, where secrecy becomes a tool for leverage.",
+    "enhanced_features": [
+      "NPC bartenders and mob affiliates exploit your presence, charging 'extra fees' that turn into humiliating demands.",
+      "Music and dancing mask the whispers of blackmail and threats, intensifying the tension."
+    ],
+    "stat_modifiers": {
+      "trust": "falls quickly, as everyone has hidden motives.",
+      "obedience": "rises if you’re trying to keep your secret safe from law enforcement or criminals."
+    },
+    "activity_examples": [
+      "Forced to ‘entertain’ at a private booth, wearing era-appropriate but demeaning attire.",
+      "Cleaning glassware all night under the watchful eyes of smug NPCs, who comment on each slip.",
+      "Begging a mob boss for protection from an impending raid, offering deeper submission to pay off your ‘tabs.’"
+    ]
+  },
+  {
+    "name": "Casino",
+    "mood_tone": "A glittering den of chance and temptation, where every high-stakes bet becomes leverage against you.",
+    "enhanced_features": [
+      "NPC dealers and pit bosses rig games, ensuring losses that deepen your debt—and your subservience.",
+      "Security cameras monitor every misstep, capturing evidence for blackmail."
+    ],
+    "stat_modifiers": {
+      "desperation": "climbs with each gamble, as debt ties you more tightly to NPC demands.",
+      "obedience": "spikes when threatened with public exposure or forced eviction."
+    },
+    "activity_examples": [
+      "Being paraded around by the casino owner wearing a sign declaring your mounting debts.",
+      "Forced to be a ‘lucky charm’ for high rollers, standing quietly while they pat your head for luck.",
+      "Washing chips and polishing slot machines overnight to ‘work off’ your losses under mocking supervision."
+    ]
+  },
+  {
+    "name": "Desert Island",
+    "mood_tone": "A sun-scorched isolation where survival needs force strict hierarchies, and every misstep invites ruthless consequences.",
+    "enhanced_features": [
+      "Limited resources make you dependent on dominant NPCs for food and water.",
+      "Harsh climate intensifies physical exhaustion, amplifying every humiliating demand."
+    ],
+    "stat_modifiers": {
+      "dependency": "accelerates under threat of starvation or dehydration.",
+      "obedience": "rises as resisting tasks means being denied critical supplies."
+    },
+    "activity_examples": [
+      "Collecting coconuts while NPCs lounge in the shade, critiquing your every move.",
+      "Forced to stand watch all night, surrendering sleep while NPCs rest comfortably.",
+      "Scrubbing driftwood for NPC bonfires, scalded by the sun and mocked for your weakness."
+    ]
+  },
+  {
+    "name": "Coast",
+    "mood_tone": "An open shoreline battered by waves and shifting tides, offering both idyllic views and a stage for salt-sprayed embarrassment.",
+    "enhanced_features": [
+      "Public beaches expose you to onlookers, intensifying humiliations under bright sunlight.",
+      "NPCs use natural elements—sand, seaweed, rough waters—to craft creative punishments."
+    ],
+    "stat_modifiers": {
+      "exposure": "increases with open, crowded beaches where privacy is scarce.",
+      "shame": "intensifies with wet clothes or forced scanty attire."
+    },
+    "activity_examples": [
+      "Being made to drag heavy nets across the shoreline, with beachgoers laughing at your struggle.",
+      "Buried in the sand up to your neck as NPCs discuss your faults like a sideshow attraction.",
+      "Chasing drifting beach towels while NPCs splash water at you, mocking every stumble."
+    ]
+  },
+  {
+    "name": "Mysterious Woods",
+    "mood_tone": "A labyrinth of towering trees and rustling undergrowth, where isolation and primal instincts converge.",
+    "enhanced_features": [
+      "NPCs use hidden clearings to stage ambushes or forced ‘hunts.’",
+      "No clear paths or landmarks, so escape attempts end in deeper entanglement."
+    ],
+    "stat_modifiers": {
+      "fear": "climbs with each rustle or howl in the darkness.",
+      "dependency": "on any NPC guide rises, as losing them means getting lost forever."
+    },
+    "activity_examples": [
+      "Forced to gather firewood at dusk, anxiously scanning shadows as NPCs lurk just out of sight.",
+      "Chased through brambles in a 'predator-prey' game, scraping skin and pride as you flee.",
+      "Tied to a tree while insects buzz around, reciting confessions to earn release from your captors."
+    ]
+  },
+  {
+    "name": "Wild West",
+    "mood_tone": "A dusty frontier of lawless towns, saloons, and outlaws, where quick draws and quicker humiliations rule.",
+    "enhanced_features": [
+      "NPCs exploit makeshift jails, public stocks, or forced standoffs to assert power.",
+      "Saloon gossip travels fast, ensuring your every embarrassment is known in the next county by sundown."
+    ],
+    "stat_modifiers": {
+      "dominance": "rises when gunslingers and sheriffs use frontier justice against you.",
+      "shame": "increases each time rumors of your subservience spread."
+    },
+    "activity_examples": [
+      "Scrubbing spit and sawdust off saloon floors while rowdy patrons jeer.",
+      "Riding through town on a donkey labeled with your ‘crime’ or failing, accompanied by whistling onlookers.",
+      "Locked in the sheriff’s single-cell jail, forced to beg for water or shade under the scorching desert sun."
+    ]
+  },
+  {
+    "name": "Clinic",
+    "mood_tone": "A sterile, fluorescent-lit environment where medical authority and invasive procedures heighten vulnerability.",
+    "enhanced_features": [
+      "NPCs leverage the ‘for your health’ rationale to impose examinations or embarrassing tasks.",
+      "Cold, clinical tools and procedures turn humiliation into something coldly methodical."
+    ],
+    "stat_modifiers": {
+      "dependency": "increases as refusing medical orders can be deemed 'dangerous.'",
+      "fear": "climbs with every invasive or embarrassing ‘check-up.’"
+    },
+    "activity_examples": [
+      "Forced to wear a flimsy gown and parade through the clinic hall, clutching it to preserve some modesty.",
+      "NPC staff discussing your ‘condition’ loudly at the reception desk, ignoring your pleas for privacy.",
+      "Required to clean or sterilize equipment while under observation, every error leading to a scolding ‘in the name of safety.’"
+    ]
   }
 ]
