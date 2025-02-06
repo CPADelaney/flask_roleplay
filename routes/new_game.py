@@ -2,19 +2,25 @@ import logging
 import json
 import random
 import time
+import asyncio
 from flask import Blueprint, request, jsonify, session
+import asyncpg
 import openai
-from db.connection import get_db_connection
+
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.npc_creation import create_npc
 from logic.aggregator import get_aggregated_roleplay_context
 from routes.story_routes import build_aggregator_text
 
+# Make sure you have your database DSN configured somewhere.
+# For example: "postgresql://user:password@localhost:5432/yourdb"
+DB_DSN = "postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@postgres.railway.internal:5432/railway"
+
 new_game_bp = Blueprint('new_game_bp', __name__)
 
 @new_game_bp.route('/start_new_game', methods=['POST'])
-def start_new_game():
+async def start_new_game():
     logging.info("=== START: /start_new_game CALLED ===")
 
     # 1. Confirm the user is logged in.
@@ -22,52 +28,48 @@ def start_new_game():
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
 
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
+    # 2. Parse the incoming JSON (unwrap "params" if present).
+    data = request.get_json() or {}
+    if "params" in data:
+        data = data["params"]
+    conversation_id = data.get("conversation_id")
 
-        # 2. Parse the incoming JSON (unwrap "params" if present).
-        data = request.get_json() or {}
-        if "params" in data:
-            data = data["params"]
-        conversation_id = data.get("conversation_id")
+    # 3. Generate the environment snippet.
+    # (We still call the synchronous version in a thread.)
+    mega_data = await asyncio.to_thread(generate_mega_setting_logic)
+    if "error" in mega_data:
+        mega_data["mega_name"] = "No environment available"
+    environment_name = mega_data["mega_name"]
+    environment_desc = (
+        "An eclectic realm combining monstrous societies, futuristic tech, "
+        "and archaic ruins floating across the sky. Strange energies swirl, "
+        "revealing hidden rituals and uncharted opportunities."
+    )
 
-        # 3. Generate the environment snippet.
-        mega_data = generate_mega_setting_logic()
-        if "error" in mega_data:
-            mega_data["mega_name"] = "No environment available"
-        environment_name = mega_data["mega_name"]
-        environment_desc = (
-            "An eclectic realm combining monstrous societies, futuristic tech, "
-            "and archaic ruins floating across the sky. Strange energies swirl, "
-            "revealing hidden rituals and uncharted opportunities."
+    # 4. Generate scenario name and quest if no conversation ID is provided.
+    scenario_name, quest_blurb = ("New Game", "")
+    if not conversation_id:
+        scenario_name, quest_blurb = await asyncio.to_thread(
+            gpt_generate_scenario_name_and_quest, environment_name, environment_desc
         )
 
-        # 4. Generate scenario name and quest if no conversation ID is provided.
-        scenario_name, quest_blurb = ("New Game", "")
+    # 5. Open an asyncpg connection.
+    conn = await asyncpg.connect(dsn=DB_DSN)
+    try:
+        # Create or reuse the conversation.
         if not conversation_id:
-            scenario_name, quest_blurb = gpt_generate_scenario_name_and_quest(environment_name, environment_desc)
-
-        # 5. Create or reuse the conversation.
-        if not conversation_id:
-            cursor.execute(
-                """
-                INSERT INTO conversations (user_id, conversation_name)
-                VALUES (%s, %s)
-                RETURNING id
-                """,
-                (user_id, scenario_name)
+            row = await conn.fetchrow(
+                "INSERT INTO conversations (user_id, conversation_name) VALUES ($1, $2) RETURNING id",
+                user_id, scenario_name
             )
-            conversation_id = cursor.fetchone()[0]
-            # Commit immediately so that subsequent operations (like create_npc) can see the new conversation.
-            conn.commit()
+            conversation_id = row["id"]
             logging.info(f"Created new conversation_id={conversation_id} for user_id={user_id}, name={scenario_name}")
         else:
-            cursor.execute(
-                "SELECT id FROM conversations WHERE id=%s AND user_id=%s",
-                (conversation_id, user_id)
+            row = await conn.fetchrow(
+                "SELECT id FROM conversations WHERE id=$1 AND user_id=$2",
+                conversation_id, user_id
             )
-            if not cursor.fetchone():
+            if not row:
                 return jsonify({"error": f"Conversation {conversation_id} not found or unauthorized"}), 403
             logging.info(f"Using existing conversation_id={conversation_id} for user_id={user_id}")
 
@@ -77,7 +79,8 @@ def start_new_game():
             "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"
         ]
         for table in tables_to_clear:
-            cursor.execute(f"DELETE FROM {table} WHERE user_id=%s AND conversation_id=%s", (user_id, conversation_id))
+            # (Since table names cannot be parameterized, we assume these are trusted constants.)
+            await conn.execute(f"DELETE FROM {table} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
         logging.info(f"Cleared data for user_id={user_id}, conversation_id={conversation_id}")
 
         # 7. Insert environment data into CurrentRoleplay.
@@ -88,64 +91,58 @@ def start_new_game():
         if quest_blurb.strip():
             roleplay_entries["MainQuest"] = quest_blurb.strip()
         for key, value in roleplay_entries.items():
-            cursor.execute(
+            await conn.execute(
                 """
                 INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                VALUES (%s, %s, %s, %s)
+                VALUES ($1, $2, $3, $4)
                 ON CONFLICT (user_id, conversation_id, key)
                 DO UPDATE SET value=EXCLUDED.value
                 """,
-                (user_id, conversation_id, key, value)
+                user_id, conversation_id, key, value
             )
 
         # 8. Ensure all necessary settings exist.
         logging.info("Calling insert_missing_settings()")
-        insert_missing_settings()
+        await asyncio.to_thread(insert_missing_settings)
 
         # 9. Reset or create 'Chase' in PlayerStats.
-        cursor.execute(
-            """
-            DELETE FROM PlayerStats
-            WHERE user_id=%s AND conversation_id=%s AND player_name <> 'Chase'
-            """,
-            (user_id, conversation_id)
+        await conn.execute(
+            "DELETE FROM PlayerStats WHERE user_id=$1 AND conversation_id=$2 AND player_name <> 'Chase'",
+            user_id, conversation_id
         )
-        cursor.execute(
-            """
-            SELECT id FROM PlayerStats
-            WHERE user_id=%s AND conversation_id=%s AND player_name='Chase'
-            """,
-            (user_id, conversation_id)
+        row = await conn.fetchrow(
+            "SELECT id FROM PlayerStats WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'",
+            user_id, conversation_id
         )
-        if cursor.fetchone():
-            cursor.execute(
-                '''
+        if row:
+            await conn.execute(
+                """
                 UPDATE PlayerStats
                 SET corruption=10, confidence=60, willpower=50, obedience=20,
                     dependency=10, lust=15, mental_resilience=55, physical_endurance=40
-                WHERE user_id=%s AND conversation_id=%s AND player_name='Chase'
-                ''',
-                (user_id, conversation_id)
+                WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+                """,
+                user_id, conversation_id
             )
             logging.info("Updated existing 'Chase' stats.")
         else:
-            cursor.execute(
-                '''
+            await conn.execute(
+                """
                 INSERT INTO PlayerStats (
                   user_id, conversation_id, player_name,
                   corruption, confidence, willpower,
                   obedience, dependency, lust,
                   mental_resilience, physical_endurance
                 )
-                VALUES (%s, %s, 'Chase', 10, 60, 50, 20, 10, 15, 55, 40)
-                ''',
-                (user_id, conversation_id)
+                VALUES ($1, $2, 'Chase', 10, 60, 50, 20, 10, 15, 55, 40)
+                """,
+                user_id, conversation_id
             )
             logging.info("Inserted fresh row for 'Chase'.")
 
-        # 10. Spawn new NPCs (note: the loop comment mentioned 10 but here only 3 are created).
+        # 10. Spawn new NPCs.
         for i in range(2):
-            npc_id = create_npc(user_id=user_id, conversation_id=conversation_id, introduced=False)
+            npc_id = await asyncio.to_thread(create_npc, user_id=user_id, conversation_id=conversation_id, introduced=False)
             logging.info(f"Spawned NPC {i+1}/3, ID={npc_id}")
 
         # 11. Define the player's schedule and role.
@@ -164,8 +161,8 @@ def start_new_game():
         )
 
         # 12. Get aggregated roleplay context and generate the opening narrative.
-        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
-        aggregator_text = build_aggregator_text(aggregator_data)
+        aggregator_data = await asyncio.to_thread(get_aggregated_roleplay_context, user_id, conversation_id, "Chase")
+        aggregator_text = await asyncio.to_thread(build_aggregator_text, aggregator_data)
         opening_user_prompt = (
             "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, "
             "briefly recount the new environment’s background or history from the aggregator data, "
@@ -178,14 +175,8 @@ def start_new_game():
             "Conclude with a menacing or teasing invitation for Chase to proceed."
         )
 
-        gpt_reply = get_chatgpt_response(
-            conversation_id=conversation_id,
-            aggregator_text=aggregator_text,
-            user_input=opening_user_prompt
-        )
+        gpt_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id, aggregator_text, opening_user_prompt)
         nyx_text = gpt_reply.get("response")
-
-        # 13. If GPT returns a function call or empty text, retry with a forced text-only prompt.
         if gpt_reply.get("type") == "function_call" or not nyx_text:
             logging.info("GPT returned a function call or empty response; retrying without function calls.")
             client = get_openai_client()
@@ -193,44 +184,38 @@ def start_new_game():
                 {"role": "system", "content": aggregator_text},
                 {"role": "user", "content": f"No function calls for the introduction. Produce only text narrative.\n\n{opening_user_prompt}"}
             ]
-            fallback_response = client.chat.completions.create(
+            fallback_response = await asyncio.to_thread(
+                client.chat.completions.create,
                 model="gpt-4o",
                 messages=forced_messages,
                 temperature=0.7,
-                timeout=120 
+                timeout=120
             )
             fallback_text = fallback_response.choices[0].message.content.strip()
             nyx_text = fallback_text if fallback_text else "[No text returned from GPT]"
 
-        # 14. Store the final GPT response into the messages table.
-        structured_json_str = json.dumps(gpt_reply)
-        cursor.execute(
+        # 13. Store the final GPT response into the messages table.
+        await conn.execute(
             """
             INSERT INTO messages (conversation_id, sender, content, structured_content)
-            VALUES (%s, %s, %s, %s)
+            VALUES ($1, $2, $3, $4)
             """,
-            (conversation_id, "Nyx", nyx_text, structured_json_str)
+            conversation_id, "Nyx", nyx_text, json.dumps(gpt_reply)
         )
 
-        # 15. Retrieve conversation history.
-        cursor.execute(
-            """
-            SELECT sender, content, created_at
-            FROM messages
-            WHERE conversation_id=%s
-            ORDER BY id ASC
-            """,
-            (conversation_id,)
+        # 14. Retrieve conversation history.
+        rows = await conn.fetch(
+            "SELECT sender, content, created_at FROM messages WHERE conversation_id=$1 ORDER BY id ASC",
+            conversation_id
         )
         conversation_history = [
-            {"sender": r[0], "content": r[1], "created_at": r[2].isoformat()}
-            for r in cursor.fetchall()
+            {"sender": row["sender"], "content": row["content"], "created_at": row["created_at"].isoformat()}
+            for row in rows
         ]
 
-        conn.commit()
         success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
         logging.info(f"Success! {success_msg}")
-
+        logging.info("=== END: /start_new_game ===")
         return jsonify({
             "message": success_msg,
             "scenario_name": scenario_name,
@@ -244,11 +229,9 @@ def start_new_game():
 
     except Exception as e:
         logging.exception("Error in /start_new_game:")
-        conn.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
-        conn.close()
-        logging.info("=== END: /start_new_game ===")
+        await conn.close()
 
 
 def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
@@ -256,7 +239,7 @@ def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
     Calls GPT to produce a short scenario name and a quest summary.
     Returns a tuple: (scenario_name, quest_blurb).
     """
-    client = get_openai_client()
+    client = get_openai_client()  # Use the OpenAI client helper
     unique_token = f"{random.randint(1000, 9999)}_{int(time.time())}"
     forbidden_words = ["mistress", "darkness", "manor", "chains", "twilight"]
 
@@ -282,7 +265,7 @@ def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
         temperature=0.9,
         max_tokens=120,
         frequency_penalty=0.3,
-        timeout=120 
+        timeout=120
     )
 
     msg = response.choices[0].message.content.strip()
