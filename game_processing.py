@@ -426,41 +426,41 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
 
 # ---------------------------------------------------------------------
 # Main game processing function
-async def async_process_new_game(user_id, conversation_data):
-    logging.info("=== Starting async_process_new_game for user_id=%s with conversation_data=%s ===", user_id, conversation_data)
-    
-            # Step 1: Create or validate conversation.
-            provided_conversation_id = conversation_data.get("conversation_id")
-            conn = await asyncpg.connect(dsn=DB_DSN)
-            try:
-                if not provided_conversation_id:
-                    preliminary_name = "New Game"
-                    logging.info("No conversation_id provided; creating a new conversation for user_id=%s", user_id)
-                    row = await conn.fetchrow("""
-                        INSERT INTO conversations (user_id, conversation_name)
-                        VALUES ($1, $2)
-                        RETURNING id
-                    """, user_id, preliminary_name)
-                    conversation_id = row["id"]
-                    logging.info("Created new conversation with id=%s for user_id=%s", conversation_id, user_id)
-                else:
-                    conversation_id = provided_conversation_id
-                    logging.info("Validating provided conversation_id=%s for user_id=%s", conversation_id, user_id)
-                    row = await conn.fetchrow("""
-                        SELECT id FROM conversations WHERE id=$1 AND user_id=$2
-                    """, conversation_id, user_id)
-                    if not row:
-                        raise Exception(f"Conversation {conversation_id} not found or unauthorized")
-                    logging.info("Validated existing conversation with id=%s", conversation_id)
+    async def async_process_new_game(user_id, conversation_data):
+        logging.info("=== Starting async_process_new_game for user_id=%s with conversation_data=%s ===", user_id, conversation_data)
+        
+        # Step 1: Create or validate conversation.
+        provided_conversation_id = conversation_data.get("conversation_id")
+        conn = await asyncpg.connect(dsn=DB_DSN)
+        try:
+            if not provided_conversation_id:
+                preliminary_name = "New Game"
+                logging.info("No conversation_id provided; creating a new conversation for user_id=%s", user_id)
+                row = await conn.fetchrow("""
+                    INSERT INTO conversations (user_id, conversation_name)
+                    VALUES ($1, $2)
+                    RETURNING id
+                """, user_id, preliminary_name)
+                conversation_id = row["id"]
+                logging.info("Created new conversation with id=%s for user_id=%s", conversation_id, user_id)
+            else:
+                conversation_id = provided_conversation_id
+                logging.info("Validating provided conversation_id=%s for user_id=%s", conversation_id, user_id)
+                row = await conn.fetchrow("""
+                    SELECT id FROM conversations WHERE id=$1 AND user_id=$2
+                """, conversation_id, user_id)
+                if not row:
+                    raise Exception(f"Conversation {conversation_id} not found or unauthorized")
+                logging.info("Validated existing conversation with id=%s", conversation_id)
             
-                # *** New Block: Clear old game data early ***
-                tables_to_clear = [
-                    "Events", "PlannedEvents", "PlayerInventory", "Quests",
-                    "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"
-                ]
-                for table in tables_to_clear:
-                    await conn.execute(f"DELETE FROM {table} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
-                logging.info("Cleared old game data for conversation_id=%s", conversation_id)
+            # *** New Block: Clear old game data early ***
+            tables_to_clear = [
+                "Events", "PlannedEvents", "PlayerInventory", "Quests",
+                "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"
+            ]
+            for table in tables_to_clear:
+                await conn.execute(f"DELETE FROM {table} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
+            logging.info("Cleared old game data for conversation_id=%s", conversation_id)
 
         
             # Step 2: Dynamically generate environment components, a setting name, and a cohesive description.
