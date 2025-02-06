@@ -105,16 +105,6 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     for (nid, nname, dom, cru, clos, tru, resp, inten,
          hbs, pers, lks, dlks, sched, curr_loc) in introduced_rows:
 
-        # Trim schedule to the current day
-        trimmed_schedule = {}
-        if sched:
-            try:
-                full_sched = json.loads(sched)
-                if current_day in full_sched:
-                    trimmed_schedule[current_day] = full_sched[current_day]
-            except Exception:
-                pass
-
         introduced_npcs.append({
             "npc_id": nid,
             "npc_name": nname,
@@ -147,21 +137,16 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     """, (user_id, conversation_id))
     unintroduced_rows = cursor.fetchall()
     for (nid, nname, sched, curr_loc) in unintroduced_rows:
-        trimmed_schedule = {}
-        if sched:
-            try:
-                full_sched = json.loads(sched)
-                if current_day in full_sched:
-                    trimmed_schedule[current_day] = full_sched[current_day]
-            except Exception:
-                pass
+        try:
+            trimmed_schedule = json.loads(sched) if sched else {}
+        except Exception:
+            trimmed_schedule = {}
         unintroduced_npcs.append({
             "npc_id": nid,
             "npc_name": nname,
             "current_location": curr_loc or "Unknown",
             "schedule": trimmed_schedule
         })
-
     #----------------------------------------------------------------
     # 5) Social Links
     #----------------------------------------------------------------
