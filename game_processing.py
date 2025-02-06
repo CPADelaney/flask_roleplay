@@ -457,21 +457,32 @@ async def async_process_new_game(user_id, conversation_data):
         logging.info("Generating mega setting logic for conversation_id=%s", conversation_id)
         mega_data = await asyncio.to_thread(generate_mega_setting_logic)
         logging.info("Mega data returned: %s", mega_data)
-        unique_envs = mega_data.get("unique_environments")
-        if not unique_envs:
-            unique_envs = mega_data.get("selected_settings", [])
-        logging.info("Extracted unique_envs: %s", unique_envs)
+        
+        # Use selected_settings if available; otherwise, try unique_environments.
+        unique_envs = mega_data.get("unique_envurations")  # typo check: adjust key if needed
+        unique_envs = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
+        logging.info("Extracted environment components before fallback: %s", unique_envs)
         if not unique_envs or len(unique_envs) == 0:
             unique_envs = [
                 "A sprawling cyberpunk metropolis under siege by monstrous clans",
                 "Floating archaic ruins steeped in ancient rituals",
                 "Futuristic tech hubs that blend magic and machinery"
             ]
-            logging.info("No unique_envs returned; using fallback values: %s", unique_envs)
+            logging.info("No environment components returned; using fallback: %s", unique_envs)
         else:
             logging.info("Unique environment components: %s", unique_envs)
         
-        # --- Generate a dynamic setting name ---
+        # Extract enhanced features and stat modifiers.
+        enhanced_features = mega_data.get("enhanced_features", [])
+        stat_modifiers = mega_data.get("stat_modifiers", {})
+        
+        # Create strings for enhanced features and stat modifiers.
+        enhanced_features_str = ", ".join(enhanced_features) if enhanced_features else ""
+        stat_modifiers_str = ", ".join([f"{k}: {v}" for k, v in stat_modifiers.items()]) if stat_modifiers else ""
+        logging.info("Enhanced features: %s", enhanced_features_str)
+        logging.info("Stat modifiers: %s", stat_modifiers_str)
+        
+        # --- Generate a dynamic setting name (using only the environment components) ---
         name_prompt = "Given the following environment components:\n"
         for i, env in enumerate(unique_envs):
             name_prompt += f"Component {i+1}: {env}\n"
@@ -498,8 +509,12 @@ async def async_process_new_game(user_id, conversation_data):
         env_desc_prompt = "Using the following environment components:\n"
         for i, env in enumerate(unique_envs):
             env_desc_prompt += f"Component {i+1}: {env}\n"
+        if enhanced_features_str:
+            env_desc_prompt += f"Enhanced features: {enhanced_features_str}\n"
+        if stat_modifiers_str:
+            env_desc_prompt += f"Stat modifiers: {stat_modifiers_str}\n"
         env_desc_prompt += (
-            "Describe in a cohesive narrative how these components combine to form a unique, dynamic world."
+            "Describe in a cohesive narrative how these components, features, and modifiers combine to form a unique, dynamic world."
         )
         logging.info("Calling GPT for dynamic environment description with prompt: %s", env_desc_prompt)
         env_desc_reply = await spaced_gpt_call(conversation_id, "", env_desc_prompt)
@@ -551,6 +566,7 @@ async def async_process_new_game(user_id, conversation_data):
         environment_desc = f"{base_environment_desc}\n\nHistory: {environment_history}"
         logging.info("Constructed environment description: %s", environment_desc)
         
+                
         # Step 3: Store EnvironmentDesc in CurrentRoleplay.
         logging.info("Storing EnvironmentDesc in CurrentRoleplay for conversation_id=%s", conversation_id)
         await conn.execute("""
