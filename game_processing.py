@@ -575,22 +575,21 @@ async def async_process_new_game(user_id, conversation_data):
         # Step 4: Generate and store notable Events.
         events_prompt = (
             "Based on the following environment description, generate a JSON array of notable events and holidays in this setting. "
-            "Each event should be an object with keys 'name' and 'description' describing the event briefly. "
+            "Each event should be an object with keys 'name', 'description', 'start_time', 'end_time', and 'location' describing the event briefly. "
             "\nEnvironment description: " + environment_desc
         )
         logging.info("Generating events with prompt: %s", events_prompt)
         events_reply = await spaced_gpt_call(conversation_id, environment_desc, events_prompt)
         events_response = events_reply.get("response", "")
+        logging.info("Raw events response from GPT: %s", events_response)
         if events_response:
             events_response = events_response.strip()
-            # If the response is wrapped in markdown code fences, remove them.
+            # Remove markdown code fences if present.
             if events_response.startswith("```"):
                 logging.info("Events response contains markdown code fences. Stripping them.")
                 lines = events_response.splitlines()
-                # Remove the first line if it starts with ``` (and possibly a language tag)
                 if lines[0].startswith("```"):
                     lines = lines[1:]
-                # Remove the last line if it starts with ```
                 if lines and lines[-1].startswith("```"):
                     lines = lines[:-1]
                 events_response = "\n".join(lines).strip()
@@ -600,15 +599,27 @@ async def async_process_new_game(user_id, conversation_data):
         except Exception as e:
             logging.warning("Failed to parse events JSON; using fallback. Exception: %s", e, exc_info=True)
             events_json = []
+        
         for event in events_json:
             event_name = event.get("name", "Unnamed Event")
             event_desc = event.get("description", "")
-            logging.info("Storing event: %s - %s", event_name, event_desc)
+            ev_start = event.get("start_time", "TBD Start")
+            ev_end = event.get("end_time", "TBD End")
+            ev_loc = event.get("location", "Unknown")
+            # Fallback if any of the required fields are missing or null.
+            if not ev_start:
+                ev_start = "TBD Start"
+            if not ev_end:
+                ev_end = "TBD End"
+            if not ev_loc:
+                ev_loc = "Unknown"
+            logging.info("Storing event: %s - %s | start_time: %s, end_time: %s, location: %s", event_name, event_desc, ev_start, ev_end, ev_loc)
             await conn.execute("""
-                INSERT INTO Events (user_id, conversation_id, event_name, description)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO Events (user_id, conversation_id, event_name, description, start_time, end_time, location)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT DO NOTHING
-            """, user_id, conversation_id, event_name, event_desc)
+            """, user_id, conversation_id, event_name, event_desc, ev_start, ev_end, ev_loc)
+
 
         # Step 5: Generate and store notable Locations.
         locations_prompt = (
