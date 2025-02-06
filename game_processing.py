@@ -609,7 +609,7 @@ async def async_process_new_game(user_id, conversation_data):
             event_desc = event.get("description", "")
             logging.info("Storing event: %s - %s", event_name, event_desc)
             await conn.execute("""
-                INSERT INTO Events (user_id, conversation_id, event_name, event_description)
+                INSERT INTO Events (user_id, conversation_id, event_name, description)
                 VALUES ($1, $2, $3, $4)
                 ON CONFLICT DO NOTHING
             """, user_id, conversation_id, event_name, event_desc)
