@@ -37,11 +37,10 @@ async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0):
 # ---------------------------------------------------------------------
 # Universal update function (asynchronous version)
 async def apply_universal_update(user_id, conversation_id, update_data, conn):
-    """
-    Processes the universal_update payload, inserting or updating DB records.
-    This function has been converted to async/await using asyncpg.
-    """
-    logging.info("Applying universal update for conversation_id=%s with data: %s", conversation_id, update_data)
+    logging.info("=== [apply_universal_update] START ===")
+    logging.info("Update data keys: %s", list(update_data.keys()))
+    # For example, log the entire payload in a pretty format:
+    logging.info("Full update data:\n%s", json.dumps(update_data, indent=2))
     
     # 1) roleplay_updates
     rp_updates = update_data.get("roleplay_updates", {})
@@ -57,7 +56,8 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value = EXCLUDED.value
         """, user_id, conversation_id, key, stored_val)
-        logging.info("Inserted/Updated CurrentRoleplay => key=%s, value=%s", key, val)
+        logging.info("Inserted/Updated CurrentRoleplay: key=%s, value=%s", key, stored_val)
+    
     
     # 2) npc_creations
     npc_creations = update_data.get("npc_creations", [])
@@ -454,9 +454,9 @@ async def async_process_new_game(user_id, conversation_data):
             logging.info("Validated existing conversation with id=%s", conversation_id)
         
             # Step 2: Dynamically generate environment components, a setting name, and a cohesive description.
-            logging.info("Generating mega setting logic for conversation_id=%s", conversation_id)
+            logging.info("Calling generate_mega_setting_logic for conversation_id=%s", conversation_id)
             mega_data = await asyncio.to_thread(generate_mega_setting_logic)
-            logging.info("Mega data returned: %s", mega_data)
+            logging.info("Mega data returned: %s", json.dumps(mega_data, indent=2))
             # Use selected_settings if available; otherwise, try unique_environments.
             unique_envs = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
             logging.info("Extracted environment components before fallback: %s", unique_envs)
@@ -469,6 +469,13 @@ async def async_process_new_game(user_id, conversation_data):
                 logging.info("No environment components returned; using fallback: %s", unique_envs)
             else:
                 logging.info("Unique environment components: %s", unique_envs)
+            
+            # Also log enhanced_features and stat_modifiers:
+            enhanced_features = mega_data.get("enhanced_features", [])
+            stat_modifiers = mega_data.get("stat_modifiers", {})
+            logging.info("Enhanced features: %s", enhanced_features)
+            logging.info("Stat modifiers: %s", stat_modifiers)
+
         
             # Extract enhanced features and stat modifiers.
             enhanced_features = mega_data.get("enhanced_features", [])
@@ -630,23 +637,42 @@ async def async_process_new_game(user_id, conversation_data):
         logging.info("Generating locations with prompt: %s", locations_prompt)
         locations_reply = await spaced_gpt_call(conversation_id, environment_desc, locations_prompt)
         locations_response = locations_reply.get("response", "")
+        logging.info("Raw locations response from GPT: %s", locations_response)
+        
         if locations_response:
             locations_response = locations_response.strip()
+            # Check if the response is wrapped in Markdown code fences (```)
+            if locations_response.startswith("```"):
+                logging.info("Locations response contains markdown code fences. Stripping them.")
+                lines = locations_response.splitlines()
+                # Remove the first line if it's a code fence
+                if lines and lines[0].startswith("```"):
+                    lines = lines[1:]
+                # Remove the last line if it's a code fence
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                locations_response = "\n".join(lines).strip()
+            logging.info("Locations response after stripping markdown: %s", locations_response)
+        else:
+            logging.warning("Locations GPT response was empty; using fallback.")
+        
         try:
             locations_json = json.loads(locations_response) if locations_response else []
             logging.info("Parsed locations JSON successfully: %s", locations_json)
         except Exception as e:
             logging.warning("Failed to parse locations JSON; using fallback. Exception: %s", e, exc_info=True)
             locations_json = []
+        
         for loc in locations_json:
             loc_name = loc.get("name", "Unnamed Location")
             loc_desc = loc.get("description", "")
             logging.info("Storing location: %s - %s", loc_name, loc_desc)
             await conn.execute("""
-                INSERT INTO Locations (user_id, conversation_id, location_name, location_description)
+                INSERT INTO Locations (user_id, conversation_id, location_name, description)
                 VALUES ($1, $2, $3, $4)
                 ON CONFLICT DO NOTHING
             """, user_id, conversation_id, loc_name, loc_desc)
+
         
         # Step 6: Generate scenario name and quest summary (if conversation was newly created).
         scenario_name = "New Game"
