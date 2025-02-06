@@ -287,6 +287,7 @@ def start_new_game():
                 model="gpt-4o",
                 messages=forced_messages,
                 temperature=0.7,
+                timeout=120 
             )
         
             fallback_text = fallback_response.choices[0].message.content.strip()
@@ -383,7 +384,8 @@ def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
         messages=messages,
         temperature=0.9,    # higher for more creativity
         max_tokens=120,
-        frequency_penalty=0.3
+        frequency_penalty=0.3,
+        timeout=120 
     )
 
     msg = response.choices[0].message.content.strip()
