@@ -1,9 +1,9 @@
 import os
+import logging
 from flask import Flask, render_template, request, session, jsonify, redirect
 from flask_cors import CORS
-import logging
 
-# Your blueprint imports
+# Blueprint imports
 from routes.new_game import new_game_bp
 from routes.player_input import player_input_bp
 from routes.settings_routes import settings_bp
@@ -23,9 +23,10 @@ def create_app():
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_dev_key")  # fallback for local dev
 
+    # Enable CORS for all routes
     CORS(app)
 
-    # Register your blueprint modules
+    # Register blueprint modules
     app.register_blueprint(new_game_bp)
     app.register_blueprint(player_input_bp, url_prefix="/player")
     app.register_blueprint(settings_bp, url_prefix="/settings")
@@ -39,26 +40,30 @@ def create_app():
     app.register_blueprint(multiuser_bp, url_prefix="/multiuser")
 
     # -----------------
-    # ROUTES
+    # Define Routes Directly on the App
     # -----------------
 
-    # A simple route to serve the chat page
+    @app.route("/test_task", methods=["GET"])
+    def run_test_task():
+        from tasks import test_task  # Import here so that tasks.py is loaded after app is created
+        result = test_task.delay()
+        return jsonify({"job_id": result.id})
+
     @app.route("/chat")
     def chat_page():
         if "user_id" not in session:
             return redirect("/login_page")
         return render_template("chat.html")
 
-    # Optional: a dedicated login_page that serves login.html
     @app.route("/login_page", methods=["GET"])
     def login_page():
-        return render_template("login.html")  # Create templates/login.html
+        return render_template("login.html")  # Create a templates/login.html file
 
     @app.route("/login", methods=["POST"])
     def login():
         """
         Minimal login route that looks up 'username' & 'password' in the DB.
-        If valid, stores user_id in session for subsequent requests.
+        If valid, stores user_id in session.
         """
         data = request.get_json()
         username = data.get("username")
@@ -72,7 +77,6 @@ def create_app():
         cur = conn.cursor()
         cur.execute("SELECT id, password_hash FROM users WHERE username = %s", (username,))
         row = cur.fetchone()
-        
         cur.close()
         conn.close()
 
@@ -80,16 +84,11 @@ def create_app():
             return jsonify({"error": "Invalid username"}), 401
 
         user_id, password_hash = row
-        
-        # TODO: For real security, verify the password with a hashing library (bcrypt or similar).
-        # if not bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8')):
-        #     return jsonify({"error": "Invalid password"}), 401
 
-        # If valid, store user_id in session
+        # TODO: Use a proper password hashing method in production.
         session["user_id"] = user_id
+        return jsonify({"message": "Logged in", "user_id": user_id})
 
-        return jsonify({"message": "Logged in", "user_id": user_id})\
-    
     @app.route("/whoami", methods=["GET"])
     def whoami():
         user_id = session.get("user_id")
@@ -100,10 +99,9 @@ def create_app():
 
     @app.route("/logout", methods=["POST"])
     def logout():
-        # Clear the session so the user is "logged out"
         session.clear()
-        return jsonify({"message": "Logged out"}), 200       
-    
+        return jsonify({"message": "Logged out"}), 200
+
     @app.route("/register", methods=["POST"])
     def register():
         """
@@ -116,12 +114,6 @@ def create_app():
         if not username or not password:
             return jsonify({"error": "Username and password required"}), 400
 
-        # (Optional) Check password complexity, length, etc.
-        # For real production, also store a hashed password. Example with bcrypt:
-        #
-        # import bcrypt
-        # hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')     
-        
         conn = get_db_connection()
         cur = conn.cursor()
 
@@ -133,26 +125,21 @@ def create_app():
             conn.close()
             return jsonify({"error": "Username already taken"}), 400
 
-        # Insert new user
-        # For demonstration, storing password in plaintext (NOT recommended in production)
+        # Insert new user (plaintext password for demonstration only)
         cur.execute("""
             INSERT INTO users (username, password_hash)
             VALUES (%s, %s)
             RETURNING id
         """, (username, password))
         new_user_id = cur.fetchone()[0]
-
         conn.commit()
         cur.close()
         conn.close()
 
-        # Optionally log them in right away:
         session["user_id"] = new_user_id
-
         return jsonify({"message": "User registered successfully", "user_id": new_user_id})
 
     return app
-
 
 app = create_app()
 
