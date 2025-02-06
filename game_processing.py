@@ -757,6 +757,10 @@ async def async_process_new_game(user_id, conversation_data):
         logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
         schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
         chase_schedule_generated = schedule_reply.get("response", "{}")
+        # Ensure chase_schedule_generated is a string; if it's falsy, set it to '{}'
+        if not chase_schedule_generated:
+            logging.warning("ChaseSchedule GPT response was empty; using fallback JSON.")
+            chase_schedule_generated = "{}"
         try:
             chase_schedule = json.loads(chase_schedule_generated)
             logging.info("Parsed ChaseSchedule JSON successfully: %s", chase_schedule)
