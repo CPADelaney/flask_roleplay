@@ -1,3 +1,5 @@
+# routes/story_routes.py
+
 import logging
 import openai
 import os
