@@ -160,7 +160,7 @@ def start_new_game():
 
         # 7) Spawn 10 new unintroduced NPCs
         logging.info("Spawning 10 new unintroduced NPCs.")
-        for i in range(10):
+        for i in range(3):
             new_id = create_npc(
                 user_id=user_id,
                 conversation_id=conversation_id,
