@@ -282,3 +282,42 @@ def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
         else:
             quest_blurb += line + " "
     return scenario_name.strip(), quest_blurb.strip()
+
+@new_game_bp.route('/spawn_npcs', methods=['POST'])
+async def spawn_npcs():
+    """
+    Spawns NPCs for a given conversation.
+    Expects JSON with a 'conversation_id'.
+    """
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not logged in"}), 401
+
+    data = request.get_json() or {}
+    conversation_id = data.get("conversation_id")
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id"}), 400
+
+    # Connect to the database.
+    conn = await asyncpg.connect(dsn=DB_DSN)
+    try:
+        # Optionally verify the conversation belongs to the user.
+        row = await conn.fetchrow("""
+            SELECT id FROM conversations WHERE id=$1 AND user_id=$2
+        """, conversation_id, user_id)
+        if not row:
+            return jsonify({"error": "Conversation not found or unauthorized"}), 403
+
+        spawned_npcs = []
+        # Spawn 10 NPCs. Offload the creation process if needed.
+        for i in range(10):
+            npc_id = await asyncio.to_thread(create_npc, user_id=user_id, conversation_id=conversation_id, introduced=False)
+            spawned_npcs.append(npc_id)
+            logging.info(f"Spawned NPC {i+1}/10, ID={npc_id}")
+
+        return jsonify({"message": "NPCs spawned", "npc_ids": spawned_npcs}), 200
+    except Exception as e:
+        logging.exception("Error in /spawn_npcs:")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        await conn.close()
