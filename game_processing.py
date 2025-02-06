@@ -857,29 +857,7 @@ async def async_process_new_game(user_id, conversation_data):
         } for row in rows]
         logging.info("Retrieved %d messages from conversation history", len(conversation_history))
         
-        success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
-        logging.info(success_msg)
-        return {
-            "message": success_msg,
-            "scenario_name": scenario_name,
-            "environment_name": environment_name,
-            "environment_desc": environment_desc,
-            "chase_schedule": chase_schedule,
-            "chase_role": player_role_text,
-            "conversation_id": conversation_id,
-            "messages": conversation_history
-        }
-         
-    except Exception as e:
-         logging.exception("Error in async_process_new_game:")
-         return {"error": str(e)}
-    finally:
-         logging.info("=== END: async_process_new_game ===")
-         try:
-             await conn.close()
-         except Exception:
-             pass
-        
+       
         # For this example, we assume that the remainder of the code (steps 4-20) remains unchanged.
         # At the end, return the results:
         success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
