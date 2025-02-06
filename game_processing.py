@@ -832,11 +832,9 @@ async def async_process_new_game(user_id, conversation_data):
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, json.dumps(chase_schedule))
-        
+    
         # Step 17: Build aggregated roleplay context.
-        # Ensure that any universal updates (such as NPC creations) have been committed
-        # so that aggregated context picks them up.
-        await conn.commit()
+        # Remove the commit call because the connection is in autocommit mode.
         logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
         aggregator_data = await asyncio.to_thread(get_aggregated_roleplay_context, user_id, conversation_id, "Chase")
         aggregator_text = await asyncio.to_thread(build_aggregator_text, aggregator_data)
