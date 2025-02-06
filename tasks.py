@@ -5,16 +5,17 @@ from celery import Celery
 from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from game_processing import async_process_new_game  # Import the helper you just created
+import os
 
-# Configure Celery to use RabbitMQ as the broker and RPC as the result backend.
-# Adjust the broker URL as needed. Here we assume that RabbitMQ is reachable at the hostname "rabbitmq".
+# Read RabbitMQ URL from environment variables; Railway will set this for you.
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
+
 celery_app = Celery(
     'tasks',
-    broker='amqp://guest:guest@rabbitmq:5672//',
+    broker=RABBITMQ_URL,
     backend='rpc://'
 )
 
-# Optional Celery configuration updates
 celery_app.conf.update(
     task_serializer='json',
     accept_content=['json'],
