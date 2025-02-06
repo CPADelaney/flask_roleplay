@@ -289,7 +289,7 @@ async def spawn_npcs():
     """
     Spawns NPCs for a given conversation.
     Expects JSON with a 'conversation_id'.
-    Spawns 5 NPCs per call with a small delay between each to reduce load.
+    Spawns 5 NPCs concurrently using asyncio.gather to reduce total processing time.
     """
     user_id = session.get("user_id")
     if not user_id:
@@ -310,24 +310,21 @@ async def spawn_npcs():
         if not row:
             return jsonify({"error": "Conversation not found or unauthorized"}), 403
 
-        spawned_npcs = []
-        # Spawn 5 NPCs sequentially with a 1-second delay between each.
-        for i in range(5):
-            npc_id = await asyncio.to_thread(
-                create_npc,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                introduced=False
-            )
-            spawned_npcs.append(npc_id)
-            logging.info(f"Spawned NPC {i+1}/5, ID={npc_id}")
-            # Wait 1 second between spawns to reduce the load on the system/API.
-            await asyncio.sleep(1)
+        # Instead of a loop with delays, create a list of tasks to spawn NPCs concurrently.
+        spawn_tasks = [
+            asyncio.to_thread(create_npc, user_id=user_id, conversation_id=conversation_id, introduced=False)
+            for _ in range(5)
+        ]
 
-        return jsonify({"message": "NPCs spawned", "npc_ids": spawned_npcs}), 200
+        # Await all the NPC creation tasks concurrently.
+        spawned_npc_ids = await asyncio.gather(*spawn_tasks)
+        logging.info(f"Spawned NPCs concurrently: {spawned_npc_ids}")
+
+        return jsonify({"message": "NPCs spawned", "npc_ids": spawned_npc_ids}), 200
     except Exception as e:
         logging.exception("Error in /spawn_npcs:")
         return jsonify({"error": str(e)}), 500
     finally:
         await conn.close()
+
 
