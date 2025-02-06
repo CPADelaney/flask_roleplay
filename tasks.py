@@ -5,9 +5,22 @@ from celery import Celery
 from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 
-# Configure the Celery app.
-# Adjust the broker URL (e.g., using Redis or RabbitMQ) as needed.
-celery_app = Celery('tasks', broker='redis://redis:6379/0')
+# Configure Celery to use RabbitMQ as the broker and RPC as the result backend.
+# Adjust the broker URL as needed. Here we assume that RabbitMQ is reachable at the hostname "rabbitmq".
+celery_app = Celery(
+    'tasks',
+    broker='amqp://guest:guest@rabbitmq:5672//',
+    backend='rpc://'
+)
+
+# Optional Celery configuration updates
+celery_app.conf.update(
+    task_serializer='json',
+    accept_content=['json'],
+    result_serializer='json',
+    timezone='UTC',
+    enable_utc=True,
+)
 
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
@@ -26,12 +39,14 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
     This task calls the GPT API (or its fallback) and returns a JSON-encoded reply.
     """
     logging.info("Async GPT task: Calling GPT for opening line.")
+    
     # First attempt: normal GPT call
     gpt_reply_dict = get_chatgpt_response(
         conversation_id=conversation_id,
         aggregator_text=aggregator_text,
         user_input=opening_user_prompt
     )
+    
     nyx_text = gpt_reply_dict.get("response")
     if gpt_reply_dict.get("type") == "function_call" or not nyx_text:
         logging.info("Async GPT task: GPT returned a function call or no text. Retrying without function calls.")
@@ -39,7 +54,7 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
         forced_messages = [
             {"role": "system", "content": aggregator_text},
             {"role": "user", "content": (
-                "No function calls for the introduction. Produce only text narrative.\n\n" +
+                "No function calls for the introduction. Produce only a text narrative.\n\n" +
                 opening_user_prompt)}
         ]
         fallback_response = client.chat.completions.create(
@@ -52,4 +67,5 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
         # Update the reply dictionary to indicate fallback was used.
         gpt_reply_dict["response"] = nyx_text
         gpt_reply_dict["type"] = "fallback"
+        
     return json.dumps(gpt_reply_dict)
