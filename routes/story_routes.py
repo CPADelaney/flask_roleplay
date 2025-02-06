@@ -383,8 +383,8 @@ def fetch_plot_triggers():
         except:
             trigz = {}
         triggers.append({
-            "trigger_name": tname,
-            "stage_name": stg,
+            "title": tname,
+            "stage": stg,
             "description": desc,
             "key_features": kfeat,
             "stat_dynamics": sdyn,
@@ -432,8 +432,6 @@ def fetch_interactions():
     conn.close()
     return result
 
-story_bp = Blueprint("story_bp", __name__)
-
 @story_bp.route("/next_storybeat", methods=["POST"])
 def next_storybeat():
     try:
@@ -474,6 +472,17 @@ def next_storybeat():
             if row[0] != user_id:
                 conn.close()
                 return jsonify({"error": f"Conversation {conv_id} not owned by this user"}), 403
+
+        # 1.5) Check unintroduced NPC count and generate 3 more if there are fewer than 2.
+        cur.execute("""
+            SELECT COUNT(*) FROM NPCStats
+            WHERE user_id=%s AND conversation_id=%s AND introduced=FALSE
+        """, (user_id, conv_id))
+        count = cur.fetchone()[0]
+        if count < 2:
+            logging.info("Only %d unintroduced NPC(s) found; generating 3 more.", count)
+            for i in range(3):
+                create_npc(user_id, conv_id, introduced=False)
 
         # 2) Insert user message
         cur.execute(
