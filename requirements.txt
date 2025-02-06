@@ -6,3 +6,4 @@ flask-cors==4.0.0  # Add this line
 openai
 celery
 redis
+requests
