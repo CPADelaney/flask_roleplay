@@ -573,14 +573,14 @@ async def async_process_new_game(user_id, conversation_data):
         environment_desc = f"{base_environment_desc}\n\nHistory: {environment_history}"
         logging.info("Constructed environment description: %s", environment_desc)
             
-            # Step 3: Store EnvironmentDesc in CurrentRoleplay.
-            logging.info("Storing EnvironmentDesc in CurrentRoleplay for conversation_id=%s", conversation_id)
-            await conn.execute("""
-                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                VALUES ($1, $2, 'EnvironmentDesc', $3)
-                ON CONFLICT (user_id, conversation_id, key)
-                DO UPDATE SET value=EXCLUDED.value
-            """, user_id, conversation_id, environment_desc)
+        # Step 3: Store EnvironmentDesc in CurrentRoleplay.
+        logging.info("Storing EnvironmentDesc in CurrentRoleplay for conversation_id=%s", conversation_id)
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES ($1, $2, 'EnvironmentDesc', $3)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id, environment_desc)
         
         # Step 4: Generate and store notable Events.
         events_prompt = (
