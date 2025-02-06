@@ -14,7 +14,7 @@ from routes.story_routes import build_aggregator_text
 from db.connection import get_db_connection  # Not used anymore if using asyncpg
 
 # Use your Railway DSN (public URL for local development)
-DB_DSN = "postgresql://postgres:YOUR_PASSWORD@monorail.proxy.rlwy.net:24727/railway"
+DB_DSN = "postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@monorail.proxy.rlwy.net:24727/railway"
 
 new_game_bp = Blueprint('new_game_bp', __name__)
 
