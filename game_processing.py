@@ -840,7 +840,7 @@ async def async_process_new_game(user_id, conversation_data):
         # If the raw response is empty or equals an empty JSON object, use fallback.
         if not chase_schedule_generated or chase_schedule_generated.strip() in ["{}", ""]:
             logging.warning("ChaseSchedule GPT response was empty; using fallback JSON.")
-             chase_schedule_generated = """{
+            chase_schedule_generated = """{
                 "Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast", "Afternoon": "Head to work at the local data office", "Evening": "Attend a casual meetup with friends", "Night": "Return to the inn for rest"},
                 "Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise", "Afternoon": "Study mystical texts at the library", "Evening": "Work on personal creative projects", "Night": "Return to the inn and unwind"},
                 "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"}
