@@ -59,6 +59,8 @@ def start_new_game():
                 (user_id, scenario_name)
             )
             conversation_id = cursor.fetchone()[0]
+            # Commit immediately so that subsequent operations (like create_npc) can see the new conversation.
+            conn.commit()
             logging.info(f"Created new conversation_id={conversation_id} for user_id={user_id}, name={scenario_name}")
         else:
             cursor.execute(
