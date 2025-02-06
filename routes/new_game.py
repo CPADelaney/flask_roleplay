@@ -19,6 +19,15 @@ DB_DSN = "postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@monorail.proxy.
 
 new_game_bp = Blueprint('new_game_bp', __name__)
 
+# --- Helper: a spaced-out GPT call ---
+async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0):
+    """
+    Waits for a short delay and then calls get_chatgpt_response in a thread.
+    Adjust delay (in seconds) as needed to spread out API calls.
+    """
+    await asyncio.sleep(delay)
+    return await asyncio.to_thread(get_chatgpt_response, conversation_id, context, prompt)
+
 @new_game_bp.route('/start_new_game', methods=['POST'])
 async def start_new_game():
     logging.info("=== START: /start_new_game CALLED ===")
@@ -74,7 +83,7 @@ async def start_new_game():
             "\nEnvironment description: " + base_environment_desc
         )
         # Use the valid conversation_id (an integer) for GPT calls.
-        history_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id, base_environment_desc, history_prompt)
+        history_reply = await spaced_gpt_call(conversation_id, base_environment_desc, history_prompt)
         environment_history = history_reply.get("response", "").strip()
         if not environment_history:
             environment_history = "Ancient legends speak of forgotten gods and lost civilizations that once shaped this realm."
@@ -94,11 +103,7 @@ async def start_new_game():
             "Each event should be an object with keys 'name' and 'description' describing the event briefly. "
             "\nEnvironment description: " + environment_desc
         )
-        
-        # Get the GPT response for events
-        events_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id, environment_desc, events_prompt)
-        
-        # Check if events_reply is valid before processing
+        events_reply = await spaced_gpt_call(conversation_id, environment_desc, events_prompt)
         if events_reply is None:
             logging.error("get_chatgpt_response returned None for events prompt.")
             events_response = ""
@@ -111,7 +116,6 @@ async def start_new_game():
             logging.warning("Failed to parse events JSON, using fallback.", exc_info=e)
             events_json = []
         
-        # Proceed with inserting events into the database
         for event in events_json:
             event_name = event.get("name", "Unnamed Event")
             event_desc = event.get("description", "")
@@ -120,7 +124,6 @@ async def start_new_game():
                 VALUES ($1, $2, $3, $4)
                 ON CONFLICT DO NOTHING
             """, user_id, conversation_id, event_name, event_desc)
-
         
         # 6. Generate and store notable Locations.
         locations_prompt = (
@@ -128,7 +131,7 @@ async def start_new_game():
             "Each location should be an object with keys 'name' and 'description' providing a brief overview of the location. "
             "\nEnvironment description: " + environment_desc
         )
-        locations_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id, environment_desc, locations_prompt)
+        locations_reply = await spaced_gpt_call(conversation_id, environment_desc, locations_prompt)
         locations_response = locations_reply.get("response", "").strip()
         try:
             locations_json = json.loads(locations_response)
@@ -149,6 +152,7 @@ async def start_new_game():
         scenario_name = "New Game"
         quest_blurb = ""
         if not provided_conversation_id:
+            # Here we still use the synchronous helper for scenario name and quest
             scenario_name, quest_blurb = await asyncio.to_thread(gpt_generate_scenario_name_and_quest, environment_name, environment_desc)
             await conn.execute("""
                 UPDATE conversations SET conversation_name=$1 WHERE id=$2
@@ -229,7 +233,7 @@ async def start_new_game():
             "In real life, Chase is a 31 year old data analyst, but this does not necessarily mean it will be the same. "
             "Career can be anything (student, etc.), but make sure it fits and makes sense within setting context."
         )
-        player_role_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id, environment_desc, player_role_prompt)
+        player_role_reply = await spaced_gpt_call(conversation_id, environment_desc, player_role_prompt)
         player_role_text = player_role_reply.get("response", "Chase works a standard office job, barely scraping by.")
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
@@ -244,7 +248,7 @@ async def start_new_game():
             "generate a short summary of the main quest he is about to undertake. The quest should be intriguing and mysterious, "
             "hinting at challenges ahead without revealing too much."
         )
-        main_quest_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id, environment_desc, main_quest_prompt)
+        main_quest_reply = await spaced_gpt_call(conversation_id, environment_desc, main_quest_prompt)
         main_quest_text = main_quest_reply.get("response", "Embark on a mysterious quest that challenges everything Chase thought he knew.")
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
@@ -258,7 +262,7 @@ async def start_new_game():
             "Based on the current environment and Chase's role, generate a detailed weekly schedule for Chase. "
             "Format the schedule as valid JSON with keys for each day of the week (e.g., Monday, Tuesday, etc.)."
         )
-        schedule_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id, environment_desc, schedule_prompt)
+        schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
         chase_schedule_generated = schedule_reply.get("response", "{}")
         try:
             chase_schedule = json.loads(chase_schedule_generated)
@@ -326,7 +330,7 @@ async def start_new_game():
             "the player's role, and hint at the mysterious main quest. "
             "Stay fully in character and conclude with a teasing invitation for Chase to proceed."
         )
-        gpt_reply_dict = await asyncio.to_thread(get_chatgpt_response, conversation_id, aggregator_text, opening_user_prompt)
+        gpt_reply_dict = await spaced_gpt_call(conversation_id, aggregator_text, opening_user_prompt)
         nyx_text = gpt_reply_dict.get("response")
         if gpt_reply_dict.get("type") == "function_call" or not nyx_text:
             logging.info("GPT attempted a function call or returned no text; retrying without function calls.")
