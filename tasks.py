@@ -22,6 +22,8 @@ celery_app.conf.update(
     result_serializer='json',
     timezone='UTC',
     enable_utc=True,
+    worker_log_format="%(levelname)s:%(name)s:%(message)s",
+    worker_redirect_stdouts_level='INFO',  # Instead of DEBUG
 )
 
 @celery_app.task
