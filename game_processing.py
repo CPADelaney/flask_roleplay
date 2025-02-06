@@ -787,6 +787,8 @@ async def async_process_new_game(user_id, conversation_data):
         logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
         schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
         chase_schedule_generated = schedule_reply.get("response", "{}")
+        logging.info("Raw ChaseSchedule response from GPT: %s", chase_schedule_generated)
+        
         if not chase_schedule_generated:
             logging.warning("ChaseSchedule GPT response was empty; using fallback JSON.")
             chase_schedule_generated = "{}"
@@ -825,7 +827,7 @@ async def async_process_new_game(user_id, conversation_data):
                            "Evening": "Have a light dinner with friends",
                            "Night": "Enjoy some quiet time before sleep"}
             }
-        logging.info("Storing ChaseSchedule for conversation_id=%s", conversation_id)
+        logging.info("Final ChaseSchedule to be stored: %s", chase_schedule)
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
             VALUES ($1, $2, 'ChaseSchedule', $3)
