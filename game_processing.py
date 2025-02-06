@@ -453,128 +453,124 @@ async def async_process_new_game(user_id, conversation_data):
                 raise Exception(f"Conversation {conversation_id} not found or unauthorized")
             logging.info("Validated existing conversation with id=%s", conversation_id)
         
-        # Step 2: Dynamically generate environment components, a setting name, and a cohesive description.
-        logging.info("Generating mega setting logic for conversation_id=%s", conversation_id)
-        mega_data = await asyncio.to_thread(generate_mega_setting_logic)
-        logging.info("Mega data returned: %s", mega_data)
-        
-        # Use selected_settings if available; otherwise, try unique_environments.
-        unique_envs = mega_data.get("unique_envurations")  # typo check: adjust key if needed
-        unique_envs = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
-        logging.info("Extracted environment components before fallback: %s", unique_envs)
-        if not unique_envs or len(unique_envs) == 0:
-            unique_envs = [
-                "A sprawling cyberpunk metropolis under siege by monstrous clans",
-                "Floating archaic ruins steeped in ancient rituals",
-                "Futuristic tech hubs that blend magic and machinery"
-            ]
-            logging.info("No environment components returned; using fallback: %s", unique_envs)
-        else:
-            logging.info("Unique environment components: %s", unique_envs)
-        
-        # Extract enhanced features and stat modifiers.
-        enhanced_features = mega_data.get("enhanced_features", [])
-        stat_modifiers = mega_data.get("stat_modifiers", {})
-        
-        # Create strings for enhanced features and stat modifiers.
-        enhanced_features_str = ", ".join(enhanced_features) if enhanced_features else ""
-        stat_modifiers_str = ", ".join([f"{k}: {v}" for k, v in stat_modifiers.items()]) if stat_modifiers else ""
-        logging.info("Enhanced features: %s", enhanced_features_str)
-        logging.info("Stat modifiers: %s", stat_modifiers_str)
-        
-        # --- Generate a dynamic setting name (using only the environment components) ---
-        name_prompt = "Given the following environment components:\n"
-        for i, env in enumerate(unique_envs):
-            name_prompt += f"Component {i+1}: {env}\n"
-        name_prompt += (
-            "Describe how these components come together to form a cohesive world and generate a short, creative name for the overall setting. "
-            "Return only the name."
-        )
-        logging.info("Calling GPT for dynamic setting name with prompt: %s", name_prompt)
-        setting_name_reply = await spaced_gpt_call(conversation_id, "", name_prompt)
-        dynamic_setting_name = setting_name_reply.get("response", "")
-        if dynamic_setting_name:
-            dynamic_setting_name = dynamic_setting_name.strip()
-        else:
-            stored_setting = await get_stored_value(conn, user_id, conversation_id, "CurrentSetting")
-            if stored_setting:
-                dynamic_setting_name = stored_setting
+            # Step 2: Dynamically generate environment components, a setting name, and a cohesive description.
+            logging.info("Generating mega setting logic for conversation_id=%s", conversation_id)
+            mega_data = await asyncio.to_thread(generate_mega_setting_logic)
+            logging.info("Mega data returned: %s", mega_data)
+            # Use selected_settings if available; otherwise, try unique_environments.
+            unique_envs = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
+            logging.info("Extracted environment components before fallback: %s", unique_envs)
+            if not unique_envs or len(unique_envs) == 0:
+                unique_envs = [
+                    "A sprawling cyberpunk metropolis under siege by monstrous clans",
+                    "Floating archaic ruins steeped in ancient rituals",
+                    "Futuristic tech hubs that blend magic and machinery"
+                ]
+                logging.info("No environment components returned; using fallback: %s", unique_envs)
             else:
-                logging.warning("GPT returned no setting name and none stored; using fallback.")
-                dynamic_setting_name = "Default Setting Name"
-        logging.info("Generated dynamic setting name: %s", dynamic_setting_name)
-        environment_name = dynamic_setting_name
+                logging.info("Unique environment components: %s", unique_envs)
         
-        # --- Generate a cohesive environment description ---
-        env_desc_prompt = "Using the following environment components:\n"
-        for i, env in enumerate(unique_envs):
-            env_desc_prompt += f"Component {i+1}: {env}\n"
-        if enhanced_features_str:
-            env_desc_prompt += f"Enhanced features: {enhanced_features_str}\n"
-        if stat_modifiers_str:
-            env_desc_prompt += f"Stat modifiers: {stat_modifiers_str}\n"
-        env_desc_prompt += (
-            "Describe in a cohesive narrative how these components, features, and modifiers combine to form a unique, dynamic world."
-        )
-        logging.info("Calling GPT for dynamic environment description with prompt: %s", env_desc_prompt)
-        env_desc_reply = await spaced_gpt_call(conversation_id, "", env_desc_prompt)
-        base_environment_desc = env_desc_reply.get("response")
-        if base_environment_desc is None or not base_environment_desc.strip():
-            stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
-            if stored_env_desc:
-                base_environment_desc = stored_env_desc
-            else:
-                logging.warning("GPT returned no dynamic environment description and none stored; using fallback text.")
-                base_environment_desc = (
-                    "An eclectic realm combining monstrous societies, futuristic tech, "
-                    "and archaic ruins floating across the sky. Strange energies swirl, "
-                    "revealing hidden rituals and uncharted opportunities."
-                )
-        else:
-            base_environment_desc = base_environment_desc.strip()
+            # Extract enhanced features and stat modifiers.
+            enhanced_features = mega_data.get("enhanced_features", [])
+            stat_modifiers = mega_data.get("stat_modifiers", {})
+            enhanced_features_str = ", ".join(enhanced_features) if enhanced_features else ""
+            stat_modifiers_str = ", ".join([f"{k}: {v}" for k, v in stat_modifiers.items()]) if stat_modifiers else ""
+            logging.info("Enhanced features: %s", enhanced_features_str)
+            logging.info("Stat modifiers: %s", stat_modifiers_str)
         
-        # --- Generate the setting history based on the dynamic description ---
-        history_prompt = (
-            "Based on the following environment description, generate a brief, evocative history "
-            "of this setting. Explain its origins, major past events, and its current state so that the narrative is well grounded. "
-            "Include notable NPCs, important locations (with details about the town), and key cultural information such as holidays, festivals, and beliefs. "
-            "\nEnvironment description: " + base_environment_desc
-        )
-        logging.info("Calling GPT for environment history with prompt: %s", history_prompt)
-        history_reply = await spaced_gpt_call(conversation_id, base_environment_desc, history_prompt)
-        if history_reply.get("type") == "function_call":
-            logging.info("GPT returned a function call for environment history. Processing function call.")
-            function_args = history_reply.get("function_args", {})
-            await apply_universal_update(user_id, conversation_id, function_args, conn)
-            stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
-            if stored_env_desc:
-                environment_history = stored_env_desc
+            # --- Generate a dynamic setting name ---
+            name_prompt = "Given the following environment components:\n"
+            for i, env in enumerate(unique_envs):
+                name_prompt += f"Component {i+1}: {env}\n"
+            name_prompt += (
+                "Describe how these components come together to form a cohesive world and generate a short, creative name for the overall setting. "
+                "Return only the name."
+            )
+            logging.info("Calling GPT for dynamic setting name with prompt: %s", name_prompt)
+            setting_name_reply = await spaced_gpt_call(conversation_id, "", name_prompt)
+            dynamic_setting_name = setting_name_reply.get("response", "")
+            if dynamic_setting_name:
+                dynamic_setting_name = dynamic_setting_name.strip()
             else:
-                environment_history = "World context updated via GPT function call."
-        else:
-            response_text = history_reply.get("response")
-            if response_text is None or not response_text.strip():
+                stored_setting = await get_stored_value(conn, user_id, conversation_id, "CurrentSetting")
+                if stored_setting:
+                    dynamic_setting_name = stored_setting
+                else:
+                    logging.warning("GPT returned no setting name and none stored; using fallback.")
+                    dynamic_setting_name = "Default Setting Name"
+            logging.info("Generated dynamic setting name: %s", dynamic_setting_name)
+            environment_name = dynamic_setting_name
+        
+            # --- Generate a cohesive environment description ---
+            env_desc_prompt = "Using the following environment components:\n"
+            for i, env in enumerate(unique_envs):
+                env_desc_prompt += f"Component {i+1}: {env}\n"
+            if enhanced_features_str:
+                env_desc_prompt += f"Enhanced features: {enhanced_features_str}\n"
+            if stat_modifiers_str:
+                env_desc_prompt += f"Stat modifiers: {stat_modifiers_str}\n"
+            env_desc_prompt += (
+                "Describe in a cohesive narrative how these components, features, and modifiers combine to form a unique, dynamic world."
+            )
+            logging.info("Calling GPT for dynamic environment description with prompt: %s", env_desc_prompt)
+            env_desc_reply = await spaced_gpt_call(conversation_id, "", env_desc_prompt)
+            base_environment_desc = env_desc_reply.get("response")
+            if base_environment_desc is None or not base_environment_desc.strip():
+                stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
+                if stored_env_desc:
+                    base_environment_desc = stored_env_desc
+                else:
+                    logging.warning("GPT returned no dynamic environment description and none stored; using fallback text.")
+                    base_environment_desc = (
+                        "An eclectic realm combining monstrous societies, futuristic tech, and archaic ruins floating across the sky. "
+                        "Strange energies swirl, revealing hidden rituals and uncharted opportunities."
+                    )
+            else:
+                base_environment_desc = base_environment_desc.strip()
+            
+            # --- Generate the setting history based on the dynamic description ---
+            history_prompt = (
+                "Based on the following environment description, generate a brief, evocative history "
+                "of this setting. Explain its origins, major past events, and its current state so that the narrative is well grounded. "
+                "Include notable NPCs, important locations (with details about the town), and key cultural information such as holidays, festivals, and beliefs. "
+                "\nEnvironment description: " + base_environment_desc
+            )
+            logging.info("Calling GPT for environment history with prompt: %s", history_prompt)
+            history_reply = await spaced_gpt_call(conversation_id, base_environment_desc, history_prompt)
+            if history_reply.get("type") == "function_call":
+                logging.info("GPT returned a function call for environment history. Processing function call.")
+                function_args = history_reply.get("function_args", {})
+                await apply_universal_update(user_id, conversation_id, function_args, conn)
+                # Commit changes so that generated NPCs, etc., are saved.
+                await conn.commit()
                 stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
                 if stored_env_desc:
                     environment_history = stored_env_desc
                 else:
-                    logging.warning("GPT returned no response text for environment history and none stored; using fallback text.")
-                    environment_history = "Ancient legends speak of forgotten gods and lost civilizations that once shaped this realm."
+                    environment_history = "World context updated via GPT function call."
             else:
-                environment_history = response_text.strip()
-        
-        environment_desc = f"{base_environment_desc}\n\nHistory: {environment_history}"
-        logging.info("Constructed environment description: %s", environment_desc)
-        
-                
-        # Step 3: Store EnvironmentDesc in CurrentRoleplay.
-        logging.info("Storing EnvironmentDesc in CurrentRoleplay for conversation_id=%s", conversation_id)
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'EnvironmentDesc', $3)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id, environment_desc)
+                response_text = history_reply.get("response")
+                if response_text is None or not response_text.strip():
+                    stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
+                    if stored_env_desc:
+                        environment_history = stored_env_desc
+                    else:
+                        logging.warning("GPT returned no response text for environment history and none stored; using fallback text.")
+                        environment_history = "Ancient legends speak of forgotten gods and lost civilizations that once shaped this realm."
+                else:
+                    environment_history = response_text.strip()
+            
+            environment_desc = f"{base_environment_desc}\n\nHistory: {environment_history}"
+            logging.info("Constructed environment description: %s", environment_desc)
+            
+            # Step 3: Store EnvironmentDesc in CurrentRoleplay.
+            logging.info("Storing EnvironmentDesc in CurrentRoleplay for conversation_id=%s", conversation_id)
+            await conn.execute("""
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'EnvironmentDesc', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value=EXCLUDED.value
+            """, user_id, conversation_id, environment_desc)
         
         # Step 4: Generate and store notable Events.
         events_prompt = (
@@ -791,7 +787,6 @@ async def async_process_new_game(user_id, conversation_data):
         logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
         schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
         chase_schedule_generated = schedule_reply.get("response", "{}")
-        # Ensure chase_schedule_generated is a string; if it's falsy, set it to '{}'
         if not chase_schedule_generated:
             logging.warning("ChaseSchedule GPT response was empty; using fallback JSON.")
             chase_schedule_generated = "{}"
@@ -838,7 +833,10 @@ async def async_process_new_game(user_id, conversation_data):
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, json.dumps(chase_schedule))
         
-        # Step 17: Build aggregated context.
+        # Step 17: Build aggregated roleplay context.
+        # Ensure that any universal updates (such as NPC creations) have been committed
+        # so that aggregated context picks them up.
+        await conn.commit()
         logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
         aggregator_data = await asyncio.to_thread(get_aggregated_roleplay_context, user_id, conversation_id, "Chase")
         aggregator_text = await asyncio.to_thread(build_aggregator_text, aggregator_data)
