@@ -94,13 +94,24 @@ async def start_new_game():
             "Each event should be an object with keys 'name' and 'description' describing the event briefly. "
             "\nEnvironment description: " + environment_desc
         )
+        
+        # Get the GPT response for events
         events_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id, environment_desc, events_prompt)
-        events_response = events_reply.get("response", "").strip()
+        
+        # Check if events_reply is valid before processing
+        if events_reply is None:
+            logging.error("get_chatgpt_response returned None for events prompt.")
+            events_response = ""
+        else:
+            events_response = events_reply.get("response", "").strip()
+        
         try:
             events_json = json.loads(events_response)
         except Exception as e:
             logging.warning("Failed to parse events JSON, using fallback.", exc_info=e)
             events_json = []
+        
+        # Proceed with inserting events into the database
         for event in events_json:
             event_name = event.get("name", "Unnamed Event")
             event_desc = event.get("description", "")
@@ -109,6 +120,7 @@ async def start_new_game():
                 VALUES ($1, $2, $3, $4)
                 ON CONFLICT DO NOTHING
             """, user_id, conversation_id, event_name, event_desc)
+
         
         # 6. Generate and store notable Locations.
         locations_prompt = (
