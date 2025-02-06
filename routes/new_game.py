@@ -310,7 +310,7 @@ async def spawn_npcs():
 
         spawned_npcs = []
         # Spawn 10 NPCs. Offload the creation process if needed.
-        for i in range(10):
+        for i in range(3):
             npc_id = await asyncio.to_thread(create_npc, user_id=user_id, conversation_id=conversation_id, introduced=False)
             spawned_npcs.append(npc_id)
             logging.info(f"Spawned NPC {i+1}/10, ID={npc_id}")
