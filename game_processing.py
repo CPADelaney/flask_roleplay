@@ -456,7 +456,7 @@ async def async_process_new_game(user_id, conversation_data):
         # *** New Block: Clear old game data early ***
         tables_to_clear = [
             "Events", "PlannedEvents", "PlayerInventory", "Quests",
-            "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"
+            "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay", "IntensityTiers"
         ]
         for table in tables_to_clear:
             await conn.execute(f"DELETE FROM {table} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
@@ -585,38 +585,43 @@ async def async_process_new_game(user_id, conversation_data):
         # Step 4: Generate and store notable Events.
         events_prompt = (
             "Based on the following environment description, generate a JSON array of notable events and holidays in this setting. "
-            "Each event should be an object with keys 'name', 'description', 'start_time', 'end_time', and 'location' describing the event briefly. "
+            "Each event should be an object with keys 'name', 'description', 'start_time', 'end_time', and 'location'. "
+            "Return only the JSON array with no markdown formatting or extra text."
             "\nEnvironment description: " + environment_desc
         )
         logging.info("Generating events with prompt: %s", events_prompt)
         events_reply = await spaced_gpt_call(conversation_id, environment_desc, events_prompt)
         events_response = events_reply.get("response", "")
         logging.info("Raw events response from GPT: %s", events_response)
+        
         if events_response:
             events_response = events_response.strip()
             # Remove markdown code fences if present.
             if events_response.startswith("```"):
                 logging.info("Events response contains markdown code fences. Stripping them.")
                 lines = events_response.splitlines()
-                if lines[0].startswith("```"):
+                if lines and lines[0].startswith("```"):
                     lines = lines[1:]
                 if lines and lines[-1].startswith("```"):
                     lines = lines[:-1]
                 events_response = "\n".join(lines).strip()
+        else:
+            logging.warning("Events GPT response was empty; using fallback.")
+            events_response = "[]"
+        
         try:
             events_json = json.loads(events_response) if events_response else []
             logging.info("Parsed events JSON successfully: %s", events_json)
         except Exception as e:
             logging.warning("Failed to parse events JSON; using fallback. Exception: %s", e, exc_info=True)
             events_json = []
-        
+            
         for event in events_json:
             event_name = event.get("name", "Unnamed Event")
             event_desc = event.get("description", "")
             ev_start = event.get("start_time", "TBD Start")
             ev_end = event.get("end_time", "TBD End")
             ev_loc = event.get("location", "Unknown")
-            # Fallback if any of the required fields are missing or null.
             if not ev_start:
                 ev_start = "TBD Start"
             if not ev_end:
@@ -815,16 +820,31 @@ async def async_process_new_game(user_id, conversation_data):
         # Step 16: Generate and store ChaseSchedule.
         schedule_prompt = (
             "Based on the current environment and Chase's role, generate a detailed weekly schedule for Chase. "
-            "Format the schedule as valid JSON with keys for each day of the week (e.g., Monday, Tuesday, etc.)."
+            "Return only a valid JSON object with keys for each day of the week (e.g., 'Monday', 'Tuesday', etc.). "
+            "Do not include any markdown formatting or extra text."
         )
         logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
         schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
         chase_schedule_generated = schedule_reply.get("response", "{}")
         logging.info("Raw ChaseSchedule response from GPT: %s", chase_schedule_generated)
         
-        if not chase_schedule_generated:
+        # Remove any markdown fences if accidentally included.
+        if chase_schedule_generated.startswith("```"):
+            lines = chase_schedule_generated.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            chase_schedule_generated = "\n".join(lines).strip()
+        
+        # If the raw response is empty or equals an empty JSON object, use fallback.
+        if not chase_schedule_generated or chase_schedule_generated.strip() in ["{}", ""]:
             logging.warning("ChaseSchedule GPT response was empty; using fallback JSON.")
-            chase_schedule_generated = "{}"
+             chase_schedule_generated = """{
+                "Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast", "Afternoon": "Head to work at the local data office", "Evening": "Attend a casual meetup with friends", "Night": "Return to the inn for rest"},
+                "Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise", "Afternoon": "Study mystical texts at the library", "Evening": "Work on personal creative projects", "Night": "Return to the inn and unwind"},
+                "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"}
+            }"""
         try:
             chase_schedule = json.loads(chase_schedule_generated)
             logging.info("Parsed ChaseSchedule JSON successfully: %s", chase_schedule)
