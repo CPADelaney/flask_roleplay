@@ -19,7 +19,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Clean up build deps (optional optimization)
 RUN apt-get remove -y gcc libpq-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
-
 # ---------- Stage 2: Runtime Image ----------
 FROM python:3.10-slim
 
@@ -41,7 +40,12 @@ COPY . .
 RUN useradd -m appuser
 USER appuser
 
+# Copy the entrypoint script into the container and make it executable
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 ENV PORT=8080
 EXPOSE 8080 
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--timeout", "600", "--worker-class", "uvicorn.workers.UvicornWorker", "main:app"]
+# Use the entrypoint script as the command
+CMD ["/app/entrypoint.sh"]
