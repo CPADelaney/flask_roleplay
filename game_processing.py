@@ -396,7 +396,6 @@ def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
             quest_blurb += line + " "
     return scenario_name.strip(), quest_blurb.strip()
 
-@new_game_bp.route('/spawn_npcs', methods=['POST'])
 async def spawn_npcs():
     """
     Spawns NPCs for a given conversation.
