@@ -316,7 +316,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     # 12) Locations (New)
     #----------------------------------------------------------------
     cursor.execute("""
-        SELECT id, location_name, location_description
+        SELECT id, location_name, description
         FROM Locations
         WHERE user_id=%s
           AND conversation_id=%s
@@ -327,7 +327,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         locations_list.append({
             "location_id": lid,
             "location_name": lname,
-            "location_description": ldesc
+            "description": ldesc
         })
 
     #----------------------------------------------------------------
@@ -421,7 +421,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     if aggregated.get("locations"):
         aggregator_text += "\n\nNotable Locations:\n"
         for loc in aggregated["locations"][:3]:
-            aggregator_text += f"- {loc['location_name']}: {loc['location_description']}\n"
+            aggregator_text += f"- {loc['location_name']}: {loc['description']}\n"
     
     # Incorporate MegaSettingModifiers if available
     modifiers_str = aggregated["currentRoleplay"].get("MegaSettingModifiers", "")
