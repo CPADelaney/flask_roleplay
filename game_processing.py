@@ -456,13 +456,18 @@ async def async_process_new_game(user_id, conversation_data):
         # Step 2: Dynamically generate environment components, a setting name, and a cohesive description.
         logging.info("Generating mega setting logic for conversation_id=%s", conversation_id)
         mega_data = await asyncio.to_thread(generate_mega_setting_logic)
+        logging.info("Mega data returned: %s", mega_data)
         unique_envs = mega_data.get("unique_environments", [])
+        logging.info("Extracted unique_envs before fallback check: %s", unique_envs)
         if not unique_envs or len(unique_envs) == 0:
             unique_envs = [
                 "A sprawling cyberpunk metropolis under siege by monstrous clans",
                 "Floating archaic ruins steeped in ancient rituals",
                 "Futuristic tech hubs that blend magic and machinery"
             ]
+            logging.info("No unique_envs returned; using fallback values: %s", unique_envs)
+        else:
+            logging.info("Unique environment components: %s", unique_envs)
         
         # --- Generate a dynamic setting name ---
         name_prompt = "Given the following environment components:\n"
