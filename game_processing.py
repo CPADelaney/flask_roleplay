@@ -587,6 +587,17 @@ async def async_process_new_game(user_id, conversation_data):
         events_response = events_reply.get("response", "")
         if events_response:
             events_response = events_response.strip()
+            # If the response is wrapped in markdown code fences, remove them.
+            if events_response.startswith("```"):
+                logging.info("Events response contains markdown code fences. Stripping them.")
+                lines = events_response.splitlines()
+                # Remove the first line if it starts with ``` (and possibly a language tag)
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                # Remove the last line if it starts with ```
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                events_response = "\n".join(lines).strip()
         try:
             events_json = json.loads(events_response) if events_response else []
             logging.info("Parsed events JSON successfully: %s", events_json)
@@ -602,7 +613,7 @@ async def async_process_new_game(user_id, conversation_data):
                 VALUES ($1, $2, $3, $4)
                 ON CONFLICT DO NOTHING
             """, user_id, conversation_id, event_name, event_desc)
-        
+
         # Step 5: Generate and store notable Locations.
         locations_prompt = (
             "Based on the following environment description, generate a JSON array of notable locations in this setting. "
