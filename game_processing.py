@@ -808,7 +808,7 @@ async def async_process_new_game(user_id, conversation_data):
         
         # Step 18: Call GPT for the opening narrative using the aggregated context.
         opening_user_prompt = (
-            "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, avoiding clichéd phrases. "
+            "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, avoiding clichéd phrases such as 'Ah, Chase'. "
             "Format your greeting using Markdown sections. Briefly recount the new environment’s background from the aggregator data, "
             "and announce that Monday morning has just begun. Describe where Chase is that morning by referencing the schedule, "
             "the player's role, and hint at the mysterious main quest. "
