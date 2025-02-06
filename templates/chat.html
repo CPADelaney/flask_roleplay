@@ -368,15 +368,14 @@
       currentConvId = data.conversation_id;
       alert("New game started! conversation_id=" + currentConvId);
   
-      // 1) Refresh the conversation list
+      // Refresh the conversation list and open the new conversation
       await loadConversations();
-  
-      // 2) Automatically open the new conversation
       selectConversation(currentConvId);
   
-      // 3) Now call the NPC spawning endpoint
-      await spawnNPCs();
-  
+      // Now, automatically spawn NPCs after a short delay (if desired)
+      setTimeout(async () => {
+        await spawnNPCs();
+      }, 1000); // 1-second delay before starting NPC generation
     } catch (err) {
       console.error("startNewGame error:", err);
       alert("Failed to start new game!");
@@ -397,13 +396,13 @@
         return;
       }
       console.log("NPCs spawned:", data.npc_ids);
-      // Optionally, update the UI with NPC information here.
+      // Optionally update the UI to show NPC info.
     } catch (err) {
       console.error("spawnNPCs error:", err);
       alert("Error spawning NPCs");
     }
   }
-
+  
 
   function renderConvoList(conversations) {
     const convListDiv = document.getElementById("convList");
