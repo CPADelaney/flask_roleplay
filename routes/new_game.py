@@ -28,15 +28,35 @@ async def start_new_game():
         return jsonify({"error": "Not logged in"}), 401
 
     try:
-        # 2. Parse request JSON.
+        # 1. Parse request JSON.
         data = request.get_json() or {}
         if "params" in data:
             data = data["params"]
-        conversation_id = data.get("conversation_id")
+        provided_conversation_id = data.get("conversation_id")
         
         # Open connection early.
         conn = await asyncpg.connect(dsn=DB_DSN)
         
+        # 2. Create a conversation early if one is not provided.
+        if not provided_conversation_id:
+            preliminary_name = "New Game"
+            row = await conn.fetchrow("""
+                INSERT INTO conversations (user_id, conversation_name)
+                VALUES ($1, $2)
+                RETURNING id
+            """, user_id, preliminary_name)
+            conversation_id = row["id"]
+            logging.info(f"Pre-created conversation_id={conversation_id} for user_id={user_id}")
+        else:
+            # Use the provided conversation_id and verify it exists.
+            conversation_id = provided_conversation_id
+            row = await conn.fetchrow("""
+                SELECT id FROM conversations WHERE id=$1 AND user_id=$2
+            """, conversation_id, user_id)
+            if not row:
+                await conn.close()
+                return jsonify({"error": f"Conversation {conversation_id} not found or unauthorized"}), 403
+
         # 3. Generate environment snippet and history.
         mega_data = await asyncio.to_thread(generate_mega_setting_logic)
         if "error" in mega_data:
@@ -53,13 +73,14 @@ async def start_new_game():
             "Include notable NPCs, important locations (including details about the town), and key cultural information such as holidays, festivals, and beliefs. "
             "\nEnvironment description: " + base_environment_desc
         )
-        history_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id or "new", base_environment_desc, history_prompt)
+        # Use the valid conversation_id (an integer) for GPT calls.
+        history_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id, base_environment_desc, history_prompt)
         environment_history = history_reply.get("response", "").strip()
         if not environment_history:
             environment_history = "Ancient legends speak of forgotten gods and lost civilizations that once shaped this realm."
         environment_desc = f"{base_environment_desc}\n\nHistory: {environment_history}"
         
-        # Store EnvironmentDesc in CurrentRoleplay.
+        # 4. Store EnvironmentDesc in CurrentRoleplay.
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
             VALUES ($1, $2, 'EnvironmentDesc', $3)
@@ -67,13 +88,13 @@ async def start_new_game():
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, environment_desc)
         
-        # 4. Generate and store notable Events.
+        # 5. Generate and store notable Events.
         events_prompt = (
             "Based on the following environment description, generate a JSON array of notable events and holidays in this setting. "
             "Each event should be an object with keys 'name' and 'description' describing the event briefly. "
             "\nEnvironment description: " + environment_desc
         )
-        events_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id or "new", environment_desc, events_prompt)
+        events_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id, environment_desc, events_prompt)
         events_response = events_reply.get("response", "").strip()
         try:
             events_json = json.loads(events_response)
@@ -89,13 +110,13 @@ async def start_new_game():
                 ON CONFLICT DO NOTHING
             """, user_id, conversation_id, event_name, event_desc)
         
-        # 5. Generate and store notable Locations.
+        # 6. Generate and store notable Locations.
         locations_prompt = (
             "Based on the following environment description, generate a JSON array of notable locations in this setting. "
             "Each location should be an object with keys 'name' and 'description' providing a brief overview of the location. "
             "\nEnvironment description: " + environment_desc
         )
-        locations_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id or "new", environment_desc, locations_prompt)
+        locations_reply = await asyncio.to_thread(get_chatgpt_response, conversation_id, environment_desc, locations_prompt)
         locations_response = locations_reply.get("response", "").strip()
         try:
             locations_json = json.loads(locations_response)
@@ -111,92 +132,85 @@ async def start_new_game():
                 ON CONFLICT DO NOTHING
             """, user_id, conversation_id, loc_name, loc_desc)
         
-        # 6. If no conversation exists, generate scenario name & quest summary.
+        # 7. If the conversation was created just now, generate scenario name & quest summary,
+        #    and update the conversation record.
         scenario_name = "New Game"
         quest_blurb = ""
-        if not conversation_id:
+        if not provided_conversation_id:
             scenario_name, quest_blurb = await asyncio.to_thread(gpt_generate_scenario_name_and_quest, environment_name, environment_desc)
+            await conn.execute("""
+                UPDATE conversations SET conversation_name=$1 WHERE id=$2
+            """, scenario_name, conversation_id)
         
-        # 7. Connect to PostgreSQL using asyncpg (open a new connection for conversation creation and clearing data).
-        # (If you wish to reuse the same connection, ensure it’s not needed for the earlier steps.)
+        # 8. Re-open connection for subsequent steps (clearing old data, etc.).
         await conn.close()  # Close the earlier connection.
         conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
-            # Create or reuse conversation.
-            if not conversation_id:
-                row = await conn.fetchrow("""
-                    INSERT INTO conversations (user_id, conversation_name)
-                    VALUES ($1, $2)
-                    RETURNING id
-                """, user_id, scenario_name)
-                conversation_id = row["id"]
-                logging.info(f"Created conversation_id={conversation_id} for user_id={user_id}")
-            else:
-                row = await conn.fetchrow("""
-                    SELECT id FROM conversations WHERE id=$1 AND user_id=$2
-                """, conversation_id, user_id)
-                if not row:
-                    return jsonify({"error": f"Conversation {conversation_id} not found or unauthorized"}), 403
+        
+        # Verify conversation exists if one was provided.
+        if provided_conversation_id:
+            row = await conn.fetchrow("""
+                SELECT id FROM conversations WHERE id=$1 AND user_id=$2
+            """, conversation_id, user_id)
+            if not row:
+                await conn.close()
+                return jsonify({"error": f"Conversation {conversation_id} not found or unauthorized"}), 403
 
-            # 8. Clear old game data.
-            tables_to_clear = [
-                "Events", "PlannedEvents", "PlayerInventory", "Quests",
-                "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"
-            ]
-            for table in tables_to_clear:
-                await conn.execute(f"DELETE FROM {table} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
+        # 9. Clear old game data.
+        tables_to_clear = [
+            "Events", "PlannedEvents", "PlayerInventory", "Quests",
+            "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"
+        ]
+        for table in tables_to_clear:
+            await conn.execute(f"DELETE FROM {table} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
 
-            # 9. Insert environment data (MegaSettingModifiers).
-            modifiers_json = json.dumps(mega_data.get("stat_modifiers", {}))
+        # 10. Insert environment data (MegaSettingModifiers).
+        modifiers_json = json.dumps(mega_data.get("stat_modifiers", {}))
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES ($1, $2, 'MegaSettingModifiers', $3)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id, modifiers_json)
+
+        # 11. Insert missing settings.
+        await asyncio.to_thread(insert_missing_settings)
+
+        # 12. Reset or create 'Chase' in PlayerStats.
+        await conn.execute("""
+            DELETE FROM PlayerStats
+            WHERE user_id=$1 AND conversation_id=$2 AND player_name <> 'Chase'
+        """, user_id, conversation_id)
+        chase_row = await conn.fetchrow("""
+            SELECT id FROM PlayerStats
+            WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+        """, user_id, conversation_id)
+        if chase_row:
             await conn.execute("""
-                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                VALUES ($1, $2, 'MegaSettingModifiers', $3)
-                ON CONFLICT (user_id, conversation_id, key)
-                DO UPDATE SET value=EXCLUDED.value
-            """, user_id, conversation_id, modifiers_json)
-
-            # 10. Insert missing settings.
-            await asyncio.to_thread(insert_missing_settings)
-
-            # 11. Reset or create 'Chase' in PlayerStats.
-            await conn.execute("""
-                DELETE FROM PlayerStats
-                WHERE user_id=$1 AND conversation_id=$2 AND player_name <> 'Chase'
-            """, user_id, conversation_id)
-            chase_row = await conn.fetchrow("""
-                SELECT id FROM PlayerStats
+                UPDATE PlayerStats
+                SET corruption=10, confidence=60, willpower=50, obedience=20,
+                    dependency=10, lust=15, mental_resilience=55, physical_endurance=40
                 WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
             """, user_id, conversation_id)
-            if chase_row:
-                await conn.execute("""
-                    UPDATE PlayerStats
-                    SET corruption=10, confidence=60, willpower=50, obedience=20,
-                        dependency=10, lust=15, mental_resilience=55, physical_endurance=40
-                    WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
-                """, user_id, conversation_id)
-            else:
-                await conn.execute("""
-                    INSERT INTO PlayerStats (
-                      user_id, conversation_id, player_name,
-                      corruption, confidence, willpower,
-                      obedience, dependency, lust,
-                      mental_resilience, physical_endurance
-                    )
-                    VALUES ($1, $2, 'Chase', 10, 60, 50, 20, 10, 15, 55, 40)
-                """, user_id, conversation_id)
-
-            # 12. Store environment name as 'CurrentSetting'.
+        else:
             await conn.execute("""
-                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-                VALUES ($1, $2, 'CurrentSetting', $3)
-                ON CONFLICT (user_id, conversation_id, key)
-                DO UPDATE SET value=EXCLUDED.value
-            """, user_id, conversation_id, environment_name)
-        except Exception as inner_e:
-            logging.exception("Error during conversation creation and clearing data:")
-            raise inner_e
+                INSERT INTO PlayerStats (
+                  user_id, conversation_id, player_name,
+                  corruption, confidence, willpower,
+                  obedience, dependency, lust,
+                  mental_resilience, physical_endurance
+                )
+                VALUES ($1, $2, 'Chase', 10, 60, 50, 20, 10, 15, 55, 40)
+            """, user_id, conversation_id)
 
-        # 13. Generate and store PlayerRole.
+        # 13. Store environment name as 'CurrentSetting'.
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES ($1, $2, 'CurrentSetting', $3)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id, environment_name)
+        
+        # 14. Generate and store PlayerRole.
         player_role_prompt = (
             "Based on the current environment and setting, generate a concise description of Chase's typical day "
             "(e.g., career/daily life). The description should reflect how his role fits into this world of dominant females. "
@@ -212,7 +226,7 @@ async def start_new_game():
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, player_role_text)
         
-        # 14. Generate and store MainQuest.
+        # 15. Generate and store MainQuest.
         main_quest_prompt = (
             "Based on the current environment and the fact that Chase is one of the only men in this world of dominant females, "
             "generate a short summary of the main quest he is about to undertake. The quest should be intriguing and mysterious, "
@@ -227,7 +241,7 @@ async def start_new_game():
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, main_quest_text)
         
-        # 15. Generate and store ChaseSchedule.
+        # 16. Generate and store ChaseSchedule.
         schedule_prompt = (
             "Based on the current environment and Chase's role, generate a detailed weekly schedule for Chase. "
             "Format the schedule as valid JSON with keys for each day of the week (e.g., Monday, Tuesday, etc.)."
@@ -288,11 +302,11 @@ async def start_new_game():
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, json.dumps(chase_schedule))
         
-        # 16. Build aggregated context.
+        # 17. Build aggregated context.
         aggregator_data = await asyncio.to_thread(get_aggregated_roleplay_context, user_id, conversation_id, "Chase")
         aggregator_text = await asyncio.to_thread(build_aggregator_text, aggregator_data)
         
-        # 17. Call GPT for the opening narrative using the aggregated context.
+        # 18. Call GPT for the opening narrative using the aggregated context.
         opening_user_prompt = (
             "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, avoiding clichéd phrases. "
             "Format your greeting using Markdown sections. Briefly recount the new environment’s background from the aggregator data, "
@@ -318,14 +332,14 @@ async def start_new_game():
             fallback_text = fallback_response.choices[0].message.content.strip()
             nyx_text = fallback_text if fallback_text else "[No text returned from GPT]"
         
-        # 18. Store the GPT response in messages.
+        # 19. Store the GPT response in messages.
         structured_json_str = json.dumps(gpt_reply_dict)
         await conn.execute("""
             INSERT INTO messages (conversation_id, sender, content, structured_content)
             VALUES ($1, $2, $3, $4)
         """, conversation_id, "Nyx", nyx_text, structured_json_str)
         
-        # 19. Retrieve conversation history.
+        # 20. Retrieve conversation history.
         rows = await conn.fetch("""
             SELECT sender, content, created_at
             FROM messages
