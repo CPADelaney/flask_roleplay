@@ -591,49 +591,55 @@ async def async_process_new_game(user_id, conversation_data):
         )
         logging.info("Generating events with prompt: %s", events_prompt)
         events_reply = await spaced_gpt_call(conversation_id, environment_desc, events_prompt)
-        events_response = events_reply.get("response", "")
-        logging.info("Raw events response from GPT: %s", events_response)
         
-        if events_response:
-            events_response = events_response.strip()
-            # Remove markdown code fences if present.
-            if events_response.startswith("```"):
-                logging.info("Events response contains markdown code fences. Stripping them.")
-                lines = events_response.splitlines()
-                if lines and lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                events_response = "\n".join(lines).strip()
+        if events_reply.get("type") == "function_call":
+            logging.info("GPT returned a function call for events. Processing update via apply_universal_update.")
+            fn_args = events_reply.get("function_args", {})
+            # Call the universal update function to update Events (and any other keys returned)
+            await apply_universal_update(user_id, conversation_id, fn_args, conn)
+            # Optionally, you can log or retrieve the updated events from the DB here.
         else:
-            logging.warning("Events GPT response was empty; using fallback.")
-            events_response = "[]"
-        
-        try:
-            events_json = json.loads(events_response) if events_response else []
-            logging.info("Parsed events JSON successfully: %s", events_json)
-        except Exception as e:
-            logging.warning("Failed to parse events JSON; using fallback. Exception: %s", e, exc_info=True)
-            events_json = []
+            events_response = events_reply.get("response", "")
+            if events_response:
+                events_response = events_response.strip()
+                # Remove markdown code fences if present.
+                if events_response.startswith("```"):
+                    lines = events_response.splitlines()
+                    if lines and lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    events_response = "\n".join(lines).strip()
+            else:
+                logging.warning("Events GPT response was empty; using fallback.")
+                events_response = "[]"
             
-        for event in events_json:
-            event_name = event.get("name", "Unnamed Event")
-            event_desc = event.get("description", "")
-            ev_start = event.get("start_time", "TBD Start")
-            ev_end = event.get("end_time", "TBD End")
-            ev_loc = event.get("location", "Unknown")
-            if not ev_start:
-                ev_start = "TBD Start"
-            if not ev_end:
-                ev_end = "TBD End"
-            if not ev_loc:
-                ev_loc = "Unknown"
-            logging.info("Storing event: %s - %s | start_time: %s, end_time: %s, location: %s", event_name, event_desc, ev_start, ev_end, ev_loc)
-            await conn.execute("""
-                INSERT INTO Events (user_id, conversation_id, event_name, description, start_time, end_time, location)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT DO NOTHING
-            """, user_id, conversation_id, event_name, event_desc, ev_start, ev_end, ev_loc)
+            try:
+                events_json = json.loads(events_response) if events_response else []
+                logging.info("Parsed events JSON successfully: %s", events_json)
+            except Exception as e:
+                logging.warning("Failed to parse events JSON; using fallback. Exception: %s", e, exc_info=True)
+                events_json = []
+            
+            # Now insert the events into your database.
+            for event in events_json:
+                event_name = event.get("name", "Unnamed Event")
+                event_desc = event.get("description", "")
+                ev_start = event.get("start_time", "TBD Start")
+                ev_end = event.get("end_time", "TBD End")
+                ev_loc = event.get("location", "Unknown")
+                if not ev_start:
+                    ev_start = "TBD Start"
+                if not ev_end:
+                    ev_end = "TBD End"
+                if not ev_loc:
+                    ev_loc = "Unknown"
+                logging.info("Storing event: %s - %s | start_time: %s, end_time: %s, location: %s", event_name, event_desc, ev_start, ev_end, ev_loc)
+                await conn.execute("""
+                    INSERT INTO Events (user_id, conversation_id, event_name, description, start_time, end_time, location)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT DO NOTHING
+                """, user_id, conversation_id, event_name, event_desc, ev_start, ev_end, ev_loc)
 
 
         # Step 5: Generate and store notable Locations.
@@ -825,26 +831,49 @@ async def async_process_new_game(user_id, conversation_data):
         )
         logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
         schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
-        chase_schedule_generated = schedule_reply.get("response", "{}")
-        logging.info("Raw ChaseSchedule response from GPT: %s", chase_schedule_generated)
         
-        # Remove any markdown fences if accidentally included.
-        if chase_schedule_generated.startswith("```"):
-            lines = chase_schedule_generated.splitlines()
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            chase_schedule_generated = "\n".join(lines).strip()
+        # Check if GPT returned a function call response
+        if schedule_reply.get("type") == "function_call":
+            logging.info("GPT returned a function call for ChaseSchedule. Processing update via apply_universal_update.")
+            fn_args = schedule_reply.get("function_args", {})
+            await apply_universal_update(user_id, conversation_id, fn_args, conn)
+            
+            # After the update, try to retrieve the stored schedule from the database.
+            stored_schedule = await get_stored_value(conn, user_id, conversation_id, "ChaseSchedule")
+            if stored_schedule:
+                chase_schedule_generated = stored_schedule
+                logging.info("Retrieved stored ChaseSchedule: %s", chase_schedule_generated)
+            else:
+                logging.warning("No stored ChaseSchedule found after function call; using fallback JSON.")
+                chase_schedule_generated = """{
+                    "Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast", "Afternoon": "Head to work at the local data office", "Evening": "Attend a casual meetup with friends", "Night": "Return to the inn for rest"},
+                    "Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise", "Afternoon": "Study mystical texts at the library", "Evening": "Work on personal creative projects", "Night": "Return to the inn and unwind"},
+                    "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"}
+                }"""
+        else:
+            # Process a plain text response.
+            chase_schedule_generated = schedule_reply.get("response", "{}")
+            logging.info("Raw ChaseSchedule response from GPT: %s", chase_schedule_generated)
+            
+            # Remove any markdown fences if accidentally included.
+            if chase_schedule_generated.startswith("```"):
+                lines = chase_schedule_generated.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                chase_schedule_generated = "\n".join(lines).strip()
+            
+            # If the raw response is empty or equals an empty JSON object, use fallback.
+            if not chase_schedule_generated or chase_schedule_generated.strip() in ["{}", ""]:
+                logging.warning("ChaseSchedule GPT response was empty; using fallback JSON.")
+                chase_schedule_generated = """{
+                    "Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast", "Afternoon": "Head to work at the local data office", "Evening": "Attend a casual meetup with friends", "Night": "Return to the inn for rest"},
+                    "Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise", "Afternoon": "Study mystical texts at the library", "Evening": "Work on personal creative projects", "Night": "Return to the inn and unwind"},
+                    "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"}
+                }"""
         
-        # If the raw response is empty or equals an empty JSON object, use fallback.
-        if not chase_schedule_generated or chase_schedule_generated.strip() in ["{}", ""]:
-            logging.warning("ChaseSchedule GPT response was empty; using fallback JSON.")
-            chase_schedule_generated = """{
-                "Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast", "Afternoon": "Head to work at the local data office", "Evening": "Attend a casual meetup with friends", "Night": "Return to the inn for rest"},
-                "Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise", "Afternoon": "Study mystical texts at the library", "Evening": "Work on personal creative projects", "Night": "Return to the inn and unwind"},
-                "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"}
-            }"""
+        # Attempt to parse the JSON.
         try:
             chase_schedule = json.loads(chase_schedule_generated)
             logging.info("Parsed ChaseSchedule JSON successfully: %s", chase_schedule)
@@ -880,6 +909,7 @@ async def async_process_new_game(user_id, conversation_data):
                            "Evening": "Have a light dinner with friends",
                            "Night": "Enjoy some quiet time before sleep"}
             }
+        
         logging.info("Final ChaseSchedule to be stored: %s", chase_schedule)
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
@@ -887,6 +917,7 @@ async def async_process_new_game(user_id, conversation_data):
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, json.dumps(chase_schedule))
+
     
         # Step 17: Build aggregated roleplay context.
         # Remove the commit call because the connection is in autocommit mode.
