@@ -289,6 +289,7 @@ async def spawn_npcs():
     """
     Spawns NPCs for a given conversation.
     Expects JSON with a 'conversation_id'.
+    Spawns 5 NPCs per call with a small delay between each to reduce load.
     """
     user_id = session.get("user_id")
     if not user_id:
@@ -310,11 +311,18 @@ async def spawn_npcs():
             return jsonify({"error": "Conversation not found or unauthorized"}), 403
 
         spawned_npcs = []
-        # Spawn 10 NPCs. Offload the creation process if needed.
-        for i in range(3):
-            npc_id = await asyncio.to_thread(create_npc, user_id=user_id, conversation_id=conversation_id, introduced=False)
+        # Spawn 5 NPCs sequentially with a 1-second delay between each.
+        for i in range(5):
+            npc_id = await asyncio.to_thread(
+                create_npc,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                introduced=False
+            )
             spawned_npcs.append(npc_id)
-            logging.info(f"Spawned NPC {i+1}/10, ID={npc_id}")
+            logging.info(f"Spawned NPC {i+1}/5, ID={npc_id}")
+            # Wait 1 second between spawns to reduce the load on the system/API.
+            await asyncio.sleep(1)
 
         return jsonify({"message": "NPCs spawned", "npc_ids": spawned_npcs}), 200
     except Exception as e:
@@ -322,3 +330,4 @@ async def spawn_npcs():
         return jsonify({"error": str(e)}), 500
     finally:
         await conn.close()
+
