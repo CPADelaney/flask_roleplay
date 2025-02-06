@@ -4,6 +4,7 @@ import logging
 from celery import Celery
 from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
+from game_processing import async_process_new_game  # Import the helper you just created
 
 # Configure Celery to use RabbitMQ as the broker and RPC as the result backend.
 # Adjust the broker URL as needed. Here we assume that RabbitMQ is reachable at the hostname "rabbitmq".
@@ -21,6 +22,20 @@ celery_app.conf.update(
     timezone='UTC',
     enable_utc=True,
 )
+
+@celery_app.task
+def process_new_game_task(user_id, conversation_data):
+    """
+    Celery task to run the heavy game startup processing.
+    This function runs the asynchronous helper using asyncio.run.
+    """
+    try:
+        result = asyncio.run(async_process_new_game(user_id, conversation_data))
+        logging.info("Completed processing new game for user_id=%s", user_id)
+        return result
+    except Exception as e:
+        logging.exception("Error in process_new_game_task for user_id=%s", user_id)
+        return {"status": "failed", "error": str(e)}
 
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
