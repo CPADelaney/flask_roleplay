@@ -165,12 +165,14 @@ async def start_new_game():
             # 13. Call GPT for the opening narrative.
             opening_user_prompt = (
                 "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, "
-                "briefly recount the new environment’s background or history from the aggregator data, "
-                "and announce that Day 1 has just begun. "
-                "Describe where the player is that morning (look at their schedule). "
+                "avoid opening with 'ah, ' because it's too cliche."
+                "Format your greeting by breaking it up into different sections with Markdown style."
+                "Briefly recount the new environment’s background or history from the aggregator data, "
+                "and announce that Monday morning has just begun. "
+                "Describe where the player is that morning (look at their schedule from aggregator data). "
                 "Reference the player's role (if relevant), and (only if the main character has already met them) "
                 "highlight a couple of newly introduced NPCs. "
-                "If there's a main quest mentioned, hint at it ominously. "
+                "If there's a main quest that you've created, hint at it ominously. "
                 "Stay fully in character, with no disclaimers or system explanations. "
                 "Conclude with a menacing or teasing invitation for Chase to proceed."
             )
