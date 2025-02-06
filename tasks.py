@@ -1,10 +1,10 @@
-# tasks.py
 import json
 import logging
+import asyncio  # Added import here
 from celery import Celery
 from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
-from game_processing import async_process_new_game  # Import the helper you just created
+from game_processing import async_process_new_game  # Ensure this file has no Flask blueprint code
 import os
 
 # Read RabbitMQ URL from environment variables; Railway will set this for you.
