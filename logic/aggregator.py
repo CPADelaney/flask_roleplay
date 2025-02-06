@@ -1,3 +1,5 @@
+# logic/aggregator.py
+
 import json
 from db.connection import get_db_connection
 
@@ -5,13 +7,12 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     """
     Gathers data from multiple tables, merges them into a single aggregator dict,
     and also manages an incremental 'GlobalSummary' to reduce context size.
-
+    
     For unintroduced NPCs, we only store minimal info:
       - npc_id, npc_name, location, day-slice schedule
     That ensures the player can potentially encounter them in the world,
     but we don't load the rest of their stats yet.
     """
-
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -88,7 +89,6 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     # 3) NPC Stats (Introduced)
     #----------------------------------------------------------------
     introduced_npcs = []
-
     cursor.execute("""
         SELECT npc_id, npc_name,
                dominance, cruelty, closeness,
@@ -112,7 +112,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
                 full_sched = json.loads(sched)
                 if current_day in full_sched:
                     trimmed_schedule[current_day] = full_sched[current_day]
-            except:
+            except Exception:
                 pass
 
         introduced_npcs.append({
@@ -153,13 +153,13 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
                 full_sched = json.loads(sched)
                 if current_day in full_sched:
                     trimmed_schedule[current_day] = full_sched[current_day]
-            except:
+            except Exception:
                 pass
         unintroduced_npcs.append({
             "npc_id": nid,
             "npc_name": nname,
             "current_location": curr_loc or "Unknown",
-            "schedule": trimmed_schedule  # minimal day-by-day
+            "schedule": trimmed_schedule
         })
 
     #----------------------------------------------------------------
@@ -175,7 +175,6 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         ORDER BY link_id
     """, (user_id, conversation_id))
     link_rows = cursor.fetchall()
-
     social_links = []
     for (lid, e1t, e1i, e2t, e2i, ltype, lvl, hist) in link_rows:
         social_links.append({
@@ -329,7 +328,25 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         })
 
     #----------------------------------------------------------------
-    # 12) CurrentRoleplay details
+    # 12) Locations (New)
+    #----------------------------------------------------------------
+    cursor.execute("""
+        SELECT id, location_name, location_description
+        FROM Locations
+        WHERE user_id=%s
+          AND conversation_id=%s
+        ORDER BY id
+    """, (user_id, conversation_id))
+    locations_list = []
+    for (lid, lname, ldesc) in cursor.fetchall():
+        locations_list.append({
+            "location_id": lid,
+            "location_name": lname,
+            "location_description": ldesc
+        })
+
+    #----------------------------------------------------------------
+    # 13) CurrentRoleplay details
     #----------------------------------------------------------------
     cursor.execute("""
         SELECT key, value
@@ -338,13 +355,12 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
           AND conversation_id=%s
     """, (user_id, conversation_id))
     all_rows = cursor.fetchall()
-
     currentroleplay_data = {}
     for (k, v) in all_rows:
         if k == "ChaseSchedule":
             try:
                 currentroleplay_data[k] = json.loads(v)
-            except:
+            except Exception:
                 currentroleplay_data[k] = v
         else:
             currentroleplay_data[k] = v
@@ -352,7 +368,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     conn.close()
 
     #----------------------------------------------------------------
-    # 13) Build a final aggregator dictionary
+    # 14) Build a final aggregator dictionary
     #----------------------------------------------------------------
     aggregated = {
         "playerStats": player_stats,
@@ -366,13 +382,14 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         "inventory": inventory_list,
         "events": events_list,
         "plannedEvents": planned_events_list,
-        "gameRules": game_rules_list,
         "quests": quest_list,
-        "statDefinitions": stat_def_list
+        "gameRules": game_rules_list,
+        "statDefinitions": stat_def_list,
+        "locations": locations_list
     }
 
     #----------------------------------------------------------------
-    # 14) Summarize new changes & update 'GlobalSummary' in DB
+    # 15) Summarize new changes & update 'GlobalSummary' in DB
     #----------------------------------------------------------------
     new_changes_summary = build_changes_summary(aggregated)
     if new_changes_summary.strip():
@@ -389,6 +406,9 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         conn2.close()
         existing_summary = updated_summary
 
+    #----------------------------------------------------------------
+    # 16) Build the aggregator text for GPT
+    #----------------------------------------------------------------
     aggregator_text = (
         f"{existing_summary}\n\n"
         f"Day {current_day}, {time_of_day}.\n"
@@ -396,7 +416,29 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         f"{make_minimal_scene_info(aggregated)}"
     )
     
-    # incorporate MegaSettingModifiers
+    # Append additional context from CurrentRoleplay if available.
+    if "EnvironmentDesc" in aggregated["currentRoleplay"]:
+        aggregator_text += "\n\nEnvironment Description:\n" + aggregated["currentRoleplay"]["EnvironmentDesc"]
+    if "PlayerRole" in aggregated["currentRoleplay"]:
+        aggregator_text += "\n\nPlayer Role:\n" + aggregated["currentRoleplay"]["PlayerRole"]
+    if "MainQuest" in aggregated["currentRoleplay"]:
+        aggregator_text += "\n\nMain Quest (hint):\n" + aggregated["currentRoleplay"]["MainQuest"]
+    if "ChaseSchedule" in aggregated["currentRoleplay"]:
+        aggregator_text += "\n\nChase Schedule:\n" + json.dumps(aggregated["currentRoleplay"]["ChaseSchedule"], indent=2)
+    
+    # Append Notable Events (if any)
+    if aggregated.get("events"):
+        aggregator_text += "\n\nNotable Events:\n"
+        for ev in aggregated["events"][:3]:
+            aggregator_text += f"- {ev['event_name']}: {ev['description']} (at {ev['location']})\n"
+    
+    # Append Notable Locations (if any)
+    if aggregated.get("locations"):
+        aggregator_text += "\n\nNotable Locations:\n"
+        for loc in aggregated["locations"][:3]:
+            aggregator_text += f"- {loc['location_name']}: {loc['location_description']}\n"
+    
+    # Incorporate MegaSettingModifiers if available
     modifiers_str = aggregated["currentRoleplay"].get("MegaSettingModifiers", "")
     if modifiers_str:
         aggregator_text += "\n\n=== MEGA SETTING MODIFIERS ===\n"
@@ -404,7 +446,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             mod_dict = json.loads(modifiers_str)
             for k, v in mod_dict.items():
                 aggregator_text += f"- {k}: {v}\n"
-        except:
+        except Exception:
             aggregator_text += "(Could not parse MegaSettingModifiers)\n"
     
     aggregated["aggregator_text"] = aggregator_text
@@ -420,15 +462,9 @@ def build_changes_summary(aggregated):
     or any quest changes, etc.
     """
     lines = []
-
     introduced_count = len(aggregated["introducedNPCs"])
     unintroduced_count = len(aggregated["unintroducedNPCs"])
-
     lines.append(f"Introduced NPCs: {introduced_count}, Unintroduced: {unintroduced_count}")
-
-    # Possibly mention major quest changes or new items, etc.
-    # For brevity, we'll skip that.
-    
     text = "\n".join(lines)
     if introduced_count == 0 and unintroduced_count == 0:
         text = ""  # if no real changes
@@ -451,17 +487,14 @@ def make_minimal_scene_info(aggregated):
     day = aggregated["day"]
     tod = aggregated["timeOfDay"]
     lines.append(f"- It is Day {day}, {tod}.\n")
-
     # Introduced NPCs snippet
     lines.append("Introduced NPCs in the area:")
     for npc in aggregated["introducedNPCs"][:4]:
         loc = npc.get("current_location", "Unknown")
         lines.append(f"  - {npc['npc_name']} is at {loc}")
-
     # Unintroduced snippet
     lines.append("Unintroduced NPCs (possible random encounters):")
     for npc in aggregated["unintroducedNPCs"][:2]:
         loc = npc.get("current_location", "Unknown")
         lines.append(f"  - ???: '{npc['npc_name']}' lurking around {loc}")
-
     return "\n".join(lines)
