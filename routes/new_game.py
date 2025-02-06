@@ -144,7 +144,7 @@ def start_new_game():
             logging.info("Inserted fresh row for 'Chase'.")
 
         # 10. Spawn new NPCs (note: the loop comment mentioned 10 but here only 3 are created).
-        for i in range(3):
+        for i in range(2):
             npc_id = create_npc(user_id=user_id, conversation_id=conversation_id, introduced=False)
             logging.info(f"Spawned NPC {i+1}/3, ID={npc_id}")
 
