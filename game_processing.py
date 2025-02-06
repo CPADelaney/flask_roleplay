@@ -452,7 +452,6 @@ async def async_process_new_game(user_id, conversation_data):
             if not row:
                 raise Exception(f"Conversation {conversation_id} not found or unauthorized")
             logging.info("Validated existing conversation with id=%s", conversation_id)
-        await conn.execute("DELETE FROM intensitytiers")
 
         # *** New Block: Clear old game data early ***
         tables_to_clear = [
