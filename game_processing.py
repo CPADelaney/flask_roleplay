@@ -457,8 +457,10 @@ async def async_process_new_game(user_id, conversation_data):
         logging.info("Generating mega setting logic for conversation_id=%s", conversation_id)
         mega_data = await asyncio.to_thread(generate_mega_setting_logic)
         logging.info("Mega data returned: %s", mega_data)
-        unique_envs = mega_data.get("unique_environments", [])
-        logging.info("Extracted unique_envs before fallback check: %s", unique_envs)
+        unique_envs = mega_data.get("unique_environments")
+        if not unique_envs:
+            unique_envs = mega_data.get("selected_settings", [])
+        logging.info("Extracted unique_envs: %s", unique_envs)
         if not unique_envs or len(unique_envs) == 0:
             unique_envs = [
                 "A sprawling cyberpunk metropolis under siege by monstrous clans",
