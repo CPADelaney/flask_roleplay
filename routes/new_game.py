@@ -1,9 +1,12 @@
 import logging
-import json             # Explicit import for json
-import random           # For randomness
-import time             # For time-based token
+import json
+import random
+import time
+import requests.exceptions  # for Timeout exceptions
 from flask import Blueprint, request, jsonify, session
 import openai
+from openai.error import RateLimitError, APIError, ServiceUnavailableError, Timeout
+
 from db.connection import get_db_connection
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
@@ -12,6 +15,47 @@ from logic.aggregator import get_aggregated_roleplay_context
 from routes.story_routes import build_aggregator_text
 
 new_game_bp = Blueprint('new_game_bp', __name__)
+
+# -------------------------------
+# Retry decorator for API calls
+# -------------------------------
+def retry_on_exception(max_retries=5, backoff_factor=2):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except (RateLimitError, APIError, ServiceUnavailableError, Timeout, requests.exceptions.Timeout) as e:
+                    wait = backoff_factor ** attempt
+                    logging.warning(f"API error: {e}. Retrying in {wait} seconds (attempt {attempt + 1}/{max_retries}).")
+                    time.sleep(wait)
+            raise Exception("Max retries exceeded for API call.")
+        return wrapper
+    return decorator
+
+# -----------------------------------------
+# Helper function to stream chat completion
+# -----------------------------------------
+@retry_on_exception(max_retries=5, backoff_factor=2)
+def stream_chat_completion(client, messages, model="gpt-4o", temperature=0.7, timeout=120, max_tokens=150, frequency_penalty=0.0):
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        timeout=timeout,
+        max_tokens=max_tokens,
+        frequency_penalty=frequency_penalty,
+        stream=True  # enable streaming responses
+    )
+    full_response = ""
+    # Iterate over the streamed chunks and accumulate the text.
+    for chunk in response:
+        if 'choices' in chunk:
+            for choice in chunk['choices']:
+                delta = choice.get('delta', {})
+                content = delta.get('content', '')
+                full_response += content
+    return full_response.strip()
 
 @new_game_bp.route('/start_new_game', methods=['POST'])
 def start_new_game():
@@ -256,46 +300,43 @@ def start_new_game():
             "Conclude with a menacing or teasing invitation for Chase to proceed."
         )
         
-        # 11) First GPT call
         gpt_reply_dict = get_chatgpt_response(
             conversation_id=conversation_id, 
-            aggregator_text=aggregator_text, 
+            aggregator_text=get_aggregated_roleplay_context(user_id, conversation_id, "Chase"),
             user_input=opening_user_prompt
         )
-        
-        # 12) If the reply is a function call or no text, do a simpler second call
-        nyx_text = gpt_reply_dict.get("response")  # might be None if "type" is function_call
-        
+        nyx_text = gpt_reply_dict.get("response")
+
         if gpt_reply_dict["type"] == "function_call" or not nyx_text:
-            logging.info("GPT tried a function call or gave no text for the intro. Re-calling with function_call='none'.")
+            logging.info("GPT tried a function call or returned no text for the intro. Re-calling without function calls.")
             client = get_openai_client()
             forced_messages = [
                 {
                     "role": "system",
-                    "content": aggregator_text
+                    "content": get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
                 },
                 {
                     "role": "user",
-                    "content": (
-                        "No function calls for the introduction. Produce only text narrative.\n\n"
-                        f"{opening_user_prompt}"
-                    )
+                    "content": "No function calls for the introduction. Produce only text narrative.\n\n" + opening_user_prompt
                 }
             ]
-        
-            fallback_response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=forced_messages,
-                temperature=0.7,
-                timeout=120 
-            )
-        
-            fallback_text = fallback_response.choices[0].message.content.strip()
+            try:
+                # Use our streaming helper with error handling/retries.
+                fallback_text = stream_chat_completion(
+                    client,
+                    forced_messages,
+                    model="gpt-4o",
+                    temperature=0.7,
+                    timeout=120,
+                    max_tokens=150  # adjust as needed
+                )
+            except Exception as e:
+                logging.exception("Error during fallback streaming call:")
+                fallback_text = "[No text returned from GPT]"
             nyx_text = fallback_text if fallback_text else "[No text returned from GPT]"
-        
+
         # 13) Store the final text into DB
         structured_json_str = json.dumps(gpt_reply_dict)
-        
         cursor.execute(
             """
             INSERT INTO messages (conversation_id, sender, content, structured_content)
@@ -313,14 +354,14 @@ def start_new_game():
             ORDER BY id ASC
         """, (conversation_id,))
         rows = cursor.fetchall()
-        conversation_history = []
-        for r in rows:
-            conversation_history.append({
-                "sender": r[0],
-                "content": r[1],
-                "created_at": r[2].isoformat()
-            })
+        conversation_history = [{
+            "sender": r[0],
+            "content": r[1],
+            "created_at": r[2].isoformat()
+        } for r in rows]
 
+        success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
+        logging.info(f"Success! Returning 200 with message: {success_msg}")
         return jsonify({
             "message": success_msg,
             "scenario_name": scenario_name,
@@ -342,18 +383,8 @@ def start_new_game():
 
 
 def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
-    """
-    Calls GPT for a short scenario name (1–8 words)
-    and a short main quest (1-2 lines),
-    referencing the environment name/desc so it’s more unique.
-    Returns (scenario_name, quest_blurb).
-    """
     client = get_openai_client()
-
-    # Add a random token to encourage unique naming
     unique_token = f"{random.randint(1000,9999)}_{int(time.time())}"
-
-    # We explicitly forbid certain cliche words here:
     forbidden_words = ["mistress", "darkness", "manor", "chains", "twilight"]
 
     system_instructions = f"""
@@ -368,38 +399,25 @@ def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
        Avoid cliche words like {', '.join(forbidden_words)}.
     2) Then one or two lines summarizing the main quest.
 
-    The conversation name must be unique; do not reuse names from older scenarios 
-    (you can ensure uniqueness using the token or environment cues).
-    Keep it thematically relevant to a fantasy/femdom environment, 
-    but do not use overly repeated phrases like 'Mistress of Darkness' or 'Chains of Twilight.'
+    Ensure uniqueness by using the provided token.
     """
-
-    messages = [
-        {"role": "system", "content": system_instructions}
-    ]
-
-    # Increase temperature for more variation
+    messages = [{"role": "system", "content": system_instructions}]
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=messages,
-        temperature=0.9,    # higher for more creativity
+        temperature=0.9,
         max_tokens=120,
         frequency_penalty=0.3,
-        timeout=120 
+        timeout=120
     )
-
     msg = response.choices[0].message.content.strip()
     logging.info(f"[gpt_generate_scenario_name_and_quest] Raw GPT output: {msg}")
-
     scenario_name = "New Game"
     quest_blurb = ""
-
-    lines = msg.splitlines()
-    for line in lines:
+    for line in msg.splitlines():
         line = line.strip()
         if line.lower().startswith("scenarioname:"):
             scenario_name = line.split(":", 1)[1].strip()
         else:
             quest_blurb += line + " "
-
     return scenario_name.strip(), quest_blurb.strip()
