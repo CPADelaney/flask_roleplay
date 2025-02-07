@@ -309,7 +309,8 @@ def create_npc(
             logging.error("Failed to parse synergy JSON; using fallback.", exc_info=True)
             new_npc_name = npc_name if npc_name else f"NPC_{random.randint(1000,9999)}"
             synergy_text = "No synergy text available."
-        extras_summary = get_archetype_extras_summary(chosen_arcs_list_for_json)
+        extras_summary = get_archetype_extras_summary(chosen_arcs_list_for_json, new_npc_name)
+
     else:
         new_npc_name = npc_name if npc_name else f"NPC_{random.randint(1000,9999)}"
         synergy_text = "No synergy text available."
@@ -530,7 +531,7 @@ def update_missing_npc_archetypes(user_id, conversation_id):
 
         # Generate the synergy text and extras summary using your existing GPT functions.
         synergy_text = get_archetype_synergy_description(chosen_arcs_list_for_json, npc_name)
-        extras_summary = get_archetype_extras_summary(chosen_arcs_list)
+        extras_summary = get_archetype_extras_summary(chosen_arcs_list_for_json, new_npc_name)
 
         update_query = """
         UPDATE NPCStats
