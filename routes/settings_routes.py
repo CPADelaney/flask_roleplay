@@ -114,28 +114,27 @@ def generate_mega_setting_logic():
     # Create a preliminary mega name by joining the names.
     mega_name = " + ".join(picked_names)
 
-    # Build a fusion prompt that instructs GPT to blend these settings into one cohesive narrative.
     fusion_prompt = (
-        "You are a creative writer tasked with creating a single, unified description for an environment. "
-        "You have the following diverse settings, each with its own unique characteristics. Rather than listing each one individually, "
-        "blend these settings together into one cohesive, evocative description that captures the essence of the world as a whole. "
-        "Focus on creating a narrative that fuses their mood, enhanced features, stat modifiers, and activity examples into a single, imaginative portrayal. "
-        "Your final output should be 3-5 sentences long, written as a single paragraph, and should not list the individual settings separately.\n\n"
-        "Here are the settings:\n"
+        "You are a creative writer tasked with creating a single, immersive world description that blends together a variety of environment elements. "
+        "Do not list or name each element separately. Instead, incorporate all of the following details into one cohesive narrative that reads as if it were describing one unified setting. "
+        "Focus on the overall atmosphere, mood, and aesthetic, ensuring that the final description feels like a single, organically integrated environment. "
+        "Your output should be a single paragraph of 3-5 sentences without bullet points, numbering, or obvious transitions between separate settings.\n\n"
+        "Below are the details from the selected settings:\n"
     )
     
-    for i, s in enumerate(selected):
-        # For clarity, prepare the details from each setting.
+    # For each selected setting, format its details on one line (but the instruction is to blend them)
+    for s in selected:
         ef = ", ".join(s["enhanced_features"]) if s["enhanced_features"] else "None"
         ae = ", ".join(s["activity_examples"]) if s["activity_examples"] else "None"
         sm = ", ".join([f"{k}: {v}" for k, v in s["stat_modifiers"].items()]) if s["stat_modifiers"] else "None"
+        # Instead of using bullet points, you could simply separate them with a semicolon:
         fusion_prompt += (
             f"- {s['name']} (Mood: {s['mood_tone']}; Enhanced features: {ef}; Stat modifiers: {sm}; Activity examples: {ae})\n"
         )
     
     fusion_prompt += (
-        "\nPlease produce one unified, creative description that blends all these elements into a single coherent environment. "
-        "Output only the final description text without any extra commentary or formatting."
+        "\n\nNow, synthesize all of these details into one unified, creative world description that reads naturally as one setting. "
+        "Output only the final descriptive paragraph."
     )
         
     # Log the fusion prompt for debugging.
