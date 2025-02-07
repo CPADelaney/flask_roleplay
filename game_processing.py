@@ -124,6 +124,12 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
         if not npc_id:
             logging.warning("Skipping npc_update: missing npc_id.")
             continue
+
+        # Add a sanity check: skip update if npc_id matches the player's user_id.
+        if npc_id == user_id:
+            logging.warning("Skipping NPC update for npc_id=%s as it matches the player id.", npc_id)
+            continue
+
         fields_map = {
             "npc_name": "npc_name",
             "introduced": "introduced",
