@@ -142,21 +142,20 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
     
     archetype_names = [a["name"] for a in archetypes_list]
     
-    # Instruct GPT to output a JSON object
-    name_instruction = ""
     if provided_npc_name:
         name_instruction = f"Use the provided NPC name: '{provided_npc_name}'. Do not invent a new name."
     else:
         name_instruction = "Generate a creative, fitting name for the NPC."
     
-    system_instructions = f"""
-    You are writing a short personality/backstory summary for an NPC who combines these archetypes: {', '.join(archetype_names)}.
-    {name_instruction}
-    Provide your output as a JSON object with exactly two keys:
-      "npc_name": the NPC's name,
-      "archetype_summary": a short summary explaining how these archetypes fuse into a cohesive personality.
-    Output only the JSON without any extra text.
-    """
+    system_instructions = (
+        f"You are an expert creative writer. You are tasked with writing a personality/backstory summary for an NPC "
+        f"who combines these archetypes: {', '.join(archetype_names)}.\n"
+        f"{name_instruction}\n"
+        "Your response must be a single valid JSON object with exactly two keys:\n"
+        "  \"npc_name\": a creative, fitting name for the NPC,\n"
+        "  \"archetype_summary\": a short summary explaining how these archetypes fuse together into a unique personality.\n"
+        "Do not include any extra text, markdown formatting, or newlines outside of the JSON. Output only the JSON object."
+    )
     
     gpt_client = get_openai_client()
     messages = [{"role": "system", "content": system_instructions}]
