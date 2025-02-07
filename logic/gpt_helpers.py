@@ -26,9 +26,11 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     likes = original_values["likes"]
     dislikes = original_values["dislikes"]
     hobbies = original_values["hobbies"]
-
+    
     prompt = (
-        "Given the following NPC preferences:\n"
+        "Given the following environment description and NPC preferences:\n"
+        "Environment: {environment_desc}\n\n"
+        "NPC Preferences:\n"
         "Likes: {likes}\n"
         "Dislikes: {dislikes}\n"
         "Hobbies: {hobbies}\n\n"
@@ -37,9 +39,11 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
         "  - 'likes': an array of strings representing the adjusted likes,\n"
         "  - 'dislikes': an array of strings representing the adjusted dislikes, and\n"
         "  - 'hobbies': an array of strings representing the adjusted hobbies.\n"
-        "Do not include any additional text or markdown formatting."
-        "Do not include anything within parenthesis or setting-specific."
+        "Do not include any additional text or markdown formatting. "
+        "Do not include anything within parenthesis."
+        "Ensure the likes, dislikes, and hobbies make sense within the environment."
     ).format(
+        environment_desc=environment_desc,
         likes=likes,
         dislikes=dislikes,
         hobbies=hobbies
