@@ -43,6 +43,17 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
     logging.info("Update data keys: %s", list(update_data.keys()))
     logging.info("Full update data:\n%s", json.dumps(update_data, indent=2))
     
+    # NEW: Check for a top-level "ChaseSchedule" key and store it if found.
+    if "ChaseSchedule" in update_data:
+        chase_schedule_value = update_data["ChaseSchedule"]
+        logging.info("Storing ChaseSchedule from update data.")
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES ($1, $2, 'ChaseSchedule', $3)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id, json.dumps(chase_schedule_value))
+    
     # 1) roleplay_updates
     rp_updates = update_data.get("roleplay_updates", {})
     logging.info("[apply_universal_update] roleplay_updates: %s", rp_updates)
