@@ -1,7 +1,6 @@
-# logic/gpt_helpers.py
 import json
 import logging
-from logic.gpt_utils import spaced_gpt_call  # Import from the new module
+from logic.gpt_utils import spaced_gpt_call  # Now imported from our separate module
 
 async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     """
@@ -33,6 +32,15 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     else:
         logging.warning("GPT did not return adjusted preferences; falling back to original values.")
         return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
+    
+    # Remove markdown code fences if present
+    if preferences_text.startswith("```"):
+        lines = preferences_text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        preferences_text = "\n".join(lines).strip()
     
     try:
         updated_preferences = json.loads(preferences_text)
@@ -83,6 +91,15 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
     else:
         logging.warning("GPT did not return affiliations and schedule; using default empty values.")
         return {"affiliations": [], "schedule": {}}
+    
+    # Remove markdown code fences if present
+    if affiliations_schedule_text.startswith("```"):
+        lines = affiliations_schedule_text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        affiliations_schedule_text = "\n".join(lines).strip()
     
     try:
         result = json.loads(affiliations_schedule_text)
