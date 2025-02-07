@@ -91,6 +91,7 @@ def create_all_tables():
           id SERIAL PRIMARY KEY,
           user_id INTEGER NOT NULL,
           conversation_name VARCHAR(100) NOT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'processing',
           created_at TIMESTAMP DEFAULT NOW(),
           FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
