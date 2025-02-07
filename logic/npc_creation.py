@@ -411,28 +411,25 @@ def assign_npc_flavor(user_id, conversation_id, npc_id: int):
     finally:
         conn.close()
 
-from logic.chatgpt_integration import get_openai_client
-
-def get_physical_description(npc_data, final_stats, chosen_arcs_list):
+def get_physical_description(final_stats, chosen_arcs_list):
     """
     Uses GPT to generate a robust, vivid physical description for an NPC.
     The prompt considers the NPC's stats and the names of the chosen archetypes.
     Returns a plain text description.
     """
-    # Format stats and archetypes as strings.
+    # Format the stats into a string (e.g., "dominance: 70, cruelty: 40, ...")
     stats_str = ", ".join([f"{k}: {v}" for k, v in final_stats.items()])
-    if chosen_arcs_list:
-        archetypes_str = ", ".join([arc["name"] for arc in chosen_arcs_list])
-    else:
-        archetypes_str = "None"
+    # Format the archetype names into a comma-separated list.
+    archetypes_str = ", ".join([arc["name"] for arc in chosen_arcs_list]) if chosen_arcs_list else "None"
 
     prompt = (
         f"Generate a robust, vivid physical description for an NPC in a femdom daily-life sim. "
         f"Consider the following details:\n"
         f"Stats: {stats_str}\n"
         f"Archetypes: {archetypes_str}\n\n"
-        "The description should detail the NPC's physical appearance (e.g., facial features, build, style, "
+        "The description should detail the NPC's physical appearance (including facial features, build, style, "
         "and any distinctive traits) in a way that fits a world of dominant females. "
+        "Call out size of breasts and ass - they should both be extremely voluptuous."
         "Output only the description text with no extra commentary or markdown."
     )
     logging.info("Generating physical description with prompt: %s", prompt)
