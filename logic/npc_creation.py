@@ -154,8 +154,8 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         f"who combines these archetypes: {', '.join(archetype_names)}.\n"
         f"{name_instruction}\n"
         "Your response must be a single valid JSON object with exactly two keys:\n"
-        "  \"npc_name\": a creative, fitting name for the NPC,\n"
-        "  \"archetype_summary\": a short summary explaining how these archetypes fuse together into a single unique personality.\n"
+        "  \"npc_name\": a creative, unique, and fitting name for the NPC,\n"
+        "  \"archetype_summary\": describe the unique personality that emerges from merging the independent archetypes into one cohesive, unified archetype.\n"
         "Do not include any extra text, markdown formatting, or newlines outside of the JSON. Output only the JSON object."
     )
     
@@ -192,9 +192,9 @@ def get_archetype_extras_summary(archetypes_list):
         extras_text_list.append(f"{arc['name']}:\nProgression: {pr}\nTraits: {ut}\nKinks: {pk}")
     combined_extras = "\n\n".join(extras_text_list)
     system_instructions = f"""
-    You are a creative writer tasked with summarizing the following extra details from a set of archetypes in a femdom context:
+    You are a creative writer tasked with synthesizing the following extra details from several archetypes in a femdom context into one cohesive, unified description. Instead of describing each archetype separately, imagine that their traits, progression rules, and unique kinks merge to form a single, complex persona. 
     {combined_extras}
-    Please produce a concise description (3-5 sentences) that fuses these details into a cohesive overview, highlighting how they reinforce the overall dominant personality and how they are used.
+    Please produce a concise description of 3-5 sentences that integrates all these details into a singular, powerful image of an NPC. Emphasize how the combined traits reinforce an overall dominant and compelling personality.
     """
     gpt_client = get_openai_client()
     messages = [{"role": "system", "content": system_instructions}]
