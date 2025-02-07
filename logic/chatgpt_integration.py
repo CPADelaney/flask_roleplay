@@ -123,6 +123,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                 "items": {
                     "type": "object",
                     "properties": {
+                        "npc_id": {"type": "number"},
                         "npc_name": {"type": "string"},
                         "introduced": {"type": "boolean"},
                         "archetypes": {
@@ -265,13 +266,19 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "npc_id": {"type": "number"},
                         "npc_name": {"type": "string"},
                         "introduced": {"type": "boolean"},
+                        "archetype_summary": {"type": "string"},
+                        "archetype_extras_summary": {"type": "string"},
+                        "physical_description": {"type": "string"},
                         "dominance": {"type": "number"},
                         "cruelty": {"type": "number"},
                         "closeness": {"type": "number"},
                         "trust": {"type": "number"},
                         "respect": {"type": "number"},
                         "intensity": {"type": "number"},
-                        "monica_level": {"type": "number"},
+                        "hobbies": {"type": "array", "items": {"type": "string"}},
+                        "personality_traits": {"type": "array", "items": {"type": "string"}},
+                        "likes": {"type": "array", "items": {"type": "string"}},
+                        "dislikes": {"type": "array", "items": {"type": "string"}},
                         "sex": {"type": "string"},
                         "memory": {
                             "description": "NPC memory can be a string or an array of strings.",
