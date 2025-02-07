@@ -5,10 +5,11 @@ from logic.gpt_utils import spaced_gpt_call  # Import from the separate GPT util
 
 async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     """
-    Query GPT to generate updated preferences for the NPC.
+    Query GPT to generate updated NPC preferences (likes, dislikes, and hobbies)
+    that are tailored to an environment dominated by powerful females.
     This function is designed to be used as part of a function call payload for apply_universal_update.
-    It expects GPT to return a function call with a key "npc_creations" containing an array of NPC update objects.
-    If such a payload is found, it will extract the likes, dislikes, and hobbies for the NPC.
+    It expects GPT to return a function call payload with a key "npc_creations" that is a list of update objects.
+    If found, it extracts the likes, dislikes, and hobbies from the first object.
     """
     likes = npc_data.get("likes", [])
     dislikes = npc_data.get("dislikes", [])
@@ -25,9 +26,9 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
         "{\n"
         "  \"npc_creations\": [\n"
         "    {\n"
-        "      \"likes\": [string,...],\n"
-        "      \"dislikes\": [string,...],\n"
-        "      \"hobbies\": [string,...]\n"
+        "      \"likes\": [string, ...],\n"
+        "      \"dislikes\": [string, ...],\n"
+        "      \"hobbies\": [string, ...]\n"
         "    }\n"
         "  ]\n"
         "}\n"
@@ -42,10 +43,16 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
         args = reply.get("function_args", {})
         if "npc_creations" in args:
             updates = args["npc_creations"]
-            # For simplicity, assume that if there's at least one update, we use the first one.
             if isinstance(updates, list) and updates:
                 update_obj = updates[0]
-                # Make sure that the expected keys are present.
+                # If update_obj is a string, try parsing it as JSON.
+                if isinstance(update_obj, str):
+                    try:
+                        update_obj = json.loads(update_obj)
+                    except Exception as e:
+                        logging.error("Could not parse update_obj as JSON: %s", e)
+                        return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
+                # Now check for the expected keys.
                 if all(k in update_obj for k in ["likes", "dislikes", "hobbies"]):
                     return {
                         "likes": update_obj["likes"],
@@ -58,7 +65,9 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
             else:
                 logging.warning("npc_creations update is empty or not a list; falling back.")
                 return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
-    # If not a function call, try to get a direct response.
+        else:
+            logging.warning("GPT function call did not include 'npc_creations'; falling back.")
+            return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
     elif reply.get("response"):
         try:
             data = json.loads(reply["response"].strip())
