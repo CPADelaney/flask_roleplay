@@ -25,17 +25,19 @@ def create_conversation_sync(user_id):
         conn = await asyncpg.connect(dsn=DB_DSN)
         try:
             preliminary_name = "New Game"
+            status = "processing"
             row = await conn.fetchrow("""
-                INSERT INTO conversations (user_id, conversation_name)
-                VALUES ($1, $2)
+                INSERT INTO conversations (user_id, conversation_name, status)
+                VALUES ($1, $2, $3)
                 RETURNING id
-            """, user_id, preliminary_name)
+            """, user_id, preliminary_name, status)
             conversation_id = row["id"]
             logging.info(f"Created conversation_id: {conversation_id} for user_id: {user_id}")
             return conversation_id
         finally:
             await conn.close()
     return asyncio.run(_create_conversation())
+
 
 # --- Helper: a spaced-out GPT call (used by the background task if needed) ---
 async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0):
