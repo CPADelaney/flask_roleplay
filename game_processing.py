@@ -831,6 +831,11 @@ async def async_process_new_game(user_id, conversation_data):
         schedule_prompt = (
             "Based on the current environment and Chase's role, generate a detailed weekly schedule for Chase. "
             "Return only a valid JSON object with keys for each day of the week (e.g., 'Monday', 'Tuesday', etc.). "
+            "It should be formatted similarly to:"
+            ""Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast", "Afternoon": "Head to work at the local data office", "Evening": "Attend a casual meetup with friends", "Night": "Return to the inn for rest"},"
+            ""Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise", "Afternoon": "Study mystical texts at the library", "Evening": "Work on personal creative projects", "Night": "Return to the inn and unwind"},"
+            ""Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"}"
+            "And for Thursday, Friday, Saturday, and Sunday as well."
             "Do not include any markdown formatting or extra text."
         )
         logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
