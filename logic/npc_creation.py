@@ -289,6 +289,7 @@ def create_npc(
             })
         try:
             synergy_data = json.loads(synergy_json)
+            # Use the GPT-provided name for the NPC, and that will be our final name.
             new_npc_name = synergy_data.get("npc_name", npc_name)
             synergy_text = synergy_data.get("archetype_summary", "")
             if isinstance(synergy_text, list):
@@ -302,10 +303,10 @@ def create_npc(
         new_npc_name = npc_name if npc_name else f"NPC_{random.randint(1000,9999)}"
         synergy_text = "No synergy text available."
         extras_summary = "No extra archetype details available."
-
-    # --- NEW: Generate a robust physical description using GPT ---
-    physical_description = get_physical_description(final_stats, chosen_arcs_list_for_json)
-
+    
+    # --- Generate physical description, now using the final NPC name (new_npc_name) ---
+    physical_description = get_physical_description(new_npc_name, final_stats, chosen_arcs_list_for_json)
+    
     try:
         cursor.execute(
             """
@@ -340,7 +341,7 @@ def create_npc(
                 chosen_arcs_json_str,
                 synergy_text,
                 extras_summary,
-                physical_description  # This is our new field
+                physical_description
             )
         )
         new_id = cursor.fetchone()[0]
@@ -423,26 +424,23 @@ def assign_npc_flavor(user_id, conversation_id, npc_id: int):
     finally:
         conn.close()
 
-def get_physical_description(final_stats, chosen_arcs_list):
+def get_physical_description(final_npc_name, final_stats, chosen_arcs_list):
     """
     Uses GPT to generate a robust, vivid physical description for an NPC.
-    The prompt considers the NPC's stats and the names of the chosen archetypes.
+    The prompt considers the NPC's final name, its stats, and the names of the chosen archetypes.
     Returns a plain text description.
     """
-    # Format the stats into a string (e.g., "dominance: 70, cruelty: 40, ...")
     stats_str = ", ".join([f"{k}: {v}" for k, v in final_stats.items()])
-    # Format the archetype names into a comma-separated list.
     archetypes_str = ", ".join([arc["name"] for arc in chosen_arcs_list]) if chosen_arcs_list else "None"
 
     prompt = (
         f"Generate a robust, vivid physical description for an NPC in a femdom daily-life sim. "
+        f"Use the NPC's name: {final_npc_name}.\n"
         f"Consider the following details:\n"
         f"Stats: {stats_str}\n"
         f"Archetypes: {archetypes_str}\n\n"
-        "The description should detail the NPC's physical appearance (including facial features, build, style, "
-        "and any distinctive traits) in a way that fits a world of dominant females. "
-        "Call out size of breasts and ass - they should both be extremely voluptuous."
-        "Output only the description text with no extra commentary or markdown."
+        "The description should detail the NPC's physical appearance (e.g., facial features, build, style, and any distinctive traits) "
+        "in a way that fits a world of dominant females. Output only the description text with no extra commentary or markdown."
     )
     logging.info("Generating physical description with prompt: %s", prompt)
     gpt_client = get_openai_client()
@@ -452,7 +450,7 @@ def get_physical_description(final_stats, chosen_arcs_list):
             model="gpt-4o",
             messages=messages,
             temperature=0.7,
-            max_tokens=150
+            max_tokens=550
         )
         description = response.choices[0].message.content.strip()
         logging.info("Generated physical description: %s", description)
@@ -460,6 +458,7 @@ def get_physical_description(final_stats, chosen_arcs_list):
     except Exception as e:
         logging.error("Error generating physical description: %s", e, exc_info=True)
         return "A physically striking NPC with an enigmatic and captivating appearance."
+
 
 
 def update_missing_npc_archetypes(user_id, conversation_id):
@@ -519,7 +518,7 @@ def update_missing_npc_archetypes(user_id, conversation_id):
         chosen_arcs_list = [{"id": arc[0], "name": arc[1]} for arc in chosen_arcs]
 
         # Generate the synergy text and extras summary using your existing GPT functions.
-        synergy_text = get_archetype_synergy_description(chosen_arcs_list)
+        synergy_text = get_archetype_synergy_description(chosen_arcs_list_for_json, npc_name)
         extras_summary = get_archetype_extras_summary(chosen_arcs_list)
 
         update_query = """
