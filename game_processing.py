@@ -1133,6 +1133,13 @@ async def async_process_new_game(user_id, conversation_data):
             VALUES ($1, $2, $3, $4)
         """, conversation_id, "Nyx", nyx_text, structured_json_str)
         
+        # Update the conversation to mark it as ready.
+        await conn.execute("""
+            UPDATE conversations 
+            SET conversation_name = $1, status = 'ready'
+            WHERE id = $2 AND user_id = $3
+        """, scenario_name, conversation_id, user_id)
+
         # Step 20: Retrieve conversation history.
         logging.info("Retrieving conversation history for conversation_id=%s", conversation_id)
         rows = await conn.fetch("""
