@@ -3,17 +3,29 @@ import json
 import logging
 from logic.gpt_utils import spaced_gpt_call  # Import from the separate GPT utils module
 
+import json
+import logging
+from logic.gpt_utils import spaced_gpt_call  # Import the GPT call helper
+
 async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     """
     Query GPT to generate updated NPC preferences (likes, dislikes, and hobbies)
-    that are tailored to an environment dominated by powerful females.
+    tailored to an environment dominated by powerful females.
     This function expects GPT to return a function call payload with a key "npc_creations"
     that is a list of update objects. It then extracts the likes, dislikes, and hobbies
     from the first object in that list.
+    
+    Instead of immediately falling back when the result is not valid,
+    it will retry the GPT call up to `max_retries` times.
     """
-    likes = npc_data.get("likes", [])
-    dislikes = npc_data.get("dislikes", [])
-    hobbies = npc_data.get("hobbies", [])
+    original_values = {
+        "likes": npc_data.get("likes", []),
+        "dislikes": npc_data.get("dislikes", []),
+        "hobbies": npc_data.get("hobbies", [])
+    }
+    likes = original_values["likes"]
+    dislikes = original_values["dislikes"]
+    hobbies = original_values["hobbies"]
     
     prompt = (
         "Given the following NPC preferences:\n"
@@ -36,50 +48,73 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     ).format(likes=likes, dislikes=dislikes, hobbies=hobbies)
     
     logging.info("Adjusting NPC preferences with prompt: %s", prompt)
-    reply = await spaced_gpt_call(conversation_id, environment_desc, prompt)
     
-    # Check if GPT returned a function call.
-    if reply.get("type") == "function_call":
-        args = reply.get("function_args", {})
-        if "npc_creations" in args:
-            updates = args["npc_creations"]
-            if isinstance(updates, list) and updates:
-                update_obj = updates[0]
-                # If update_obj is a string, try stripping whitespace and parsing as JSON.
-                if isinstance(update_obj, str):
-                    stripped = update_obj.strip()
-                    try:
-                        update_obj = json.loads(stripped)
-                    except Exception as e:
-                        logging.error("Could not parse update_obj as JSON after stripping: %s", e)
-                        logging.debug("Raw update_obj value: %s", stripped)
-                        return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
-                # Ensure the expected keys are present.
-                if all(k in update_obj for k in ["likes", "dislikes", "hobbies"]):
-                    return {
-                        "likes": update_obj["likes"],
-                        "dislikes": update_obj["dislikes"],
-                        "hobbies": update_obj["hobbies"]
-                    }
+    max_retries = 3
+    retry_count = 0
+    while retry_count < max_retries:
+        reply = await spaced_gpt_call(conversation_id, environment_desc, prompt)
+        # Process the GPT response:
+        if reply.get("type") == "function_call":
+            args = reply.get("function_args", {})
+            if "npc_creations" in args:
+                updates = args["npc_creations"]
+                if isinstance(updates, list) and updates:
+                    update_obj = updates[0]
+                    # If update_obj is a string, try to strip and parse it.
+                    if isinstance(update_obj, str):
+                        stripped = update_obj.strip()
+                        # If it doesn't start with '{', assume it needs repair.
+                        if not stripped.startswith("{"):
+                            logging.error("Update object string does not look like a JSON object: %s", stripped)
+                            retry_count += 1
+                            continue
+                        try:
+                            update_obj = json.loads(stripped)
+                        except Exception as e:
+                            logging.error("JSON parsing failed for update_obj: %s", e)
+                            retry_count += 1
+                            continue
+                    # At this point, update_obj should be a dict.
+                    if all(k in update_obj for k in ["likes", "dislikes", "hobbies"]):
+                        logging.info("Successfully extracted updated preferences on retry %d", retry_count)
+                        return {
+                            "likes": update_obj["likes"],
+                            "dislikes": update_obj["dislikes"],
+                            "hobbies": update_obj["hobbies"]
+                        }
+                    else:
+                        logging.warning("Expected keys not found in npc_creations update; retrying.")
+                        retry_count += 1
+                        continue
                 else:
-                    logging.warning("Expected keys not found in npc_creations update; falling back.")
-                    return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
+                    logging.warning("npc_creations update is empty or not a list; retrying.")
+                    retry_count += 1
+                    continue
             else:
-                logging.warning("npc_creations update is empty or not a list; falling back.")
-                return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
+                logging.warning("GPT function call did not include 'npc_creations'; retrying.")
+                retry_count += 1
+                continue
+        elif reply.get("response"):
+            try:
+                data = json.loads(reply["response"].strip())
+                if all(k in data for k in ["likes", "dislikes", "hobbies"]):
+                    logging.info("Successfully extracted updated preferences from response on retry %d", retry_count)
+                    return data
+                else:
+                    logging.warning("Response JSON does not contain expected keys; retrying.")
+                    retry_count += 1
+                    continue
+            except Exception as e:
+                logging.error("Error parsing JSON from response: %s", e)
+                retry_count += 1
+                continue
         else:
-            logging.warning("GPT function call did not include 'npc_creations'; falling back.")
-            return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
-    elif reply.get("response"):
-        try:
-            data = json.loads(reply["response"].strip())
-            return data
-        except Exception as e:
-            logging.error("Error parsing adjusted preferences JSON: %s", e)
-            return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
-    else:
-        logging.warning("GPT did not return any valid preferences; falling back to original values.")
-        return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
+            logging.warning("GPT did not return a valid response; retrying.")
+            retry_count += 1
+
+    # If we've exhausted retries, log and return the original values.
+    logging.error("Max retries reached; using original preferences instead.")
+    return original_values
 
 async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, conversation_id):
     """
