@@ -267,7 +267,6 @@
     const MAX_POLL_ATTEMPTS = 30; // for example, 30*5 = 150 seconds maximum
     let attempts = 0;
   
-    // Use setInterval with an async IIFE so we can await inside the callback.
     const intervalId = setInterval(() => {
       (async () => {
         try {
@@ -281,14 +280,17 @@
           }
           const data = await res.json();
           console.log("Polled conversation status:", data);
-  
+          
           if (data.status === "ready") {
             clearInterval(intervalId);
-            console.log("Conversation is ready. Updating UI dynamically...");
-  
-            // Instead of reloading the page, update the UI:
-            await loadConversations();       // Re-fetch the conversation list
-            selectConversation(convId);        // Load the messages for the current conversation
+            console.log("Conversation is ready. Refreshing messages...");
+            // Instead of re-selecting the conversation, just refresh messages if already open.
+            if (currentConvId === convId) {
+              await loadMessages(convId, true);
+            } else {
+              await loadConversations();
+              selectConversation(convId);
+            }
           } else {
             attempts++;
             if (attempts >= MAX_POLL_ATTEMPTS) {
@@ -302,6 +304,7 @@
       })();
     }, POLL_INTERVAL);
   }
+
 
 
   // Check login
