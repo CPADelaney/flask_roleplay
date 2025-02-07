@@ -71,27 +71,35 @@ def start_new_game():
 
 @new_game_bp.route('/conversation_status', methods=['GET'])
 def conversation_status():
-    conversation_id = request.args.get("conversation_id")
+    conversation_id_str = request.args.get("conversation_id")
     user_id = session.get("user_id")
-    if not user_id or not conversation_id:
+    if not user_id or not conversation_id_str:
         return jsonify({"error": "Missing parameters"}), 400
+
+    try:
+        conversation_id = int(conversation_id_str)
+    except ValueError:
+        return jsonify({"error": "Invalid conversation_id parameter"}), 400
 
     async def _get_status():
         conn = await asyncpg.connect(dsn=DB_DSN)
         try:
-            row = await conn.fetchrow("""
+            row = await conn.fetchrow(
+                """
                 SELECT conversation_name, status 
                 FROM conversations 
                 WHERE id=$1 AND user_id=$2
-            """, conversation_id, user_id)
+                """,
+                conversation_id, user_id
+            )
             if row:
                 return {"conversation_name": row["conversation_name"], "status": row["status"]}
             else:
                 return {"error": "Conversation not found"}
         finally:
             await conn.close()
-    return jsonify(asyncio.run(_get_status()))
 
+    return jsonify(asyncio.run(_get_status()))
 
 @new_game_bp.route('/spawn_npcs', methods=['POST'])
 async def spawn_npcs():
