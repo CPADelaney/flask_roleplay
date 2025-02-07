@@ -101,7 +101,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
               "required": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
               "additionalProperties": false,
               "description": "The detailed weekly schedule for Chase, with keys for each day of the week and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
-            }
+            },
             "npc_creations": {
                 "type": "array",
                 "description": "Create new NPCs with stats/hobbies/affiliations, etc.",
