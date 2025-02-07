@@ -8,6 +8,7 @@ from routes.settings_routes import insert_missing_settings, generate_mega_settin
 from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.aggregator import get_aggregated_roleplay_context
+from logic.gpt_helpers import adjust_npc_preferences, generate_npc_affiliations_and_schedule
 from routes.story_routes import build_aggregator_text
 
 # Use your Railway DSN (update as needed)
@@ -891,7 +892,164 @@ async def async_process_new_game(user_id, conversation_data):
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, main_quest_text)
 
+       # Step 16: Generate and store ChaseSchedule.
+        schedule_prompt = (
+            "Based on the current environment and Chase's role, generate a detailed weekly schedule for Chase. "
+            "Return a function call payload with a parameter named \"ChaseSchedule\" that is a valid JSON object with keys for each day of the week (e.g., \"Monday\", \"Tuesday\", etc.), "
+            "where each day has nested keys for \"Morning\", \"Afternoon\", \"Evening\", and \"Night\" representing Chase's activities. "
+            "Do not output any additional text or markdown formatting."
+        )
+        logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
+        schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
         
+        if schedule_reply.get("type") == "function_call":
+            logging.info("GPT returned a function call for ChaseSchedule. Processing update via apply_universal_update.")
+            fn_args = schedule_reply.get("function_args", {})
+            # The payload should include a key "ChaseSchedule"
+            await apply_universal_update(user_id, conversation_id, fn_args, conn)
+            
+            # After the update, retrieve the stored schedule from the database.
+            stored_schedule = await get_stored_value(conn, user_id, conversation_id, "ChaseSchedule")
+            if stored_schedule:
+                chase_schedule_generated = stored_schedule
+                logging.info("Retrieved stored ChaseSchedule: %s", chase_schedule_generated)
+            else:
+                logging.warning("No stored ChaseSchedule found after function call; using fallback JSON.")
+                chase_schedule_generated = """{
+                    "Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast", "Afternoon": "Head to work at the local data office", "Evening": "Attend a casual meetup with friends", "Night": "Return to the inn for rest"},
+                    "Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise", "Afternoon": "Study mystical texts at the library", "Evening": "Work on personal creative projects", "Night": "Return to the inn and unwind"},
+                    "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"}
+                }"""
+        else:
+            # Process a plain text response.
+            chase_schedule_generated = schedule_reply.get("response", "{}")
+            logging.info("Raw ChaseSchedule response from GPT: %s", chase_schedule_generated)
+            if chase_schedule_generated.startswith("
+"):
+                lines = chase_schedule_generated.splitlines()
+                if lines[0].startswith("
+"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("
+"):
+                    lines = lines[:-1]
+                chase_schedule_generated = "\n".join(lines).strip()
+            if not chase_schedule_generated or chase_schedule_generated.strip() in ["{}", ""]:
+                logging.warning("ChaseSchedule GPT response was empty; using fallback JSON.")
+                chase_schedule_generated = """{
+                    "Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast", "Afternoon": "Head to work at the local data office", "Evening": "Attend a casual meetup with friends", "Night": "Return to the inn for rest"},
+                    "Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise", "Afternoon": "Study mystical texts at the library", "Evening": "Work on personal creative projects", "Night": "Return to the inn and unwind"},
+                    "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"},
+                    "Thursday": {"Morning": "Do light training at the local gym", "Afternoon": "Work at the office", "Evening": "Meet with friends at a nearby tavern", "Night": "Return home for sleep"},
+                    "Friday": {"Morning": "Wake up at the inn", "Afternoon": "Wrap up work and relax", "Evening": "Attend a small social gathering", "Night": "Take a leisurely late night stroll"},
+                    "Saturday": {"Morning": "Sleep in and enjoy a lazy start", "Afternoon": "Explore the bustling market", "Evening": "Watch a local performance", "Night": "Return to the inn to wind down"},
+                    "Sunday": {"Morning": "Take an early walk in the park", "Afternoon": "Reflect on the week and plan ahead", "Evening": "Have a light dinner with friends", "Night": "Enjoy some quiet time before sleep"}
+                }"""
+        try:
+            chase_schedule = json.loads(chase_schedule_generated)
+            logging.info("Parsed ChaseSchedule JSON successfully: %s", chase_schedule)
+        except Exception as e:
+            logging.warning("Failed to parse ChaseSchedule JSON; using fallback schedule. Exception: %s", e, exc_info=True)
+            chase_schedule = {
+                "Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast",
+                           "Afternoon": "Head to work at the local data office",
+                           "Evening": "Attend a casual meetup with friends",
+                           "Night": "Return to the inn for rest"},
+                "Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise",
+                            "Afternoon": "Study mystical texts at the library",
+                            "Evening": "Work on personal creative projects",
+                            "Night": "Return to the inn and unwind"},
+                "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast",
+                              "Afternoon": "Run errands and visit the guild",
+                              "Evening": "Attend a community dinner",
+                              "Night": "Head back to the inn for some rest"},
+                "Thursday": {"Morning": "Do light training at the local gym",
+                             "Afternoon": "Work at the office",
+                             "Evening": "Meet with friends at a nearby tavern",
+                             "Night": "Return home for sleep"},
+                "Friday": {"Morning": "Wake up at the inn",
+                           "Afternoon": "Wrap up work and relax",
+                           "Evening": "Attend a small social gathering",
+                           "Night": "Take a leisurely late night stroll"},
+                "Saturday": {"Morning": "Sleep in and enjoy a lazy start",
+                             "Afternoon": "Explore the bustling market",
+                             "Evening": "Watch a local performance",
+                             "Night": "Return to the inn to wind down"},
+                "Sunday": {"Morning": "Take an early walk in the park",
+                           "Afternoon": "Reflect on the week and plan ahead",
+                           "Evening": "Have a light dinner with friends",
+                           "Night": "Enjoy some quiet time before sleep"}
+            }
+        logging.info("Final ChaseSchedule to be stored: %s", chase_schedule)
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES ($1, $2, 'ChaseSchedule', $3)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id, json.dumps(chase_schedule))
+
+        # Step 16.5: Final NPC Adjustments via GPT.
+        logging.info("Performing final adjustments on NPCs using GPT helper functions for conversation_id=%s", conversation_id)
+        npc_rows = await conn.fetch("""
+            SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes, archetype_summary
+            FROM NPCStats
+            WHERE user_id=$1 AND conversation_id=$2
+        """, user_id, conversation_id)
+        
+        for npc_row in npc_rows:
+            npc_id = npc_row["npc_id"]
+            # Build an npc_data dict from the stored values.
+            npc_data = {
+                "npc_name": npc_row["npc_name"],
+                "hobbies": json.loads(npc_row["hobbies"]) if isinstance(npc_row["hobbies"], str) else npc_row["hobbies"],
+                "likes": json.loads(npc_row["likes"]) if isinstance(npc_row["likes"], str) else npc_row["likes"],
+                "dislikes": json.loads(npc_row["dislikes"]) if isinstance(npc_row["dislikes"], str) else npc_row["dislikes"],
+                "affiliations": json.loads(npc_row["affiliations"]) if isinstance(npc_row["affiliations"], str) else npc_row["affiliations"],
+                "schedule": json.loads(npc_row["schedule"]) if isinstance(npc_row["schedule"], str) else npc_row["schedule"],
+                "archetypes": json.loads(npc_row["archetypes"]) if isinstance(npc_row["archetypes"], str) else npc_row["archetypes"],
+                "archetype_summary": npc_row.get("archetype_summary", "")
+            }
+            
+            # Call the helper to adjust preferences.
+            try:
+                adjusted_preferences = await adjust_npc_preferences(npc_data, environment_desc, conversation_id)
+            except Exception as e:
+                logging.error("Error adjusting preferences for NPC %s: %s", npc_id, e)
+                adjusted_preferences = {
+                    "likes": npc_data.get("likes", []),
+                    "dislikes": npc_data.get("dislikes", []),
+                    "hobbies": npc_data.get("hobbies", [])
+                }
+            
+            # Call the helper to generate affiliations and schedule.
+            try:
+                affiliation_schedule = await generate_npc_affiliations_and_schedule(npc_data, environment_desc, conversation_id)
+            except Exception as e:
+                logging.error("Error generating affiliations/schedule for NPC %s: %s", npc_id, e)
+                affiliation_schedule = {
+                    "affiliations": npc_data.get("affiliations", []),
+                    "schedule": npc_data.get("schedule", {})
+                }
+            
+            # Update the NPC record with the GPT-adjusted values.
+            await conn.execute("""
+                UPDATE NPCStats
+                SET likes = $1,
+                    dislikes = $2,
+                    hobbies = $3,
+                    affiliations = $4,
+                    schedule = $5
+                WHERE npc_id = $6 AND user_id = $7 AND conversation_id = $8
+            """,
+            json.dumps(adjusted_preferences.get("likes", [])),
+            json.dumps(adjusted_preferences.get("dislikes", [])),
+            json.dumps(adjusted_preferences.get("hobbies", [])),
+            json.dumps(affiliation_schedule.get("affiliations", [])),
+            json.dumps(affiliation_schedule.get("schedule", {})),
+            npc_id, user_id, conversation_id)
+            
+            logging.info("Final GPT adjustments applied for NPC %s", npc_id)
+            
   
         # Step 17: Build aggregated roleplay context.
         logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
