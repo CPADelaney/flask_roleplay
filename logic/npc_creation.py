@@ -124,22 +124,31 @@ def archetypes_to_json(rows):
 ###################
 # 6) GPT Synergy Functions
 ###################
-def get_archetype_synergy_description(archetypes_list):
+def get_archetype_synergy_description(archetypes_list, npc_name=None):
     """
     Calls GPT to produce a cohesive short backstory and personality summary
     for an NPC who combines these archetypes.
+    If an npc_name is provided, instruct GPT to use that name and not generate a new one.
     """
     if not archetypes_list:
         return "No special archetype synergy."
+    
     archetype_names = [a["name"] for a in archetypes_list]
+    
+    name_instruction = f"Use the provided NPC name: '{npc_name}'." if npc_name else ""
+    
     system_instructions = f"""
     You are writing a short personality/backstory summary for an NPC who combines these archetypes: {', '.join(archetype_names)}.
+    {name_instruction}
     They exist in a femdom context.
     Please produce 1-2 paragraphs that explain how these archetypes fuse into a single cohesive personality, and include a brief backstory.
+    Do not invent a new name if one is provided.
     Keep it concise.
     """
+    
     gpt_client = get_openai_client()
     messages = [{"role": "system", "content": system_instructions}]
+    
     try:
         response = gpt_client.chat.completions.create(
             model="gpt-4o",
@@ -264,7 +273,8 @@ def create_npc(
     synergy_text = ""
     extras_summary = ""
     if sex.lower() == "female" and chosen_arcs_list_for_json:
-        synergy_text = get_archetype_synergy_description(chosen_arcs_list_for_json)
+        # Pass the provided npc_name so GPT uses it.
+        synergy_text = get_archetype_synergy_description(chosen_arcs_list_for_json, npc_name)
         extras_summary = get_archetype_extras_summary(chosen_arcs_list_for_json)
     else:
         synergy_text = "No synergy text (male or no archetypes)."
@@ -372,3 +382,78 @@ def assign_npc_flavor(user_id, conversation_id, npc_id: int):
         logging.error(f"[assign_npc_flavor] DB error: {e}", exc_info=True)
     finally:
         conn.close()
+
+def update_missing_npc_archetypes(user_id, conversation_id):
+    """
+    Scans the NPCStats table for any NPCs (for the given user and conversation)
+    that have missing archetype fields (i.e.:
+      - archetypes is NULL or an empty array,
+      - archetype_summary is NULL or blank,
+      - archetype_extras_summary is NULL or blank).
+    For each such NPC (if female), randomly selects archetypes, computes the synergy
+    and extras summaries via GPT, and updates the record.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = """
+    SELECT npc_id, sex
+    FROM NPCStats 
+    WHERE user_id = %s AND conversation_id = %s
+      AND (
+          archetypes IS NULL OR archetypes = '[]'
+          OR archetype_summary IS NULL OR TRIM(archetype_summary) = ''
+          OR archetype_extras_summary IS NULL OR TRIM(archetype_extras_summary) = ''
+      )
+    """
+    cursor.execute(query, (user_id, conversation_id))
+    rows = cursor.fetchall()
+    if not rows:
+        logging.info("No NPCs with missing archetype fields found for user_id=%s, conversation_id=%s", user_id, conversation_id)
+        conn.close()
+        return
+
+    for npc_id, sex in rows:
+        # For this example, we update only female NPCs (as in your creation logic).
+        if sex.lower() != "female":
+            logging.info("Skipping NPC %s (sex=%s) for archetype update.", npc_id, sex)
+            continue
+
+        # Retrieve all archetypes from the database.
+        cursor.execute("SELECT id, name, baseline_stats FROM Archetypes")
+        all_arcs = cursor.fetchall()
+        if not all_arcs:
+            logging.warning("No archetypes available in DB to update NPC %s", npc_id)
+            continue
+
+        # Define how many archetypes to choose (e.g., 4)
+        total_archetypes = 4
+
+        # Filter out any archetypes in the reroll pool (if desired)
+        normal_pool = [arc for arc in all_arcs if arc[0] not in REROLL_IDS]
+        if len(normal_pool) < total_archetypes:
+            chosen_arcs = normal_pool
+        else:
+            chosen_arcs = random.sample(normal_pool, total_archetypes)
+
+        # Build a Python list of archetype objects (not JSON-dumped yet)
+        chosen_arcs_list = [{"id": arc[0], "name": arc[1]} for arc in chosen_arcs]
+
+        # Generate the synergy text and extras summary using your existing GPT functions.
+        synergy_text = get_archetype_synergy_description(chosen_arcs_list)
+        extras_summary = get_archetype_extras_summary(chosen_arcs_list)
+
+        update_query = """
+        UPDATE NPCStats
+        SET archetypes = %s,
+            archetype_summary = %s,
+            archetype_extras_summary = %s
+        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+        """
+        # Here we pass the archetypes as a JSON string since the column is JSONB.
+        cursor.execute(update_query, (json.dumps(chosen_arcs_list), synergy_text, extras_summary, npc_id, user_id, conversation_id))
+        conn.commit()
+        logging.info("Updated NPC %s with archetypes and summaries.", npc_id)
+
+    conn.close()
+
