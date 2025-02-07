@@ -1100,9 +1100,10 @@ async def async_process_new_game(user_id, conversation_data):
         opening_user_prompt = (
             "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, avoiding clichéd phrases such as 'Ah, Chase'. "
             "Format your greeting using Markdown sections. Briefly recount the new environment’s background from the aggregator data, "
-            "and announce that Monday morning has just begun. Describe where Chase is that morning by referencing the schedule, "
-            "the player's role, and hint at the mysterious main quest. "
-            "Stay fully in character and conclude with a teasing invitation for Chase to proceed."
+            "and announce that Monday morning has just begun. Make sure to reference the schedule stored in CurrentRoleplay, which details "
+            "Chase's planned activities for the day, and describe where he is scheduled to be. Also, include a nod to the player's role "
+            "and hint at the mysterious main quest awaiting him. "
+            "Stay fully in character and conclude with a teasing invitation for Chase to proceed, clearly mentioning the next destination from his schedule."
         )
         logging.info("Calling GPT for opening narrative with prompt: %s", opening_user_prompt)
         gpt_reply_dict = await spaced_gpt_call(conversation_id, aggregator_text, opening_user_prompt)
