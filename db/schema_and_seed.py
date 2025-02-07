@@ -1,3 +1,19 @@
+import json
+from db.connection import get_db_connection
+
+# If you have these modules:
+from routes.activities import insert_missing_activities
+from routes.archetypes import insert_missing_archetypes
+from routes.settings_routes import insert_missing_settings
+from logic.seed_intensity_tiers import create_and_seed_intensity_tiers
+from logic.seed_plot_triggers import create_and_seed_plot_triggers
+from logic.seed_interactions import create_and_seed_interactions
+from logic.stats_logic import (
+    insert_stat_definitions,
+    insert_or_update_game_rules,
+    insert_default_player_stats_chase
+)
+
 def create_all_tables():
     """
     Creates all core tables with user_id, conversation_id columns from the start,
