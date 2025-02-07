@@ -185,6 +185,7 @@ def get_shared_memory(relationship, npc_name, archetype_summary="", archetype_ex
     {extra_context}
     In a femdom narrative, generate a short memory (1-2 sentences) describing a shared event or experience between {npc_name} and {target_name} that reflects their history.
     The memory should be concise, vivid, and fit naturally within the setting.
+    To determine the nature of the relationship, review likes, dislikes, affiliations, and schedules of both characters, and come up with a plausible reason the relationship exists.
     """
     gpt_client = get_openai_client()
     messages = [{"role": "system", "content": system_instructions}]
