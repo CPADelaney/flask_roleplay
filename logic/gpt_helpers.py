@@ -33,18 +33,16 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
         "Dislikes: {dislikes}\n"
         "Hobbies: {hobbies}\n\n"
         "Adapt these preferences so that they are specifically tailored to an environment dominated by powerful females. "
-        "For each entry, produce one cohesive version that fits the current setting. "
-        "Output your answer as a function call payload conforming exactly to the following JSON schema with no additional text or markdown:\n\n"
-        "{\n"
-        "  \"npc_creations\": [\n"
-        "    {\n"
-        "      \"likes\": [\"string\", ...],\n"
-        "      \"dislikes\": [\"string\", ...],\n"
-        "      \"hobbies\": [\"string\", ...]\n"
-        "    }\n"
-        "  ]\n"
-        "}\n"
-    ).format(likes=likes, dislikes=dislikes, hobbies=hobbies)
+        "Return only a JSON object with one key: 'npc_creations'. This key should map to an array containing exactly one object that has the following keys:\n"
+        "  - 'likes': an array of strings representing the adjusted likes,\n"
+        "  - 'dislikes': an array of strings representing the adjusted dislikes, and\n"
+        "  - 'hobbies': an array of strings representing the adjusted hobbies.\n"
+        "Do not include any additional text or markdown formatting."
+    ).format(
+        likes=likes,
+        dislikes=dislikes,
+        hobbies=hobbies
+    )
 
     logging.info("Adjusting NPC preferences with prompt: %s", prompt)
 
