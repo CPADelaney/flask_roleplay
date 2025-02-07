@@ -177,27 +177,37 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
             "archetype_summary": "An NPC with these archetypes has a mysterious blend of traits, but GPT call failed."
         })
 
-def get_archetype_extras_summary(archetypes_list):
+def get_archetype_extras_summary(archetypes_list, provided_npc_name):
     """
     Produces a concise summary that fuses extra details (progression_rules,
-    unique_traits, preferred_kinks) of the chosen archetypes.
+    unique_traits, preferred_kinks) from the chosen archetypes into one cohesive description.
+    The summary must explicitly use the provided NPC name (provided_npc_name) so that it matches
+    the name stored in the NPCStats table.
     """
     if not archetypes_list:
-        return "No extra details available."
+        return f"No extra details available for {provided_npc_name}."
+    
     extras_text_list = []
     for arc in archetypes_list:
         pr = " ".join(arc.get("progression_rules", []))
         ut = " ".join(arc.get("unique_traits", []))
         pk = " ".join(arc.get("preferred_kinks", []))
-        extras_text_list.append(f"{arc['name']}:\nProgression: {pr}\nTraits: {ut}\nKinks: {pk}")
+        extras_text_list.append(f"{arc['name']}: Progression: {pr}; Traits: {ut}; Kinks: {pk}")
+    
     combined_extras = "\n\n".join(extras_text_list)
+    
     system_instructions = f"""
-    You are a creative writer tasked with synthesizing the following extra details from several archetypes in a femdom context into one cohesive, unified description. Instead of describing each archetype separately, imagine that their traits, progression rules, and unique kinks merge to form a single, complex persona. 
+    You are a creative writer tasked with synthesizing the following extra details from several archetypes in a femdom context into one cohesive, unified description for an NPC named "{provided_npc_name}". Instead of describing each archetype separately, imagine that their traits, progression rules, and unique kinks merge into a single, complex persona. 
+    Here are the details:
     {combined_extras}
-    Please produce a concise description of 3-5 sentences that integrates all these details into a singular, powerful image of an NPC. Emphasize how the combined traits reinforce an overall dominant and compelling personality.
+    
+    Please produce a concise description (3-5 sentences) that integrates all these details into a singular, powerful image of an NPC named "{provided_npc_name}". Emphasize how the combined traits reinforce an overall dominant and compelling personality.
+    Output only the final description text without any extra commentary or formatting.
     """
+    
     gpt_client = get_openai_client()
     messages = [{"role": "system", "content": system_instructions}]
+    
     try:
         response = gpt_client.chat.completions.create(
             model="gpt-4o",
@@ -208,7 +218,8 @@ def get_archetype_extras_summary(archetypes_list):
         return response.choices[0].message.content.strip()
     except Exception as e:
         logging.error(f"[get_archetype_extras_summary] GPT error: {e}")
-        return "An extra archetype summary could not be generated."
+        return f"An extra archetype summary for {provided_npc_name} could not be generated."
+
 
 ###################
 # 7) Create NPC
