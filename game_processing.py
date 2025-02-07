@@ -543,8 +543,8 @@ async def async_process_new_game(user_id, conversation_data):
             VALUES ($1, $2, 'EnvironmentDesc', $3)
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id, environment_desc)
-        
+        """, user_id, conversation_id, base_environment_desc)
+
         # **************************************************
         # NEW STEP (3.5): Generate notable NPCs immediately after setting.
         # **************************************************
