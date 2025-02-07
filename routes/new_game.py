@@ -129,3 +129,26 @@ async def spawn_npcs():
         return jsonify({"error": str(e)}), 500
     finally:
         await conn.close()
+
+@new_game_bp.route('/conversation_status', methods=['GET'])
+def conversation_status():
+    conversation_id = request.args.get("conversation_id")
+    user_id = session.get("user_id")
+    if not user_id or not conversation_id:
+        return jsonify({"error": "Missing parameters"}), 400
+
+    conn = get_db_connection()
+    try:
+        row = conn.cursor().execute("""
+            SELECT conversation_name, status 
+            FROM conversations 
+            WHERE id=%s AND user_id=%s
+        """, (conversation_id, user_id))
+        # Fetch result here (pseudo-code; adjust per your db library)
+        if row:
+            return jsonify({"conversation_name": row["conversation_name"], "status": row["status"]})
+        else:
+            return jsonify({"error": "Conversation not found"}), 404
+    finally:
+        conn.close()
+
