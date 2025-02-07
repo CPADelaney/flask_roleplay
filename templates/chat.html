@@ -262,6 +262,44 @@
     await loadConversations();
   };
 
+  async function pollConversationStatus(convId) {
+    const POLL_INTERVAL = 5000; // milliseconds
+    const MAX_POLL_ATTEMPTS = 30; // poll for a maximum of 30*5 = 150 seconds (adjust as needed)
+    let attempts = 0;
+  
+    const intervalId = setInterval(async () => {
+      try {
+        const res = await fetch(`/conversation_status?conversation_id=${convId}`, {
+          method: "GET",
+          credentials: "include"
+        });
+        if (!res.ok) {
+          console.error("Failed to fetch conversation status:", res.status);
+          return;
+        }
+        const data = await res.json();
+        console.log("Polled conversation status:", data);
+        
+        if (data.status === "ready") {
+          clearInterval(intervalId);
+          // Option 1: Refresh the page
+          window.location.reload();
+          // Option 2: Or update the conversation list/ UI
+          // await loadConversations();
+          // selectConversation(convId);
+        } else {
+          attempts++;
+          if (attempts >= MAX_POLL_ATTEMPTS) {
+            clearInterval(intervalId);
+            console.warn("Polling timed out; conversation is still not ready.");
+          }
+        }
+      } catch (err) {
+        console.error("Error polling conversation status:", err);
+      }
+    }, POLL_INTERVAL);
+  }
+
   // Check login
   async function checkLoggedIn() {
     try {
@@ -372,15 +410,20 @@
       await loadConversations();
       selectConversation(currentConvId);
   
-      // Now, automatically spawn NPCs after a short delay (if desired)
+      // Optionally, start NPC generation after a short delay
       setTimeout(async () => {
         await spawnNPCs();
       }, 1000); // 1-second delay before starting NPC generation
+  
+      // Start polling the conversation status
+      pollConversationStatus(currentConvId);
+      
     } catch (err) {
       console.error("startNewGame error:", err);
       alert("Failed to start new game!");
     }
   }
+
   
   async function spawnNPCs() {
     try {
