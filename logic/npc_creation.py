@@ -223,12 +223,12 @@ def create_npc(
     total_archetypes=4,
     relationships=None  # Optional: list of relationship dicts
 ):
-    # If no name is provided, generate a temporary one (which will be replaced if GPT returns a better name)
+    # If no name is provided, initialize it as an empty string so that GPT will generate a dynamic name.
     if not npc_name:
-        npc_name = f"NPC_{random.randint(1000,9999)}"
+        npc_name = ""
     logging.info(
         f"[create_npc] user_id={user_id}, conv_id={conversation_id}, "
-        f"name={npc_name}, introduced={introduced}, sex={sex}"
+        f"name={npc_name or '[None]'}, introduced={introduced}, sex={sex}"
     )
 
     conn = get_db_connection()
@@ -240,12 +240,12 @@ def create_npc(
 
     if sex.lower() == "male":
         final_stats = {
-            "dominance": random.randint(0,30),
-            "cruelty":   random.randint(0,30),
-            "closeness": random.randint(0,30),
-            "trust":     random.randint(-30,30),
-            "respect":   random.randint(-30,30),
-            "intensity": random.randint(0,30)
+            "dominance": random.randint(0, 30),
+            "cruelty": random.randint(0, 30),
+            "closeness": random.randint(0, 30),
+            "trust": random.randint(-30, 30),
+            "respect": random.randint(-30, 30),
+            "intensity": random.randint(0, 30)
         }
     else:
         cursor.execute("SELECT id, name, baseline_stats FROM Archetypes")
@@ -253,16 +253,16 @@ def create_npc(
         if not all_arcs:
             logging.warning("[create_npc] No archetypes in DB. Using pure-random for female.")
             final_stats = {
-                "dominance": random.randint(0,40),
-                "cruelty":   random.randint(0,40),
-                "closeness": random.randint(0,40),
-                "trust":     random.randint(-40,40),
-                "respect":   random.randint(-40,40),
-                "intensity": random.randint(0,40)
+                "dominance": random.randint(0, 40),
+                "cruelty": random.randint(0, 40),
+                "closeness": random.randint(0, 40),
+                "trust": random.randint(-40, 40),
+                "respect": random.randint(-40, 40),
+                "intensity": random.randint(0, 40)
             }
         else:
-            reroll_pool  = [row for row in all_arcs if row[0] in REROLL_IDS]
-            normal_pool  = [row for row in all_arcs if row[0] not in REROLL_IDS]
+            reroll_pool = [row for row in all_arcs if row[0] in REROLL_IDS]
+            normal_pool = [row for row in all_arcs if row[0] not in REROLL_IDS]
             if len(normal_pool) < total_archetypes:
                 chosen_arcs_rows = normal_pool
             else:
@@ -278,8 +278,8 @@ def create_npc(
         logging.error("Error parsing chosen archetypes JSON: %s", e)
         chosen_arcs_list_for_json = []
 
-    # --- Generate synergy text and also obtain a "nice" NPC name from GPT ---
-    if sex.lower() == "female" and chosen_arcs_list_for_json:
+    # --- Always generate synergy text and obtain a "nice" dynamic NPC name from GPT if archetypes exist ---
+    if chosen_arcs_list_for_json:
         synergy_json = get_archetype_synergy_description(chosen_arcs_list_for_json, npc_name)
         try:
             synergy_data = json.loads(synergy_json)
@@ -288,12 +288,12 @@ def create_npc(
             synergy_text = synergy_data.get("archetype_summary", "")
         except Exception as e:
             logging.error("Failed to parse synergy JSON; using fallback.", exc_info=True)
-            new_npc_name = npc_name
+            new_npc_name = npc_name if npc_name else f"NPC_{random.randint(1000,9999)}"
             synergy_text = "No synergy text available."
         extras_summary = get_archetype_extras_summary(chosen_arcs_list_for_json)
     else:
-        new_npc_name = npc_name
-        synergy_text = "No synergy text (male or no archetypes)."
+        new_npc_name = npc_name if npc_name else f"NPC_{random.randint(1000,9999)}"
+        synergy_text = "No synergy text available."
         extras_summary = "No extra archetype details available."
 
     try:
@@ -351,6 +351,7 @@ def create_npc(
     assign_npc_flavor(user_id, conversation_id, new_id)
     conn.close()
     return new_id
+
 
 
 # 8) NPC Flavor
