@@ -15,8 +15,7 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     that is a list of update objects. It then extracts the likes, dislikes, and hobbies
     from the first object in that list.
     
-    Instead of immediately falling back when the result is not valid,
-    it will retry the GPT call up to `max_retries` times.
+    Retries the GPT call up to max_retries times if the output isn’t valid.
     """
     original_values = {
         "likes": npc_data.get("likes", []),
@@ -27,6 +26,7 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     dislikes = original_values["dislikes"]
     hobbies = original_values["hobbies"]
     
+    # Updated prompt with explicit instructions
     prompt = (
         "Given the following NPC preferences:\n"
         "Likes: {likes}\n"
@@ -34,17 +34,16 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
         "Hobbies: {hobbies}\n\n"
         "Adapt these preferences so that they are specifically tailored to an environment dominated by powerful females. "
         "For each entry, produce one cohesive version that fits the current setting. "
-        "Output your answer as a function call payload conforming to the following JSON schema:\n\n"
+        "Output your answer as a function call payload conforming exactly to the following JSON schema with no additional text or markdown:\n\n"
         "{\n"
         "  \"npc_creations\": [\n"
         "    {\n"
-        "      \"likes\": [string, ...],\n"
-        "      \"dislikes\": [string, ...],\n"
-        "      \"hobbies\": [string, ...]\n"
+        "      \"likes\": [\"string\", ...],\n"
+        "      \"dislikes\": [\"string\", ...],\n"
+        "      \"hobbies\": [\"string\", ...]\n"
         "    }\n"
         "  ]\n"
         "}\n"
-        "Do not output any additional text."
     ).format(likes=likes, dislikes=dislikes, hobbies=hobbies)
     
     logging.info("Adjusting NPC preferences with prompt: %s", prompt)
@@ -58,12 +57,22 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
             args = reply.get("function_args", {})
             if "npc_creations" in args:
                 updates = args["npc_creations"]
+                
+                # If updates is returned as a string, try to parse it as JSON.
+                if isinstance(updates, str):
+                    stripped_updates = updates.strip()
+                    try:
+                        updates = json.loads(stripped_updates)
+                    except Exception as e:
+                        logging.error("Failed to parse npc_creations string as JSON: %s", e)
+                        retry_count += 1
+                        continue
+                
                 if isinstance(updates, list) and updates:
                     update_obj = updates[0]
-                    # If update_obj is a string, try to strip and parse it.
+                    # If update_obj is a string, try to parse it.
                     if isinstance(update_obj, str):
                         stripped = update_obj.strip()
-                        # If it doesn't start with '{', assume it needs repair.
                         if not stripped.startswith("{"):
                             logging.error("Update object string does not look like a JSON object: %s", stripped)
                             retry_count += 1
@@ -74,7 +83,7 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
                             logging.error("JSON parsing failed for update_obj: %s", e)
                             retry_count += 1
                             continue
-                    # At this point, update_obj should be a dict.
+                    # Verify that all expected keys exist.
                     if all(k in update_obj for k in ["likes", "dislikes", "hobbies"]):
                         logging.info("Successfully extracted updated preferences on retry %d", retry_count)
                         return {
@@ -96,7 +105,16 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
                 continue
         elif reply.get("response"):
             try:
-                data = json.loads(reply["response"].strip())
+                response_text = reply["response"].strip()
+                # Remove markdown code fences if present.
+                if response_text.startswith("```"):
+                    lines = response_text.splitlines()
+                    if lines and lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    response_text = "\n".join(lines).strip()
+                data = json.loads(response_text)
                 if all(k in data for k in ["likes", "dislikes", "hobbies"]):
                     logging.info("Successfully extracted updated preferences from response on retry %d", retry_count)
                     return data
@@ -112,9 +130,9 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
             logging.warning("GPT did not return a valid response; retrying.")
             retry_count += 1
 
-    # If we've exhausted retries, log and return the original values.
     logging.error("Max retries reached; using original preferences instead.")
     return original_values
+
 
 async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, conversation_id):
     """
