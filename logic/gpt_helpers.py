@@ -6,7 +6,9 @@ from logic.gpt_utils import spaced_gpt_call  # Import from the separate GPT util
 async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     """
     Given an NPC's current likes, dislikes, and hobbies, query GPT to generate updated preferences
-    that fit the environment. Returns a dictionary with keys: 'likes', 'dislikes', and 'hobbies'.
+    tailored to the current environment (dominated by powerful females). For each preference in the list,
+    adapt it to the current setting without including multiple variant descriptions. Returns a JSON object
+    with keys: 'likes', 'dislikes', and 'hobbies'.
     """
     likes = npc_data.get("likes", [])
     dislikes = npc_data.get("dislikes", [])
@@ -17,14 +19,16 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
         "Likes: {likes}\n"
         "Dislikes: {dislikes}\n"
         "Hobbies: {hobbies}\n\n"
-        "Update these preferences so that they are more fitting for an environment dominated by powerful females. "
+        "Adapt these preferences so that they are specifically tailored to an environment dominated by powerful females. "
+        "For each entry in the likes list, modify it to produce one cohesive version that fits the current setting (do not include alternative variants such as Modern, Fantasy, Sci-Fi, or Post-Apoc descriptions). "
+        "Perform similar adaptation for dislikes and hobbies if needed. "
         "Return only a JSON object with the keys 'likes', 'dislikes', and 'hobbies'."
     ).format(likes=likes, dislikes=dislikes, hobbies=hobbies)
     
     logging.info("Adjusting NPC preferences with prompt: %s", prompt)
     reply = await spaced_gpt_call(conversation_id, environment_desc, prompt)
     
-    # Extract the text from the reply.
+    # Try to extract the text from the reply, checking both direct response and function call.
     if reply.get("response"):
         preferences_text = reply["response"].strip()
     elif (reply.get("type") == "function_call" and 
