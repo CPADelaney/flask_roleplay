@@ -421,7 +421,8 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
             """, user_id, conversation_id, qname or "Unnamed Quest", status, detail, qgiver, reward)
     
     logging.info("=== [apply_universal_update] Success! ===")
-    await conn.commit()
+    # Remove the following line since commit is not available:
+    # await conn.commit()
     return {"message": "Universal update successful"}
 
 # ---------------------------------------------------------------------
