@@ -830,16 +830,30 @@ async def async_process_new_game(user_id, conversation_data):
         # Step 16: Generate and store ChaseSchedule.
         schedule_prompt = (
             "Based on the current environment and Chase's role, generate a detailed weekly schedule for Chase. "
-            "Return only a valid JSON object with keys for each day of the week (e.g., 'Monday', 'Tuesday', etc.). "
-            "It should be formatted similarly to:"
-            ""Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast", "Afternoon": "Head to work at the local data office", "Evening": "Attend a casual meetup with friends", "Night": "Return to the inn for rest"},"
-            ""Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise", "Afternoon": "Study mystical texts at the library", "Evening": "Work on personal creative projects", "Night": "Return to the inn and unwind"},"
-            ""Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"}"
-            "And for Thursday, Friday, Saturday, and Sunday as well."
-            "Do not include any markdown formatting or extra text."
+            "Return only a valid JSON object with keys for each day of the week (i.e., \"Monday\", \"Tuesday\", etc.), "
+            "where each day has nested keys for \"Morning\", \"Afternoon\", \"Evening\", and \"Night\" representing Chase's activities. "
+            "The output must be exactly in JSON format with no markdown formatting or additional text. "
+            "For example, the JSON should follow this format: "
+            "{\"Monday\": {\"Morning\": \"Wake at a cozy inn, have a quick breakfast\", "
+            "\"Afternoon\": \"Head to work at the local data office\", "
+            "\"Evening\": \"Attend a casual meetup with friends\", "
+            "\"Night\": \"Return to the inn for rest\"}, "
+            "\"Tuesday\": {\"Morning\": \"Jog along the city walls, enjoy the sunrise\", "
+            "\"Afternoon\": \"Study mystical texts at the library\", "
+            "\"Evening\": \"Work on personal creative projects\", "
+            "\"Night\": \"Return to the inn and unwind\"}, "
+            "\"Wednesday\": {\"Morning\": \"Wake at the inn and enjoy a hearty breakfast\", "
+            "\"Afternoon\": \"Run errands and visit the guild\", "
+            "\"Evening\": \"Attend a community dinner\", "
+            "\"Night\": \"Head back to the inn for some rest\"}, "
+            "\"Thursday\": {\"Morning\": \"...\", \"Afternoon\": \"...\", \"Evening\": \"...\", \"Night\": \"...\"}, "
+            "\"Friday\": {\"Morning\": \"...\", \"Afternoon\": \"...\", \"Evening\": \"...\", \"Night\": \"...\"}, "
+            "\"Saturday\": {\"Morning\": \"...\", \"Afternoon\": \"...\", \"Evening\": \"...\", \"Night\": \"...\"}, "
+            "\"Sunday\": {\"Morning\": \"...\", \"Afternoon\": \"...\", \"Evening\": \"...\", \"Night\": \"...\"}}"
         )
         logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
         schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
+
         
         # Check if GPT returned a function call response
         if schedule_reply.get("type") == "function_call":
