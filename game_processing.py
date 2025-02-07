@@ -556,7 +556,11 @@ async def async_process_new_game(user_id, conversation_data):
             generated_npcs.append(npc)
         logging.info("Generated NPCs: %s", generated_npcs)
         # Gather a comma-separated list of NPC names for the history prompt.
-        notable_npcs_str = ", ".join([npc.get("npc_name", "Unnamed NPC") for npc in generated_npcs])
+        notable_npcs_str = ", ".join([
+            npc.get("npc_name", f"NPC #{npc}") if isinstance(npc, dict) else f"NPC #{npc}"
+            for npc in generated_npcs
+        ])
+
         # **************************************************
         
         # --- Now generate the setting history using the pre-generated NPCs ---
