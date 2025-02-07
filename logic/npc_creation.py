@@ -153,7 +153,7 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         f"{name_instruction}\n"
         "Your response must be a single valid JSON object with exactly two keys:\n"
         "  \"npc_name\": a creative, fitting name for the NPC,\n"
-        "  \"archetype_summary\": a short summary explaining how these archetypes fuse together into a unique personality.\n"
+        "  \"archetype_summary\": a short summary explaining how these archetypes fuse together into a single unique personality.\n"
         "Do not include any extra text, markdown formatting, or newlines outside of the JSON. Output only the JSON object."
     )
     
@@ -174,7 +174,6 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
             "npc_name": default_name,
             "archetype_summary": "An NPC with these archetypes has a mysterious blend of traits, but GPT call failed."
         })
-
 
 def get_archetype_extras_summary(archetypes_list):
     """
@@ -280,7 +279,6 @@ def create_npc(
     # --- Always generate synergy text and obtain a "nice" dynamic NPC name from GPT if archetypes exist ---
     if chosen_arcs_list_for_json:
         synergy_json = get_archetype_synergy_description(chosen_arcs_list_for_json, npc_name)
-        # If the returned string is empty, use a fallback.
         if not synergy_json:
             logging.error("GPT returned an empty synergy JSON; using fallback.")
             synergy_json = json.dumps({
@@ -289,10 +287,8 @@ def create_npc(
             })
         try:
             synergy_data = json.loads(synergy_json)
-            # Use the GPT-provided name for the NPC
             new_npc_name = synergy_data.get("npc_name", npc_name)
             synergy_text = synergy_data.get("archetype_summary", "")
-            # If synergy_text is a list, join its items into one string.
             if isinstance(synergy_text, list):
                 synergy_text = " ".join(synergy_text)
         except Exception as e:
@@ -305,6 +301,7 @@ def create_npc(
         synergy_text = "No synergy text available."
         extras_summary = "No extra archetype details available."
 
+    physical_description = get_physical_description(npc_data, final_stats, chosen_arcs_list_for_json)
 
     try:
         cursor.execute(
@@ -316,12 +313,14 @@ def create_npc(
                 archetypes,
                 archetype_summary,
                 archetype_extras_summary,
+                physical_description,
                 memory, monica_level
             )
             VALUES (
                 %s, %s,
                 %s, %s, %s,
                 %s, %s, %s, %s, %s, %s,
+                %s,
                 %s,
                 %s,
                 %s,
@@ -337,7 +336,8 @@ def create_npc(
                 final_stats["respect"], final_stats["intensity"],
                 chosen_arcs_json_str,
                 synergy_text,
-                extras_summary
+                extras_summary,
+                physical_description  # <-- new physical description
             )
         )
         new_id = cursor.fetchone()[0]
@@ -410,6 +410,48 @@ def assign_npc_flavor(user_id, conversation_id, npc_id: int):
         logging.error(f"[assign_npc_flavor] DB error: {e}", exc_info=True)
     finally:
         conn.close()
+
+from logic.chatgpt_integration import get_openai_client
+
+def get_physical_description(npc_data, final_stats, chosen_arcs_list):
+    """
+    Uses GPT to generate a robust, vivid physical description for an NPC.
+    The prompt considers the NPC's stats and the names of the chosen archetypes.
+    Returns a plain text description.
+    """
+    # Format stats and archetypes as strings.
+    stats_str = ", ".join([f"{k}: {v}" for k, v in final_stats.items()])
+    if chosen_arcs_list:
+        archetypes_str = ", ".join([arc["name"] for arc in chosen_arcs_list])
+    else:
+        archetypes_str = "None"
+
+    prompt = (
+        f"Generate a robust, vivid physical description for an NPC in a femdom daily-life sim. "
+        f"Consider the following details:\n"
+        f"Stats: {stats_str}\n"
+        f"Archetypes: {archetypes_str}\n\n"
+        "The description should detail the NPC's physical appearance (e.g., facial features, build, style, "
+        "and any distinctive traits) in a way that fits a world of dominant females. "
+        "Output only the description text with no extra commentary or markdown."
+    )
+    logging.info("Generating physical description with prompt: %s", prompt)
+    gpt_client = get_openai_client()
+    messages = [{"role": "system", "content": prompt}]
+    try:
+        response = gpt_client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=150
+        )
+        description = response.choices[0].message.content.strip()
+        logging.info("Generated physical description: %s", description)
+        return description
+    except Exception as e:
+        logging.error("Error generating physical description: %s", e, exc_info=True)
+        return "A physically striking NPC with an enigmatic and captivating appearance."
+
 
 def update_missing_npc_archetypes(user_id, conversation_id):
     """
