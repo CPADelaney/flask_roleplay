@@ -116,27 +116,28 @@ def generate_mega_setting_logic():
 
     # Build a fusion prompt that instructs GPT to blend these settings into one cohesive narrative.
     fusion_prompt = (
-        "You are a creative writer tasked with blending together the following settings into a single cohesive world description. "
-        "Each setting is described by its name, mood tone, enhanced features, stat modifiers, and activity examples. "
-        "Embrace contradictions, get creative, and understand that the implementation of these doesn't need to be 'literal.' (eg., 'prison' can be a metaphorical prison)"
-        "The final description should be a unified, evocative narrative that seamlessly fuses these diverse elements into one world.\n\n"
-        "Settings:\n"
+        "You are a creative writer tasked with creating a single, unified description for an environment. "
+        "You have the following diverse settings, each with its own unique characteristics. Rather than listing each one individually, "
+        "blend these settings together into one cohesive, evocative description that captures the essence of the world as a whole. "
+        "Focus on creating a narrative that fuses their mood, enhanced features, stat modifiers, and activity examples into a single, imaginative portrayal. "
+        "Your final output should be 3-5 sentences long, written as a single paragraph, and should not list the individual settings separately.\n\n"
+        "Here are the settings:\n"
     )
-    for s in selected:
-        # For clarity, join the lists; for stat modifiers, you can format them as key: value pairs.
+    
+    for i, s in enumerate(selected):
+        # For clarity, prepare the details from each setting.
         ef = ", ".join(s["enhanced_features"]) if s["enhanced_features"] else "None"
         ae = ", ".join(s["activity_examples"]) if s["activity_examples"] else "None"
         sm = ", ".join([f"{k}: {v}" for k, v in s["stat_modifiers"].items()]) if s["stat_modifiers"] else "None"
         fusion_prompt += (
-            f"- {s['name']}: Mood tone: {s['mood_tone']}; "
-            f"Enhanced features: {ef}; Stat modifiers: {sm}; "
-            f"Activity examples: {ae}\n"
+            f"- {s['name']} (Mood: {s['mood_tone']}; Enhanced features: {ef}; Stat modifiers: {sm}; Activity examples: {ae})\n"
         )
+    
     fusion_prompt += (
-        "\nPlease produce a single, creative, and cohesive description (3-5 sentences) that blends these settings together into one unified environment. "
+        "\nPlease produce one unified, creative description that blends all these elements into a single coherent environment. "
         "Output only the final description text without any extra commentary or formatting."
     )
-    
+        
     # Log the fusion prompt for debugging.
     logging.info("Fusion prompt for mega setting: %s", fusion_prompt)
 
