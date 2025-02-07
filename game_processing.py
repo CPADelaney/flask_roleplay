@@ -898,9 +898,10 @@ async def async_process_new_game(user_id, conversation_data):
         
         # Step 15: Generate and store MainQuest.
         main_quest_prompt = (
-            "Based on the current environment and the fact that Chase is one of the only men in this world of dominant females, "
+            "Based on the current environment, NPCs, and the fact that Chase is one of the only men in this world of dominant females, "
             "generate a short summary of the main quest he is about to undertake. The quest should be intriguing and mysterious, "
             "hinting at challenges ahead without revealing too much."
+            "Ensure the quest is unique and engaging. Give it an equally creative name."
             "Do not include any additional text, markdown, or narrative. Output only the JSON object."
         )
         logging.info("Generating MainQuest with prompt: %s", main_quest_prompt)
