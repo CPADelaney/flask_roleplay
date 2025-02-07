@@ -535,10 +535,36 @@ async def async_process_new_game(user_id, conversation_data):
             base_environment_desc = base_environment_desc.strip()
         
         # --- Generate the setting history based on the dynamic description ---
+        # (This history will later be created using GPT.)
+        # First, store the EnvironmentDesc.
+        logging.info("Storing EnvironmentDesc in CurrentRoleplay for conversation_id=%s", conversation_id)
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES ($1, $2, 'EnvironmentDesc', $3)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id, environment_desc)
+        
+        # **************************************************
+        # NEW STEP (3.5): Generate notable NPCs immediately after setting.
+        # **************************************************
+        logging.info("Generating notable NPCs right after the setting for conversation_id=%s", conversation_id)
+        npc_count = 3  # Adjust the number as needed
+        generated_npcs = []
+        for i in range(npc_count):
+            npc = await asyncio.to_thread(create_npc, user_id=user_id, conversation_id=conversation_id, introduced=False)
+            generated_npcs.append(npc)
+        logging.info("Generated NPCs: %s", generated_npcs)
+        # Gather a comma-separated list of NPC names for the history prompt.
+        notable_npcs_str = ", ".join([npc.get("npc_name", "Unnamed NPC") for npc in generated_npcs])
+        # **************************************************
+        
+        # --- Now generate the setting history using the pre-generated NPCs ---
         history_prompt = (
             "Based on the following environment description, generate a brief, evocative history "
             "of this setting. Explain its origins, major past events, and its current state so that the narrative is well grounded. "
-            "Include notable NPCs, important locations (with details about the town), and key cultural information such as holidays, festivals, and beliefs. "
+            "Integrate the following notable NPCs into the history: " + notable_npcs_str + ". "
+            "Also include important locations (with details about the town), and key cultural information such as holidays, festivals, and beliefs. "
             "\nEnvironment description: " + base_environment_desc
         )
         logging.info("Calling GPT for environment history with prompt: %s", history_prompt)
@@ -567,15 +593,6 @@ async def async_process_new_game(user_id, conversation_data):
         environment_desc = f"{base_environment_desc}\n\nHistory: {environment_history}"
         logging.info("Constructed environment description: %s", environment_desc)
             
-        # Step 3: Store EnvironmentDesc in CurrentRoleplay.
-        logging.info("Storing EnvironmentDesc in CurrentRoleplay for conversation_id=%s", conversation_id)
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'EnvironmentDesc', $3)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id, environment_desc)
-        
         # Step 4: Generate and store notable Events.
         events_prompt = (
             "Based on the following environment description, generate a JSON array of notable events and holidays in this setting. "
@@ -857,7 +874,11 @@ async def async_process_new_game(user_id, conversation_data):
                 chase_schedule_generated = """{
                     "Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast", "Afternoon": "Head to work at the local data office", "Evening": "Attend a casual meetup with friends", "Night": "Return to the inn for rest"},
                     "Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise", "Afternoon": "Study mystical texts at the library", "Evening": "Work on personal creative projects", "Night": "Return to the inn and unwind"},
-                    "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"}
+                    "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"},
+                    "Thursday": {"Morning": "Do light training at the local gym", "Afternoon": "Work at the office", "Evening": "Meet with friends at a nearby tavern", "Night": "Return home for sleep"},
+                    "Friday": {"Morning": "Wake up at the inn", "Afternoon": "Wrap up work and relax", "Evening": "Attend a small social gathering", "Night": "Take a leisurely late night stroll"},
+                    "Saturday": {"Morning": "Sleep in and enjoy a lazy start", "Afternoon": "Explore the bustling market", "Evening": "Watch a local performance", "Night": "Return to the inn to wind down"},
+                    "Sunday": {"Morning": "Take an early walk in the park", "Afternoon": "Reflect on the week and plan ahead", "Evening": "Have a light dinner with friends", "Night": "Enjoy some quiet time before sleep"}
                 }"""
         
         # Attempt to parse the JSON.
