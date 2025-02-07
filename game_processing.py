@@ -120,16 +120,32 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
     npc_updates = update_data.get("npc_updates", [])
     logging.info("[apply_universal_update] npc_updates: %s", npc_updates)
     for up in npc_updates:
+        # First try to get npc_id from the payload
         npc_id = up.get("npc_id")
-        if not npc_id:
-            logging.warning("Skipping npc_update: missing npc_id.")
-            continue
-
-        # Add a sanity check: skip update if npc_id matches the player's user_id.
+        # If npc_id is 0 or falsy, attempt a lookup by npc_name
+        if not npc_id or npc_id == 0:
+            npc_name = up.get("npc_name")
+            if npc_name:
+                logging.warning("Provided npc_id is invalid (0); looking up NPCStats for npc_name=%s", npc_name)
+                row = await conn.fetchrow(
+                    "SELECT npc_id FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND npc_name=$3",
+                    user_id, conversation_id, npc_name
+                )
+                if row:
+                    npc_id = row["npc_id"]
+                    logging.info("Lookup successful: found npc_id=%s for npc_name=%s", npc_id, npc_name)
+                else:
+                    logging.warning("No NPC found in NPCStats for npc_name=%s; skipping update.", npc_name)
+                    continue
+            else:
+                logging.warning("Skipping npc_update: missing both npc_id and npc_name.")
+                continue
+    
+        # (Optional: add a check to ensure npc_id != user_id if needed)
         if npc_id == user_id:
             logging.warning("Skipping NPC update for npc_id=%s as it matches the player id.", npc_id)
             continue
-
+    
         fields_map = {
             "npc_name": "npc_name",
             "introduced": "introduced",
@@ -156,7 +172,7 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
                 SET {set_str}
                 WHERE npc_id=$%d AND user_id=$%d AND conversation_id=$%d
             """ % (len(set_vals)-2, len(set_vals)-1, len(set_vals))
-            logging.info("Updating NPC %s with %s", npc_id, set_clauses)
+            logging.info("Updating NPC %s with fields %s", npc_id, set_clauses)
             await conn.execute(query, *set_vals)
             logging.info("Updated NPC %s", npc_id)
         if "memory" in up:
@@ -197,6 +213,21 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
                     SET schedule=$1
                     WHERE npc_id=$2 AND user_id=$3 AND conversation_id=$4
                 """, json.dumps(existing_schedule), npc_id, user_id, conversation_id)
+        if "affiliations" in up:
+            logging.info("Updating affiliations for NPC %s: %s", npc_id, up["affiliations"])
+            await conn.execute("""
+                UPDATE NPCStats
+                SET affiliations = $1
+                WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
+            """, json.dumps(up["affiliations"]), npc_id, user_id, conversation_id)
+    
+        if "current_location" in up:
+            logging.info("Updating current location for NPC %s: %s", npc_id, up["current_location"])
+            await conn.execute("""
+                UPDATE NPCStats
+                SET current_location = $1
+                WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
+            """, up["current_location"], npc_id, user_id, conversation_id)
     
     # 4) character_stat_updates
     char_update = update_data.get("character_stat_updates", {})
