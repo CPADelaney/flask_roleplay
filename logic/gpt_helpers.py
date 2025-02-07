@@ -25,7 +25,7 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     likes = original_values["likes"]
     dislikes = original_values["dislikes"]
     hobbies = original_values["hobbies"]
-    
+
     # Updated prompt with explicit instructions
     prompt = (
         "Given the following NPC preferences:\n"
@@ -45,9 +45,9 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
         "  ]\n"
         "}\n"
     ).format(likes=likes, dislikes=dislikes, hobbies=hobbies)
-    
+
     logging.info("Adjusting NPC preferences with prompt: %s", prompt)
-    
+
     max_retries = 3
     retry_count = 0
     while retry_count < max_retries:
@@ -57,22 +57,30 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
             args = reply.get("function_args", {})
             if "npc_creations" in args:
                 updates = args["npc_creations"]
-                
-                # If updates is returned as a string, try to parse it as JSON.
+
+                # If updates is returned as a string, check if it's just a placeholder.
                 if isinstance(updates, str):
                     stripped_updates = updates.strip()
+                    if stripped_updates in ['"npc_creations"', "npc_creations"]:
+                        logging.error("Received invalid output (placeholder text) for npc_creations: %s", stripped_updates)
+                        retry_count += 1
+                        continue
                     try:
                         updates = json.loads(stripped_updates)
                     except Exception as e:
                         logging.error("Failed to parse npc_creations string as JSON: %s", e)
                         retry_count += 1
                         continue
-                
+
                 if isinstance(updates, list) and updates:
                     update_obj = updates[0]
-                    # If update_obj is a string, try to parse it.
+                    # If update_obj is a string, check for placeholder and try parsing.
                     if isinstance(update_obj, str):
                         stripped = update_obj.strip()
+                        if stripped in ['"npc_creations"', "npc_creations"]:
+                            logging.error("Received invalid update object text: %s", stripped)
+                            retry_count += 1
+                            continue
                         if not stripped.startswith("{"):
                             logging.error("Update object string does not look like a JSON object: %s", stripped)
                             retry_count += 1
