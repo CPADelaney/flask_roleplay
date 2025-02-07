@@ -124,31 +124,42 @@ def archetypes_to_json(rows):
 ###################
 # 6) GPT Synergy Functions
 ###################
-def get_archetype_synergy_description(archetypes_list, npc_name=None):
+def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
     """
-    Calls GPT to produce a cohesive short backstory and personality summary
-    for an NPC who combines these archetypes.
-    If an npc_name is provided, instruct GPT to use that name and not generate a new one.
+    Calls GPT to produce a JSON object containing:
+      - "npc_name": a creative (or provided) NPC name,
+      - "archetype_summary": a short personality/backstory summary.
+    
+    If provided_npc_name is given, instruct GPT to use that value.
     """
+    # If no archetypes, return a default JSON
     if not archetypes_list:
-        return "No special archetype synergy."
+        default_name = provided_npc_name if provided_npc_name else "Unknown"
+        return json.dumps({
+            "npc_name": default_name,
+            "archetype_summary": "No special archetype synergy."
+        })
     
     archetype_names = [a["name"] for a in archetypes_list]
     
-    name_instruction = f"Use the provided NPC name: '{npc_name}'." if npc_name else ""
+    # Instruct GPT to output a JSON object
+    name_instruction = ""
+    if provided_npc_name:
+        name_instruction = f"Use the provided NPC name: '{provided_npc_name}'. Do not invent a new name."
+    else:
+        name_instruction = "Generate a creative, fitting name for the NPC."
     
     system_instructions = f"""
     You are writing a short personality/backstory summary for an NPC who combines these archetypes: {', '.join(archetype_names)}.
     {name_instruction}
-    They exist in a femdom context.
-    Please produce 1-2 paragraphs that explain how these archetypes fuse into a single cohesive personality, and include a brief backstory.
-    Do not invent a new name if one is provided.
-    Keep it concise.
+    Provide your output as a JSON object with exactly two keys:
+      "npc_name": the NPC's name,
+      "archetype_summary": a short summary explaining how these archetypes fuse into a cohesive personality.
+    Output only the JSON without any extra text.
     """
     
     gpt_client = get_openai_client()
     messages = [{"role": "system", "content": system_instructions}]
-    
     try:
         response = gpt_client.chat.completions.create(
             model="gpt-4o",
@@ -159,7 +170,12 @@ def get_archetype_synergy_description(archetypes_list, npc_name=None):
         return response.choices[0].message.content.strip()
     except Exception as e:
         logging.error(f"[get_archetype_synergy_description] GPT error: {e}")
-        return "An NPC with these archetypes has a mysterious blend of traits, but GPT call failed."
+        default_name = provided_npc_name if provided_npc_name else "Unknown"
+        return json.dumps({
+            "npc_name": default_name,
+            "archetype_summary": "An NPC with these archetypes has a mysterious blend of traits, but GPT call failed."
+        })
+
 
 def get_archetype_extras_summary(archetypes_list):
     """
@@ -205,18 +221,9 @@ def create_npc(
     sex="female",
     reroll_extra=False,
     total_archetypes=4,
-    relationships=None  # New parameter: a list of relationship dicts
+    relationships=None  # Optional: list of relationship dicts
 ):
-    """
-    Creates a new NPC in NPCStats with multiple archetypes logic.
-    For female NPCs, it randomly selects archetypes (with an optional extra from REROLL_IDS),
-    computes combined stats, and calls GPT to produce both a synergy backstory and
-    an extra details summary.
-
-    Additionally, if a list of relationship dictionaries is provided (each with keys such as
-    'type', 'target', and 'target_name'), generate a GPT-based shared memory for each relationship
-    and append it to the NPC's memory.
-    """
+    # If no name is provided, generate a temporary one (which will be replaced if GPT returns a better name)
     if not npc_name:
         npc_name = f"NPC_{random.randint(1000,9999)}"
     logging.info(
@@ -267,16 +274,25 @@ def create_npc(
     chosen_arcs_json_str = archetypes_to_json(chosen_arcs_rows)
     try:
         chosen_arcs_list_for_json = json.loads(chosen_arcs_json_str)
-    except:
+    except Exception as e:
+        logging.error("Error parsing chosen archetypes JSON: %s", e)
         chosen_arcs_list_for_json = []
 
-    synergy_text = ""
-    extras_summary = ""
+    # --- Generate synergy text and also obtain a "nice" NPC name from GPT ---
     if sex.lower() == "female" and chosen_arcs_list_for_json:
-        # Pass the provided npc_name so GPT uses it.
-        synergy_text = get_archetype_synergy_description(chosen_arcs_list_for_json, npc_name)
+        synergy_json = get_archetype_synergy_description(chosen_arcs_list_for_json, npc_name)
+        try:
+            synergy_data = json.loads(synergy_json)
+            # Use the GPT-provided name for the NPC
+            new_npc_name = synergy_data.get("npc_name", npc_name)
+            synergy_text = synergy_data.get("archetype_summary", "")
+        except Exception as e:
+            logging.error("Failed to parse synergy JSON; using fallback.", exc_info=True)
+            new_npc_name = npc_name
+            synergy_text = "No synergy text available."
         extras_summary = get_archetype_extras_summary(chosen_arcs_list_for_json)
     else:
+        new_npc_name = npc_name
         synergy_text = "No synergy text (male or no archetypes)."
         extras_summary = "No extra archetype details available."
 
@@ -305,7 +321,7 @@ def create_npc(
             """,
             (
                 user_id, conversation_id,
-                npc_name, introduced, sex.lower(),
+                new_npc_name, introduced, sex.lower(),
                 final_stats["dominance"], final_stats["cruelty"],
                 final_stats["closeness"], final_stats["trust"],
                 final_stats["respect"], final_stats["intensity"],
@@ -318,7 +334,7 @@ def create_npc(
         conn.commit()
         logging.info(
             f"[create_npc] Inserted npc_id={new_id} with stats={final_stats}. "
-            f"Archetypes count={len(chosen_arcs_rows)} synergy={synergy_text[:50]}"
+            f"Archetypes count={len(chosen_arcs_rows)}. New NPC name: {new_npc_name}"
         )
     except Exception as e:
         conn.rollback()
@@ -326,15 +342,16 @@ def create_npc(
         conn.close()
         raise
 
-    # If there are any pre-existing relationships, generate and record shared memories
+    # Process relationships if provided
     if relationships:
         for rel in relationships:
-            memory_text = get_shared_memory(rel, npc_name)
+            memory_text = get_shared_memory(rel, new_npc_name)
             record_npc_event(user_id, conversation_id, new_id, memory_text)
 
     assign_npc_flavor(user_id, conversation_id, new_id)
     conn.close()
     return new_id
+
 
 # 8) NPC Flavor
 def assign_npc_flavor(user_id, conversation_id, npc_id: int):
