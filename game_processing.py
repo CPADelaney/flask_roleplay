@@ -716,16 +716,37 @@ async def async_process_new_game(user_id, conversation_data):
         # Step 5: Generate and store notable Locations.
         locations_prompt = (
             "Based on the following environment description, generate a JSON array of notable locations in this setting. "
-            "Each location should be an object with keys 'name' and 'description' providing a brief overview of the location. "
-            "\nEnvironment description: " + environment_desc
+            "This location could be the name of a bar, a restaurant, a store, a school campus, or anything else, but should be a proper noun."
+            "Each element in the array must be an object with exactly three keys: 'location_name', 'description', and 'open_hours'. "
+            "The 'location_name' should be a short title for the location, the 'description' should be a brief overview of that location, "
+            "and 'open_hours' should be an array of strings representing the hours the location is open. "
+            "Return only the JSON array with no additional text, markdown, or formatting.\n"
+            "Environment description: " + environment_desc
         )
         logging.info("Generating locations with prompt: %s", locations_prompt)
         locations_reply = await spaced_gpt_call(conversation_id, environment_desc, locations_prompt)
-        locations_response = locations_reply.get("response", "")
+        
+        # Check for a direct response or a function call.
+        if locations_reply.get("response"):
+            locations_response = locations_reply["response"].strip()
+        elif locations_reply.get("type") == "function_call":
+            args = locations_reply.get("function_args", {})
+            if "location_creations" in args:
+                value = args["location_creations"]
+                if isinstance(value, (list, dict)):
+                    locations_response = json.dumps(value)
+                else:
+                    locations_response = str(value)
+            else:
+                locations_response = ""
+        else:
+            locations_response = ""
+        
         logging.info("Raw locations response from GPT: %s", locations_response)
         
         if locations_response:
             locations_response = locations_response.strip()
+            # Remove markdown code fences if present.
             if locations_response.startswith("```"):
                 logging.info("Locations response contains markdown code fences. Stripping them.")
                 lines = locations_response.splitlines()
@@ -746,14 +767,17 @@ async def async_process_new_game(user_id, conversation_data):
             locations_json = []
         
         for loc in locations_json:
-            loc_name = loc.get("name", "Unnamed Location")
+            loc_name = loc.get("location_name", "Unnamed Location")
             loc_desc = loc.get("description", "")
-            logging.info("Storing location: %s - %s", loc_name, loc_desc)
+            open_hours = loc.get("open_hours", [])
+            logging.info("Storing location: %s - %s - open_hours: %s", loc_name, loc_desc, open_hours)
             await conn.execute("""
-                INSERT INTO Locations (user_id, conversation_id, location_name, description)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO Locations (user_id, conversation_id, location_name, description, open_hours)
+                VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT DO NOTHING
-            """, user_id, conversation_id, loc_name, loc_desc)
+            """, user_id, conversation_id, loc_name, loc_desc, json.dumps(open_hours))
+
+        
 
         
         # Step 6: Generate scenario name and quest summary (if conversation was newly created).
