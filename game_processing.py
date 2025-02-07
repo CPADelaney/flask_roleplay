@@ -39,17 +39,13 @@ async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0):
 async def apply_universal_update(user_id, conversation_id, update_data, conn):
     logging.info("=== [apply_universal_update] START ===")
     logging.info("Update data keys: %s", list(update_data.keys()))
-    # For example, log the entire payload in a pretty format:
     logging.info("Full update data:\n%s", json.dumps(update_data, indent=2))
     
     # 1) roleplay_updates
     rp_updates = update_data.get("roleplay_updates", {})
     logging.info("[apply_universal_update] roleplay_updates: %s", rp_updates)
     for key, val in rp_updates.items():
-        if isinstance(val, (dict, list)):
-            stored_val = json.dumps(val)
-        else:
-            stored_val = str(val)
+        stored_val = json.dumps(val) if isinstance(val, (dict, list)) else str(val)
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
             VALUES ($1, $2, $3, $4)
@@ -57,7 +53,6 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
             DO UPDATE SET value = EXCLUDED.value
         """, user_id, conversation_id, key, stored_val)
         logging.info("Inserted/Updated CurrentRoleplay: key=%s, value=%s", key, stored_val)
-    
     
     # 2) npc_creations
     npc_creations = update_data.get("npc_creations", [])
@@ -421,8 +416,6 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
             """, user_id, conversation_id, qname or "Unnamed Quest", status, detail, qgiver, reward)
     
     logging.info("=== [apply_universal_update] Success! ===")
-    # Remove the following line since commit is not available:
-    # await conn.commit()
     return {"message": "Universal update successful"}
 
 # ---------------------------------------------------------------------
@@ -596,14 +589,11 @@ async def async_process_new_game(user_id, conversation_data):
         if events_reply.get("type") == "function_call":
             logging.info("GPT returned a function call for events. Processing update via apply_universal_update.")
             fn_args = events_reply.get("function_args", {})
-            # Call the universal update function to update Events (and any other keys returned)
             await apply_universal_update(user_id, conversation_id, fn_args, conn)
-            # Optionally, you can log or retrieve the updated events from the DB here.
         else:
             events_response = events_reply.get("response", "")
             if events_response:
                 events_response = events_response.strip()
-                # Remove markdown code fences if present.
                 if events_response.startswith("```"):
                     lines = events_response.splitlines()
                     if lines and lines[0].startswith("```"):
@@ -622,7 +612,6 @@ async def async_process_new_game(user_id, conversation_data):
                 logging.warning("Failed to parse events JSON; using fallback. Exception: %s", e, exc_info=True)
                 events_json = []
             
-            # Now insert the events into your database.
             for event in events_json:
                 event_name = event.get("name", "Unnamed Event")
                 event_desc = event.get("description", "")
@@ -656,14 +645,11 @@ async def async_process_new_game(user_id, conversation_data):
         
         if locations_response:
             locations_response = locations_response.strip()
-            # Check if the response is wrapped in Markdown code fences (```)
             if locations_response.startswith("```"):
                 logging.info("Locations response contains markdown code fences. Stripping them.")
                 lines = locations_response.splitlines()
-                # Remove the first line if it's a code fence
                 if lines and lines[0].startswith("```"):
                     lines = lines[1:]
-                # Remove the last line if it's a code fence
                 if lines and lines[-1].startswith("```"):
                     lines = lines[:-1]
                 locations_response = "\n".join(lines).strip()
@@ -921,7 +907,6 @@ async def async_process_new_game(user_id, conversation_data):
 
     
         # Step 17: Build aggregated roleplay context.
-        # Remove the commit call because the connection is in autocommit mode.
         logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
         aggregator_data = await asyncio.to_thread(get_aggregated_roleplay_context, user_id, conversation_id, "Chase")
         aggregator_text = await asyncio.to_thread(build_aggregator_text, aggregator_data)
@@ -978,21 +963,14 @@ async def async_process_new_game(user_id, conversation_data):
         } for row in rows]
         logging.info("Retrieved %d messages from conversation history", len(conversation_history))
         
-       
-        # For this example, we assume that the remainder of the code (steps 4-20) remains unchanged.
-        # At the end, return the results:
         success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
         logging.info(success_msg)
-        # (Assuming conversation_history, chase_schedule, player_role_text, scenario_name, quest_blurb are defined in steps 4-16.)
         return {
             "message": success_msg,
             "scenario_name": scenario_name,
             "environment_name": environment_name,
             "environment_desc": environment_desc,
-            # "chase_schedule": chase_schedule,
-            # "chase_role": player_role_text,
             "conversation_id": conversation_id,
-            # "messages": conversation_history
         }
          
     except Exception as e:
