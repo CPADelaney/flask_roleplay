@@ -831,6 +831,7 @@ async def async_process_new_game(user_id, conversation_data):
             "(e.g., career/daily life). The description should reflect how his role fits into this world of dominant females. "
             "In real life, Chase is a 31 year old data analyst, but this does not necessarily mean it will be the same. "
             "Career can be anything (student, etc.), but make sure it fits and makes sense within setting context."
+            "Do not include any additional text, markdown, or narrative. Output only the JSON object."
         )
         logging.info("Generating PlayerRole with prompt: %s", player_role_prompt)
         player_role_reply = await spaced_gpt_call(conversation_id, environment_desc, player_role_prompt)
@@ -857,6 +858,7 @@ async def async_process_new_game(user_id, conversation_data):
             "Based on the current environment and the fact that Chase is one of the only men in this world of dominant females, "
             "generate a short summary of the main quest he is about to undertake. The quest should be intriguing and mysterious, "
             "hinting at challenges ahead without revealing too much."
+            "Do not include any additional text, markdown, or narrative. Output only the JSON object."
         )
         logging.info("Generating MainQuest with prompt: %s", main_quest_prompt)
         main_quest_reply = await spaced_gpt_call(conversation_id, environment_desc, main_quest_prompt)
