@@ -7,9 +7,9 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     """
     Query GPT to generate updated NPC preferences (likes, dislikes, and hobbies)
     that are tailored to an environment dominated by powerful females.
-    This function is designed to be used as part of a function call payload for apply_universal_update.
-    It expects GPT to return a function call payload with a key "npc_creations" that is a list of update objects.
-    If found, it extracts the likes, dislikes, and hobbies from the first object.
+    This function expects GPT to return a function call payload with a key "npc_creations"
+    that is a list of update objects. It then extracts the likes, dislikes, and hobbies
+    from the first object in that list.
     """
     likes = npc_data.get("likes", [])
     dislikes = npc_data.get("dislikes", [])
@@ -45,14 +45,16 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
             updates = args["npc_creations"]
             if isinstance(updates, list) and updates:
                 update_obj = updates[0]
-                # If update_obj is a string, try parsing it as JSON.
+                # If update_obj is a string, try stripping whitespace and parsing as JSON.
                 if isinstance(update_obj, str):
+                    stripped = update_obj.strip()
                     try:
-                        update_obj = json.loads(update_obj)
+                        update_obj = json.loads(stripped)
                     except Exception as e:
-                        logging.error("Could not parse update_obj as JSON: %s", e)
+                        logging.error("Could not parse update_obj as JSON after stripping: %s", e)
+                        logging.debug("Raw update_obj value: %s", stripped)
                         return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
-                # Now check for the expected keys.
+                # Ensure the expected keys are present.
                 if all(k in update_obj for k in ["likes", "dislikes", "hobbies"]):
                     return {
                         "likes": update_obj["likes"],
@@ -78,7 +80,6 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     else:
         logging.warning("GPT did not return any valid preferences; falling back to original values.")
         return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
-
 
 async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, conversation_id):
     """
