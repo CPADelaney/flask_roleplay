@@ -1117,6 +1117,13 @@ async def async_process_new_game(user_id, conversation_data):
         } for row in rows]
         logging.info("Retrieved %d messages from conversation history", len(conversation_history))
         
+        # Update conversation to mark it as "ready" with the final scenario name.
+        await conn.execute("""
+            UPDATE conversations 
+            SET conversation_name = $1, status = 'ready'
+            WHERE id = $2 AND user_id = $3
+        """, scenario_name, conversation_id, user_id)
+        
         success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
         logging.info(success_msg)
         return {
