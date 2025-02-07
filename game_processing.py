@@ -924,14 +924,11 @@ async def async_process_new_game(user_id, conversation_data):
             # Process a plain text response.
             chase_schedule_generated = schedule_reply.get("response", "{}")
             logging.info("Raw ChaseSchedule response from GPT: %s", chase_schedule_generated)
-            if chase_schedule_generated.startswith("
-"):
+            if chase_schedule_generated.startswith("```"):
                 lines = chase_schedule_generated.splitlines()
-                if lines[0].startswith("
-"):
+                if lines and lines[0].startswith("```"):
                     lines = lines[1:]
-                if lines and lines[-1].startswith("
-"):
+                if lines and lines[-1].startswith("```"):
                     lines = lines[:-1]
                 chase_schedule_generated = "\n".join(lines).strip()
             if not chase_schedule_generated or chase_schedule_generated.strip() in ["{}", ""]:
