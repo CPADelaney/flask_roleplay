@@ -38,6 +38,7 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
         "  - 'dislikes': an array of strings representing the adjusted dislikes, and\n"
         "  - 'hobbies': an array of strings representing the adjusted hobbies.\n"
         "Do not include any additional text or markdown formatting."
+        "Do not include anything within parenthesis or setting-specific."
     ).format(
         likes=likes,
         dislikes=dislikes,
