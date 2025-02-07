@@ -264,7 +264,7 @@
 
   async function pollConversationStatus(convId) {
     const POLL_INTERVAL = 5000; // 5 seconds
-    const MAX_POLL_ATTEMPTS = 30; // for example, 30*5 = 150 seconds maximum
+    const MAX_POLL_ATTEMPTS = 30;
     let attempts = 0;
   
     const intervalId = setInterval(() => {
@@ -280,17 +280,11 @@
           }
           const data = await res.json();
           console.log("Polled conversation status:", data);
-          
+  
           if (data.status === "ready") {
             clearInterval(intervalId);
             console.log("Conversation is ready. Refreshing messages...");
-            // Instead of re-selecting the conversation, just refresh messages if already open.
-            if (currentConvId === convId) {
-              await loadMessages(convId, true);
-            } else {
-              await loadConversations();
-              selectConversation(convId);
-            }
+            await loadMessages(convId, true); // Refresh chat window
           } else {
             attempts++;
             if (attempts >= MAX_POLL_ATTEMPTS) {
@@ -304,8 +298,6 @@
       })();
     }, POLL_INTERVAL);
   }
-
-
 
   // Check login
   async function checkLoggedIn() {
