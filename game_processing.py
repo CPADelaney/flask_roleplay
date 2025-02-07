@@ -1086,9 +1086,16 @@ async def async_process_new_game(user_id, conversation_data):
             json.dumps(affiliation_schedule.get("affiliations", [])),
             json.dumps(affiliation_schedule.get("schedule", {})),
             npc_id, user_id, conversation_id)
-            
-            logging.info("Final GPT adjustments applied for NPC %s", npc_id)
-            
+
+        # Now assign relationships using the final NPC data:
+        logging.info("Assigning final relationships to all NPCs based on adjusted attributes")
+        final_npc_rows = await conn.fetch("""
+            SELECT npc_id, npc_name 
+            FROM NPCStats
+            WHERE user_id=$1 AND conversation_id=$2
+        """, user_id, conversation_id)
+        for npc in final_npc_rows:
+            assign_random_relationships(user_id, conversation_id, npc["npc_id"], npc["npc_name"])        
   
         # Step 17: Build aggregated roleplay context.
         logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
