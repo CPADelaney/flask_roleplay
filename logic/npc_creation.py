@@ -368,24 +368,24 @@ def create_npc(
         conn.close()
         raise
 
+    # Process relationships:
     if relationships:
-        for rel in relationships:
-            memory_text = get_shared_memory(rel, new_npc_name)
-            record_npc_event(user_id, conversation_id, new_id, memory_text)
+        # Use the relationships provided
+            for rel in relationships:
+                # Decide how many memories to generate for this relationship (e.g., 1 to 3)
+                num_memories = random.randint(1, 5)
+                for _ in range(num_memories):
+                    memory_text = get_shared_memory(rel["type"], rel["target_name"])
+                    record_npc_event(user_id, conversation_id, new_npc_id, memory_text)
+    else:
+        # If no relationships provided, assign random relationships
+        assign_random_relationships(user_id, conversation_id, new_id, new_npc_name)
 
+    # Finally, assign NPC flavor, close the connection, and return the new NPC id.
     assign_npc_flavor(user_id, conversation_id, new_id)
     conn.close()
     return new_id
 
-    # Process relationships if provided
-    if relationships:
-        for rel in relationships:
-            memory_text = get_shared_memory(rel, new_npc_name)
-            record_npc_event(user_id, conversation_id, new_id, memory_text)
-
-    assign_npc_flavor(user_id, conversation_id, new_id)
-    conn.close()
-    return new_id
 
 
 
@@ -547,3 +547,75 @@ def update_missing_npc_archetypes(user_id, conversation_id):
 
     conn.close()
 
+import random
+import json
+from db.connection import get_db_connection
+from logic.memory_logic import get_shared_memory, record_npc_event
+
+def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_name):
+    """
+    Randomly assigns relationships for the newly created NPC.
+    The function:
+      - Gives a chance to have a relationship with the player.
+      - Queries existing NPCs in the conversation and, with some chance, assigns a relationship.
+      - Uses two pools (familial and non-familial) to ensure that conflicting roles aren’t assigned.
+      - Records a memory for each relationship and updates the NPC's affiliations field.
+    """
+    # Define relationship types
+    familial = ["mother", "sister", "aunt"]
+    non_familial = ["enemy", "friend", "lover", "neighbor", "colleague", "classmate", "teammate"]
+
+    relationships = []
+
+    # --- Decide relationship with the player ---
+    if random.random() < 0.5:  # 50% chance to have a connection with the player
+        if random.random() < 0.2:  # 20% chance for familial
+            rel_type = random.choice(familial)
+        else:
+            rel_type = random.choice(non_familial)
+        relationships.append({"target": "player", "target_name": "the player", "type": rel_type})
+
+    # --- Decide relationships with existing NPCs ---
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT npc_id, npc_name FROM NPCStats WHERE user_id = %s AND conversation_id = %s AND npc_id != %s",
+        (user_id, conversation_id, new_npc_id)
+    )
+    existing_npcs = cursor.fetchall()
+    conn.close()
+
+    for npc_row in existing_npcs:
+        candidate_id, candidate_name = npc_row
+        if random.random() < 0.3:  # 30% chance to assign a relationship with this NPC
+            if random.random() < 0.2:
+                rel_type = random.choice(familial)
+            else:
+                rel_type = random.choice(non_familial)
+            # Avoid duplicate relationship with the same candidate.
+            if not any(rel.get("target") == candidate_id for rel in relationships):
+                relationships.append({
+                    "target": candidate_id,
+                    "target_name": candidate_name,
+                    "type": rel_type
+                })
+
+    # --- Record memories for each relationship ---
+    for rel in relationships:
+        memory_text = get_shared_memory(rel["type"], rel["target_name"])
+        record_npc_event(user_id, conversation_id, new_npc_id, memory_text)
+
+    # --- Update NPC's affiliations ---
+    if not relationships:
+        affiliations = []
+    else:
+        affiliations = [{"target": rel["target"], "type": rel["type"]} for rel in relationships]
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE NPCStats SET affiliations = %s WHERE npc_id = %s",
+        (json.dumps(affiliations), new_npc_id)
+    )
+    conn.commit()
+    conn.close()
