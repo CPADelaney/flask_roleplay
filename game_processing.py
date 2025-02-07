@@ -900,20 +900,23 @@ async def async_process_new_game(user_id, conversation_data):
         main_quest_prompt = (
             "Based on the current environment, NPCs, and the fact that Chase is one of the only men in this world of dominant females, "
             "generate a short summary of the main quest he is about to undertake. The quest should be intriguing and mysterious, "
-            "hinting at challenges ahead without revealing too much."
-            "Ensure the quest is unique and engaging. Give it an equally creative name."
+            "hinting at challenges ahead without revealing too much. "
+            "Ensure the quest is unique and engaging. Give it an equally creative name. "
             "Do not include any additional text, markdown, or narrative. Output only the JSON object."
+            "Output only a JSON object with keys 'quest_name' and 'progress_detail'."
+            "Then extract those keys and use them in your INSERT statement."
         )
         logging.info("Generating MainQuest with prompt: %s", main_quest_prompt)
         main_quest_reply = await spaced_gpt_call(conversation_id, environment_desc, main_quest_prompt)
         
-        # Check if the response was returned in the "response" key or as part of a function call.
+        # Extract the GPT output for the quest.
         if main_quest_reply.get("response"):
             main_quest_text = main_quest_reply["response"].strip()
         elif (main_quest_reply.get("type") == "function_call" and
               main_quest_reply.get("function_args", {}).get("MainQuest")):
             main_quest_text = main_quest_reply["function_args"]["MainQuest"].strip()
         else:
+            # Try to fall back from an already stored quest, if any.
             stored_main_quest = await get_stored_value(conn, user_id, conversation_id, "MainQuest")
             if stored_main_quest:
                 main_quest_text = stored_main_quest
@@ -922,11 +925,13 @@ async def async_process_new_game(user_id, conversation_data):
                 main_quest_text = "Embark on a mysterious quest that challenges everything Chase thought he knew."
         
         logging.info("Generated MainQuest: %s", main_quest_text)
+        
+        # Instead of inserting into CurrentRoleplay, insert the quest into the Quests table.
+        # Here, we use the generated main_quest_text as the quest name.
+        # (Additional fields like progress_detail, quest_giver, and reward can be updated later via quest_updates.)
         await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'MainQuest', $3)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
+            INSERT INTO Quests (user_id, conversation_id, quest_name, status, progress_detail, quest_giver, reward)
+            VALUES ($1, $2, $3, 'In Progress', '', '', '')
         """, user_id, conversation_id, main_quest_text)
 
        # Step 16: Generate and store ChaseSchedule.
