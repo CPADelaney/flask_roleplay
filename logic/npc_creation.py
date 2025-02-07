@@ -301,7 +301,8 @@ def create_npc(
         synergy_text = "No synergy text available."
         extras_summary = "No extra archetype details available."
 
-    physical_description = get_physical_description(npc_data, final_stats, chosen_arcs_list_for_json)
+    # --- NEW: Generate a robust physical description using GPT ---
+    physical_description = get_physical_description(final_stats, chosen_arcs_list_for_json)
 
     try:
         cursor.execute(
@@ -337,7 +338,7 @@ def create_npc(
                 chosen_arcs_json_str,
                 synergy_text,
                 extras_summary,
-                physical_description  # <-- new physical description
+                physical_description  # This is our new field
             )
         )
         new_id = cursor.fetchone()[0]
@@ -351,6 +352,15 @@ def create_npc(
         logging.error(f"[create_npc] DB error: {e}", exc_info=True)
         conn.close()
         raise
+
+    if relationships:
+        for rel in relationships:
+            memory_text = get_shared_memory(rel, new_npc_name)
+            record_npc_event(user_id, conversation_id, new_id, memory_text)
+
+    assign_npc_flavor(user_id, conversation_id, new_id)
+    conn.close()
+    return new_id
 
     # Process relationships if provided
     if relationships:
