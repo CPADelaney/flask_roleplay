@@ -10,6 +10,7 @@ from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.aggregator import get_aggregated_roleplay_context
 from logic.gpt_helpers import adjust_npc_preferences, generate_npc_affiliations_and_schedule
 from routes.story_routes import build_aggregator_text
+from logic.gpt_utils import spaced_gpt_call
 
 # Use your Railway DSN (update as needed)
 DB_DSN = "postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@monorail.proxy.rlwy.net:24727/railway"
