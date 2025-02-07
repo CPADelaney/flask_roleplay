@@ -835,9 +835,13 @@ async def async_process_new_game(user_id, conversation_data):
         )
         logging.info("Generating PlayerRole with prompt: %s", player_role_prompt)
         player_role_reply = await spaced_gpt_call(conversation_id, environment_desc, player_role_prompt)
-        player_role_text = player_role_reply.get("response", "")
-        if player_role_text:
-            player_role_text = player_role_text.strip()
+        
+        # Check if the response was returned in the "response" key or as part of a function call.
+        if player_role_reply.get("response"):
+            player_role_text = player_role_reply["response"].strip()
+        elif (player_role_reply.get("type") == "function_call" and
+              player_role_reply.get("function_args", {}).get("PlayerRole")):
+            player_role_text = player_role_reply["function_args"]["PlayerRole"].strip()
         else:
             stored_player_role = await get_stored_value(conn, user_id, conversation_id, "PlayerRole")
             if stored_player_role:
@@ -845,6 +849,7 @@ async def async_process_new_game(user_id, conversation_data):
             else:
                 logging.warning("GPT returned no PlayerRole text and none stored; using fallback.")
                 player_role_text = "Chase works a standard office job, barely scraping by."
+        
         logging.info("Generated PlayerRole: %s", player_role_text)
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
@@ -852,6 +857,7 @@ async def async_process_new_game(user_id, conversation_data):
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, player_role_text)
+
         
         # Step 15: Generate and store MainQuest.
         main_quest_prompt = (
@@ -862,9 +868,13 @@ async def async_process_new_game(user_id, conversation_data):
         )
         logging.info("Generating MainQuest with prompt: %s", main_quest_prompt)
         main_quest_reply = await spaced_gpt_call(conversation_id, environment_desc, main_quest_prompt)
-        main_quest_text = main_quest_reply.get("response", "")
-        if main_quest_text:
-            main_quest_text = main_quest_text.strip()
+        
+        # Check if the response was returned in the "response" key or as part of a function call.
+        if main_quest_reply.get("response"):
+            main_quest_text = main_quest_reply["response"].strip()
+        elif (main_quest_reply.get("type") == "function_call" and
+              main_quest_reply.get("function_args", {}).get("MainQuest")):
+            main_quest_text = main_quest_reply["function_args"]["MainQuest"].strip()
         else:
             stored_main_quest = await get_stored_value(conn, user_id, conversation_id, "MainQuest")
             if stored_main_quest:
@@ -872,6 +882,7 @@ async def async_process_new_game(user_id, conversation_data):
             else:
                 logging.warning("GPT returned no MainQuest text and none stored; using fallback.")
                 main_quest_text = "Embark on a mysterious quest that challenges everything Chase thought he knew."
+        
         logging.info("Generated MainQuest: %s", main_quest_text)
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
@@ -879,6 +890,7 @@ async def async_process_new_game(user_id, conversation_data):
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, main_quest_text)
+
         
   
         # Step 17: Build aggregated roleplay context.
