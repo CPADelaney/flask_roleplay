@@ -1,5 +1,6 @@
 import json
 import logging
+from game_processing import spaced_gpt_call  # Import the GPT call helper
 
 async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     """
@@ -40,13 +41,10 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     
     return updated_preferences
 
-import json
-import logging
-
 async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, conversation_id):
     """
     Using an NPC's archetype summary along with their likes, dislikes, and hobbies,
-    query GPT to generate a JSON object containing both the NPC's affiliations (e.g., teams, clubs, etc.)
+    query GPT to generate a JSON object containing both the NPC's affiliations (e.g., teams, clubs, partnerships, associations, etc.)
     and a detailed weekly schedule. The schedule should have keys for each day (Monday through Sunday),
     with nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'.
     """
