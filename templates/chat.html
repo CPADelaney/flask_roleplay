@@ -406,16 +406,16 @@
       currentConvId = data.conversation_id;
       alert("New game started! conversation_id=" + currentConvId);
   
-      // Refresh the conversation list and open the new conversation
+      // Refresh the conversation list and open the new conversation immediately
       await loadConversations();
       selectConversation(currentConvId);
   
-      // Optionally, start NPC generation after a short delay
+      // Optionally, start NPC generation after a short delay.
       setTimeout(async () => {
         await spawnNPCs();
-      }, 1000); // 1-second delay before starting NPC generation
+      }, 1000);
   
-      // Start polling the conversation status
+      // Start polling the conversation status and update the UI dynamically when ready.
       pollConversationStatus(currentConvId);
       
     } catch (err) {
