@@ -5,6 +5,7 @@ import logging
 import random
 from flask import Blueprint, request, jsonify, session
 from db.connection import get_db_connection
+from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
 
 settings_bp = Blueprint('settings_bp', __name__)
 
