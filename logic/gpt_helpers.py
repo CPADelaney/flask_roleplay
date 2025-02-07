@@ -166,6 +166,7 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
     prompt = (
         "Given the following NPC information:\n"
         "Archetype Summary: {archetype_summary}\n"
+        "Environment: {environment_desc}\n\n"
         "Likes: {likes}\n"
         "Dislikes: {dislikes}\n"
         "Hobbies: {hobbies}\n\n"
@@ -173,8 +174,10 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
         "The schedule should be formatted as a JSON object with keys for each day of the week (Monday to Sunday), "
         "and for each day include nested keys 'Morning', 'Afternoon', 'Evening', and 'Night'. "
         "Return only a JSON object with two keys: 'affiliations' (an array) and 'schedule' (the weekly schedule)."
+        "Ensure the affiliations and schedule make sense within the environment."
     ).format(
         archetype_summary=archetype_summary,
+        environment_desc=environment_desc,
         likes=likes,
         dislikes=dislikes,
         hobbies=hobbies
