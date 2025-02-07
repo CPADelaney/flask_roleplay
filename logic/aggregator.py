@@ -88,6 +88,9 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     #----------------------------------------------------------------
     # 3) NPC Stats (Introduced)
     #----------------------------------------------------------------
+    #----------------------------------------------------------------
+    # 3) NPC Stats (Introduced)
+    #----------------------------------------------------------------
     introduced_npcs = []
     cursor.execute("""
         SELECT npc_id, npc_name,
@@ -104,7 +107,11 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     introduced_rows = cursor.fetchall()
     for (nid, nname, dom, cru, clos, tru, resp, inten,
          hbs, pers, lks, dlks, sched, curr_loc) in introduced_rows:
-
+        # Attempt to parse the schedule (which may be stored as a JSON string)
+        try:
+            trimmed_schedule = json.loads(sched) if sched else {}
+        except Exception:
+            trimmed_schedule = {}
         introduced_npcs.append({
             "npc_id": nid,
             "npc_name": nname,
@@ -121,6 +128,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "schedule": trimmed_schedule,
             "current_location": curr_loc or "Unknown"
         })
+
 
     #----------------------------------------------------------------
     # 4) NPC Minimal Info (Unintroduced)
