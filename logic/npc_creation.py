@@ -280,11 +280,21 @@ def create_npc(
     # --- Always generate synergy text and obtain a "nice" dynamic NPC name from GPT if archetypes exist ---
     if chosen_arcs_list_for_json:
         synergy_json = get_archetype_synergy_description(chosen_arcs_list_for_json, npc_name)
+        # If the returned string is empty, use a fallback.
+        if not synergy_json:
+            logging.error("GPT returned an empty synergy JSON; using fallback.")
+            synergy_json = json.dumps({
+                "npc_name": npc_name if npc_name else f"NPC_{random.randint(1000,9999)}",
+                "archetype_summary": "No synergy text available."
+            })
         try:
             synergy_data = json.loads(synergy_json)
             # Use the GPT-provided name for the NPC
             new_npc_name = synergy_data.get("npc_name", npc_name)
             synergy_text = synergy_data.get("archetype_summary", "")
+            # If synergy_text is a list, join its items into one string.
+            if isinstance(synergy_text, list):
+                synergy_text = " ".join(synergy_text)
         except Exception as e:
             logging.error("Failed to parse synergy JSON; using fallback.", exc_info=True)
             new_npc_name = npc_name if npc_name else f"NPC_{random.randint(1000,9999)}"
@@ -294,6 +304,7 @@ def create_npc(
         new_npc_name = npc_name if npc_name else f"NPC_{random.randint(1000,9999)}"
         synergy_text = "No synergy text available."
         extras_summary = "No extra archetype details available."
+
 
     try:
         cursor.execute(
