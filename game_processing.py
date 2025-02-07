@@ -836,38 +836,20 @@ async def async_process_new_game(user_id, conversation_data):
         # Step 16: Generate and store ChaseSchedule.
         schedule_prompt = (
             "Based on the current environment and Chase's role, generate a detailed weekly schedule for Chase. "
-            "Return only a valid JSON object with keys for each day of the week (i.e., \"Monday\", \"Tuesday\", etc.), "
+            "Return a function call payload with a parameter named \"ChaseSchedule\" that is a valid JSON object with keys for each day of the week (e.g., \"Monday\", \"Tuesday\", etc.), "
             "where each day has nested keys for \"Morning\", \"Afternoon\", \"Evening\", and \"Night\" representing Chase's activities. "
-            "The output must be exactly in JSON format with no markdown formatting or additional text. "
-            "For example, the JSON should follow this format: "
-            "{\"Monday\": {\"Morning\": \"Wake at a cozy inn, have a quick breakfast\", "
-            "\"Afternoon\": \"Head to work at the local data office\", "
-            "\"Evening\": \"Attend a casual meetup with friends\", "
-            "\"Night\": \"Return to the inn for rest\"}, "
-            "\"Tuesday\": {\"Morning\": \"Jog along the city walls, enjoy the sunrise\", "
-            "\"Afternoon\": \"Study mystical texts at the library\", "
-            "\"Evening\": \"Work on personal creative projects\", "
-            "\"Night\": \"Return to the inn and unwind\"}, "
-            "\"Wednesday\": {\"Morning\": \"Wake at the inn and enjoy a hearty breakfast\", "
-            "\"Afternoon\": \"Run errands and visit the guild\", "
-            "\"Evening\": \"Attend a community dinner\", "
-            "\"Night\": \"Head back to the inn for some rest\"}, "
-            "\"Thursday\": {\"Morning\": \"...\", \"Afternoon\": \"...\", \"Evening\": \"...\", \"Night\": \"...\"}, "
-            "\"Friday\": {\"Morning\": \"...\", \"Afternoon\": \"...\", \"Evening\": \"...\", \"Night\": \"...\"}, "
-            "\"Saturday\": {\"Morning\": \"...\", \"Afternoon\": \"...\", \"Evening\": \"...\", \"Night\": \"...\"}, "
-            "\"Sunday\": {\"Morning\": \"...\", \"Afternoon\": \"...\", \"Evening\": \"...\", \"Night\": \"...\"}}"
+            "Do not output any additional text or markdown formatting."
         )
         logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
         schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
-
         
-        # Check if GPT returned a function call response
         if schedule_reply.get("type") == "function_call":
             logging.info("GPT returned a function call for ChaseSchedule. Processing update via apply_universal_update.")
             fn_args = schedule_reply.get("function_args", {})
+            # The payload should include a key "ChaseSchedule"
             await apply_universal_update(user_id, conversation_id, fn_args, conn)
             
-            # After the update, try to retrieve the stored schedule from the database.
+            # After the update, retrieve the stored schedule from the database.
             stored_schedule = await get_stored_value(conn, user_id, conversation_id, "ChaseSchedule")
             if stored_schedule:
                 chase_schedule_generated = stored_schedule
@@ -883,8 +865,6 @@ async def async_process_new_game(user_id, conversation_data):
             # Process a plain text response.
             chase_schedule_generated = schedule_reply.get("response", "{}")
             logging.info("Raw ChaseSchedule response from GPT: %s", chase_schedule_generated)
-            
-            # Remove any markdown fences if accidentally included.
             if chase_schedule_generated.startswith("```"):
                 lines = chase_schedule_generated.splitlines()
                 if lines[0].startswith("```"):
@@ -892,8 +872,6 @@ async def async_process_new_game(user_id, conversation_data):
                 if lines and lines[-1].startswith("```"):
                     lines = lines[:-1]
                 chase_schedule_generated = "\n".join(lines).strip()
-            
-            # If the raw response is empty or equals an empty JSON object, use fallback.
             if not chase_schedule_generated or chase_schedule_generated.strip() in ["{}", ""]:
                 logging.warning("ChaseSchedule GPT response was empty; using fallback JSON.")
                 chase_schedule_generated = """{
@@ -905,8 +883,6 @@ async def async_process_new_game(user_id, conversation_data):
                     "Saturday": {"Morning": "Sleep in and enjoy a lazy start", "Afternoon": "Explore the bustling market", "Evening": "Watch a local performance", "Night": "Return to the inn to wind down"},
                     "Sunday": {"Morning": "Take an early walk in the park", "Afternoon": "Reflect on the week and plan ahead", "Evening": "Have a light dinner with friends", "Night": "Enjoy some quiet time before sleep"}
                 }"""
-        
-        # Attempt to parse the JSON.
         try:
             chase_schedule = json.loads(chase_schedule_generated)
             logging.info("Parsed ChaseSchedule JSON successfully: %s", chase_schedule)
@@ -942,7 +918,6 @@ async def async_process_new_game(user_id, conversation_data):
                            "Evening": "Have a light dinner with friends",
                            "Night": "Enjoy some quiet time before sleep"}
             }
-        
         logging.info("Final ChaseSchedule to be stored: %s", chase_schedule)
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
@@ -950,7 +925,6 @@ async def async_process_new_game(user_id, conversation_data):
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, json.dumps(chase_schedule))
-
     
         # Step 17: Build aggregated roleplay context.
         logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
