@@ -1,6 +1,55 @@
+# logic/gpt_helpers.py
 import json
 import logging
-from logic.gpt_utils import spaced_gpt_call  # Import the GPT call helper from our new module
+from logic.gpt_utils import spaced_gpt_call  # Import from the separate GPT utils module
+
+async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
+    """
+    Given an NPC's current likes, dislikes, and hobbies, query GPT to generate updated preferences
+    that fit the environment. Returns a dictionary with keys: 'likes', 'dislikes', and 'hobbies'.
+    """
+    likes = npc_data.get("likes", [])
+    dislikes = npc_data.get("dislikes", [])
+    hobbies = npc_data.get("hobbies", [])
+    
+    prompt = (
+        "Given the following NPC preferences:\n"
+        "Likes: {likes}\n"
+        "Dislikes: {dislikes}\n"
+        "Hobbies: {hobbies}\n\n"
+        "Update these preferences so that they are more fitting for an environment dominated by powerful females. "
+        "Return only a JSON object with the keys 'likes', 'dislikes', and 'hobbies'."
+    ).format(likes=likes, dislikes=dislikes, hobbies=hobbies)
+    
+    logging.info("Adjusting NPC preferences with prompt: %s", prompt)
+    reply = await spaced_gpt_call(conversation_id, environment_desc, prompt)
+    
+    # Extract the text from the reply.
+    if reply.get("response"):
+        preferences_text = reply["response"].strip()
+    elif (reply.get("type") == "function_call" and 
+          reply.get("function_args", {}).get("preferences")):
+        preferences_text = reply["function_args"]["preferences"].strip()
+    else:
+        logging.warning("GPT did not return adjusted preferences; falling back to original values.")
+        return {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
+    
+    # Remove markdown code fences if present.
+    if preferences_text.startswith("```"):
+        lines = preferences_text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        preferences_text = "\n".join(lines).strip()
+    
+    try:
+        updated_preferences = json.loads(preferences_text)
+    except Exception as e:
+        logging.error("Error parsing updated preferences: %s", e)
+        updated_preferences = {"likes": likes, "dislikes": dislikes, "hobbies": hobbies}
+    
+    return updated_preferences
 
 async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, conversation_id):
     """
@@ -37,18 +86,16 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
     # First check for a direct response.
     if reply.get("response"):
         affiliations_schedule_text = reply["response"].strip()
-    # Then check if it's a function call with a specific key.
+    # Then check if it's a function call.
     elif reply.get("type") == "function_call":
         args = reply.get("function_args", {})
         if "affiliations_schedule" in args:
             affiliations_schedule_text = args["affiliations_schedule"].strip()
         elif "npc_updates" in args:
-            # Assume that GPT returned a list of npc_updates.
+            # Assume GPT returned a list of npc_updates; use the first one.
             updates = args.get("npc_updates")
             if isinstance(updates, list) and len(updates) > 0:
-                # Optionally, you could try to filter by npc_id if your npc_data has an id.
                 first_update = updates[0]
-                # Construct a JSON object from the update.
                 result_dict = {
                     "affiliations": first_update.get("affiliations", []),
                     "schedule": first_update.get("schedule", {})
