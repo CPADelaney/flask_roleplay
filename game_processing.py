@@ -44,6 +44,13 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
     # 1) roleplay_updates
     rp_updates = update_data.get("roleplay_updates", {})
     logging.info("[apply_universal_update] roleplay_updates: %s", rp_updates)
+    # If rp_updates is a list, merge them into a single dictionary.
+    if isinstance(rp_updates, list):
+        merged_rp_updates = {}
+        for d in rp_updates:
+            if isinstance(d, dict):
+                merged_rp_updates.update(d)
+        rp_updates = merged_rp_updates
     for key, val in rp_updates.items():
         stored_val = json.dumps(val) if isinstance(val, (dict, list)) else str(val)
         await conn.execute("""
@@ -53,6 +60,7 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
             DO UPDATE SET value = EXCLUDED.value
         """, user_id, conversation_id, key, stored_val)
         logging.info("Inserted/Updated CurrentRoleplay: key=%s, value=%s", key, stored_val)
+
     
     # 2) npc_creations
     npc_creations = update_data.get("npc_creations", [])
