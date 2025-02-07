@@ -27,7 +27,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "introduced": {"type": "boolean"},
                         "archetypes": {"type": "array", "items": {"type": "object","properties": {"id": {"type": "number"}, "name": {"type": "string"}}}},
                         "archetype_summary": {"type": "string"},
-                        "archetype_extras_summary": {"type": "string"}
+                        "archetype_extras_summary": {"type": "string"},
                         "dominance": {"type": "number"},
                         "cruelty": {"type": "number"},
                         "closeness": {"type": "number"},
