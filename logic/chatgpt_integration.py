@@ -137,6 +137,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         },
                         "archetype_summary": {"type": "string"},
                         "archetype_extras_summary": {"type": "string"},
+                        "physical_description": {"type": "string"},
                         "dominance": {"type": "number"},
                         "cruelty": {"type": "number"},
                         "closeness": {"type": "number"},
