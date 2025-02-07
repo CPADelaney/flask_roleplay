@@ -150,11 +150,13 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
             if isinstance(new_mem_entries, str):
                 new_mem_entries = [new_mem_entries]
             logging.info("Appending memory to NPC %s: %s", npc_id, new_mem_entries)
+            # Convert the list to a JSON string.
+            memory_json = json.dumps(new_mem_entries)
             await conn.execute("""
                 UPDATE NPCStats
-                SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb($1::text)
+                SET memory = COALESCE(memory, '[]'::jsonb) || $1::jsonb
                 WHERE npc_id=$2 AND user_id=$3 AND conversation_id=$4
-            """, new_mem_entries, npc_id, user_id, conversation_id)
+            """, memory_json, npc_id, user_id, conversation_id)
         if "schedule" in up:
             new_schedule = up["schedule"]
             logging.info("Overwriting schedule for NPC %s: %s", npc_id, new_schedule)
