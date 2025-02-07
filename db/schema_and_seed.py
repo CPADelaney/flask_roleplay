@@ -165,6 +165,7 @@ def create_all_tables():
             archetypes JSONB,
             archetype_summary TEXT,
             archetype_extras_summary TEXT,
+            physical_description TEXT,       -- NEW: robust physical description
             relationships JSONB,
             dominance INT CHECK (dominance BETWEEN 0 AND 100),
             cruelty INT CHECK (cruelty BETWEEN 0 AND 100),
