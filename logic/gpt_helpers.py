@@ -14,8 +14,9 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     This function expects GPT to return a function call payload with a key "npc_creations"
     that is a list of update objects. It then extracts the likes, dislikes, and hobbies
     from the first object in that list.
-    
-    Retries the GPT call up to max_retries times if the output isn’t valid.
+
+    If GPT returns a placeholder value (e.g. just "npc_creations"), the function will
+    retry up to max_retries times, then fall back to the original values.
     """
     original_values = {
         "likes": npc_data.get("likes", []),
@@ -26,7 +27,6 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     dislikes = original_values["dislikes"]
     hobbies = original_values["hobbies"]
 
-    # Updated prompt with explicit instructions
     prompt = (
         "Given the following NPC preferences:\n"
         "Likes: {likes}\n"
@@ -58,11 +58,14 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
             if "npc_creations" in args:
                 updates = args["npc_creations"]
 
-                # If updates is returned as a string, check if it's just a placeholder.
+                # If updates is a string, process it:
                 if isinstance(updates, str):
                     stripped_updates = updates.strip()
-                    if stripped_updates in ['"npc_creations"', "npc_creations"]:
-                        logging.error("Received invalid output (placeholder text) for npc_creations: %s", stripped_updates)
+                    logging.debug("Stripped npc_creations value: %r", stripped_updates)
+                    # Remove any surrounding quotes before comparing
+                    cleaned = stripped_updates.strip('"').lower()
+                    if cleaned == "npc_creations":
+                        logging.error("Received placeholder output for npc_creations: %r", stripped_updates)
                         retry_count += 1
                         continue
                     try:
@@ -72,21 +75,23 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
                         retry_count += 1
                         continue
 
+                # Now expect updates to be a list.
                 if isinstance(updates, list) and updates:
                     update_obj = updates[0]
-                    # If update_obj is a string, check for placeholder and try parsing.
                     if isinstance(update_obj, str):
-                        stripped = update_obj.strip()
-                        if stripped in ['"npc_creations"', "npc_creations"]:
-                            logging.error("Received invalid update object text: %s", stripped)
+                        stripped_obj = update_obj.strip()
+                        logging.debug("Stripped update object: %r", stripped_obj)
+                        cleaned_obj = stripped_obj.strip('"').lower()
+                        if cleaned_obj == "npc_creations":
+                            logging.error("Received placeholder text in update object: %r", stripped_obj)
                             retry_count += 1
                             continue
-                        if not stripped.startswith("{"):
-                            logging.error("Update object string does not look like a JSON object: %s", stripped)
+                        if not stripped_obj.startswith("{"):
+                            logging.error("Update object string does not look like a JSON object: %r", stripped_obj)
                             retry_count += 1
                             continue
                         try:
-                            update_obj = json.loads(stripped)
+                            update_obj = json.loads(stripped_obj)
                         except Exception as e:
                             logging.error("JSON parsing failed for update_obj: %s", e)
                             retry_count += 1
@@ -114,7 +119,6 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
         elif reply.get("response"):
             try:
                 response_text = reply["response"].strip()
-                # Remove markdown code fences if present.
                 if response_text.startswith("```"):
                     lines = response_text.splitlines()
                     if lines and lines[0].startswith("```"):
@@ -122,6 +126,7 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
                     if lines and lines[-1].startswith("```"):
                         lines = lines[:-1]
                     response_text = "\n".join(lines).strip()
+                logging.debug("Raw GPT response text: %r", response_text)
                 data = json.loads(response_text)
                 if all(k in data for k in ["likes", "dislikes", "hobbies"]):
                     logging.info("Successfully extracted updated preferences from response on retry %d", retry_count)
@@ -140,6 +145,7 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
 
     logging.error("Max retries reached; using original preferences instead.")
     return original_values
+
 
 
 async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, conversation_id):
