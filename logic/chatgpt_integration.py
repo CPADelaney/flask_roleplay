@@ -18,9 +18,90 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                 "description": "Updates to the CurrentRoleplay table, arbitrary key-value pairs.",
             },
             "ChaseSchedule": {
-                "type": "object",
-                "description": "The detailed weekly schedule for Chase, formatted as a JSON object with keys for each day and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
-            },
+              "type": "object",
+              "properties": {
+                "Monday": {
+                  "type": "object",
+                  "properties": {
+                    "Morning": { "type": "string" },
+                    "Afternoon": { "type": "string" },
+                    "Evening": { "type": "string" },
+                    "Night": { "type": "string" }
+                  },
+                  "required": ["Morning", "Afternoon", "Evening", "Night"],
+                  "additionalProperties": false
+                },
+                "Tuesday": {
+                  "type": "object",
+                  "properties": {
+                    "Morning": { "type": "string" },
+                    "Afternoon": { "type": "string" },
+                    "Evening": { "type": "string" },
+                    "Night": { "type": "string" }
+                  },
+                  "required": ["Morning", "Afternoon", "Evening", "Night"],
+                  "additionalProperties": false
+                },
+                "Wednesday": {
+                  "type": "object",
+                  "properties": {
+                    "Morning": { "type": "string" },
+                    "Afternoon": { "type": "string" },
+                    "Evening": { "type": "string" },
+                    "Night": { "type": "string" }
+                  },
+                  "required": ["Morning", "Afternoon", "Evening", "Night"],
+                  "additionalProperties": false
+                },
+                "Thursday": {
+                  "type": "object",
+                  "properties": {
+                    "Morning": { "type": "string" },
+                    "Afternoon": { "type": "string" },
+                    "Evening": { "type": "string" },
+                    "Night": { "type": "string" }
+                  },
+                  "required": ["Morning", "Afternoon", "Evening", "Night"],
+                  "additionalProperties": false
+                },
+                "Friday": {
+                  "type": "object",
+                  "properties": {
+                    "Morning": { "type": "string" },
+                    "Afternoon": { "type": "string" },
+                    "Evening": { "type": "string" },
+                    "Night": { "type": "string" }
+                  },
+                  "required": ["Morning", "Afternoon", "Evening", "Night"],
+                  "additionalProperties": false
+                },
+                "Saturday": {
+                  "type": "object",
+                  "properties": {
+                    "Morning": { "type": "string" },
+                    "Afternoon": { "type": "string" },
+                    "Evening": { "type": "string" },
+                    "Night": { "type": "string" }
+                  },
+                  "required": ["Morning", "Afternoon", "Evening", "Night"],
+                  "additionalProperties": false
+                },
+                "Sunday": {
+                  "type": "object",
+                  "properties": {
+                    "Morning": { "type": "string" },
+                    "Afternoon": { "type": "string" },
+                    "Evening": { "type": "string" },
+                    "Night": { "type": "string" }
+                  },
+                  "required": ["Morning", "Afternoon", "Evening", "Night"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+              "additionalProperties": false,
+              "description": "The detailed weekly schedule for Chase, with keys for each day of the week and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
+            }
             "npc_creations": {
                 "type": "array",
                 "description": "Create new NPCs with stats/hobbies/affiliations, etc.",
@@ -51,52 +132,204 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "personality_traits": {"type": "array", "items": {"type": "string"}},
                         "likes": {"type": "array", "items": {"type": "string"}},
                         "dislikes": {"type": "array", "items": {"type": "string"}},
-                        "affiliations": {"type": "array", "items": {"type": "string"}},
-                        "schedule": {"type": "object"},
-                        "memory": {
-                            "description": "NPC memory can be a string or an array of strings.",
-                            "anyOf": [
-                                { "type": "string" },
-                                { "type": "array", "items": { "type": "string" } }
-                            ]
+            "affiliations": { "type": "array", "items": { "type": "string" } },
+            "schedule": {
+              "type": "object",
+              "properties": {
+                        "Monday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
                         },
-                        "monica_level": {"type": "number"},
-                        "sex": {"type": "string"}
+                        "Tuesday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        },
+                        "Wednesday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        },
+                        "Thursday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        },
+                        "Friday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        },
+                        "Saturday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        },
+                        "Sunday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        }
+                      },
+                      "required": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+                      "description": "The detailed weekly schedule for this NPC, formatted as a JSON object with keys for each day and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
                     },
-                    "required": ["npc_name"]
+                    "memory": {
+                      "description": "NPC memory can be a string or an array of strings.",
+                      "anyOf": [
+                        { "type": "string" },
+                        { "type": "array", "items": { "type": "string" } }
+                      ]
+                    },
+                    "monica_level": { "type": "number" },
+                    "sex": { "type": "string" }
+                  },
+                  "required": ["npc_name"]
                 },
                 "description": "Create new NPCs with stats/hobbies/affiliations, etc."
-            },
-            "npc_updates": {
+              },
+              "npc_updates": {
                 "type": "array",
                 "description": "Update existing NPCs by npc_id.",
                 "items": {
-                    "type": "object",
-                    "properties": {
-                        "npc_id": { "type": "number" },
-                        "npc_name": {"type": "string"},
-                        "introduced": {"type": "boolean"},
-                        "dominance": {"type": "number"},
-                        "cruelty": {"type": "number"},
-                        "closeness": {"type": "number"},
-                        "trust": {"type": "number"},
-                        "respect": {"type": "number"},
-                        "intensity": {"type": "number"},
-                        "monica_level": {"type": "number"},
-                        "sex": {"type": "string"},
-                        "memory": {
-                            "description": "NPC memory can be a string or an array of strings.",
-                            "anyOf": [
-                                { "type": "string" },
-                                { "type": "array", "items": { "type": "string" } }
-                            ]
-                        },
-                        "schedule": {"type": "object"},
-                        "schedule_updates": {"type": "object"},
-                        "affiliations": {"type": "array", "items": {"type": "string"}},
-                        "current_location": {"type": "string"}
+                  "type": "object",
+                  "properties": {
+                    "npc_id": { "type": "number" },
+                    "npc_name": { "type": "string" },
+                    "introduced": { "type": "boolean" },
+                    "dominance": { "type": "number" },
+                    "cruelty": { "type": "number" },
+                    "closeness": { "type": "number" },
+                    "trust": { "type": "number" },
+                    "respect": { "type": "number" },
+                    "intensity": { "type": "number" },
+                    "monica_level": { "type": "number" },
+                    "sex": { "type": "string" },
+                    "memory": {
+                      "description": "NPC memory can be a string or an array of strings.",
+                      "anyOf": [
+                        { "type": "string" },
+                        { "type": "array", "items": { "type": "string" } }
+                      ]
                     },
-                    "required": ["npc_id"]
+                    "schedule": {
+                      "type": "object",
+                      "properties": {
+                        "Monday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        },
+                        "Tuesday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        },
+                        "Wednesday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        },
+                        "Thursday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        },
+                        "Friday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        },
+                        "Saturday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        },
+                        "Sunday": {
+                          "type": "object",
+                          "properties": {
+                            "Morning": { "type": "string" },
+                            "Afternoon": { "type": "string" },
+                            "Evening": { "type": "string" },
+                            "Night": { "type": "string" }
+                          },
+                          "required": ["Morning", "Afternoon", "Evening", "Night"]
+                        }
+                      },
+                      "required": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+                      "description": "The detailed weekly schedule for this NPC."
+                    },
+                    "schedule_updates": { "type": "object" },
+                    "affiliations": { "type": "array", "items": { "type": "string" } },
+                    "current_location": { "type": "string" }
+                  },
+                  "required": ["npc_id"]
                 },
                 "description": "Update existing NPCs by npc_id."
             },
