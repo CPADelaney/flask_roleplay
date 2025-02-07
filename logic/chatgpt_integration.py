@@ -29,7 +29,7 @@ from logic.prompts import SYSTEM_PROMPT
               "Night": { "type": "string" }
             },
             "required": ["Morning", "Afternoon", "Evening", "Night"],
-            "additionalProperties": false
+            "additionalProperties": False
           },
           "Tuesday": {
             "type": "object",
@@ -40,7 +40,7 @@ from logic.prompts import SYSTEM_PROMPT
               "Night": { "type": "string" }
             },
             "required": ["Morning", "Afternoon", "Evening", "Night"],
-            "additionalProperties": false
+            "additionalProperties": False
           },
           "Wednesday": {
             "type": "object",
@@ -51,7 +51,7 @@ from logic.prompts import SYSTEM_PROMPT
               "Night": { "type": "string" }
             },
             "required": ["Morning", "Afternoon", "Evening", "Night"],
-            "additionalProperties": false
+            "additionalProperties": False
           },
           "Thursday": {
             "type": "object",
@@ -62,7 +62,7 @@ from logic.prompts import SYSTEM_PROMPT
               "Night": { "type": "string" }
             },
             "required": ["Morning", "Afternoon", "Evening", "Night"],
-            "additionalProperties": false
+            "additionalProperties": False
           },
           "Friday": {
             "type": "object",
@@ -73,7 +73,7 @@ from logic.prompts import SYSTEM_PROMPT
               "Night": { "type": "string" }
             },
             "required": ["Morning", "Afternoon", "Evening", "Night"],
-            "additionalProperties": false
+            "additionalProperties": False
           },
           "Saturday": {
             "type": "object",
@@ -84,7 +84,7 @@ from logic.prompts import SYSTEM_PROMPT
               "Night": { "type": "string" }
             },
             "required": ["Morning", "Afternoon", "Evening", "Night"],
-            "additionalProperties": false
+            "additionalProperties": False
           },
           "Sunday": {
             "type": "object",
@@ -95,11 +95,11 @@ from logic.prompts import SYSTEM_PROMPT
               "Night": { "type": "string" }
             },
             "required": ["Morning", "Afternoon", "Evening", "Night"],
-            "additionalProperties": false
+            "additionalProperties": False
           }
         },
         "required": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-        "additionalProperties": false,
+        "additionalProperties": False,
         "description": "The detailed weekly schedule for Chase, with keys for each day of the week and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
       },
       "MainQuest": {
@@ -153,7 +153,7 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 },
                 "Tuesday": {
                   "type": "object",
@@ -164,7 +164,7 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 },
                 "Wednesday": {
                   "type": "object",
@@ -175,7 +175,7 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 },
                 "Thursday": {
                   "type": "object",
@@ -186,7 +186,7 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 },
                 "Friday": {
                   "type": "object",
@@ -197,7 +197,7 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 },
                 "Saturday": {
                   "type": "object",
@@ -208,7 +208,7 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 },
                 "Sunday": {
                   "type": "object",
@@ -219,11 +219,11 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 }
               },
               "required": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-              "additionalProperties": false,
+              "additionalProperties": False,
               "description": "The detailed weekly schedule for this NPC, formatted as a JSON object with keys for each day and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
             },
             "memory": {
@@ -276,7 +276,7 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 },
                 "Tuesday": {
                   "type": "object",
@@ -287,7 +287,7 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 },
                 "Wednesday": {
                   "type": "object",
@@ -298,7 +298,7 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 },
                 "Thursday": {
                   "type": "object",
@@ -309,7 +309,7 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 },
                 "Friday": {
                   "type": "object",
@@ -320,7 +320,7 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 },
                 "Saturday": {
                   "type": "object",
@@ -331,7 +331,7 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 },
                 "Sunday": {
                   "type": "object",
@@ -342,11 +342,11 @@ from logic.prompts import SYSTEM_PROMPT
                     "Night": { "type": "string" }
                   },
                   "required": ["Morning", "Afternoon", "Evening", "Night"],
-                  "additionalProperties": false
+                  "additionalProperties": False
                 }
               },
               "required": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-              "additionalProperties": false,
+              "additionalProperties": False,
               "description": "The detailed weekly schedule for this NPC."
             },
             "schedule_updates": { "type": "object" },
