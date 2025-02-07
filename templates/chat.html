@@ -263,42 +263,46 @@
   };
 
   async function pollConversationStatus(convId) {
-    const POLL_INTERVAL = 5000; // milliseconds
-    const MAX_POLL_ATTEMPTS = 30; // poll for a maximum of 30*5 = 150 seconds (adjust as needed)
+    const POLL_INTERVAL = 5000; // 5 seconds
+    const MAX_POLL_ATTEMPTS = 30; // for example, 30*5 = 150 seconds maximum
     let attempts = 0;
   
-    const intervalId = setInterval(async () => {
-      try {
-        const res = await fetch(`/conversation_status?conversation_id=${convId}`, {
-          method: "GET",
-          credentials: "include"
-        });
-        if (!res.ok) {
-          console.error("Failed to fetch conversation status:", res.status);
-          return;
-        }
-        const data = await res.json();
-        console.log("Polled conversation status:", data);
-        
-        if (data.status === "ready") {
-          clearInterval(intervalId);
-          // Option 1: Refresh the page
-          window.location.reload();
-          // Option 2: Or update the conversation list/ UI
-          // await loadConversations();
-          // selectConversation(convId);
-        } else {
-          attempts++;
-          if (attempts >= MAX_POLL_ATTEMPTS) {
-            clearInterval(intervalId);
-            console.warn("Polling timed out; conversation is still not ready.");
+    // Use setInterval with an async IIFE so we can await inside the callback.
+    const intervalId = setInterval(() => {
+      (async () => {
+        try {
+          const res = await fetch(`/conversation_status?conversation_id=${convId}`, {
+            method: "GET",
+            credentials: "include"
+          });
+          if (!res.ok) {
+            console.error("Failed to fetch conversation status:", res.status);
+            return;
           }
+          const data = await res.json();
+          console.log("Polled conversation status:", data);
+  
+          if (data.status === "ready") {
+            clearInterval(intervalId);
+            console.log("Conversation is ready. Updating UI dynamically...");
+  
+            // Instead of reloading the page, update the UI:
+            await loadConversations();       // Re-fetch the conversation list
+            selectConversation(convId);        // Load the messages for the current conversation
+          } else {
+            attempts++;
+            if (attempts >= MAX_POLL_ATTEMPTS) {
+              clearInterval(intervalId);
+              console.warn("Polling timed out; conversation is still not ready.");
+            }
+          }
+        } catch (err) {
+          console.error("Error polling conversation status:", err);
         }
-      } catch (err) {
-        console.error("Error polling conversation status:", err);
-      }
+      })();
     }, POLL_INTERVAL);
   }
+
 
   // Check login
   async function checkLoggedIn() {
