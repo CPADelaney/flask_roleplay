@@ -160,16 +160,51 @@ def update_npc_memory():
 
     return jsonify({"message": "NPC memory updated", "memory": memory_text}), 200
 
+async def get_stored_setting(conn, user_id, conversation_id):
+    # Retrieve the setting name and description from CurrentRoleplay.
+    row = await conn.fetchrow(
+        "SELECT key, value FROM CurrentRoleplay WHERE user_id=$1 AND conversation_id=$2 AND key IN ('CurrentSetting', 'EnvironmentDesc')",
+        user_id, conversation_id
+    )
+    # If you expect both keys, you might need to run two separate queries or fetch all rows.
+    # Here's one approach:
+    rows = await conn.fetch(
+        "SELECT key, value FROM CurrentRoleplay WHERE user_id=$1 AND conversation_id=$2 AND key IN ('CurrentSetting', 'EnvironmentDesc')",
+        user_id, conversation_id
+    )
+    result = {r["key"]: r["value"] for r in rows}
+    # Fallbacks if not found:
+    result.setdefault("CurrentSetting", "Default Setting Name")
+    result.setdefault("EnvironmentDesc", "Default environment description.")
+    return result
+
+
 def get_shared_memory(relationship, npc_name, archetype_summary="", archetype_extras_summary=""):
     """
-    Given a relationship dict (with keys: type, target, target_name) and the NPC's name,
-    calls GPT to generate a short memory describing a shared event or history.
-    The memory fits within a femdom context, references the current setting,
-    and includes the NPC's synthesized background details.
+    Given a relationship dict and the NPC's name, returns a shared memory.
+    Uses the stored setting from CurrentRoleplay (keys 'CurrentSetting' and 'EnvironmentDesc').
     """
-    from routes.settings_routes import generate_mega_setting_logic
-    setting_info = generate_mega_setting_logic()
-    mega_description = setting_info.get("mega_description", "an undefined setting")
+    from db.connection import get_db_connection
+    import asyncio
+    
+    # For simplicity, assume you can run this synchronously or in a thread.
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        # Query for the stored setting details.
+        cursor.execute("""
+            SELECT key, value FROM CurrentRoleplay 
+            WHERE user_id = %s AND conversation_id = %s AND key IN ('CurrentSetting', 'EnvironmentDesc')
+        """, (user_id, conversation_id))
+        rows = cursor.fetchall()
+        stored = {row[0]: row[1] for row in rows}
+        # Use EnvironmentDesc for the detailed setting description.
+        mega_description = stored.get("EnvironmentDesc", "an undefined setting")
+    except Exception as e:
+        logging.error(f"[get_shared_memory] Error retrieving stored setting: {e}")
+        mega_description = "an undefined setting"
+    finally:
+        conn.close()
 
     target = relationship.get("target", "player")
     target_name = relationship.get("target_name", "the player")
