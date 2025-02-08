@@ -285,7 +285,7 @@ def apply_universal_updates(data: dict):
             # Import and call get_shared_memory to generate the memory text.
             # (Ensure that your get_shared_memory function is available in the logic.memory module.)
             from logic.memory import get_shared_memory
-            shared_memory_text = get_shared_memory(relationship, npc_name)
+            shared_memory_text = get_shared_memory(user_id, conversation_id, relationship, npc_name)
             logging.info(f"Generated shared memory for NPC {npc_id}: {shared_memory_text}")
 
             # Append the generated memory text to the NPC's memory field
