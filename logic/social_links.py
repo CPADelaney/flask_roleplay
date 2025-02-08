@@ -39,12 +39,14 @@ def create_social_link(user_id, conversation_id,
                        link_type="neutral", link_level=0):
     """
     Create a new SocialLinks row for (user_id, conversation_id, e1, e2).
-    Initialize link_history as an empty array. Return the new link_id.
+    Initialize link_history as an empty array.
+    If a matching row already exists, return its link_id.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO SocialLinks (
                 user_id, conversation_id,
                 entity1_type, entity1_id,
@@ -52,14 +54,32 @@ def create_social_link(user_id, conversation_id,
                 link_type, link_level, link_history
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '[]')
+            ON CONFLICT (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id)
+            DO NOTHING
             RETURNING link_id
-        """, (
-            user_id, conversation_id,
-            entity1_type, entity1_id,
-            entity2_type, entity2_id,
-            link_type, link_level
-        ))
-        link_id = cursor.fetchone()[0]
+            """,
+            (
+                user_id, conversation_id,
+                entity1_type, entity1_id,
+                entity2_type, entity2_id,
+                link_type, link_level
+            )
+        )
+        result = cursor.fetchone()
+        if result is None:
+            # If the insert did nothing because the row already exists,
+            # retrieve the existing link_id.
+            cursor.execute(
+                """
+                SELECT link_id FROM SocialLinks
+                WHERE user_id=%s AND conversation_id=%s
+                  AND entity1_type=%s AND entity1_id=%s
+                  AND entity2_type=%s AND entity2_id=%s
+                """,
+                (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id)
+            )
+            result = cursor.fetchone()
+        link_id = result[0]
         conn.commit()
         return link_id
     except:
@@ -67,6 +87,7 @@ def create_social_link(user_id, conversation_id,
         raise
     finally:
         conn.close()
+
 
 def update_link_type_and_level(user_id, conversation_id,
                                link_id, new_type=None, level_change=0):
