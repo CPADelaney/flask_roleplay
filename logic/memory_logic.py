@@ -179,22 +179,20 @@ async def get_stored_setting(conn, user_id, conversation_id):
     return result
 
 
-def get_shared_memory(relationship, npc_name, archetype_summary="", archetype_extras_summary=""):
+def get_shared_memory(user_id, conversation_id, relationship, npc_name, archetype_summary="", archetype_extras_summary=""):
     """
     Given a relationship dict and the NPC's name, returns a shared memory.
     Uses the stored setting from CurrentRoleplay (keys 'CurrentSetting' and 'EnvironmentDesc').
     """
     from db.connection import get_db_connection
-    import asyncio
-    
-    # For simplicity, assume you can run this synchronously or in a thread.
+    import logging
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        # Query for the stored setting details.
+        # Query for the stored setting details, filtering by user_id and conversation_id.
         cursor.execute("""
             SELECT key, value FROM CurrentRoleplay 
-            WHERE user_id = %s AND conversation_id = %s AND key IN ('CurrentSetting', 'EnvironmentDesc')
+            WHERE user_id=%s AND conversation_id=%s AND key IN ('CurrentSetting', 'EnvironmentDesc')
         """, (user_id, conversation_id))
         rows = cursor.fetchall()
         stored = {row[0]: row[1] for row in rows}
@@ -235,3 +233,4 @@ def get_shared_memory(relationship, npc_name, archetype_summary="", archetype_ex
     except Exception as e:
         logging.error(f"[get_shared_memory] GPT error: {e}")
         return "Shared memory could not be generated."
+
