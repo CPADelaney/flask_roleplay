@@ -616,6 +616,20 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
     if msg.function_call is not None:
         fn_name = msg.function_call.name
         fn_args_str = msg.function_call.arguments or "{}"
+
+        # Add logging to capture the raw function call arguments
+        logging.debug("Raw function call arguments: %s", fn_args_str)
+
+        # Optionally, remove markdown code fences if present
+        if fn_args_str.startswith("```"):
+            lines = fn_args_str.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            fn_args_str = "\n".join(lines).strip()
+            logging.debug("Function call arguments after stripping code fences: %s", fn_args_str)
+
         try:
             parsed_args = json.loads(fn_args_str)
         except Exception:
@@ -638,4 +652,3 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
             "response": msg.content,
             "tokens_used": tokens_used
         }
-
