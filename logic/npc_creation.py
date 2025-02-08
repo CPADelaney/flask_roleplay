@@ -7,6 +7,7 @@ import logging
 from db.connection import get_db_connection
 from logic.chatgpt_integration import get_openai_client  # or however you import it
 from logic.memory_logic import get_shared_memory, record_npc_event
+from logic.social_links import create_social_link
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -134,7 +135,6 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
     
     If provided_npc_name is given, instruct GPT to use that value.
     """
-    # If no archetypes, return a default JSON
     if not archetypes_list:
         default_name = provided_npc_name if provided_npc_name else "Unknown"
         return json.dumps({
@@ -178,12 +178,6 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         })
 
 def get_archetype_extras_summary(archetypes_list, provided_npc_name):
-    """
-    Produces a concise summary that fuses extra details (progression_rules,
-    unique_traits, preferred_kinks) from the chosen archetypes into one cohesive description.
-    The summary must explicitly use the provided NPC name (provided_npc_name) so that it matches
-    the name stored in the NPCStats table.
-    """
     if not archetypes_list:
         return f"No extra details available for {provided_npc_name}."
     
@@ -224,23 +218,11 @@ def get_archetype_extras_summary(archetypes_list, provided_npc_name):
 ###################
 # 7) Create NPC
 ###################
-def create_npc(
-    user_id,
-    conversation_id,
-    npc_name=None,
-    introduced=False,
-    sex="female",
-    reroll_extra=False,
-    total_archetypes=4,
-    relationships=None  # Optional: list of relationship dicts
-):
-    # If no name is provided, initialize it as an empty string so that GPT will generate a dynamic name.
+def create_npc(user_id, conversation_id, npc_name=None, introduced=False,
+               sex="female", reroll_extra=False, total_archetypes=4, relationships=None):
     if not npc_name:
         npc_name = ""
-    logging.info(
-        f"[create_npc] user_id={user_id}, conv_id={conversation_id}, "
-        f"name={npc_name or '[None]'}, introduced={introduced}, sex={sex}"
-    )
+    logging.info(f"[create_npc] user_id={user_id}, conv_id={conversation_id}, name={npc_name or '[None]'}, introduced={introduced}, sex={sex}")
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -289,7 +271,7 @@ def create_npc(
         logging.error("Error parsing chosen archetypes JSON: %s", e)
         chosen_arcs_list_for_json = []
 
-    # --- Always generate synergy text and obtain a "nice" dynamic NPC name from GPT if archetypes exist ---
+    # Generate synergy text and a dynamic NPC name if archetypes exist.
     if chosen_arcs_list_for_json:
         synergy_json = get_archetype_synergy_description(chosen_arcs_list_for_json, npc_name)
         if not synergy_json:
@@ -300,7 +282,6 @@ def create_npc(
             })
         try:
             synergy_data = json.loads(synergy_json)
-            # Use the GPT-provided name for the NPC, and that will be our final name.
             new_npc_name = synergy_data.get("npc_name", npc_name)
             synergy_text = synergy_data.get("archetype_summary", "")
             if isinstance(synergy_text, list):
@@ -310,13 +291,12 @@ def create_npc(
             new_npc_name = npc_name if npc_name else f"NPC_{random.randint(1000,9999)}"
             synergy_text = "No synergy text available."
         extras_summary = get_archetype_extras_summary(chosen_arcs_list_for_json, new_npc_name)
-
     else:
         new_npc_name = npc_name if npc_name else f"NPC_{random.randint(1000,9999)}"
         synergy_text = "No synergy text available."
         extras_summary = "No extra archetype details available."
     
-    # --- Generate physical description, now using the final NPC name (new_npc_name) ---
+    # Generate physical description using the final NPC name.
     physical_description = get_physical_description(new_npc_name, final_stats, chosen_arcs_list_for_json)
     
     try:
@@ -326,42 +306,26 @@ def create_npc(
                 user_id, conversation_id,
                 npc_name, introduced, sex,
                 dominance, cruelty, closeness, trust, respect, intensity,
-                archetypes,
-                archetype_summary,
-                archetype_extras_summary,
-                physical_description,
-                memory, monica_level
+                archetypes, archetype_summary, archetype_extras_summary,
+                physical_description, memory, monica_level
             )
             VALUES (
-                %s, %s,
-                %s, %s, %s,
+                %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s,
-                %s,
-                %s,
-                %s,
-                %s,
+                %s, %s, %s, %s,
                 '[]'::jsonb, 0
             )
             RETURNING npc_id
             """,
-            (
-                user_id, conversation_id,
-                new_npc_name, introduced, sex.lower(),
-                final_stats["dominance"], final_stats["cruelty"],
-                final_stats["closeness"], final_stats["trust"],
-                final_stats["respect"], final_stats["intensity"],
-                chosen_arcs_json_str,
-                synergy_text,
-                extras_summary,
-                physical_description
-            )
+            (user_id, conversation_id, new_npc_name, introduced, sex.lower(),
+             final_stats["dominance"], final_stats["cruelty"],
+             final_stats["closeness"], final_stats["trust"],
+             final_stats["respect"], final_stats["intensity"],
+             chosen_arcs_json_str, synergy_text, extras_summary, physical_description)
         )
         new_id = cursor.fetchone()[0]
         conn.commit()
-        logging.info(
-            f"[create_npc] Inserted npc_id={new_id} with stats={final_stats}. "
-            f"Archetypes count={len(chosen_arcs_rows)}. New NPC name: {new_npc_name}"
-        )
+        logging.info(f"[create_npc] Inserted npc_id={new_id} with stats={final_stats}. Archetypes count={len(chosen_arcs_rows)}. New NPC name: {new_npc_name}")
     except Exception as e:
         conn.rollback()
         logging.error(f"[create_npc] DB error: {e}", exc_info=True)
@@ -370,24 +334,21 @@ def create_npc(
 
     # Process relationships:
     if relationships:
-        # Use the relationships provided
-            for rel in relationships:
-                # Decide how many memories to generate for this relationship (e.g., 1 to 3)
-                num_memories = random.randint(1, 5)
-                for _ in range(num_memories):
-                    memory_text = get_shared_memory(rel["type"], rel["target_name"])
-                    record_npc_event(user_id, conversation_id, new_npc_id, memory_text)
+        # If relationships are provided externally:
+        for rel in relationships:
+            num_memories = random.randint(1, 5)
+            for _ in range(num_memories):
+                # Pass the full relationship dictionary to get_shared_memory
+                memory_text = get_shared_memory(rel, new_npc_name)
+                record_npc_event(user_id, conversation_id, new_id, memory_text)
     else:
-        # If no relationships provided, assign random relationships
+        # If no relationships are provided, assign random relationships.
         assign_random_relationships(user_id, conversation_id, new_id, new_npc_name)
 
     # Finally, assign NPC flavor, close the connection, and return the new NPC id.
     assign_npc_flavor(user_id, conversation_id, new_id)
     conn.close()
     return new_id
-
-
-
 
 # 8) NPC Flavor
 def assign_npc_flavor(user_id, conversation_id, npc_id: int):
@@ -398,35 +359,25 @@ def assign_npc_flavor(user_id, conversation_id, npc_id: int):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    hobby_pool       = DATA.get("hobbies", [])
+    hobby_pool = DATA.get("hobbies", [])
     personality_pool = DATA.get("personalities", [])
-    likes_pool       = DATA.get("likes", [])
-    dislikes_pool    = DATA.get("dislikes", [])
+    likes_pool = DATA.get("likes", [])
+    dislikes_pool = DATA.get("dislikes", [])
 
-    hbs  = random.sample(hobby_pool, 3)       if len(hobby_pool) >= 3 else hobby_pool
+    hbs = random.sample(hobby_pool, 3) if len(hobby_pool) >= 3 else hobby_pool
     pers = random.sample(personality_pool, 5) if len(personality_pool) >= 5 else personality_pool
-    lks  = random.sample(likes_pool, 3)       if len(likes_pool) >= 3 else likes_pool
-    dlks = random.sample(dislikes_pool, 3)    if len(dislikes_pool) >= 3 else dislikes_pool
+    lks = random.sample(likes_pool, 3) if len(likes_pool) >= 3 else likes_pool
+    dlks = random.sample(dislikes_pool, 3) if len(dislikes_pool) >= 3 else dislikes_pool
 
     try:
         cursor.execute(
             """
             UPDATE NPCStats
-            SET hobbies=%s,
-                personality_traits=%s,
-                likes=%s,
-                dislikes=%s
+            SET hobbies=%s, personality_traits=%s, likes=%s, dislikes=%s
             WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
             """,
-            (
-                json.dumps(hbs),
-                json.dumps(pers),
-                json.dumps(lks),
-                json.dumps(dlks),
-                user_id,
-                conversation_id,
-                npc_id
-            )
+            (json.dumps(hbs), json.dumps(pers), json.dumps(lks), json.dumps(dlks),
+             user_id, conversation_id, npc_id)
         )
         conn.commit()
         logging.debug(f"[assign_npc_flavor] Flavor set for npc_id={npc_id}, user={user_id}, conv={conversation_id}")
@@ -435,7 +386,7 @@ def assign_npc_flavor(user_id, conversation_id, npc_id: int):
         logging.error(f"[assign_npc_flavor] DB error: {e}", exc_info=True)
     finally:
         conn.close()
-
+        
 def get_physical_description(final_npc_name, final_stats, chosen_arcs_list):
     """
     Uses GPT to generate a robust, vivid physical description for an NPC.
@@ -552,22 +503,23 @@ import json
 from db.connection import get_db_connection
 from logic.memory_logic import get_shared_memory, record_npc_event
 
+from logic.social_links import create_social_link
+
 def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_name):
-    # Define relationship types
     familial = ["mother", "sister", "aunt"]
     non_familial = ["enemy", "friend", "lover", "neighbor", "colleague", "classmate", "teammate"]
 
     relationships = []
 
-    # --- Decide relationship with the player ---
-    if random.random() < 0.5:  # 50% chance to have a connection with the player
+    # Chance for relationship with player
+    if random.random() < 0.5:
         if random.random() < 0.2:
             rel_type = random.choice(familial)
         else:
             rel_type = random.choice(non_familial)
         relationships.append({"target": "player", "target_name": "the player", "type": rel_type})
 
-    # --- Decide relationships with existing NPCs ---
+    # Chance for relationship with other NPCs:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -579,7 +531,7 @@ def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_na
 
     for npc_row in existing_npcs:
         candidate_id, candidate_name = npc_row
-        if random.random() < 0.3:  # 30% chance to assign a relationship with this NPC
+        if random.random() < 0.3:
             if random.random() < 0.2:
                 rel_type = random.choice(familial)
             else:
@@ -591,19 +543,27 @@ def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_na
                     "type": rel_type
                 })
 
-    # --- Record memories and update affiliations ---
+    # For each relationship, generate a memory and create a SocialLinks row.
     for rel in relationships:
-        # Pass the entire relationship dictionary and the NPC's name.
         memory_text = get_shared_memory(rel, new_npc_name)
         record_npc_event(user_id, conversation_id, new_npc_id, memory_text)
+        # Determine entity types:
+        if rel["target"] == "player":
+            # Here, you might designate the player as a special type.
+            # For example, if you don’t have a player_id in your system, you could use 0.
+            create_social_link(
+                user_id, conversation_id,
+                "player", 0,          # entity1: the player (ID 0, or your designated player ID)
+                "npc", new_npc_id,     # entity2: the new NPC
+                link_type=rel["type"], link_level=0  # start at level 0
+            )
+        else:
+            # For NPC-to-NPC relationships, you could decide on an ordering convention.
+            # For example, always treat the existing NPC as entity1 and the new NPC as entity2.
+            create_social_link(
+                user_id, conversation_id,
+                "npc", rel["target"],
+                "npc", new_npc_id,
+                link_type=rel["type"], link_level=0
+            )
 
-    # Update the NPC's affiliations field
-    affiliations = [{"target": rel["target"], "type": rel["type"]} for rel in relationships] if relationships else []
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE NPCStats SET affiliations = %s WHERE npc_id = %s",
-        (json.dumps(affiliations), new_npc_id)
-    )
-    conn.commit()
-    conn.close()
