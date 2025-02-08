@@ -311,7 +311,7 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
             continue
         npc_name = row[0]
         from logic.memory import get_shared_memory
-        shared_memory_text = get_shared_memory(relationship, npc_name)
+        shared_memory_text = get_shared_memory(user_id, conversation_id, relationship, npc_name)
         logging.info("Generated shared memory for NPC %s: %s", npc_id, shared_memory_text)
         await conn.execute("""
             UPDATE NPCStats
