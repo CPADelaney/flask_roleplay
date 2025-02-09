@@ -8,7 +8,7 @@ from routes.settings_routes import insert_missing_settings, generate_mega_settin
 from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.aggregator import get_aggregated_roleplay_context
-from logic.gpt_helpers import adjust_npc_preferences, generate_npc_affiliations_and_schedule
+from logic.gpt_helpers import adjust_npc_complete
 from routes.story_routes import build_aggregator_text
 from logic.gpt_utils import spaced_gpt_call
 from logic.npc_creation import assign_random_relationships
