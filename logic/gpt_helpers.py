@@ -7,10 +7,14 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     """
     Query GPT to generate updated NPC preferences (likes, dislikes, and hobbies)
     tailored to an environment dominated by powerful females.
-    If GPT returns its output in a function call payload, this function checks both:
-      - A top-level JSON object with keys "likes", "dislikes", and "hobbies"
-      - OR a JSON object with a key "npc_creations" (a list) whose first element has those keys.
-    Retries up to max_retries times and falls back to the original values if unsuccessful.
+    
+    This function expects GPT to return a function call payload with a key "npc_creations"
+    that maps to an array containing one update object. It then extracts the keys "likes",
+    "dislikes", and "hobbies" from that object.
+    
+    If those keys are missing, it checks if an alternative structure (for example, one that
+    includes "affiliations" and "schedule") is present, and if so, logs a warning and returns
+    the original values.
     """
     original_values = {
         "likes": npc_data.get("likes", []),
@@ -20,7 +24,7 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     likes = original_values["likes"]
     dislikes = original_values["dislikes"]
     hobbies = original_values["hobbies"]
-    
+
     prompt = (
         "Given the following environment description and NPC preferences:\n"
         "Environment: {environment_desc}\n\n"
@@ -29,59 +33,75 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
         "Dislikes: {dislikes}\n"
         "Hobbies: {hobbies}\n\n"
         "Adapt these preferences so that they are specifically tailored to an environment dominated by powerful females. "
-        "Return only a JSON object with one key: 'npc_creations'. This key should map to an array containing exactly one object "
-        "that has the following keys:\n"
+        "Return only a JSON object with one key: 'npc_creations'. This key should map to an array containing exactly one object that has the following keys:\n"
         "  - 'likes': an array of strings representing the adjusted likes,\n"
         "  - 'dislikes': an array of strings representing the adjusted dislikes, and\n"
         "  - 'hobbies': an array of strings representing the adjusted hobbies.\n"
-        "Do not include any extra text, markdown formatting, or anything else."
+        "Do not include any additional text or markdown formatting. "
+        "Ensure the likes, dislikes, and hobbies make sense within the environment."
     ).format(
         environment_desc=environment_desc,
         likes=likes,
         dislikes=dislikes,
         hobbies=hobbies
     )
-    
+
     logging.info("Adjusting NPC preferences with prompt: %s", prompt)
-    
+
     max_retries = 3
     retry_count = 0
     while retry_count < max_retries:
         reply = await spaced_gpt_call(conversation_id, environment_desc, prompt)
-        logging.debug("Raw GPT reply: %s", reply)
-        
-        # Check for function call responses first.
+        # Process the GPT response:
         if reply.get("type") == "function_call":
-            func_args = reply.get("function_args", {})
-            # First try to see if keys are present at the top level.
-            if all(k in func_args for k in ["likes", "dislikes", "hobbies"]):
-                logging.info("Successfully extracted updated preferences (direct) on retry %d", retry_count)
-                return {
-                    "likes": func_args["likes"],
-                    "dislikes": func_args["dislikes"],
-                    "hobbies": func_args["hobbies"]
-                }
-            # Otherwise, check if a key "npc_creations" exists.
-            elif "npc_creations" in func_args:
-                updates = func_args["npc_creations"]
-                if isinstance(updates, list) and len(updates) > 0:
-                    first_update = updates[0]
-                    if all(k in first_update for k in ["likes", "dislikes", "hobbies"]):
-                        logging.info("Extracted preferences from 'npc_creations' on retry %d", retry_count)
+            args = reply.get("function_args", {})
+            if "npc_creations" in args:
+                updates = args["npc_creations"]
+
+                # If updates is a string, try to parse it.
+                if isinstance(updates, str):
+                    stripped_updates = updates.strip()
+                    try:
+                        updates = json.loads(stripped_updates)
+                    except Exception as e:
+                        logging.error("Failed to parse npc_creations string as JSON: %s", e)
+                        retry_count += 1
+                        continue
+
+                if isinstance(updates, list) and updates:
+                    update_obj = updates[0]
+                    # If update_obj is a string, try to parse it.
+                    if isinstance(update_obj, str):
+                        try:
+                            update_obj = json.loads(update_obj.strip())
+                        except Exception as e:
+                            logging.error("Failed to parse update object string as JSON: %s", e)
+                            retry_count += 1
+                            continue
+                    # Check for expected keys
+                    if all(k in update_obj for k in ["likes", "dislikes", "hobbies"]):
+                        logging.info("Successfully extracted updated preferences on retry %d", retry_count)
                         return {
-                            "likes": first_update["likes"],
-                            "dislikes": first_update["dislikes"],
-                            "hobbies": first_update["hobbies"]
+                            "likes": update_obj["likes"],
+                            "dislikes": update_obj["dislikes"],
+                            "hobbies": update_obj["hobbies"]
                         }
+                    elif "affiliations" in update_obj and "schedule" in update_obj:
+                        # Sometimes GPT returns a different structure.
+                        logging.warning("GPT update returned affiliations and schedule instead of likes, dislikes, hobbies. Falling back to original preferences.")
+                        return original_values
                     else:
-                        missing_keys = [k for k in ["likes", "dislikes", "hobbies"] if k not in first_update]
-                        logging.warning("Missing keys in 'npc_creations': %s", missing_keys)
+                        logging.warning("Expected keys not found in update object; retrying.")
+                        retry_count += 1
+                        continue
                 else:
-                    logging.warning("'npc_creations' update is empty or not a list; retrying.")
+                    logging.warning("npc_creations update is empty or not a list; retrying.")
+                    retry_count += 1
+                    continue
             else:
-                logging.warning("GPT function call did not include expected keys. Received: %s", func_args)
-        
-        # Otherwise, check for a plain text response.
+                logging.warning("GPT function call did not include 'npc_creations'; retrying.")
+                retry_count += 1
+                continue
         elif reply.get("response"):
             try:
                 response_text = reply["response"].strip()
@@ -92,38 +112,24 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
                     if lines and lines[-1].startswith("```"):
                         lines = lines[:-1]
                     response_text = "\n".join(lines).strip()
-                data = json.loads(response_text)
-                if all(k in data for k in ["likes", "dislikes", "hobbies"]):
+                data_parsed = json.loads(response_text)
+                if all(k in data_parsed for k in ["likes", "dislikes", "hobbies"]):
                     logging.info("Successfully extracted updated preferences from response on retry %d", retry_count)
-                    return data
-                elif "npc_creations" in data:
-                    updates = data["npc_creations"]
-                    if isinstance(updates, list) and len(updates) > 0:
-                        first_update = updates[0]
-                        if all(k in first_update for k in ["likes", "dislikes", "hobbies"]):
-                            logging.info("Extracted preferences from 'npc_creations' in response on retry %d", retry_count)
-                            return {
-                                "likes": first_update["likes"],
-                                "dislikes": first_update["dislikes"],
-                                "hobbies": first_update["hobbies"]
-                            }
-                        else:
-                            missing_keys = [k for k in ["likes", "dislikes", "hobbies"] if k not in first_update]
-                            logging.warning("Missing keys in 'npc_creations' from response: %s", missing_keys)
-                    else:
-                        logging.warning("Response JSON 'npc_creations' is empty or not a list; retrying.")
+                    return data_parsed
                 else:
-                    logging.warning("Response JSON does not contain expected keys; full response: %s", data)
+                    logging.warning("Response JSON does not contain expected keys; retrying.")
+                    retry_count += 1
+                    continue
             except Exception as e:
-                logging.error("Error parsing JSON from response: %s", e, exc_info=True)
+                logging.error("Error parsing JSON from response: %s", e)
+                retry_count += 1
+                continue
         else:
             logging.warning("GPT did not return a valid response; retrying.")
-        
-        retry_count += 1
+            retry_count += 1
 
     logging.error("Max retries reached; using original preferences instead.")
     return original_values
-
 
 
 async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, conversation_id):
