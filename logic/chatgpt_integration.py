@@ -16,7 +16,17 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
         "properties": {
             "roleplay_updates": {
                 "type": "object",
-                "description": "Updates to the CurrentRoleplay table, arbitrary key-value pairs."
+                "description": (
+                    "Updates to the CurrentRoleplay table, arbitrary key-value pairs. "
+                    "For time updates, use keys 'CurrentYear', 'CurrentMonth', 'CurrentDay', and 'TimeOfDay'."
+                ),
+                "properties": {
+                    "CurrentYear": {"type": "number"},
+                    "CurrentMonth": {"type": "number"},
+                    "CurrentDay": {"type": "number"},
+                    "TimeOfDay": {"type": "string"}
+                },
+                "additionalProperties": True
             },
             "ChaseSchedule": {
                 "type": "object",
@@ -457,6 +467,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "end_time": {"type": "string"},
                         "location": {"type": "string"},
                         "npc_id": {"type": "number"},
+                        "year": {"type": "number"},
                         "day": {"type": "number"},
                         "time_of_day": {"type": "string"},
                         "override_location": {"type": "string"}
@@ -548,6 +559,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
         "required": []
     }
 }
+
 
 
 
