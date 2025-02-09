@@ -947,7 +947,7 @@ async def async_process_new_game(user_id, conversation_data):
             "Based on the current environment, NPCs, and the fact that Chase is one of the only men in this world of dominant females, "
             "generate a short summary of the main quest he is about to undertake. The quest should be intriguing and mysterious, "
             "hinting at challenges ahead without revealing too much. "
-            "Ensure the quest is unique and engaging. Give it an equally creative name. "
+            "Ensure the quest is unique and engaging. Give it an equally creative name. Do not use the word 'of' in the quest name. "
             "Do not include any additional text, markdown, or narrative. Output only the JSON object."
             "Output only a JSON object with keys 'quest_name' and 'progress_detail'."
             "Then extract those keys and use them in your INSERT statement."
