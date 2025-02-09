@@ -38,6 +38,36 @@ async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0):
     return result
 
 # ---------------------------------------------------------------------
+# Helper: retry call upon failure
+
+async def call_gpt_with_retry(func, expected_keys: set, retries: int = 3, initial_delay: float = 1, **kwargs):
+    """
+    Calls a GPT helper function (an async function) with the given keyword arguments.
+    Checks that the returned dictionary contains the expected keys.
+    Retries the call (with exponential backoff) up to `retries` times if keys are missing or an exception occurs.
+    """
+    delay = initial_delay
+    for attempt in range(1, retries + 1):
+        try:
+            result = await func(**kwargs)
+            # Check which keys are missing
+            missing_keys = expected_keys - set(result.keys())
+            if missing_keys:
+                logging.warning("Attempt %d: %s returned missing keys: %s", attempt, func.__name__, missing_keys)
+                raise ValueError("Missing keys: " + ", ".join(missing_keys))
+            logging.info("Attempt %d: %s returned all expected keys.", attempt, func.__name__)
+            return result
+        except Exception as e:
+            logging.error("Attempt %d: Error calling %s: %s", attempt, func.__name__, e, exc_info=True)
+            if attempt < retries:
+                await asyncio.sleep(delay)
+                delay *= 2
+            else:
+                logging.error("Max retries reached for %s", func.__name__)
+                raise
+
+
+# ---------------------------------------------------------------------
 # Universal update function (asynchronous version)
 async def apply_universal_update(user_id, conversation_id, update_data, conn):
     logging.info("=== [apply_universal_update] START ===")
@@ -1037,6 +1067,10 @@ async def async_process_new_game(user_id, conversation_data):
             WHERE user_id=$1 AND conversation_id=$2
         """, user_id, conversation_id)
         
+        # Define what keys we expect from each GPT call.
+        expected_pref_keys = {"likes", "dislikes", "hobbies"}
+        expected_aff_keys = {"affiliations", "schedule"}
+        
         for npc_row in npc_rows:
             npc_id = npc_row["npc_id"]
             # Build an npc_data dict from the stored values.
@@ -1053,9 +1087,15 @@ async def async_process_new_game(user_id, conversation_data):
             
             # Call the helper to adjust preferences.
             try:
-                adjusted_preferences = await adjust_npc_preferences(npc_data, environment_desc, conversation_id)
+                adjusted_preferences = await call_gpt_with_retry(
+                    func=adjust_npc_preferences,
+                    expected_keys=expected_pref_keys,
+                    npc_data=npc_data,
+                    environment_desc=environment_desc,
+                    conversation_id=conversation_id
+                )
             except Exception as e:
-                logging.error("Error adjusting preferences for NPC %s: %s", npc_id, e)
+                logging.error("Error adjusting preferences for NPC %s after retries: %s", npc_id, e)
                 adjusted_preferences = {
                     "likes": npc_data.get("likes", []),
                     "dislikes": npc_data.get("dislikes", []),
@@ -1064,9 +1104,15 @@ async def async_process_new_game(user_id, conversation_data):
             
             # Call the helper to generate affiliations and schedule.
             try:
-                affiliation_schedule = await generate_npc_affiliations_and_schedule(npc_data, environment_desc, conversation_id)
+                affiliation_schedule = await call_gpt_with_retry(
+                    func=generate_npc_affiliations_and_schedule,
+                    expected_keys=expected_aff_keys,
+                    npc_data=npc_data,
+                    environment_desc=environment_desc,
+                    conversation_id=conversation_id
+                )
             except Exception as e:
-                logging.error("Error generating affiliations/schedule for NPC %s: %s", npc_id, e)
+                logging.error("Error generating affiliations/schedule for NPC %s after retries: %s", npc_id, e)
                 affiliation_schedule = {
                     "affiliations": npc_data.get("affiliations", []),
                     "schedule": npc_data.get("schedule", {})
@@ -1088,16 +1134,7 @@ async def async_process_new_game(user_id, conversation_data):
             json.dumps(affiliation_schedule.get("affiliations", [])),
             json.dumps(affiliation_schedule.get("schedule", {})),
             npc_id, user_id, conversation_id)
-
-        # Now assign relationships using the final NPC data:
-        logging.info("Assigning final relationships to all NPCs based on adjusted attributes")
-        final_npc_rows = await conn.fetch("""
-            SELECT npc_id, npc_name 
-            FROM NPCStats
-            WHERE user_id=$1 AND conversation_id=$2
-        """, user_id, conversation_id)
-        for npc in final_npc_rows:
-            assign_random_relationships(user_id, conversation_id, npc["npc_id"], npc["npc_name"])        
+           
   
         # Step 17: Build aggregated roleplay context.
         logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
