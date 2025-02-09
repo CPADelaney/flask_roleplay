@@ -545,25 +545,21 @@ def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_na
 
     # For each relationship, generate a memory and create a SocialLinks row.
     for rel in relationships:
-        memory_text = get_shared_memory(rel, new_npc_name)
+        # Update the call to include user_id and conversation_id:
+        memory_text = get_shared_memory(user_id, conversation_id, rel, new_npc_name)
         record_npc_event(user_id, conversation_id, new_npc_id, memory_text)
         # Determine entity types:
         if rel["target"] == "player":
-            # Here, you might designate the player as a special type.
-            # For example, if you don’t have a player_id in your system, you could use 0.
             create_social_link(
                 user_id, conversation_id,
                 "player", 0,          # entity1: the player (ID 0, or your designated player ID)
                 "npc", new_npc_id,     # entity2: the new NPC
-                link_type=rel["type"], link_level=0  # start at level 0
+                link_type=rel["type"], link_level=0
             )
         else:
-            # For NPC-to-NPC relationships, you could decide on an ordering convention.
-            # For example, always treat the existing NPC as entity1 and the new NPC as entity2.
             create_social_link(
                 user_id, conversation_id,
                 "npc", rel["target"],
                 "npc", new_npc_id,
                 link_type=rel["type"], link_level=0
             )
-
