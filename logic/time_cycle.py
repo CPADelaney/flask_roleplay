@@ -7,6 +7,44 @@ MONTHS_PER_YEAR = 12  # Adjust if needed
 # Define your phases (this remains the same)
 TIME_PHASES = ["Morning", "Afternoon", "Evening", "Night"]
 
+TIME_PRIORITY = {
+    "Morning": 1,
+    "Afternoon": 2,
+    "Evening": 3,
+    "Night": 4
+}
+
+def remove_expired_planned_events(user_id, conversation_id, current_year, current_month, current_day, current_phase):
+    """
+    Delete planned events whose scheduled time has passed.
+    This function assumes that an event is considered expired if its date/phase
+    is earlier than the current in-game time.
+    """
+    current_priority = TIME_PRIORITY.get(current_phase, 0)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        DELETE FROM PlannedEvents
+        WHERE user_id=%s AND conversation_id=%s AND (
+            (year < %s)
+            OR (year = %s AND month < %s)
+            OR (year = %s AND month = %s AND day < %s)
+            OR (year = %s AND month = %s AND day = %s AND 
+                (CASE time_of_day
+                    WHEN 'Morning' THEN 1
+                    WHEN 'Afternoon' THEN 2
+                    WHEN 'Evening' THEN 3
+                    WHEN 'Night' THEN 4
+                    ELSE 0
+                END) < %s)
+        )
+    """, (user_id, conversation_id, current_year,
+          current_year, current_month,
+          current_year, current_month, current_day,
+          current_year, current_month, current_day, current_priority))
+    conn.commit()
+    conn.close()
+
 def get_current_time(user_id, conversation_id):
     """
     Returns a tuple (current_year, current_month, current_day, time_of_day) for the given user_id and conversation_id.
@@ -140,11 +178,14 @@ def advance_time(user_id, conversation_id, increment=1):
 
 def advance_time_and_update(user_id, conversation_id, increment=1):
     """
-    Combines advance_time(...) with any updates you need (such as updating NPC schedules).
+    Advances time by a given number of phases, updates NPC schedules,
+    and removes any expired planned events.
     Returns (new_year, new_month, new_day, new_phase).
     """
     new_year, new_month, new_day, new_phase = advance_time(user_id, conversation_id, increment)
     update_npc_schedules_for_time(user_id, conversation_id, new_day, new_phase)
+    # Now remove planned events that are past due:
+    remove_expired_planned_events(user_id, conversation_id, new_year, new_month, new_day, new_phase)
     return new_year, new_month, new_day, new_phase
 
 def update_npc_schedules_for_time(user_id, conversation_id, day, time_of_day):
