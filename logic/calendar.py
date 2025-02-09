@@ -22,6 +22,7 @@ def generate_calendar_names(environment_desc, conversation_id):
     prompt = (
         "Based on the following environment description, generate an immersive and thematic naming scheme for the in-game calendar. "
         "Keep in mind the context is 'femdom daily-life sim roleplaying game' and the names should reflect this."
+        "Ensure names are creative and unique, and are rooted in the universe and history of the setting."
         "Your response should be in JSON format with exactly the following keys:\n"
         "  - \"year_name\": a creative name for the overall year (e.g., 'The Age of Ember', 'The Silver Cycle'),\n"
         "  - \"months\": an array of 12 creative and unique month names,\n"
