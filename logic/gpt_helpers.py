@@ -130,10 +130,9 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
     """
     Using an NPC's archetype summary along with their likes, dislikes, and hobbies,
     query GPT to generate a JSON object containing both the NPC's affiliations (e.g., teams, clubs, partnerships, associations, etc.)
-    and a detailed weekly schedule. The schedule should have keys for each day of the week (using your immersive day names),
-    with nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'.
+    and a detailed weekly schedule. The schedule should use your immersive day names and have nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'.
     """
-    # For this example, we use a fallback array for immersive day names.
+    # Fallback immersive day names
     immersive_days = ["Sol", "Luna", "Terra", "Vesta", "Mercury", "Venus", "Mars"]
 
     archetype_summary = npc_data.get("archetype_summary", "")
@@ -163,41 +162,40 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
     )
 
     logging.info("Generating NPC affiliations and schedule with prompt: %s", prompt)
+    
     reply = await spaced_gpt_call(conversation_id, environment_desc, prompt)
-
-    # Log the raw GPT reply for troubleshooting
-    logging.debug("Raw GPT reply: %s", reply)
+    
+    # Log the full raw reply for debugging purposes.
+    logging.debug("Raw GPT reply in generate_npc_affiliations_and_schedule: %s", json.dumps(reply, indent=2))
 
     # Determine if we got a plain response or a function call response.
     if reply.get("response"):
         affiliations_schedule_text = reply["response"].strip()
     elif reply.get("type") == "function_call":
         args = reply.get("function_args", {})
-        # Try first the "affiliations_schedule" key…
         if "affiliations_schedule" in args:
             affiliations_schedule_text = args["affiliations_schedule"].strip()
-        # …or else try "npc_updates"
         elif "npc_updates" in args:
             updates = args.get("npc_updates")
-            if isinstance(updates, list) and len(updates) > 0:
+            if isinstance(updates, list) and updates:
                 first_update = updates[0]
                 result_dict = {
                     "affiliations": first_update.get("affiliations", []),
                     "schedule": first_update.get("schedule", {})
                 }
-                logging.info("Using npc_updates payload to derive affiliations and schedule: %s", result_dict)
+                logging.info("Using 'npc_updates' payload to derive affiliations and schedule: %s", result_dict)
                 return result_dict
             else:
-                logging.warning("npc_updates is empty or not a list; returning default values.")
+                logging.warning("'npc_updates' is empty or not a list; returning default values.")
                 return {"affiliations": [], "schedule": {}}
         else:
-            logging.warning("GPT function call did not include expected keys; returning defaults.")
+            logging.warning("GPT function call did not include expected keys. Received: %s", args)
             return {"affiliations": [], "schedule": {}}
     else:
-        logging.warning("GPT did not return affiliations and schedule; using default empty values.")
+        logging.warning("GPT did not return a valid response; using default empty values.")
         return {"affiliations": [], "schedule": {}}
 
-    # Strip markdown code fences if present.
+    # Remove markdown code fences if present.
     if affiliations_schedule_text.startswith("```"):
         lines = affiliations_schedule_text.splitlines()
         if lines and lines[0].startswith("```"):
@@ -206,19 +204,18 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
             lines = lines[:-1]
         affiliations_schedule_text = "\n".join(lines).strip()
 
-    # Log the processed raw text before parsing JSON.
     logging.debug("Processed GPT output for affiliations and schedule: %s", affiliations_schedule_text)
 
-    # Try parsing the JSON and log a detailed error if it fails.
+    # Try parsing the JSON and log detailed errors if it fails.
     try:
         result = json.loads(affiliations_schedule_text)
     except Exception as e:
         logging.error("Error parsing affiliations and schedule JSON: %s. Raw text: %s", e, affiliations_schedule_text, exc_info=True)
         result = {"affiliations": [], "schedule": {}}
 
-    # Validate the result schema.
+    # Validate the schema of the parsed JSON.
     if not (isinstance(result, dict) and "affiliations" in result and "schedule" in result):
-        logging.error("Parsed result does not match expected schema: %s", result)
+        logging.error("Parsed result does not match expected schema. Got: %s", result)
         result = {"affiliations": [], "schedule": {}}
-
+    
     return result
