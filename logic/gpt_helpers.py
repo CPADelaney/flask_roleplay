@@ -7,12 +7,10 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     """
     Query GPT to generate updated NPC preferences (likes, dislikes, and hobbies)
     tailored to an environment dominated by powerful females.
-    This function expects GPT to return a function call payload with a key "npc_creations"
-    that is a list of update objects. It then extracts the likes, dislikes, and hobbies
-    from the first object in that list.
-
-    If GPT returns a placeholder value (e.g. just "npc_creations"), the function will
-    retry up to max_retries times, then fall back to the original values.
+    If GPT returns its output in a function call payload, this function checks both:
+      - A top-level JSON object with keys "likes", "dislikes", and "hobbies"
+      - OR a JSON object with a key "npc_creations" (a list) whose first element has those keys.
+    Retries up to max_retries times and falls back to the original values if unsuccessful.
     """
     original_values = {
         "likes": npc_data.get("likes", []),
@@ -31,90 +29,59 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
         "Dislikes: {dislikes}\n"
         "Hobbies: {hobbies}\n\n"
         "Adapt these preferences so that they are specifically tailored to an environment dominated by powerful females. "
-        "Return only a JSON object with one key: 'npc_creations'. This key should map to an array containing exactly one object that has the following keys:\n"
+        "Return only a JSON object with one key: 'npc_creations'. This key should map to an array containing exactly one object "
+        "that has the following keys:\n"
         "  - 'likes': an array of strings representing the adjusted likes,\n"
         "  - 'dislikes': an array of strings representing the adjusted dislikes, and\n"
         "  - 'hobbies': an array of strings representing the adjusted hobbies.\n"
-        "Do not include any additional text or markdown formatting. "
-        "Do not include anything within parenthesis."
-        "Ensure the likes, dislikes, and hobbies make sense within the environment."
+        "Do not include any extra text, markdown formatting, or anything else."
     ).format(
         environment_desc=environment_desc,
         likes=likes,
         dislikes=dislikes,
         hobbies=hobbies
     )
-
+    
     logging.info("Adjusting NPC preferences with prompt: %s", prompt)
-
+    
     max_retries = 3
     retry_count = 0
     while retry_count < max_retries:
         reply = await spaced_gpt_call(conversation_id, environment_desc, prompt)
-        # Process the GPT response:
+        logging.debug("Raw GPT reply: %s", reply)
+        
+        # Check for function call responses first.
         if reply.get("type") == "function_call":
-            args = reply.get("function_args", {})
-            if "npc_creations" in args:
-                updates = args["npc_creations"]
-
-                # If updates is a string, process it:
-                if isinstance(updates, str):
-                    stripped_updates = updates.strip()
-                    logging.debug("Stripped npc_creations value: %r", stripped_updates)
-                    # Remove any surrounding quotes before comparing
-                    cleaned = stripped_updates.strip('"').lower()
-                    if cleaned == "npc_creations":
-                        logging.error("Received placeholder output for npc_creations: %r", stripped_updates)
-                        retry_count += 1
-                        continue
-                    try:
-                        updates = json.loads(stripped_updates)
-                    except Exception as e:
-                        logging.error("Failed to parse npc_creations string as JSON: %s", e)
-                        retry_count += 1
-                        continue
-
-                # Now expect updates to be a list.
-                if isinstance(updates, list) and updates:
-                    update_obj = updates[0]
-                    if isinstance(update_obj, str):
-                        stripped_obj = update_obj.strip()
-                        logging.debug("Stripped update object: %r", stripped_obj)
-                        cleaned_obj = stripped_obj.strip('"').lower()
-                        if cleaned_obj == "npc_creations":
-                            logging.error("Received placeholder text in update object: %r", stripped_obj)
-                            retry_count += 1
-                            continue
-                        if not stripped_obj.startswith("{"):
-                            logging.error("Update object string does not look like a JSON object: %r", stripped_obj)
-                            retry_count += 1
-                            continue
-                        try:
-                            update_obj = json.loads(stripped_obj)
-                        except Exception as e:
-                            logging.error("JSON parsing failed for update_obj: %s", e)
-                            retry_count += 1
-                            continue
-                    # Verify that all expected keys exist.
-                    if all(k in update_obj for k in ["likes", "dislikes", "hobbies"]):
-                        logging.info("Successfully extracted updated preferences on retry %d", retry_count)
+            func_args = reply.get("function_args", {})
+            # First try to see if keys are present at the top level.
+            if all(k in func_args for k in ["likes", "dislikes", "hobbies"]):
+                logging.info("Successfully extracted updated preferences (direct) on retry %d", retry_count)
+                return {
+                    "likes": func_args["likes"],
+                    "dislikes": func_args["dislikes"],
+                    "hobbies": func_args["hobbies"]
+                }
+            # Otherwise, check if a key "npc_creations" exists.
+            elif "npc_creations" in func_args:
+                updates = func_args["npc_creations"]
+                if isinstance(updates, list) and len(updates) > 0:
+                    first_update = updates[0]
+                    if all(k in first_update for k in ["likes", "dislikes", "hobbies"]):
+                        logging.info("Extracted preferences from 'npc_creations' on retry %d", retry_count)
                         return {
-                            "likes": update_obj["likes"],
-                            "dislikes": update_obj["dislikes"],
-                            "hobbies": update_obj["hobbies"]
+                            "likes": first_update["likes"],
+                            "dislikes": first_update["dislikes"],
+                            "hobbies": first_update["hobbies"]
                         }
                     else:
-                        logging.warning("Expected keys not found in npc_creations update; retrying.")
-                        retry_count += 1
-                        continue
+                        missing_keys = [k for k in ["likes", "dislikes", "hobbies"] if k not in first_update]
+                        logging.warning("Missing keys in 'npc_creations': %s", missing_keys)
                 else:
-                    logging.warning("npc_creations update is empty or not a list; retrying.")
-                    retry_count += 1
-                    continue
+                    logging.warning("'npc_creations' update is empty or not a list; retrying.")
             else:
-                logging.warning("GPT function call did not include 'npc_creations'; retrying.")
-                retry_count += 1
-                continue
+                logging.warning("GPT function call did not include expected keys. Received: %s", func_args)
+        
+        # Otherwise, check for a plain text response.
         elif reply.get("response"):
             try:
                 response_text = reply["response"].strip()
@@ -125,22 +92,34 @@ async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
                     if lines and lines[-1].startswith("```"):
                         lines = lines[:-1]
                     response_text = "\n".join(lines).strip()
-                logging.debug("Raw GPT response text: %r", response_text)
                 data = json.loads(response_text)
                 if all(k in data for k in ["likes", "dislikes", "hobbies"]):
                     logging.info("Successfully extracted updated preferences from response on retry %d", retry_count)
                     return data
+                elif "npc_creations" in data:
+                    updates = data["npc_creations"]
+                    if isinstance(updates, list) and len(updates) > 0:
+                        first_update = updates[0]
+                        if all(k in first_update for k in ["likes", "dislikes", "hobbies"]):
+                            logging.info("Extracted preferences from 'npc_creations' in response on retry %d", retry_count)
+                            return {
+                                "likes": first_update["likes"],
+                                "dislikes": first_update["dislikes"],
+                                "hobbies": first_update["hobbies"]
+                            }
+                        else:
+                            missing_keys = [k for k in ["likes", "dislikes", "hobbies"] if k not in first_update]
+                            logging.warning("Missing keys in 'npc_creations' from response: %s", missing_keys)
+                    else:
+                        logging.warning("Response JSON 'npc_creations' is empty or not a list; retrying.")
                 else:
-                    logging.warning("Response JSON does not contain expected keys; retrying.")
-                    retry_count += 1
-                    continue
+                    logging.warning("Response JSON does not contain expected keys; full response: %s", data)
             except Exception as e:
-                logging.error("Error parsing JSON from response: %s", e)
-                retry_count += 1
-                continue
+                logging.error("Error parsing JSON from response: %s", e, exc_info=True)
         else:
             logging.warning("GPT did not return a valid response; retrying.")
-            retry_count += 1
+        
+        retry_count += 1
 
     logging.error("Max retries reached; using original preferences instead.")
     return original_values
