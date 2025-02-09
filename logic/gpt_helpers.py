@@ -3,34 +3,36 @@ import json
 import logging
 from logic.gpt_utils import spaced_gpt_call  # Import from the separate GPT utils module
 
-async def adjust_npc_complete(npc_data, environment_desc, conversation_id):
+async def adjust_npc_complete(npc_data, environment_desc, conversation_id, immersive_days=None):
     """
     Adapt NPC details by combining preferences adjustments and schedule/affiliation generation
     into one GPT call. Tailor all details to an environment dominated by powerful females.
-    
+
     Expects the following keys to be returned in a JSON object:
       - "likes": an array of strings (adjusted likes)
       - "dislikes": an array of strings (adjusted dislikes)
       - "hobbies": an array of strings (adjusted hobbies)
       - "affiliations": an array of strings (adjusted affiliations)
-      - "schedule": an object representing a weekly schedule using immersive day names
-                    (each day should have "Morning", "Afternoon", "Evening", and "Night" keys)
-    
-    The prompt includes:
-      - Archetype Summary
-      - Environment description
-      - Original likes, dislikes, and hobbies
-      - A list of immersive day names to be used in the schedule
+      - "schedule": an object representing a weekly schedule using the immersive day names,
+                    where each day (e.g., "Alpha", "Beta", etc.) has nested keys for "Morning",
+                    "Afternoon", "Evening", and "Night".
+
+    Parameters:
+      npc_data: A dict containing the NPC's current details (preferences, archetype summary, etc.)
+      environment_desc: A string describing the environment.
+      conversation_id: The conversation context id for the GPT call.
+      immersive_days: A list of immersive day names to use in the schedule. If None, a fallback list is used.
     """
-    # Define immersive day names.
-    immersive_days = ["Sol", "Luna", "Terra", "Vesta", "Mercury", "Venus", "Mars"]
-    
+    # Use the actual immersive day names if provided; otherwise, fall back.
+    if immersive_days is None:
+        immersive_days = ["Sol", "Luna", "Terra", "Vesta", "Mercury", "Venus", "Mars"]
+
     # Retrieve NPC details.
     archetype_summary = npc_data.get("archetype_summary", "")
     likes = npc_data.get("likes", [])
     dislikes = npc_data.get("dislikes", [])
     hobbies = npc_data.get("hobbies", [])
-    
+
     # Build the combined prompt.
     prompt = (
         "Given the following NPC information:\n"
@@ -42,7 +44,7 @@ async def adjust_npc_complete(npc_data, environment_desc, conversation_id):
         "Hobbies: {hobbies}\n\n"
         "Instructions:\n"
         "1. Adapt the above preferences so that they are specifically tailored to an environment dominated by powerful females.\n"
-        "2. Determine the NPC's affiliations (teams, clubs, partnerships, associations, etc.) that are appropriate within this environment.\n"
+        "2. Determine the NPC's affiliations (teams, clubs, partnerships, associations, etc.) that fit within this environment.\n"
         "3. Create a detailed weekly schedule. The schedule must use the following immersive day names: {immersive_days}. "
         "For each day, include nested keys 'Morning', 'Afternoon', 'Evening', and 'Night' representing the NPC's activities.\n\n"
         "Return only a JSON object with exactly the following five keys (and no additional keys or text):\n"
@@ -59,9 +61,9 @@ async def adjust_npc_complete(npc_data, environment_desc, conversation_id):
         hobbies=hobbies,
         immersive_days=", ".join(immersive_days)
     )
-    
+
     logging.info("Adjusting complete NPC details with prompt: %s", prompt)
-    
+
     max_retries = 3
     retry_count = 0
     while retry_count < max_retries:
@@ -109,7 +111,7 @@ async def adjust_npc_complete(npc_data, environment_desc, conversation_id):
         else:
             logging.warning("GPT did not return a valid response; retrying.")
             retry_count += 1
-    
+
     logging.error("Max retries reached; returning original values.")
     return {
         "likes": likes,
