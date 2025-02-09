@@ -955,21 +955,41 @@ async def async_process_new_game(user_id, conversation_data):
         logging.info("Generating MainQuest with prompt: %s", main_quest_prompt)
         main_quest_reply = await spaced_gpt_call(conversation_id, environment_desc, main_quest_prompt)
         
-        # Extract the GPT output for the quest.
         if main_quest_reply.get("response"):
             main_quest_text = main_quest_reply["response"].strip()
-        elif (main_quest_reply.get("type") == "function_call" and
-              main_quest_reply.get("function_args", {}).get("MainQuest")):
-            main_quest_text = main_quest_reply["function_args"]["MainQuest"].strip()
-        else:
-            # Try to fall back from an already stored quest, if any.
-            stored_main_quest = await get_stored_value(conn, user_id, conversation_id, "MainQuest")
-            if stored_main_quest:
-                main_quest_text = stored_main_quest
+        elif main_quest_reply.get("type") == "function_call":
+            func_args = main_quest_reply.get("function_args", {})
+            
+            # Remove markdown code fences if present (optional—apply similar logic as before)
+            # (Assume this was done before, so func_args is already a proper dict)
+            
+            # Get values from both keys, if they exist
+            main_quest_value = func_args.get("MainQuest", "").strip() if "MainQuest" in func_args else ""
+            quest_updates_value = func_args.get("quest_updates")
+            
+            # If quest_updates is a non-empty list, extract the quest name from the first update
+            quest_from_updates = ""
+            if isinstance(quest_updates_value, list) and len(quest_updates_value) > 0:
+                quest_from_updates = quest_updates_value[0].get("quest_name", "").strip()
+            
+            # Now decide which one to use or combine them:
+            if main_quest_value and quest_from_updates:
+                # For example, if the main quest value is very short (say, less than 10 characters), use the quest_updates value;
+                # otherwise, combine them (or choose one—here we combine them with a space)
+                if len(main_quest_value) < 10:
+                    main_quest_text = quest_from_updates
+                else:
+                    main_quest_text = main_quest_value + " " + quest_from_updates
+            elif main_quest_value:
+                main_quest_text = main_quest_value
+            elif quest_from_updates:
+                main_quest_text = quest_from_updates
             else:
-                logging.warning("GPT returned no MainQuest text and none stored; using fallback.")
-                main_quest_text = "Embark on a mysterious quest that challenges everything Chase thought he knew."
-        
+                main_quest_text = ""
+        else:
+            logging.warning("GPT returned no MainQuest text and none stored; using fallback.")
+            main_quest_text = "Embark on a mysterious quest that challenges everything Chase thought he knew."
+
         logging.info("Generated MainQuest: %s", main_quest_text)
         
         # Instead of inserting into CurrentRoleplay, insert the quest into the Quests table.
