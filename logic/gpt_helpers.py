@@ -155,14 +155,21 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
     """
     Using an NPC's archetype summary along with their likes, dislikes, and hobbies,
     query GPT to generate a JSON object containing both the NPC's affiliations (e.g., teams, clubs, partnerships, associations, etc.)
-    and a detailed weekly schedule. The schedule should have keys for each day (Monday through Sunday),
+    and a detailed weekly schedule. The schedule should have keys for each day of the week (using your immersive day names),
     with nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'.
     """
+    # Option 1: Try to retrieve the immersive day names from your stored CalendarNames.
+    # (If you have an async helper for that, use it. Otherwise, use a fallback.)
+    # For this example, we'll use a fallback array:
+    immersive_days = ["Sol", "Luna", "Terra", "Vesta", "Mercury", "Venus", "Mars"]
+    # (You could replace the above with a call to an async function that retrieves the stored value from CurrentRoleplay.)
+
     archetype_summary = npc_data.get("archetype_summary", "")
     likes = npc_data.get("likes", [])
     dislikes = npc_data.get("dislikes", [])
     hobbies = npc_data.get("hobbies", [])
     
+    # Build the prompt and inject the immersive day names into it.
     prompt = (
         "Given the following NPC information:\n"
         "Archetype Summary: {archetype_summary}\n"
@@ -171,16 +178,17 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
         "Dislikes: {dislikes}\n"
         "Hobbies: {hobbies}\n\n"
         "Determine the NPC's affiliations (teams, clubs, partnerships, associations, etc.) and create a detailed weekly schedule. "
-        "The schedule should be formatted as a JSON object with keys for each day of the week (Monday to Sunday), "
-        "and for each day include nested keys 'Morning', 'Afternoon', 'Evening', and 'Night'. "
-        "Return only a JSON object with two keys: 'affiliations' (an array) and 'schedule' (the weekly schedule)."
+        "The schedule must use the following immersive day names for the week: {immersive_days}. "
+        "For each day, include nested keys 'Morning', 'Afternoon', 'Evening', and 'Night' representing the NPC's activities. "
+        "Return only a JSON object with two keys: 'affiliations' (an array) and 'schedule' (the weekly schedule). "
         "Ensure the affiliations and schedule make sense within the environment."
     ).format(
         archetype_summary=archetype_summary,
         environment_desc=environment_desc,
         likes=likes,
         dislikes=dislikes,
-        hobbies=hobbies
+        hobbies=hobbies,
+        immersive_days=", ".join(immersive_days)
     )
     
     logging.info("Generating NPC affiliations and schedule with prompt: %s", prompt)
