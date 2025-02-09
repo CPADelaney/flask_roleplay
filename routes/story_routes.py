@@ -245,12 +245,13 @@ def fetch_location_details(user_id, conversation_id, location_id=None, location_
 def fetch_event_details(user_id, conversation_id, event_id):
     """
     Retrieve an event's info by event_id from the Events table.
+    Now also returns the in-game date information.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
     
     cursor.execute("""
-        SELECT event_name, description, start_time, end_time, location
+        SELECT event_name, description, start_time, end_time, location, year, month, day, time_of_day
         FROM Events
         WHERE user_id=%s
           AND conversation_id=%s
@@ -264,14 +265,18 @@ def fetch_event_details(user_id, conversation_id, event_id):
         conn.close()
         return {"error": f"No event found with id={event_id}"}
     
-    (ename, edesc, stime, etime, eloc) = row
+    (ename, edesc, stime, etime, eloc, eyear, emonth, eday, etod) = row
     event_data = {
         "event_id": event_id,
         "event_name": ename,
         "description": edesc,
         "start_time": stime,
         "end_time": etime,
-        "location": eloc
+        "location": eloc,
+        "year": eyear,
+        "month": emonth,
+        "day": eday,
+        "time_of_day": etod
     }
     
     cursor.close()
@@ -502,7 +507,6 @@ def next_storybeat():
         # 4) Possibly apply universal updates if provided in the request
         universal_data = data.get("universal_update", {})
         if universal_data:
-            from logic.universal_updater import apply_universal_updates
             universal_data["user_id"] = user_id
             universal_data["conversation_id"] = conv_id
             update_result = apply_universal_updates(universal_data)
@@ -512,12 +516,13 @@ def next_storybeat():
                 return jsonify(update_result), 500
 
         # 5) Possibly advance time and get aggregator context
-        from logic.time_cycle import advance_time_and_update
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
         if data.get("advance_time", False):
-            new_day, new_phase = advance_time_and_update(user_id, conv_id, increment=1)
+            new_year, new_month, new_day, new_phase = advance_time_and_update(user_id, conv_id, increment=1)
             aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
         else:
+            new_year = aggregator_data.get("year", 1)
+            new_month = aggregator_data.get("month", 1)
             new_day = aggregator_data.get("day", 1)
             new_phase = aggregator_data.get("timeOfDay", "Morning")
 
@@ -711,7 +716,9 @@ def next_storybeat():
             "story_output": final_text,
             "messages": conversation_history,
             "updates": {
-                "current_day": new_day,
+                "year": new_year,
+                "month": new_month,
+                "day": new_day,
                 "time_of_day": new_phase
             }
         }), 200
@@ -865,22 +872,15 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
     If rule_knowledge is provided, appends advanced rule data as well.
     """
     lines = []
+    # Update header to include full date info.
+    year = aggregator_data.get("year", 1)
+    month = aggregator_data.get("month", 1)
     day = aggregator_data.get("day", 1)
     tod = aggregator_data.get("timeOfDay", "Morning")
-    player_stats = aggregator_data.get("playerStats", {})
-    npc_stats = aggregator_data.get("npcStats", [])
-    current_rp = aggregator_data.get("currentRoleplay", {})
-    social_links = aggregator_data.get("socialLinks", [])
-    player_perks = aggregator_data.get("playerPerks", [])
-    inventory = aggregator_data.get("inventory", [])
-    events_list = aggregator_data.get("events", [])
-    planned_events_list = aggregator_data.get("plannedEvents", [])
-    game_rules_list = aggregator_data.get("gameRules", [])
-    quests_list = aggregator_data.get("quests", [])
-    stat_definitions_list = aggregator_data.get("statDefinitions", [])
-
-    lines.append(f"=== DAY {day}, {tod.upper()} ===")
+    lines.append(f"=== YEAR {year}, MONTH {month}, DAY {day}, {tod.upper()} ===")
+    
     lines.append("\n=== PLAYER STATS ===")
+    player_stats = aggregator_data.get("playerStats", {})
     if player_stats:
         lines.append(
             f"Name: {player_stats.get('name','Unknown')}, "
@@ -897,6 +897,7 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
         lines.append("No player stats found.")
 
     lines.append("\n=== NPC STATS ===")
+    npc_stats = aggregator_data.get("npcStats", [])
     introduced_npcs = [npc for npc in npc_stats if npc.get("introduced") is True]
     if introduced_npcs:
         for npc in introduced_npcs:
@@ -904,7 +905,7 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
                 f"NPC: {npc.get('npc_name','Unnamed')} "
                 f"| Sex={npc.get('sex','Unknown')} "
                 f"| Archetypes={npc.get('archetype_summary',[])} "
-                f"| Archetypes={npc.get('archetype_extras_summary',[])} "
+                f"| Extras={npc.get('archetype_extras_summary',[])} "
                 f"| Dom={npc.get('dominance',0)}, Cru={npc.get('cruelty',0)}, "
                 f"Close={npc.get('closeness',0)}, Trust={npc.get('trust',0)}, "
                 f"Respect={npc.get('respect',0)}, Int={npc.get('intensity',0)}"
@@ -945,6 +946,7 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
         lines.append("(No NPCs found)")
 
     lines.append("\n=== CURRENT ROLEPLAY ===")
+    current_rp = aggregator_data.get("currentRoleplay", {})
     if current_rp:
         for k, v in current_rp.items():
             lines.append(f"{k}: {v}")
@@ -958,6 +960,7 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
         lines.append("NPCs can adopt, combine, or ignore these ideas.\n")
 
     lines.append("\n=== SOCIAL LINKS ===")
+    social_links = aggregator_data.get("socialLinks", [])
     if social_links:
         for link in social_links:
             lines.append(
@@ -972,6 +975,7 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
         lines.append("(No social links found)")
 
     lines.append("\n=== PLAYER PERKS ===")
+    player_perks = aggregator_data.get("playerPerks", [])
     if player_perks:
         for perk in player_perks:
             lines.append(
@@ -981,6 +985,7 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
         lines.append("(No perks found)")
 
     lines.append("\n=== INVENTORY ===")
+    inventory = aggregator_data.get("inventory", [])
     if inventory:
         for item in inventory:
             lines.append(
@@ -992,26 +997,28 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
         lines.append("(No inventory items found)")
 
     lines.append("\n=== EVENTS ===")
+    events_list = aggregator_data.get("events", [])
     if events_list:
         for ev in events_list:
             lines.append(
-                f"Event #{ev['event_id']}: {ev['event_name']} @ {ev['location']}, "
+                f"Event #{ev['event_id']}: {ev['event_name']} on {ev.get('year',1)}/{ev.get('month',1)}/{ev.get('day',1)} {ev.get('time_of_day','Morning')} @ {ev['location']}, "
                 f"{ev['start_time']}-{ev['end_time']} | {ev['description']}"
             )
     else:
         lines.append("(No events found)")
 
     lines.append("\n=== PLANNED EVENTS ===")
+    planned_events_list = aggregator_data.get("plannedEvents", [])
     if planned_events_list:
         for pev in planned_events_list:
             lines.append(
-                f"PlannedEvent #{pev['event_id']}: NPC {pev['npc_id']} on Day {pev['day']} {pev['time_of_day']} "
-                f"@ {pev['override_location']}"
+                f"PlannedEvent #{pev['event_id']}: NPC {pev['npc_id']} on {pev.get('year',1)}/{pev.get('month',1)}/{pev['day']} {pev['time_of_day']} @ {pev['override_location']}"
             )
     else:
         lines.append("(No planned events found)")
 
     lines.append("\n=== QUESTS ===")
+    quests_list = aggregator_data.get("quests", [])
     if quests_list:
         for q in quests_list:
             lines.append(
@@ -1022,6 +1029,7 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
         lines.append("(No quests found)")
 
     lines.append("\n=== GAME RULES ===")
+    game_rules_list = aggregator_data.get("gameRules", [])
     if game_rules_list:
         for gr in game_rules_list:
             lines.append(
@@ -1031,6 +1039,7 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
         lines.append("(No game rules found)")
 
     lines.append("\n=== STAT DEFINITIONS ===")
+    stat_definitions_list = aggregator_data.get("statDefinitions", [])
     if stat_definitions_list:
         for sd in stat_definitions_list:
             lines.append(
