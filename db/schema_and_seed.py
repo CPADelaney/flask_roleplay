@@ -80,7 +80,7 @@ def create_all_tables():
         );
     ''')
 
-    # 6) CurrentRoleplay (with user_id, conversation_id so each user+conversation can store distinct keys)
+    # 6) CurrentRoleplay (each user+conversation can store distinct keys)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS CurrentRoleplay (
             user_id INTEGER NOT NULL,
@@ -165,7 +165,7 @@ def create_all_tables():
             archetypes JSONB,
             archetype_summary TEXT,
             archetype_extras_summary TEXT,
-            physical_description TEXT,       -- NEW: robust physical description
+            physical_description TEXT,
             relationships JSONB,
             dominance INT CHECK (dominance BETWEEN 0 AND 100),
             cruelty INT CHECK (cruelty BETWEEN 0 AND 100),
@@ -265,7 +265,7 @@ def create_all_tables():
         );
     ''')
 
-    # 15) Events
+    # 15) Events (updated to include full in-game date/time)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Events (
             id SERIAL PRIMARY KEY,
@@ -276,6 +276,10 @@ def create_all_tables():
             start_time TEXT NOT NULL,
             end_time TEXT NOT NULL,
             location TEXT NOT NULL,
+            year INT DEFAULT 1,
+            month INT DEFAULT 1,
+            day INT DEFAULT 1,
+            time_of_day TEXT DEFAULT 'Morning',
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
@@ -297,17 +301,19 @@ def create_all_tables():
         );
     ''')
 
-    # 17) PlannedEvents
+    # 17) PlannedEvents (updated to include full in-game date/time)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlannedEvents (
           event_id SERIAL PRIMARY KEY,
           user_id INTEGER NOT NULL,
           conversation_id INTEGER NOT NULL,
           npc_id INT REFERENCES NPCStats(npc_id),
+          year INT DEFAULT 1,
+          month INT DEFAULT 1,
           day INT NOT NULL,
           time_of_day TEXT NOT NULL,
           override_location TEXT NOT NULL,
-          UNIQUE(npc_id, day, time_of_day),
+          UNIQUE(npc_id, year, month, day, time_of_day),
           FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
           FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
