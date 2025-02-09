@@ -154,18 +154,14 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
     and a detailed weekly schedule. The schedule should have keys for each day of the week (using your immersive day names),
     with nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'.
     """
-    # Option 1: Try to retrieve the immersive day names from your stored CalendarNames.
-    # (If you have an async helper for that, use it. Otherwise, use a fallback.)
-    # For this example, we'll use a fallback array:
+    # For this example, we use a fallback array for immersive day names.
     immersive_days = ["Sol", "Luna", "Terra", "Vesta", "Mercury", "Venus", "Mars"]
-    # (You could replace the above with a call to an async function that retrieves the stored value from CurrentRoleplay.)
 
     archetype_summary = npc_data.get("archetype_summary", "")
     likes = npc_data.get("likes", [])
     dislikes = npc_data.get("dislikes", [])
     hobbies = npc_data.get("hobbies", [])
-    
-    # Build the prompt and inject the immersive day names into it.
+
     prompt = (
         "Given the following NPC information:\n"
         "Archetype Summary: {archetype_summary}\n"
@@ -186,20 +182,23 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
         hobbies=hobbies,
         immersive_days=", ".join(immersive_days)
     )
-    
+
     logging.info("Generating NPC affiliations and schedule with prompt: %s", prompt)
     reply = await spaced_gpt_call(conversation_id, environment_desc, prompt)
-    
-    # First check for a direct response.
+
+    # Log the raw GPT reply for troubleshooting
+    logging.debug("Raw GPT reply: %s", reply)
+
+    # Determine if we got a plain response or a function call response.
     if reply.get("response"):
         affiliations_schedule_text = reply["response"].strip()
-    # Then check if it's a function call.
     elif reply.get("type") == "function_call":
         args = reply.get("function_args", {})
+        # Try first the "affiliations_schedule" key…
         if "affiliations_schedule" in args:
             affiliations_schedule_text = args["affiliations_schedule"].strip()
+        # …or else try "npc_updates"
         elif "npc_updates" in args:
-            # Assume GPT returned a list of npc_updates; use the first one.
             updates = args.get("npc_updates")
             if isinstance(updates, list) and len(updates) > 0:
                 first_update = updates[0]
@@ -218,8 +217,8 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
     else:
         logging.warning("GPT did not return affiliations and schedule; using default empty values.")
         return {"affiliations": [], "schedule": {}}
-    
-    # Remove markdown code fences if present.
+
+    # Strip markdown code fences if present.
     if affiliations_schedule_text.startswith("```"):
         lines = affiliations_schedule_text.splitlines()
         if lines and lines[0].startswith("```"):
@@ -227,11 +226,20 @@ async def generate_npc_affiliations_and_schedule(npc_data, environment_desc, con
         if lines and lines[-1].startswith("```"):
             lines = lines[:-1]
         affiliations_schedule_text = "\n".join(lines).strip()
-    
+
+    # Log the processed raw text before parsing JSON.
+    logging.debug("Processed GPT output for affiliations and schedule: %s", affiliations_schedule_text)
+
+    # Try parsing the JSON and log a detailed error if it fails.
     try:
         result = json.loads(affiliations_schedule_text)
     except Exception as e:
-        logging.error("Error parsing affiliations and schedule: %s", e)
+        logging.error("Error parsing affiliations and schedule JSON: %s. Raw text: %s", e, affiliations_schedule_text, exc_info=True)
         result = {"affiliations": [], "schedule": {}}
-    
+
+    # Validate the result schema.
+    if not (isinstance(result, dict) and "affiliations" in result and "schedule" in result):
+        logging.error("Parsed result does not match expected schema: %s", result)
+        result = {"affiliations": [], "schedule": {}}
+
     return result
