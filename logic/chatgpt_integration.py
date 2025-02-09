@@ -2,6 +2,8 @@
 import os
 import json
 import logging
+import functools
+import time
 import openai
 from db.connection import get_db_connection
 from logic.prompts import SYSTEM_PROMPT
@@ -592,6 +594,26 @@ def build_message_history(conversation_id: int, aggregator_text: str, user_input
     messages.append({"role": "user", "content": user_input})
     return messages
 
+def retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.error.RateLimitError,)):
+    """
+    Decorator that retries a function call with exponential backoff when one of the specified exceptions is raised.
+    """
+    def decorator_retry(func):
+        @functools.wraps(func)
+        def wrapper_retry(*args, **kwargs):
+            delay = initial_delay
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    logging.warning(f"Rate limit hit on attempt {attempt+1}/{max_retries}: {e}. Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                    delay *= backoff_factor
+            raise Exception("Max retries exceeded")
+        return wrapper_retry
+    return decorator_retry
+
+@retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.error.RateLimitError,))
 def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input: str) -> dict:
     client = get_openai_client()
 
@@ -617,7 +639,7 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
         fn_name = msg.function_call.name
         fn_args_str = msg.function_call.arguments or "{}"
 
-        # Add logging to capture the raw function call arguments
+        # Log raw arguments for debugging
         logging.debug("Raw function call arguments: %s", fn_args_str)
 
         # Optionally, remove markdown code fences if present
