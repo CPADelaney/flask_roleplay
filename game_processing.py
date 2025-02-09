@@ -319,6 +319,7 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
             WHERE npc_id=$2 AND user_id=$3 AND conversation_id=$4
         """, shared_memory_text, npc_id, user_id, conversation_id)
         logging.info("Appended shared memory to NPC %s", npc_id)
+
     
     # 7) npc_introductions
     npc_intros = update_data.get("npc_introductions", [])
