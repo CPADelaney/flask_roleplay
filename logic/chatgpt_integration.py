@@ -7,7 +7,7 @@ import time
 import openai
 from db.connection import get_db_connection
 from logic.prompts import SYSTEM_PROMPT
-from logic.gpt_utils import safe_json_loads
+from logic.json_helpers import safe_json_loads
 
 UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
     "name": "apply_universal_update",
