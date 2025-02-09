@@ -115,14 +115,13 @@ def generate_mega_setting_logic():
     mega_name = " + ".join(picked_names)
 
     fusion_prompt = (
-        "You are a creative writer tasked with creating a single, immersive world description that blends together a variety of environment elements. "
-        "Do not list or name each element separately. Instead, incorporate all of the following details into one cohesive narrative that reads as if it were describing one unified setting. "
-        "Focus on the overall atmosphere, mood, and aesthetic, ensuring that the final description feels like a single, organically integrated environment. "
-        "Eg., if you have "circus" and "golden age of piracy," the circus can be a boat of performers, an island with a circus, or even a circus run by pirates. Get creative!"
-        "Your output should be a single paragraph of 3-5 sentences without bullet points, numbering, or obvious transitions between separate settings.\n\n"
-        "Below are the details from the selected settings:\n"
+        'You are a creative writer tasked with creating a single, immersive world description that blends together a variety of environment elements. '
+        'Do not list or name each element separately. Instead, incorporate all of the following details into one cohesive narrative that reads as if it were describing one unified setting. '
+        'Focus on the overall atmosphere, mood, and aesthetic, ensuring that the final description feels like a single, organically integrated environment. '
+        'Eg., if you have "circus" and "golden age of piracy," the circus can be a boat of performers, an island with a circus, or even a circus run by pirates. Get creative! '
+        'Your output should be a single paragraph of 3-5 sentences without bullet points, numbering, or obvious transitions between separate settings.\n\n'
+        'Below are the details from the selected settings:\n'
     )
-    
     # For each selected setting, format its details on one line (but the instruction is to blend them)
     for s in selected:
         ef = ", ".join(s["enhanced_features"]) if s["enhanced_features"] else "None"
