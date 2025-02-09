@@ -635,7 +635,6 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
     # Build the conversation history as a list of message dicts
     messages = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
 
-    # Pass the messages along with functions and function_call parameters
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=messages,
@@ -649,15 +648,12 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
     msg = response.choices[0].message
     tokens_used = response.usage.total_tokens
 
-    # Check if GPT called the function
     if msg.function_call is not None:
         fn_name = msg.function_call.name
         fn_args_str = msg.function_call.arguments or "{}"
-
-        # Log raw arguments for debugging
         logging.debug("Raw function call arguments: %s", fn_args_str)
 
-        # Optionally, remove markdown code fences if present
+        # Remove markdown code fences if present.
         if fn_args_str.startswith("```"):
             lines = fn_args_str.splitlines()
             if lines and lines[0].startswith("```"):
@@ -667,14 +663,21 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
             fn_args_str = "\n".join(lines).strip()
             logging.debug("Function call arguments after stripping code fences: %s", fn_args_str)
 
-        # Ensure the string is not empty
+        # Ensure the string is not empty.
         if not fn_args_str.strip():
             fn_args_str = "{}"
+
+        # If the string doesn't end with a closing brace, try to fix it.
+        if not fn_args_str.endswith("}"):
+            last_brace_index = fn_args_str.rfind("}")
+            if last_brace_index != -1:
+                logging.warning("Function call arguments appear truncated. Truncating string at index %s", last_brace_index)
+                fn_args_str = fn_args_str[:last_brace_index+1]
 
         try:
             parsed_args = json.loads(fn_args_str)
         except Exception as e:
-            logging.exception("Error parsing function call arguments: %s", e)
+            logging.exception("Error parsing function call arguments: %s. Raw arguments: %s", e, fn_args_str)
             parsed_args = {}
 
         return {
@@ -685,7 +688,6 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
             "tokens_used": tokens_used
         }
     else:
-        # Return a normal text response
         return {
             "type": "text",
             "function_name": None,
