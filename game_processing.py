@@ -1116,17 +1116,16 @@ async def async_process_new_game(user_id, conversation_data):
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, json.dumps(chase_schedule))
 
-        # Step 16.5: Final NPC Adjustments via GPT.
-        logging.info("Performing final adjustments on NPCs using GPT helper functions for conversation_id=%s", conversation_id)
+        # Step 16.5: Final NPC Adjustments via Combined GPT Call.
+        logging.info("Performing final adjustments on NPCs using a combined GPT call for conversation_id=%s", conversation_id)
         npc_rows = await conn.fetch("""
             SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes, archetype_summary
             FROM NPCStats
             WHERE user_id=$1 AND conversation_id=$2
         """, user_id, conversation_id)
         
-        # Define what keys we expect from each GPT call.
-        expected_pref_keys = {"likes", "dislikes", "hobbies"}
-        expected_aff_keys = {"affiliations", "schedule"}
+        # Define the actual immersive day names provided by your environment.
+        actual_immersive_days = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Theta"]
         
         for npc_row in npc_rows:
             npc_id = npc_row["npc_id"]
@@ -1142,35 +1141,21 @@ async def async_process_new_game(user_id, conversation_data):
                 "archetype_summary": npc_row.get("archetype_summary", "")
             }
             
-            # Call the helper to adjust preferences.
             try:
-                adjusted_preferences = await call_gpt_with_retry(
-                    func=adjust_npc_preferences,
-                    expected_keys=expected_pref_keys,
+                complete_npc = await call_gpt_with_retry(
+                    func=adjust_npc_complete,
+                    expected_keys={"likes", "dislikes", "hobbies", "affiliations", "schedule"},
                     npc_data=npc_data,
                     environment_desc=environment_desc,
-                    conversation_id=conversation_id
+                    conversation_id=conversation_id,
+                    immersive_days=actual_immersive_days
                 )
             except Exception as e:
-                logging.error("Error adjusting preferences for NPC %s after retries: %s", npc_id, e)
-                adjusted_preferences = {
+                logging.error("Error adjusting complete NPC details for NPC %s after retries: %s", npc_id, e)
+                complete_npc = {
                     "likes": npc_data.get("likes", []),
                     "dislikes": npc_data.get("dislikes", []),
-                    "hobbies": npc_data.get("hobbies", [])
-                }
-            
-            # Call the helper to generate affiliations and schedule.
-            try:
-                affiliation_schedule = await call_gpt_with_retry(
-                    func=generate_npc_affiliations_and_schedule,
-                    expected_keys=expected_aff_keys,
-                    npc_data=npc_data,
-                    environment_desc=environment_desc,
-                    conversation_id=conversation_id
-                )
-            except Exception as e:
-                logging.error("Error generating affiliations/schedule for NPC %s after retries: %s", npc_id, e)
-                affiliation_schedule = {
+                    "hobbies": npc_data.get("hobbies", []),
                     "affiliations": npc_data.get("affiliations", []),
                     "schedule": npc_data.get("schedule", {})
                 }
@@ -1185,14 +1170,13 @@ async def async_process_new_game(user_id, conversation_data):
                     schedule = $5
                 WHERE npc_id = $6 AND user_id = $7 AND conversation_id = $8
             """,
-            json.dumps(adjusted_preferences.get("likes", [])),
-            json.dumps(adjusted_preferences.get("dislikes", [])),
-            json.dumps(adjusted_preferences.get("hobbies", [])),
-            json.dumps(affiliation_schedule.get("affiliations", [])),
-            json.dumps(affiliation_schedule.get("schedule", {})),
-            npc_id, user_id, conversation_id)
-           
-  
+            json.dumps(complete_npc.get("likes", [])),
+            json.dumps(complete_npc.get("dislikes", [])),
+            json.dumps(complete_npc.get("hobbies", [])),
+            json.dumps(complete_npc.get("affiliations", [])),
+            json.dumps(complete_npc.get("schedule", {})),
+            npc_id, user_id, conversation_id)       
+          
         # Step 17: Build aggregated roleplay context.
         logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
         aggregator_data = await asyncio.to_thread(get_aggregated_roleplay_context, user_id, conversation_id, "Chase")
