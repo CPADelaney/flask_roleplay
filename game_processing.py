@@ -12,6 +12,7 @@ from logic.gpt_helpers import adjust_npc_preferences, generate_npc_affiliations_
 from routes.story_routes import build_aggregator_text
 from logic.gpt_utils import spaced_gpt_call
 from logic.npc_creation import assign_random_relationships
+from logic.calendar import update_calendar_names
 
 # Use your Railway DSN (update as needed)
 DB_DSN = "postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@monorail.proxy.rlwy.net:24727/railway"
@@ -560,13 +561,11 @@ async def async_process_new_game(user_id, conversation_data):
             await conn.execute(f"DELETE FROM {table} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
         logging.info("Cleared old game data for conversation_id=%s", conversation_id)
         
-        # Step 2: Dynamically generate environment components, a setting name, and a cohesive description.
+        # Step 2: Dynamically generate environment components, setting name, and a cohesive description.
         logging.info("Calling generate_mega_setting_logic for conversation_id=%s", conversation_id)
         mega_data = await asyncio.to_thread(generate_mega_setting_logic)
         logging.info("Mega data returned: %s", json.dumps(mega_data, indent=2))
-        # Use selected_settings if available; otherwise, try unique_environments.
         unique_envs = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
-        logging.info("Extracted environment components before fallback: %s", unique_envs)
         if not unique_envs or len(unique_envs) == 0:
             unique_envs = [
                 "A sprawling cyberpunk metropolis under siege by monstrous clans",
@@ -700,6 +699,12 @@ async def async_process_new_game(user_id, conversation_data):
         
         environment_desc = f"{base_environment_desc}\n\nHistory: {environment_history}"
         logging.info("Constructed environment description: %s", environment_desc)
+
+        # *** NEW STEP: Generate immersive calendar names ***
+        # Use the environment description to get thematic names for the year, months, and days.
+        from logic.calendar import update_calendar_names  # Ensure this is imported at the top
+        calendar_names = update_calendar_names(user_id, conversation_id, environment_desc)
+        logging.info("Generated calendar names: %s", calendar_names)
             
         # Step 4: Generate and store notable Events.
         events_prompt = (
@@ -976,23 +981,47 @@ async def async_process_new_game(user_id, conversation_data):
         """, user_id, conversation_id, main_quest_text)
 
        # Step 16: Generate and store ChaseSchedule.
+        calendar_names = json.loads(await get_stored_value(conn, user_id, conversation_id, "CalendarNames"))
+        immersive_days = calendar_names.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
+        
+        # First, try to retrieve the immersive calendar names from CurrentRoleplay.
+        cursor.execute("""
+            SELECT value 
+            FROM CurrentRoleplay 
+            WHERE user_id=%s AND conversation_id=%s AND key='CalendarNames'
+        """, (user_id, conv_id))
+        row = cursor.fetchone()
+        if row:
+            try:
+                calendar_names = json.loads(row[0])
+                # Expect "days" to be an array of 7 names.
+                immersive_days = calendar_names.get("days", 
+                    ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
+            except Exception as e:
+                logging.warning("Failed to parse CalendarNames: %s", e)
+                immersive_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        else:
+            immersive_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+        # Now, update the schedule prompt to instruct GPT to use the immersive day names.
         schedule_prompt = (
-            "Based on the current environment and Chase's role, generate a detailed weekly schedule for Chase. "
-            "Return a function call payload with a parameter named \"ChaseSchedule\" that is a valid JSON object with keys for each day of the week (e.g., \"Monday\", \"Tuesday\", etc.), "
+            f"Based on the current environment and Chase's role, generate a detailed weekly schedule for Chase. "
+            f"Use the following immersive day names for the week: {', '.join(immersive_days)}. "
+            "Return a function call payload with a parameter named \"ChaseSchedule\" that is a valid JSON object with keys for each day, "
             "where each day has nested keys for \"Morning\", \"Afternoon\", \"Evening\", and \"Night\" representing Chase's activities. "
             "Do not output any additional text or markdown formatting."
         )
         logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
-        schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
+        schedule_reply = await spaced_gpt_call(conv_id, environment_desc, schedule_prompt)
         
         if schedule_reply.get("type") == "function_call":
             logging.info("GPT returned a function call for ChaseSchedule. Processing update via apply_universal_update.")
             fn_args = schedule_reply.get("function_args", {})
             # The payload should include a key "ChaseSchedule"
-            await apply_universal_update(user_id, conversation_id, fn_args, conn)
+            await apply_universal_update(user_id, conv_id, fn_args, conn)
             
             # After the update, retrieve the stored schedule from the database.
-            stored_schedule = await get_stored_value(conn, user_id, conversation_id, "ChaseSchedule")
+            stored_schedule = await get_stored_value(conn, user_id, conv_id, "ChaseSchedule")
             if stored_schedule:
                 chase_schedule_generated = stored_schedule
                 logging.info("Retrieved stored ChaseSchedule: %s", chase_schedule_generated)
@@ -1224,6 +1253,7 @@ async def async_process_new_game(user_id, conversation_data):
             "scenario_name": scenario_name,
             "environment_name": environment_name,
             "environment_desc": environment_desc,
+            "calendar_names": calendar_names,
             "conversation_id": conversation_id,
         }
          
