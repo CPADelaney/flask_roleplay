@@ -676,7 +676,11 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
                 fn_args_str = fn_args_str[:last_brace_index+1]
 
         # Instead of directly calling json.loads, use our safe_json_loads helper.
-        parsed_args = safe_json_loads(fn_args_str)
+        try:
+            parsed_args = safe_json_loads(fn_args_str)
+        except Exception:
+            logging.exception("Error parsing function call arguments")
+            parsed_args = {}
         
         return {
             "type": "function_call",
