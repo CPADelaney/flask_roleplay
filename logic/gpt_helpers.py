@@ -3,10 +3,6 @@ import json
 import logging
 from logic.gpt_utils import spaced_gpt_call  # Import from the separate GPT utils module
 
-import json
-import logging
-from logic.gpt_utils import spaced_gpt_call  # Import the GPT call helper
-
 async def adjust_npc_preferences(npc_data, environment_desc, conversation_id):
     """
     Query GPT to generate updated NPC preferences (likes, dislikes, and hobbies)
