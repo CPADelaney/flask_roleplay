@@ -667,10 +667,14 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
             fn_args_str = "\n".join(lines).strip()
             logging.debug("Function call arguments after stripping code fences: %s", fn_args_str)
 
+        # Ensure the string is not empty
+        if not fn_args_str.strip():
+            fn_args_str = "{}"
+
         try:
             parsed_args = json.loads(fn_args_str)
-        except Exception:
-            logging.exception("Error parsing function call arguments")
+        except Exception as e:
+            logging.exception("Error parsing function call arguments: %s", e)
             parsed_args = {}
 
         return {
