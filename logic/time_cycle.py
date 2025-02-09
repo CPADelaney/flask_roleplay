@@ -1,18 +1,28 @@
 from db.connection import get_db_connection
 
-# Define a fixed number of days per month (change as needed)
+# Define constants
 DAYS_PER_MONTH = 30
+MONTHS_PER_YEAR = 12  # Adjust if needed
 
 # Define your phases (this remains the same)
 TIME_PHASES = ["Morning", "Afternoon", "Evening", "Night"]
 
 def get_current_time(user_id, conversation_id):
     """
-    Returns a tuple (current_month, current_day, time_of_day) for the given user_id and conversation_id.
-    Falls back to defaults: month=1, day=1, phase="Morning".
+    Returns a tuple (current_year, current_month, current_day, time_of_day) for the given user_id and conversation_id.
+    Falls back to defaults: year=1, month=1, day=1, phase="Morning".
     """
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # Get CurrentYear
+    cursor.execute("""
+        SELECT value
+        FROM CurrentRoleplay
+        WHERE user_id=%s AND conversation_id=%s AND key='CurrentYear'
+    """, (user_id, conversation_id))
+    row_year = cursor.fetchone()
+    current_year = int(row_year[0]) if row_year else 1
 
     # Get CurrentMonth
     cursor.execute("""
@@ -42,14 +52,22 @@ def get_current_time(user_id, conversation_id):
     time_of_day = row_time[0] if row_time else "Morning"
 
     conn.close()
-    return current_month, current_day, time_of_day
+    return current_year, current_month, current_day, time_of_day
 
-def set_current_time(user_id, conversation_id, new_month, new_day, new_phase):
+def set_current_time(user_id, conversation_id, new_year, new_month, new_day, new_phase):
     """
-    Upserts CurrentMonth, CurrentDay, and TimeOfDay in the CurrentRoleplay table for the given user_id and conversation_id.
+    Upserts CurrentYear, CurrentMonth, CurrentDay, and TimeOfDay in the CurrentRoleplay table for the given user_id and conversation_id.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # Upsert CurrentYear
+    cursor.execute("""
+        INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+        VALUES (%s, %s, 'CurrentYear', %s)
+        ON CONFLICT (user_id, conversation_id, key)
+        DO UPDATE SET value=EXCLUDED.value
+    """, (user_id, conversation_id, str(new_year)))
 
     # Upsert CurrentMonth
     cursor.execute("""
@@ -82,14 +100,15 @@ def advance_time(user_id, conversation_id, increment=1):
     """
     Advances the current time by a given number of phases.
     
-    1. Reads the current month, day, and time_of_day.
+    1. Reads the current year, month, day, and time_of_day.
     2. Advances the time_of_day by 'increment' steps (wrapping around if necessary).
        Every full cycle of phases increases the day by 1.
     3. If the new day exceeds DAYS_PER_MONTH, resets day to 1 and increments the month.
-    4. Saves the new month, day, and time_of_day back to the database.
-    5. Returns (new_month, new_day, new_phase).
+       If the new month exceeds MONTHS_PER_YEAR, resets month to 1 and increments the year.
+    4. Saves the new year, month, day, and time_of_day back to the database.
+    5. Returns (new_year, new_month, new_day, new_phase).
     """
-    current_month, current_day, current_phase = get_current_time(user_id, conversation_id)
+    current_year, current_month, current_day, current_phase = get_current_time(user_id, conversation_id)
 
     try:
         phase_index = TIME_PHASES.index(current_phase)
@@ -103,26 +122,30 @@ def advance_time(user_id, conversation_id, increment=1):
     new_phase = TIME_PHASES[new_index]
     new_day = current_day + day_increment
 
+    new_month = current_month
+    new_year = current_year
+
     # Check if day exceeds the maximum for the month.
     if new_day > DAYS_PER_MONTH:
         new_day = 1  # Reset day to 1
-        current_month += 1  # Increment the month
-        new_month = current_month
-    else:
-        new_month = current_month
+        new_month += 1  # Increment the month
+        # Check if month exceeds the maximum for the year.
+        if new_month > MONTHS_PER_YEAR:
+            new_month = 1  # Reset month to 1
+            new_year += 1  # Increment the year
 
     # Save the updated time values.
-    set_current_time(user_id, conversation_id, new_month, new_day, new_phase)
-    return new_month, new_day, new_phase
+    set_current_time(user_id, conversation_id, new_year, new_month, new_day, new_phase)
+    return new_year, new_month, new_day, new_phase
 
 def advance_time_and_update(user_id, conversation_id, increment=1):
     """
     Combines advance_time(...) with any updates you need (such as updating NPC schedules).
-    Returns (new_month, new_day, new_phase).
+    Returns (new_year, new_month, new_day, new_phase).
     """
-    new_month, new_day, new_phase = advance_time(user_id, conversation_id, increment)
+    new_year, new_month, new_day, new_phase = advance_time(user_id, conversation_id, increment)
     update_npc_schedules_for_time(user_id, conversation_id, new_day, new_phase)
-    return new_month, new_day, new_phase
+    return new_year, new_month, new_day, new_phase
 
 def update_npc_schedules_for_time(user_id, conversation_id, day, time_of_day):
     """
