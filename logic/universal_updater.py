@@ -509,3 +509,4 @@ async def apply_universal_updates_async(data: dict) -> dict:
     finally:
         cursor.close()
         conn.close()
+apply_universal_updates = apply_universal_updates_async
