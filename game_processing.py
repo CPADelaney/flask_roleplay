@@ -985,12 +985,11 @@ async def async_process_new_game(user_id, conversation_data):
         immersive_days = calendar_names.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
         
         # First, try to retrieve the immersive calendar names from CurrentRoleplay.
-        cursor.execute("""
+        row = await conn.fetchrow("""
             SELECT value 
             FROM CurrentRoleplay 
-            WHERE user_id=%s AND conversation_id=%s AND key='CalendarNames'
-        """, (user_id, conv_id))
-        row = cursor.fetchone()
+            WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
+        """, user_id, conv_id)
         if row:
             try:
                 calendar_names = json.loads(row[0])
