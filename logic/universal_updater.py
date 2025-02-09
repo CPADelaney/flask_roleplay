@@ -84,7 +84,6 @@ def apply_universal_updates(data: dict):
                 continue
 
             logging.info(f"  Creating NPC: {name}, introduced={introduced}, dominance={dom}, cruelty={cru}")
-
             cursor.execute("""
                 INSERT INTO NPCStats (
                     user_id, conversation_id,
@@ -283,12 +282,10 @@ def apply_universal_updates(data: dict):
             npc_name = row[0]
 
             # Import and call get_shared_memory to generate the memory text.
-            # (Ensure that your get_shared_memory function is available in the logic.memory module.)
             from logic.memory import get_shared_memory
             shared_memory_text = get_shared_memory(user_id, conversation_id, relationship, npc_name)
             logging.info(f"Generated shared memory for NPC {npc_id}: {shared_memory_text}")
 
-            # Append the generated memory text to the NPC's memory field
             cursor.execute("""
                 UPDATE NPCStats
                 SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s::text)
@@ -325,7 +322,7 @@ def apply_universal_updates(data: dict):
                 SELECT id
                 FROM Locations
                 WHERE user_id=%s AND conversation_id=%s
-                  AND LOWER(name)=%s
+                  AND LOWER(location_name)=%s
                 LIMIT 1
             """, (user_id, conv_id, loc_name.lower()))
             existing_location = cursor.fetchone()
@@ -335,7 +332,7 @@ def apply_universal_updates(data: dict):
 
             logging.info(f"  Inserting location => location_name={loc_name}, description={desc}, open_hours={open_hours}")
             cursor.execute("""
-                INSERT INTO Locations (user_id, conversation_id, name, description, open_hours)
+                INSERT INTO Locations (user_id, conversation_id, location_name, description, open_hours)
                 VALUES (%s, %s, %s, %s, %s)
             """, (user_id, conv_id, loc_name, desc, json.dumps(open_hours)))
             logging.info(f"  Inserted location: {loc_name}. cursor.rowcount={cursor.rowcount}")
@@ -346,8 +343,11 @@ def apply_universal_updates(data: dict):
         event_updates = data.get("event_list_updates", [])
         logging.info(f"[apply_universal_updates] event_list_updates: {event_updates}")
         for ev in event_updates:
+            # For PlannedEvents, we expect npc_id, year, month, day, and time_of_day
             if "npc_id" in ev and "day" in ev and "time_of_day" in ev:
                 npc_id = ev["npc_id"]
+                year = ev.get("year", 1)
+                month = ev.get("month", 1)
                 day = ev["day"]
                 tod = ev["time_of_day"]
                 ov_loc = ev.get("override_location", "Unknown")
@@ -357,23 +357,25 @@ def apply_universal_updates(data: dict):
                     FROM PlannedEvents
                     WHERE user_id=%s AND conversation_id=%s
                       AND npc_id=%s
+                      AND year=%s
+                      AND month=%s
                       AND day=%s
                       AND time_of_day=%s
                     LIMIT 1
-                """, (user_id, conv_id, npc_id, day, tod))
+                """, (user_id, conv_id, npc_id, year, month, day, tod))
                 existing_planned = cursor.fetchone()
                 if existing_planned:
-                    logging.info(f"  Skipping planned event creation; day={day}, tod={tod}, npc={npc_id} already exists.")
+                    logging.info(f"  Skipping planned event creation; year={year}, month={month}, day={day}, time_of_day={tod}, npc={npc_id} already exists.")
                     continue
 
-                logging.info(f"  Inserting PlannedEvent => npc_id={npc_id}, day={day}, time_of_day={tod}, override_loc={ov_loc}")
+                logging.info(f"  Inserting PlannedEvent => npc_id={npc_id}, year={year}, month={month}, day={day}, time_of_day={tod}, override_loc={ov_loc}")
                 cursor.execute("""
                     INSERT INTO PlannedEvents (
                         user_id, conversation_id,
-                        npc_id, day, time_of_day, override_location
+                        npc_id, year, month, day, time_of_day, override_location
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (user_id, conv_id, npc_id, day, tod, ov_loc))
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (user_id, conv_id, npc_id, year, month, day, tod, ov_loc))
 
             else:
                 ev_name = ev.get("event_name", "UnnamedEvent")
@@ -381,6 +383,10 @@ def apply_universal_updates(data: dict):
                 ev_start = ev.get("start_time", "TBD Start")
                 ev_end = ev.get("end_time", "TBD End")
                 ev_loc = ev.get("location", "Unknown")
+                ev_year = ev.get("year", 1)
+                ev_month = ev.get("month", 1)
+                ev_day = ev.get("day", 1)
+                ev_tod = ev.get("time_of_day", "Morning")
 
                 cursor.execute("""
                     SELECT id
@@ -394,14 +400,15 @@ def apply_universal_updates(data: dict):
                     logging.info(f"  Skipping event creation; '{ev_name}' already exists.")
                     continue
 
-                logging.info(f"  Inserting Event => {ev_name}, loc={ev_loc}, times={ev_start}-{ev_end}")
+                logging.info(f"  Inserting Event => {ev_name}, loc={ev_loc}, times={ev_start}-{ev_end}, year={ev_year}, month={ev_month}, day={ev_day}, time_of_day={ev_tod}")
                 cursor.execute("""
                     INSERT INTO Events (
                         user_id, conversation_id,
-                        event_name, description, start_time, end_time, location
+                        event_name, description, start_time, end_time, location,
+                        year, month, day, time_of_day
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (user_id, conv_id, ev_name, ev_desc, ev_start, ev_end, ev_loc))
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (user_id, conv_id, ev_name, ev_desc, ev_start, ev_end, ev_loc, ev_year, ev_month, ev_day, ev_tod))
 
         # ---------------------------------------------------------------------
         # 9) inventory_updates
