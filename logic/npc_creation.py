@@ -125,6 +125,82 @@ def archetypes_to_json(rows):
     return json.dumps(arr)
 
 ###################
+# 5.5) NPC Age/Birthdate
+###################
+
+def generate_npc_age_and_birthdate_gpt(npc_name, relationships=None, archetypes=None, current_year=1000):
+    """
+    Uses GPT to generate an NPC's age and birthdate, incorporating familial relationship details
+    and archetype cues if provided.
+    
+    For example, if the NPC is described as having a familial relationship (e.g., she is a mother),
+    ensure that her age is at least 20 years older than her child.
+    Also, if one of her archetypes is "student", she should be relatively young.
+    
+    Returns a tuple: (age, birthdate) where 'age' is an integer and 'birthdate' is a string in 'YYYY-MM-DD' format.
+    """
+    # Build a string summarizing any relationship constraints.
+    if relationships:
+        rel_strings = []
+        for rel in relationships:
+            # Example: "mother of Alice" or "sister of Bob"
+            rel_type = rel.get("type", "relation")
+            target_name = rel.get("target_name", "someone")
+            rel_strings.append(f"{rel_type} of {target_name}")
+        rel_info = "; ".join(rel_strings)
+    else:
+        rel_info = "None"
+    
+    # Build a string summarizing the NPC's archetypes.
+    if archetypes:
+        if isinstance(archetypes, list):
+            archetype_info = ", ".join(archetypes)
+        else:
+            archetype_info = str(archetypes)
+    else:
+        archetype_info = "None"
+    
+    prompt = (
+        f"Generate a JSON object with keys 'age' and 'birthdate' for an NPC in a roleplay game. "
+        f"The NPC's name is '{npc_name}'. The current in-game year is {current_year}. "
+        f"If the NPC is described as having a familial relationship (for example, if she is a mother), ensure that her age is at least 20 years older than her child. "
+        f"Also, consider the following archetypes for the NPC: {archetype_info}. For instance, if one of the archetypes is 'student', then the NPC should be relatively young. "
+        f"Here are the relationship details: {rel_info}. "
+        "If there are no familial constraints, choose an age between 18 and 50. "
+        "Then, compute the birthdate as (current_year - age) using a random month (1-12) and day (1-28). "
+        "Return only a JSON object with keys 'age' (an integer) and 'birthdate' (a string in the format YYYY-MM-DD)."
+    )
+    
+    logging.info("Generating NPC age and birthdate with prompt: %s", prompt)
+    try:
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0.7,
+            max_tokens=150
+        )
+        result_text = response.choices[0].message.content.strip()
+        logging.info("GPT age/birthdate response: %s", result_text)
+        # Remove markdown code fences if present.
+        if result_text.startswith("```"):
+            lines = result_text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            result_text = "\n".join(lines).strip()
+        result = json.loads(result_text)
+        age = result.get("age")
+        birthdate = result.get("birthdate")
+        return age, birthdate
+    except Exception as e:
+        logging.error("Error generating NPC age and birthdate via GPT: %s", e, exc_info=True)
+        # Fallback to random generation if GPT fails.
+        return generate_npc_age_and_birthdate()
+
+
+###################
 # 6) GPT Synergy Functions
 ###################
 def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
@@ -299,6 +375,12 @@ def create_npc(user_id, conversation_id, npc_name=None, introduced=False,
     # Generate physical description using the final NPC name.
     physical_description = get_physical_description(new_npc_name, final_stats, chosen_arcs_list_for_json)
     
+    # Extract the archetype names from the chosen archetypes list (if available)
+    archetype_names = [arc["name"] for arc in chosen_arcs_list_for_json] if chosen_arcs_list_for_json else []
+    # Use GPT to generate age and birthdate using both relationship details and archetype cues.
+    npc_age, birthdate = generate_npc_age_and_birthdate_gpt(new_npc_name, relationships, archetypes=archetype_names, current_year=1000)
+
+    
     try:
         cursor.execute(
             """
@@ -307,13 +389,16 @@ def create_npc(user_id, conversation_id, npc_name=None, introduced=False,
                 npc_name, introduced, sex,
                 dominance, cruelty, closeness, trust, respect, intensity,
                 archetypes, archetype_summary, archetype_extras_summary,
-                physical_description, memory, monica_level
+                physical_description, memory, monica_level,
+                age, birthdate
             )
             VALUES (
-                %s, %s, %s, %s, %s,
+                %s, %s,
+                %s, %s, %s,
                 %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s,
-                '[]'::jsonb, 0
+                '[]'::jsonb, 0,
+                %s, %s
             )
             RETURNING npc_id
             """,
@@ -321,11 +406,12 @@ def create_npc(user_id, conversation_id, npc_name=None, introduced=False,
              final_stats["dominance"], final_stats["cruelty"],
              final_stats["closeness"], final_stats["trust"],
              final_stats["respect"], final_stats["intensity"],
-             chosen_arcs_json_str, synergy_text, extras_summary, physical_description)
+             chosen_arcs_json_str, synergy_text, extras_summary, physical_description,
+             npc_age, birthdate)
         )
         new_id = cursor.fetchone()[0]
         conn.commit()
-        logging.info(f"[create_npc] Inserted npc_id={new_id} with stats={final_stats}. Archetypes count={len(chosen_arcs_rows)}. New NPC name: {new_npc_name}")
+        logging.info(f"[create_npc] Inserted npc_id={new_id} with stats={final_stats}, age={npc_age}, birthdate={birthdate}. Archetypes count={len(chosen_arcs_rows)}. New NPC name: {new_npc_name}")
     except Exception as e:
         conn.rollback()
         logging.error(f"[create_npc] DB error: {e}", exc_info=True)
@@ -338,7 +424,6 @@ def create_npc(user_id, conversation_id, npc_name=None, introduced=False,
         for rel in relationships:
             num_memories = random.randint(1, 5)
             for _ in range(num_memories):
-                # Pass the full relationship dictionary to get_shared_memory
                 memory_text = get_shared_memory(rel, new_npc_name)
                 record_npc_event(user_id, conversation_id, new_id, memory_text)
     else:
