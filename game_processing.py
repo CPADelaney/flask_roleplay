@@ -989,7 +989,7 @@ async def async_process_new_game(user_id, conversation_data):
             SELECT value 
             FROM CurrentRoleplay 
             WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
-        """, user_id, conv_id)
+        """, user_id, conversation_id)
         if row:
             try:
                 calendar_names = json.loads(row[0])
@@ -1011,16 +1011,16 @@ async def async_process_new_game(user_id, conversation_data):
             "Do not output any additional text or markdown formatting."
         )
         logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
-        schedule_reply = await spaced_gpt_call(conv_id, environment_desc, schedule_prompt)
+        schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
         
         if schedule_reply.get("type") == "function_call":
             logging.info("GPT returned a function call for ChaseSchedule. Processing update via apply_universal_update.")
             fn_args = schedule_reply.get("function_args", {})
             # The payload should include a key "ChaseSchedule"
-            await apply_universal_update(user_id, conv_id, fn_args, conn)
+            await apply_universal_update(user_id, conversation_id, fn_args, conn)
             
             # After the update, retrieve the stored schedule from the database.
-            stored_schedule = await get_stored_value(conn, user_id, conv_id, "ChaseSchedule")
+            stored_schedule = await get_stored_value(conn, user_id, conversation_id, "ChaseSchedule")
             if stored_schedule:
                 chase_schedule_generated = stored_schedule
                 logging.info("Retrieved stored ChaseSchedule: %s", chase_schedule_generated)
