@@ -30,10 +30,34 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     existing_summary = row[0] if row else ""
 
     #----------------------------------------------------------------
-    # 1) Day/time from CurrentRoleplay
+    # 1) Retrieve time info (Year, Month, Day, TimeOfDay) from CurrentRoleplay
     #----------------------------------------------------------------
+    current_year = "1"
+    current_month = "1"
     current_day = "1"
     time_of_day = "Morning"
+
+    cursor.execute("""
+        SELECT value
+        FROM CurrentRoleplay
+        WHERE user_id=%s
+          AND conversation_id=%s
+          AND key='CurrentYear'
+    """, (user_id, conversation_id))
+    row = cursor.fetchone()
+    if row:
+        current_year = row[0]
+
+    cursor.execute("""
+        SELECT value
+        FROM CurrentRoleplay
+        WHERE user_id=%s
+          AND conversation_id=%s
+          AND key='CurrentMonth'
+    """, (user_id, conversation_id))
+    row = cursor.fetchone()
+    if row:
+        current_month = row[0]
 
     cursor.execute("""
         SELECT value
@@ -88,9 +112,6 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     #----------------------------------------------------------------
     # 3) NPC Stats (Introduced)
     #----------------------------------------------------------------
-    #----------------------------------------------------------------
-    # 3) NPC Stats (Introduced)
-    #----------------------------------------------------------------
     introduced_npcs = []
     cursor.execute("""
         SELECT npc_id, npc_name,
@@ -107,7 +128,6 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     introduced_rows = cursor.fetchall()
     for (nid, nname, dom, cru, clos, tru, resp, inten,
          hbs, pers, lks, dlks, sched, curr_loc) in introduced_rows:
-        # Attempt to parse the schedule (which may be stored as a JSON string)
         try:
             trimmed_schedule = json.loads(sched) if sched else {}
         except Exception:
@@ -128,7 +148,6 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "schedule": trimmed_schedule,
             "current_location": curr_loc or "Unknown"
         })
-
 
     #----------------------------------------------------------------
     # 4) NPC Minimal Info (Unintroduced)
@@ -155,6 +174,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "current_location": curr_loc or "Unknown",
             "schedule": trimmed_schedule
         })
+
     #----------------------------------------------------------------
     # 5) Social Links
     #----------------------------------------------------------------
@@ -222,43 +242,50 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         })
 
     #----------------------------------------------------------------
-    # 8) Events
+    # 8) Events (now including full date info)
     #----------------------------------------------------------------
     cursor.execute("""
-        SELECT id, event_name, description, start_time, end_time, location
+        SELECT id, event_name, description, start_time, end_time, location,
+               year, month, day, time_of_day
         FROM Events
         WHERE user_id=%s
           AND conversation_id=%s
         ORDER BY id
     """, (user_id, conversation_id))
     events_list = []
-    for (eid, ename, edesc, stime, etime, loc) in cursor.fetchall():
+    for (eid, ename, edesc, stime, etime, loc, eyear, emonth, eday, etod) in cursor.fetchall():
         events_list.append({
             "event_id": eid,
             "event_name": ename,
             "description": edesc,
             "start_time": stime,
             "end_time": etime,
-            "location": loc
+            "location": loc,
+            "year": eyear,
+            "month": emonth,
+            "day": eday,
+            "time_of_day": etod
         })
 
     #----------------------------------------------------------------
-    # 9) PlannedEvents
+    # 9) PlannedEvents (now including full date info)
     #----------------------------------------------------------------
     cursor.execute("""
-        SELECT event_id, npc_id, day, time_of_day, override_location
+        SELECT event_id, npc_id, year, month, day, time_of_day, override_location
         FROM PlannedEvents
         WHERE user_id=%s
           AND conversation_id=%s
         ORDER BY event_id
     """, (user_id, conversation_id))
     planned_events_list = []
-    for (eid, npc_id, day, tod, ov_loc) in cursor.fetchall():
+    for (eid, npc_id, pyear, pmonth, pday, ptod, ov_loc) in cursor.fetchall():
         planned_events_list.append({
             "event_id": eid,
             "npc_id": npc_id,
-            "day": day,
-            "time_of_day": tod,
+            "year": pyear,
+            "month": pmonth,
+            "day": pday,
+            "time_of_day": ptod,
             "override_location": ov_loc
         })
 
@@ -368,6 +395,8 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         "introducedNPCs": introduced_npcs,   # Full stats for introduced
         "unintroducedNPCs": unintroduced_npcs,  # Minimal info for unintroduced
         "currentRoleplay": currentroleplay_data,
+        "year": current_year,
+        "month": current_month,
         "day": current_day,
         "timeOfDay": time_of_day,
         "socialLinks": social_links,
@@ -404,7 +433,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     #----------------------------------------------------------------
     aggregator_text = (
         f"{existing_summary}\n\n"
-        f"Day {current_day}, {time_of_day}.\n"
+        f"Year {current_year}, Month {current_month}, Day {current_day}, {time_of_day}.\n"
         "Scene Snapshot:\n"
         f"{make_minimal_scene_info(aggregated)}"
     )
@@ -451,7 +480,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
 
 def build_changes_summary(aggregated):
     """
-    Quick example: mention how many introduced/unintroduced NPCs, 
+    Quick example: mention how many introduced/unintroduced NPCs,
     or any quest changes, etc.
     """
     lines = []
@@ -463,23 +492,23 @@ def build_changes_summary(aggregated):
         text = ""  # if no real changes
     return text
 
-
 def update_global_summary(old_summary, new_stuff, max_len=3000):
     combined = old_summary.strip() + "\n\n" + new_stuff.strip()
     if len(combined) > max_len:
         combined = combined[-max_len:]
     return combined
 
-
 def make_minimal_scene_info(aggregated):
     """
-    Provide a small snippet: day/time, maybe top 2 introduced NPCs + 
-    top 2 unintroduced with location, so GPT can handle chance encounters, etc.
+    Provide a small snippet: full date info plus a brief list of introduced
+    and unintroduced NPCs for chance encounters.
     """
     lines = []
-    day = aggregated["day"]
-    tod = aggregated["timeOfDay"]
-    lines.append(f"- It is Day {day}, {tod}.\n")
+    year = aggregated.get("year", "1")
+    month = aggregated.get("month", "1")
+    day = aggregated.get("day", "1")
+    tod = aggregated.get("timeOfDay", "Morning")
+    lines.append(f"- It is Year {year}, Month {month}, Day {day}, {tod}.\n")
     # Introduced NPCs snippet
     lines.append("Introduced NPCs in the area:")
     for npc in aggregated["introducedNPCs"][:4]:
