@@ -263,7 +263,9 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                             ]
                         },
                         "monica_level": {"type": "number"},
-                        "sex": {"type": "string"}
+                        "sex": {"type": "string"},
+                        "age": {"type": "number"},
+                        "birthdate": {"type": "string", "format": "date"}
                     },
                     "required": ["npc_name"]
                 },
@@ -468,6 +470,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "location": {"type": "string"},
                         "npc_id": {"type": "number"},
                         "year": {"type": "number"},
+                        "month": {"type": "number"},
                         "day": {"type": "number"},
                         "time_of_day": {"type": "string"},
                         "override_location": {"type": "string"}
