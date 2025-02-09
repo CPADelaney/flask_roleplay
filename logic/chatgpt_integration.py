@@ -7,6 +7,7 @@ import time
 import openai
 from db.connection import get_db_connection
 from logic.prompts import SYSTEM_PROMPT
+from logic.gpt_utils import safe_json_loads
 
 UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
     "name": "apply_universal_update",
@@ -651,9 +652,10 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
     if msg.function_call is not None:
         fn_name = msg.function_call.name
         fn_args_str = msg.function_call.arguments or "{}"
+
         logging.debug("Raw function call arguments: %s", fn_args_str)
 
-        # Remove markdown code fences if present.
+        # Strip markdown code fences if present.
         if fn_args_str.startswith("```"):
             lines = fn_args_str.splitlines()
             if lines and lines[0].startswith("```"):
@@ -661,25 +663,21 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
             if lines and lines[-1].startswith("```"):
                 lines = lines[:-1]
             fn_args_str = "\n".join(lines).strip()
-            logging.debug("Function call arguments after stripping code fences: %s", fn_args_str)
+            logging.debug("Arguments after stripping markdown: %s", fn_args_str)
 
-        # Ensure the string is not empty.
         if not fn_args_str.strip():
             fn_args_str = "{}"
 
-        # If the string doesn't end with a closing brace, try to fix it.
+        # If the string does not end with a closing brace, attempt to fix it.
         if not fn_args_str.endswith("}"):
             last_brace_index = fn_args_str.rfind("}")
             if last_brace_index != -1:
                 logging.warning("Function call arguments appear truncated. Truncating string at index %s", last_brace_index)
                 fn_args_str = fn_args_str[:last_brace_index+1]
 
-        try:
-            parsed_args = json.loads(fn_args_str)
-        except Exception as e:
-            logging.exception("Error parsing function call arguments: %s. Raw arguments: %s", e, fn_args_str)
-            parsed_args = {}
-
+        # Instead of directly calling json.loads, use our safe_json_loads helper.
+        parsed_args = safe_json_loads(fn_args_str)
+        
         return {
             "type": "function_call",
             "function_name": fn_name,
