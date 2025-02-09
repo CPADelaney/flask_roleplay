@@ -390,31 +390,39 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
     event_updates = update_data.get("event_list_updates", [])
     logging.info("[apply_universal_update] event_list_updates: %s", event_updates)
     for ev in event_updates:
+        # For PlannedEvents, we now expect npc_id, year, month, day, and time_of_day.
         if "npc_id" in ev and "day" in ev and "time_of_day" in ev:
             npc_id = ev["npc_id"]
+            year = ev.get("year", 1)
+            month = ev.get("month", 1)
             day = ev["day"]
             tod = ev["time_of_day"]
             ov_loc = ev.get("override_location", "Unknown")
             row = await conn.fetchrow("""
                 SELECT event_id FROM PlannedEvents
                 WHERE user_id=$1 AND conversation_id=$2
-                  AND npc_id=$3 AND day=$4 AND time_of_day=$5
+                  AND npc_id=$3 AND year=$4 AND month=$5 AND day=$6 AND time_of_day=$7
                 LIMIT 1
-            """, user_id, conversation_id, npc_id, day, tod)
+            """, user_id, conversation_id, npc_id, year, month, day, tod)
             if row:
-                logging.info("Skipping planned event creation; day=%s, time_of_day=%s, npc=%s already exists.", day, tod, npc_id)
+                logging.info("Skipping planned event creation; year=%s, month=%s, day=%s, time_of_day=%s, npc=%s already exists.", year, month, day, tod, npc_id)
                 continue
-            logging.info("Inserting PlannedEvent => npc_id=%s, day=%s, time_of_day=%s, override_location=%s", npc_id, day, tod, ov_loc)
+            logging.info("Inserting PlannedEvent => npc_id=%s, year=%s, month=%s, day=%s, time_of_day=%s, override_loc=%s", npc_id, year, month, day, tod, ov_loc)
             await conn.execute("""
-                INSERT INTO PlannedEvents (user_id, conversation_id, npc_id, day, time_of_day, override_location)
-                VALUES ($1, $2, $3, $4, $5, $6)
-            """, user_id, conversation_id, npc_id, day, tod, ov_loc)
+                INSERT INTO PlannedEvents (user_id, conversation_id, npc_id, year, month, day, time_of_day, override_location)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """, user_id, conversation_id, npc_id, year, month, day, tod, ov_loc)
         else:
+            # For global events, we also expect the full date info.
             ev_name = ev.get("event_name", "UnnamedEvent")
             ev_desc = ev.get("description", "")
             ev_start = ev.get("start_time", "TBD Start")
             ev_end = ev.get("end_time", "TBD End")
             ev_loc = ev.get("location", "Unknown")
+            ev_year = ev.get("year", 1)
+            ev_month = ev.get("month", 1)
+            ev_day = ev.get("day", 1)
+            ev_tod = ev.get("time_of_day", "Morning")
             row = await conn.fetchrow("""
                 SELECT id FROM Events
                 WHERE user_id=$1 AND conversation_id=$2
@@ -424,11 +432,15 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
             if row:
                 logging.info("Skipping event creation; '%s' already exists.", ev_name)
                 continue
-            logging.info("Inserting Event => %s, location=%s, times=%s-%s", ev_name, ev_loc, ev_start, ev_end)
+            logging.info("Inserting Event => %s, loc=%s, times=%s-%s, year=%s, month=%s, day=%s, time_of_day=%s", ev_name, ev_loc, ev_start, ev_end, ev_year, ev_month, ev_day, ev_tod)
             await conn.execute("""
-                INSERT INTO Events (user_id, conversation_id, event_name, description, start_time, end_time, location)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-            """, user_id, conversation_id, ev_name, ev_desc, ev_start, ev_end, ev_loc)
+                INSERT INTO Events (
+                    user_id, conversation_id,
+                    event_name, description, start_time, end_time, location,
+                    year, month, day, time_of_day
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            """, user_id, conversation_id, ev_name, ev_desc, ev_start, ev_end, ev_loc, ev_year, ev_month, ev_day, ev_tod)
     
     # 10) inventory_updates
     inv_updates = update_data.get("inventory_updates", {})
@@ -808,10 +820,7 @@ async def async_process_new_game(user_id, conversation_data):
                 VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT DO NOTHING
             """, user_id, conversation_id, loc_name, loc_desc, json.dumps(open_hours))
-
-        
-
-        
+     
         # Step 6: Generate scenario name and quest summary (if conversation was newly created).
         scenario_name = "New Game"
         quest_blurb = ""
