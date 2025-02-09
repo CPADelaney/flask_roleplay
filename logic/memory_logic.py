@@ -116,13 +116,13 @@ def update_npc_memory():
          "conversation_id": X,
          "npc_id": Y,
          "relationship": {
-             "type": "mother",          # e.g., "mother", "neighbor", "friend", etc.
-             "target": "player",         # or NPC ID if relating to another NPC
-             "target_name": "Chase"      # name of the target (player or NPC)
+             "type": "mother",
+             "target": "player",
+             "target_name": "Chase"
          }
       }
-    Retrieves the NPC's name along with their synthesized archetype summaries
-    (backstory synergy and extra details), then calls GPT to generate a shared memory.
+    Retrieves the NPC's name along with their synthesized archetype fields,
+    then calls GPT to generate a shared memory.
     The generated memory is appended to the NPC's memory field.
     """
     user_id = session.get("user_id")
@@ -152,13 +152,15 @@ def update_npc_memory():
     conn.close()
 
     # Generate a shared memory using GPT, now including the NPC's background details.
-    memory_text = get_shared_memory(relationship, npc_name, archetype_summary or "", archetype_extras_summary or "")
+    from logic.memory import get_shared_memory
+    memory_text = get_shared_memory(user_id, conversation_id, relationship, npc_name, archetype_summary or "", archetype_extras_summary or "")
     try:
         record_npc_event(user_id, conversation_id, npc_id, memory_text)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
     return jsonify({"message": "NPC memory updated", "memory": memory_text}), 200
+
 
 async def get_stored_setting(conn, user_id, conversation_id):
     # Retrieve the setting name and description from CurrentRoleplay.
