@@ -781,7 +781,7 @@ async def async_process_new_game(user_id, conversation_data):
             await conn.execute(f"DELETE FROM {table} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
         logging.info("Cleared data for conv=%s", conversation_id)
 
-        # 3) generate environment components
+        # 3) Generate environment components
         mega_data = await asyncio.to_thread(generate_mega_setting_logic)
         unique_envs = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
         if not unique_envs:
@@ -793,41 +793,53 @@ async def async_process_new_game(user_id, conversation_data):
         enhanced_features = mega_data.get("enhanced_features", [])
         stat_modifiers = mega_data.get("stat_modifiers", {})
 
-        # 3.1) environment name (structured)
-        system_text = "You produce a single JSON with 'setting_name' for the environment."
-        user_text = (
+        # 3.1) environment name (TEXT-based, no structured output)
+        # We'll do a normal GPT call to produce a short creative name.
+        env_name_prompt = (
             "Environment components:\n" + "\n".join(unique_envs) + "\n"
-            "Generate a short creative name for the overall setting. No extra text."
+            "Generate a short, creative name for the overall setting. "
+            "Return only the name with no extra text."
         )
-        env_name_obj = await call_gpt_structured(system_text, user_text, ENV_NAME_SCHEMA)
-        if not env_name_obj:
+        logging.info("Calling GPT for environment name with prompt: %s", env_name_prompt)
+        env_name_reply = await spaced_gpt_call(conversation_id, "", env_name_prompt)
+        environment_name = env_name_reply.get("response", "").strip()
+        if not environment_name:
             environment_name = "Default Setting Name"
-        else:
-            environment_name = env_name_obj["setting_name"]
         logging.info(f"Got environment_name => {environment_name}")
 
-        # 3.2) environment desc (structured)
-        system_text = "You produce a single JSON with 'setting_desc' describing the environment."
-        user_text = (
-            f"Environment components: {unique_envs}\n"
-            f"Enhanced features: {enhanced_features}\n"
-            f"Stat modifiers: {stat_modifiers}\n"
-            "Describe in a cohesive narrative how these combine into a unique, dynamic world. "
-            "Output only {\"setting_desc\":\"...\"}."
+        # 3.2) environment desc (TEXT-based, no structured output)
+        env_desc_prompt = (
+            "Using the following environment components:\n"
         )
-        env_desc_obj = await call_gpt_structured(system_text, user_text, ENV_DESC_SCHEMA)
-        if not env_desc_obj:
-            base_environment_desc = "An eclectic realm of monstrous societies, futuristic tech, archaic ruins overhead..."
-        else:
-            base_environment_desc = env_desc_obj["setting_desc"]
-        
-        # store environment desc
+        for i, env in enumerate(unique_envs):
+            env_desc_prompt += f"Component {i+1}: {env}\n"
+        if enhanced_features:
+            env_desc_prompt += f"Enhanced features: {', '.join(enhanced_features)}\n"
+        if stat_modifiers:
+            mods_str = ", ".join([f"{k}: {v}" for k, v in stat_modifiers.items()])
+            env_desc_prompt += f"Stat modifiers: {mods_str}\n"
+        env_desc_prompt += (
+            "Describe in a cohesive narrative how these components, features, and modifiers combine to form a unique, dynamic world. "
+            "Assume the individual components meld into one single fused environ and explain the cohesive result."
+            "Return only plain text with no extra commentary or JSON."
+        )
+        logging.info("Calling GPT for environment description with prompt: %s", env_desc_prompt)
+        env_desc_reply = await spaced_gpt_call(conversation_id, "", env_desc_prompt)
+        base_environment_desc = env_desc_reply.get("response", "").strip()
+        if not base_environment_desc:
+            base_environment_desc = (
+                "An eclectic realm combining monstrous societies, futuristic tech, and archaic ruins floating across the sky. "
+                "Strange energies swirl, revealing hidden rituals and uncharted opportunities."
+            )
+
+        # Store environment desc in DB
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
             VALUES ($1, $2, 'EnvironmentDesc', $3)
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, base_environment_desc)
+
 
         # 3.3) generate some NPCs
         npc_count = 3
