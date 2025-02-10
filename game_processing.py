@@ -833,7 +833,7 @@ async def async_process_new_game(user_id, conversation_data):
         npc_count = 3
         generated_npcs = []
         for i in range(npc_count):
-            new_npc_id = await asyncio.to_thread(create_npc, user_id, conversation_id, introduced=False)
+            new_npc_id = await create_npc(user_id, conversation_id, introduced=False)
             generated_npcs.append(new_npc_id)
         logging.info(f"Generated NPCs => {generated_npcs}")
 
