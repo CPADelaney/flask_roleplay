@@ -703,7 +703,7 @@ async def async_process_new_game(user_id, conversation_data):
         # *** NEW STEP: Generate immersive calendar names ***
         # Use the environment description to get thematic names for the year, months, and days.
         from logic.calendar import update_calendar_names  # Ensure this is imported at the top
-        calendar_names = update_calendar_names(user_id, conversation_id, environment_desc)
+        calendar_data = await update_calendar_names(user_id, conversation_id, environment_desc)
         logging.info("Generated calendar names: %s", calendar_names)
             
         # Step 4: Generate and store notable Events.
