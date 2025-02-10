@@ -69,9 +69,10 @@ async def adjust_npc_complete(npc_data, environment_desc, conversation_id, immer
     while retry_count < max_retries:
         reply = await spaced_gpt_call(conversation_id, environment_desc, prompt)
         
-        # If GPT returns a function call style response.
+        # Process function call style responses.
         if reply.get("type") == "function_call":
             args = reply.get("function_args", {})
+            # Case 1: GPT returns the expected keys directly.
             if all(key in args for key in ["likes", "dislikes", "hobbies", "affiliations", "schedule"]):
                 return {
                     "likes": args["likes"],
@@ -80,10 +81,16 @@ async def adjust_npc_complete(npc_data, environment_desc, conversation_id, immer
                     "affiliations": args["affiliations"],
                     "schedule": args["schedule"]
                 }
-            else:
-                logging.warning("Incomplete keys in function_args; retrying.")
-                retry_count += 1
-                continue
+            # Case 2: GPT returns the values nested under "npc_updates".
+            elif "npc_updates" in args:
+                updates = args["npc_updates"]
+                if isinstance(updates, list) and len(updates) > 0:
+                    update_obj = updates[0]
+                    if all(key in update_obj for key in ["likes", "dislikes", "hobbies", "affiliations", "schedule"]):
+                        return update_obj
+            logging.warning("Incomplete keys in function_args; retrying.")
+            retry_count += 1
+            continue
         
         # Otherwise, try parsing a plain text response.
         elif reply.get("response"):
