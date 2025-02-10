@@ -387,7 +387,7 @@ def build_message_history(conversation_id: int, aggregator_text: str, user_input
     messages.append({"role": "user", "content": user_input})
     return messages
 
-def retry_with_backoff_async(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.error.RateLimitError,)):
+def retry_with_backoff_async(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,)):
     """
     Async decorator that retries an async function call with exponential backoff
     when one of the specified exceptions is raised.
