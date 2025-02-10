@@ -6,6 +6,7 @@ import random
 import logging
 import httpx
 import asyncio
+from logic.chatgpt_integration import get_openai_client
 from db.connection import get_db_connection
 
 logging.basicConfig(level=logging.DEBUG)
