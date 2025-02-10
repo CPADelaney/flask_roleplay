@@ -1181,20 +1181,22 @@ async def async_process_new_game(user_id, conversation_data):
         aggregator_text = await asyncio.to_thread(build_aggregator_text, aggregator_data)
         logging.info("Aggregated context built: %s", aggregator_text)
         
-        # Step 18: Call GPT for the opening narrative using the aggregated context.
+        # Step 18: Opening narrative
+        ### Dynamically use the first day name from immersive_days
+        first_day_name = immersive_days[0] if immersive_days else "the first day"
         opening_user_prompt = (
             "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, avoiding clichéd phrases such as 'Ah, Chase'. "
-            "Format your greeting using Markdown sections. Briefly recount the new environment’s background from the aggregator data, "
-            "and announce that Monday morning has just begun. Make sure to reference the schedule stored in CurrentRoleplay, which details "
-            "Chase's planned activities for the day, and describe where he is scheduled to be. Also, include a nod to the player's role "
-            "and hint at the mysterious main quest awaiting him. "
+            "Format your greeting using Markdown sections. Briefly recount the new environment's background from the aggregator data, "
+            f"and announce that {first_day_name} morning has just begun. Make sure to reference the schedule stored in CurrentRoleplay, "
+            "which details Chase's planned activities for the day, and describe where he is scheduled to be. Also, include a nod to the "
+            "player's role and hint at the mysterious main quest awaiting him. "
             "Stay fully in character and conclude with a teasing invitation for Chase to proceed, clearly mentioning the next destination from his schedule."
         )
-        logging.info("Calling GPT for opening narrative with prompt: %s", opening_user_prompt)
+
         gpt_reply_dict = await spaced_gpt_call(conversation_id, aggregator_text, opening_user_prompt)
         nyx_text = gpt_reply_dict.get("response")
         if gpt_reply_dict.get("type") == "function_call" or not nyx_text:
-            logging.info("GPT attempted a function call or returned no text; retrying without function calls for conversation_id=%s", conversation_id)
+            logging.info("GPT tried function_call or returned no text; re-try with forced text.")
             client = get_openai_client()
             forced_messages = [
                 {"role": "system", "content": aggregator_text},
@@ -1208,25 +1210,22 @@ async def async_process_new_game(user_id, conversation_data):
             )
             fallback_text = fallback_response.choices[0].message.content.strip()
             nyx_text = fallback_text if fallback_text else "[No text returned from GPT]"
-            logging.info("Fallback GPT narrative: %s", nyx_text)
-        
-        # Step 19: Store the GPT response in messages.
+
+        # Step 19: Store GPT response
         structured_json_str = json.dumps(gpt_reply_dict)
-        logging.info("Storing GPT response in messages for conversation_id=%s", conversation_id)
         await conn.execute("""
             INSERT INTO messages (conversation_id, sender, content, structured_content)
             VALUES ($1, $2, $3, $4)
         """, conversation_id, "Nyx", nyx_text, structured_json_str)
-        
-        # Update the conversation to mark it as ready.
+
+        # Update conversation to ready
         await conn.execute("""
             UPDATE conversations 
             SET conversation_name = $1, status = 'ready'
             WHERE id = $2 AND user_id = $3
         """, scenario_name, conversation_id, user_id)
 
-        # Step 20: Retrieve conversation history.
-        logging.info("Retrieving conversation history for conversation_id=%s", conversation_id)
+        # Step 20: Retrieve conversation history
         rows = await conn.fetch("""
             SELECT sender, content, created_at
             FROM messages
@@ -1238,15 +1237,13 @@ async def async_process_new_game(user_id, conversation_data):
             "content": row["content"],
             "created_at": row["created_at"].isoformat()
         } for row in rows]
-        logging.info("Retrieved %d messages from conversation history", len(conversation_history))
-        
-        # Update conversation to mark it as "ready" with the final scenario name.
+
         await conn.execute("""
             UPDATE conversations 
             SET conversation_name = $1, status = 'ready'
             WHERE id = $2 AND user_id = $3
         """, scenario_name, conversation_id, user_id)
-        
+
         success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
         logging.info(success_msg)
         return {
@@ -1257,7 +1254,7 @@ async def async_process_new_game(user_id, conversation_data):
             "calendar_names": calendar_names,
             "conversation_id": conversation_id,
         }
-         
+
     except Exception as e:
         logging.exception("Error in async_process_new_game:")
         return {"error": str(e)}
@@ -1267,6 +1264,7 @@ async def async_process_new_game(user_id, conversation_data):
             await conn.close()
         except Exception:
             pass
+
 
 # ---------------------------------------------------------------------
 # Helper function for generating scenario name and quest summary.
@@ -1289,8 +1287,6 @@ def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
 
     The conversation name must be unique; do not reuse names from older scenarios 
     (you can ensure uniqueness using the token or environment cues).
-    Keep it thematically relevant to a fantasy/femdom environment, 
-    but do not use overly repeated phrases like 'Mistress of Darkness' or 'Chains of Twilight.'
     """
     messages = [{"role": "system", "content": system_instructions}]
     response = client.chat.completions.create(
@@ -1311,6 +1307,7 @@ def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
         else:
             quest_blurb += line + " "
     return scenario_name.strip(), quest_blurb.strip()
+
 
 # ---------------------------------------------------------------------
 # spawn_npcs remains unchanged.
