@@ -30,95 +30,20 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                 "additionalProperties": True
             },
             "ChaseSchedule": {
-                "type": "object",
-                "properties": {
-                    "Monday": {
-                        "type": "object",
-                        "properties": {
-                            "Morning": {"type": "string"},
-                            "Afternoon": {"type": "string"},
-                            "Evening": {"type": "string"},
-                            "Night": {"type": "string"}
-                        },
-                        "required": ["Morning", "Afternoon", "Evening", "Night"],
-                        "additionalProperties": False
-                    },
-                    "Tuesday": {
-                        "type": "object",
-                        "properties": {
-                            "Morning": {"type": "string"},
-                            "Afternoon": {"type": "string"},
-                            "Evening": {"type": "string"},
-                            "Night": {"type": "string"}
-                        },
-                        "required": ["Morning", "Afternoon", "Evening", "Night"],
-                        "additionalProperties": False
-                    },
-                    "Wednesday": {
-                        "type": "object",
-                        "properties": {
-                            "Morning": {"type": "string"},
-                            "Afternoon": {"type": "string"},
-                            "Evening": {"type": "string"},
-                            "Night": {"type": "string"}
-                        },
-                        "required": ["Morning", "Afternoon", "Evening", "Night"],
-                        "additionalProperties": False
-                    },
-                    "Thursday": {
-                        "type": "object",
-                        "properties": {
-                            "Morning": {"type": "string"},
-                            "Afternoon": {"type": "string"},
-                            "Evening": {"type": "string"},
-                            "Night": {"type": "string"}
-                        },
-                        "required": ["Morning", "Afternoon", "Evening", "Night"],
-                        "additionalProperties": False
-                    },
-                    "Friday": {
-                        "type": "object",
-                        "properties": {
-                            "Morning": {"type": "string"},
-                            "Afternoon": {"type": "string"},
-                            "Evening": {"type": "string"},
-                            "Night": {"type": "string"}
-                        },
-                        "required": ["Morning", "Afternoon", "Evening", "Night"],
-                        "additionalProperties": False
-                    },
-                    "Saturday": {
-                        "type": "object",
-                        "properties": {
-                            "Morning": {"type": "string"},
-                            "Afternoon": {"type": "string"},
-                            "Evening": {"type": "string"},
-                            "Night": {"type": "string"}
-                        },
-                        "required": ["Morning", "Afternoon", "Evening", "Night"],
-                        "additionalProperties": False
-                    },
-                    "Sunday": {
-                        "type": "object",
-                        "properties": {
-                            "Morning": {"type": "string"},
-                            "Afternoon": {"type": "string"},
-                            "Evening": {"type": "string"},
-                            "Night": {"type": "string"}
-                        },
-                        "required": ["Morning", "Afternoon", "Evening", "Night"],
-                        "additionalProperties": False
-                    }
-                },
-                "required": [
-                    "Monday",
-                    "Tuesday",
-                    "Wednesday",
-                    "Thursday",
-                    "Friday",
-                    "Saturday",
-                    "Sunday"
-                ],
+                          "type": "object",
+                          "patternProperties": {
+                            "^[A-Z][a-zA-Z]*$": {
+                              "type": "object",
+                              "properties": {
+                                "Morning":   { "type": "string" },
+                                "Afternoon": { "type": "string" },
+                                "Evening":   { "type": "string" },
+                                "Night":     { "type": "string" }
+                              },
+                              "required": ["Morning","Afternoon","Evening","Night"],
+                              "additionalProperties": False
+                            }
+                          },
                 "additionalProperties": False,
                 "description": "The detailed weekly schedule for Chase, with keys for each day of the week and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
             },
@@ -164,95 +89,21 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "dislikes": {"type": "array", "items": {"type": "string"}},
                         "affiliations": {"type": "array", "items": {"type": "string"}},
                         "schedule": {
-                            "type": "object",
-                            "properties": {
-                                "Monday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                },
-                                "Tuesday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                },
-                                "Wednesday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                },
-                                "Thursday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                },
-                                "Friday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                },
-                                "Saturday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                },
-                                "Sunday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                }
-                            },
-                            "required": [
-                                "Monday",
-                                "Tuesday",
-                                "Wednesday",
-                                "Thursday",
-                                "Friday",
-                                "Saturday",
-                                "Sunday"
-                            ],
+                          "type": "object",
+                          "description": "Weekly schedule, supports any custom day names. Each day is an object containing Morning, Afternoon, Evening, Night.",
+                          "patternProperties": {
+                            "^[A-Z][a-zA-Z]*$": {
+                              "type": "object",
+                              "properties": {
+                                "Morning":   { "type": "string" },
+                                "Afternoon": { "type": "string" },
+                                "Evening":   { "type": "string" },
+                                "Night":     { "type": "string" }
+                              },
+                              "required": ["Morning","Afternoon","Evening","Night"],
+                              "additionalProperties": False
+                            }
+                          },
                             "additionalProperties": False,
                             "description": "The detailed weekly schedule for this NPC, formatted as a JSON object with keys for each day and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
                         },
@@ -303,95 +154,21 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                             ]
                         },
                         "schedule": {
-                            "type": "object",
-                            "properties": {
-                                "Monday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                },
-                                "Tuesday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                },
-                                "Wednesday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                },
-                                "Thursday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                },
-                                "Friday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                },
-                                "Saturday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                },
-                                "Sunday": {
-                                    "type": "object",
-                                    "properties": {
-                                        "Morning": {"type": "string"},
-                                        "Afternoon": {"type": "string"},
-                                        "Evening": {"type": "string"},
-                                        "Night": {"type": "string"}
-                                    },
-                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
-                                    "additionalProperties": False
-                                }
-                            },
-                            "required": [
-                                "Monday",
-                                "Tuesday",
-                                "Wednesday",
-                                "Thursday",
-                                "Friday",
-                                "Saturday",
-                                "Sunday"
-                            ],
+                          "type": "object",
+                          "description": "Weekly schedule, supports any custom day names. Each day is an object containing Morning, Afternoon, Evening, Night.",
+                          "patternProperties": {
+                            "^[A-Z][a-zA-Z]*$": {
+                              "type": "object",
+                              "properties": {
+                                "Morning":   { "type": "string" },
+                                "Afternoon": { "type": "string" },
+                                "Evening":   { "type": "string" },
+                                "Night":     { "type": "string" }
+                              },
+                              "required": ["Morning","Afternoon","Evening","Night"],
+                              "additionalProperties": False
+                            }
+                          },
                             "additionalProperties": False,
                             "description": "The detailed weekly schedule for this NPC."
                         },
