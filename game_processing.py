@@ -1109,66 +1109,66 @@ async def async_process_new_game(user_id, conversation_data):
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, json.dumps(chase_schedule))
         
-                # Step 16.5: Final NPC Adjustments via Combined GPT Call.
-                logging.info("Performing final adjustments on NPCs using a combined GPT call for conversation_id=%s", conversation_id)
-                npc_rows = await conn.fetch("""
-                    SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes, archetype_summary
-                    FROM NPCStats
-                    WHERE user_id=$1 AND conversation_id=$2
-                """, user_id, conversation_id)
+        # Step 16.5: Final NPC Adjustments via Combined GPT Call.
+        logging.info("Performing final adjustments on NPCs using a combined GPT call for conversation_id=%s", conversation_id)
+        npc_rows = await conn.fetch("""
+            SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes, archetype_summary
+            FROM NPCStats
+            WHERE user_id=$1 AND conversation_id=$2
+        """, user_id, conversation_id)
                 
-                # Reuse the same 'immersive_days' from step 16
-                # (i.e., the list we extracted from `calendar_names.get("days")`)
-                actual_immersive_days = immersive_days
+        # Reuse the same 'immersive_days' from step 16
+        # (i.e., the list we extracted from `calendar_names.get("days")`)
+        actual_immersive_days = immersive_days
         
                 
-                for npc_row in npc_rows:
-                    npc_id = npc_row["npc_id"]
-                    npc_data = {
-                        "npc_name": npc_row["npc_name"],
-                        "hobbies": json.loads(npc_row["hobbies"]) if isinstance(npc_row["hobbies"], str) else npc_row["hobbies"],
-                        "likes": json.loads(npc_row["likes"]) if isinstance(npc_row["likes"], str) else npc_row["likes"],
-                        "dislikes": json.loads(npc_row["dislikes"]) if isinstance(npc_row["dislikes"], str) else npc_row["dislikes"],
-                        "affiliations": json.loads(npc_row["affiliations"]) if isinstance(npc_row["affiliations"], str) else npc_row["affiliations"],
-                        "schedule": json.loads(npc_row["schedule"]) if isinstance(npc_row["schedule"], str) else npc_row["schedule"],
-                        "archetypes": json.loads(npc_row["archetypes"]) if isinstance(npc_row["archetypes"], str) else npc_row["archetypes"],
-                        "archetype_summary": npc_row.get("archetype_summary", "")
-                    }
+        for npc_row in npc_rows:
+            npc_id = npc_row["npc_id"]
+            npc_data = {
+                "npc_name": npc_row["npc_name"],
+                "hobbies": json.loads(npc_row["hobbies"]) if isinstance(npc_row["hobbies"], str) else npc_row["hobbies"],
+                "likes": json.loads(npc_row["likes"]) if isinstance(npc_row["likes"], str) else npc_row["likes"],
+                "dislikes": json.loads(npc_row["dislikes"]) if isinstance(npc_row["dislikes"], str) else npc_row["dislikes"],
+                "affiliations": json.loads(npc_row["affiliations"]) if isinstance(npc_row["affiliations"], str) else npc_row["affiliations"],
+                "schedule": json.loads(npc_row["schedule"]) if isinstance(npc_row["schedule"], str) else npc_row["schedule"],
+                "archetypes": json.loads(npc_row["archetypes"]) if isinstance(npc_row["archetypes"], str) else npc_row["archetypes"],
+                "archetype_summary": npc_row.get("archetype_summary", "")
+            }
                     
-                    try:
-                        complete_npc = await call_gpt_with_retry(
-                            func=adjust_npc_complete,
-                            expected_keys={"likes", "dislikes", "hobbies", "affiliations", "schedule"},
-                            npc_data=npc_data,
-                            environment_desc=environment_desc,
-                            conversation_id=conversation_id,
-                            immersive_days=actual_immersive_days  # <--- now matches the same list we used for Chase
-                        )
-                    except Exception as e:
-                        logging.error("Error adjusting complete NPC details for NPC %s after retries: %s", npc_id, e)
-                        complete_npc = {
-                            "likes": npc_data.get("likes", []),
-                            "dislikes": npc_data.get("dislikes", []),
-                            "hobbies": npc_data.get("hobbies", []),
-                            "affiliations": npc_data.get("affiliations", []),
-                            "schedule": npc_data.get("schedule", {})
-                        }
+            try:
+                complete_npc = await call_gpt_with_retry(
+                    func=adjust_npc_complete,
+                    expected_keys={"likes", "dislikes", "hobbies", "affiliations", "schedule"},
+                    npc_data=npc_data,
+                    environment_desc=environment_desc,
+                    conversation_id=conversation_id,
+                    immersive_days=actual_immersive_days  # <--- now matches the same list we used for Chase
+                )
+            except Exception as e:
+                logging.error("Error adjusting complete NPC details for NPC %s after retries: %s", npc_id, e)
+                complete_npc = {
+                    "likes": npc_data.get("likes", []),
+                    "dislikes": npc_data.get("dislikes", []),
+                    "hobbies": npc_data.get("hobbies", []),
+                    "affiliations": npc_data.get("affiliations", []),
+                    "schedule": npc_data.get("schedule", {})
+                }
                     
-                    await conn.execute("""
-                        UPDATE NPCStats
-                        SET likes = $1,
-                            dislikes = $2,
-                            hobbies = $3,
-                            affiliations = $4,
-                            schedule = $5
-                        WHERE npc_id = $6 AND user_id = $7 AND conversation_id = $8
-                    """,
-                    json.dumps(complete_npc.get("likes", [])),
-                    json.dumps(complete_npc.get("dislikes", [])),
-                    json.dumps(complete_npc.get("hobbies", [])),
-                    json.dumps(complete_npc.get("affiliations", [])),
-                    json.dumps(complete_npc.get("schedule", {})),
-                    npc_id, user_id, conversation_id)       
+            await conn.execute("""
+                UPDATE NPCStats
+                SET likes = $1,
+                    dislikes = $2,
+                    hobbies = $3,
+                    affiliations = $4,
+                    schedule = $5
+                WHERE npc_id = $6 AND user_id = $7 AND conversation_id = $8
+            """,
+            json.dumps(complete_npc.get("likes", [])),
+            json.dumps(complete_npc.get("dislikes", [])),
+            json.dumps(complete_npc.get("hobbies", [])),
+            json.dumps(complete_npc.get("affiliations", [])),
+            json.dumps(complete_npc.get("schedule", {})),
+            npc_id, user_id, conversation_id)       
           
         # Step 17: Build aggregated roleplay context.
         logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
