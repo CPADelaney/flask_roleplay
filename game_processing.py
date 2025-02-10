@@ -1129,7 +1129,6 @@ async def async_process_new_game(user_id, conversation_data):
         
         for npc_row in npc_rows:
             npc_id = npc_row["npc_id"]
-            # Build an npc_data dict from the stored values.
             npc_data = {
                 "npc_name": npc_row["npc_name"],
                 "hobbies": json.loads(npc_row["hobbies"]) if isinstance(npc_row["hobbies"], str) else npc_row["hobbies"],
@@ -1160,7 +1159,6 @@ async def async_process_new_game(user_id, conversation_data):
                     "schedule": npc_data.get("schedule", {})
                 }
             
-            # Update the NPC record with the GPT-adjusted values.
             await conn.execute("""
                 UPDATE NPCStats
                 SET likes = $1,
