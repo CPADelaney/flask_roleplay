@@ -387,22 +387,29 @@ def build_message_history(conversation_id: int, aggregator_text: str, user_input
     messages.append({"role": "user", "content": user_input})
     return messages
 
-def retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,)):
+def retry_with_backoff_async(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.error.RateLimitError,)):
     """
-    Decorator that retries a function call with exponential backoff when one of the specified exceptions is raised.
+    Async decorator that retries an async function call with exponential backoff
+    when one of the specified exceptions is raised.
     """
     def decorator_retry(func):
         @functools.wraps(func)
-        def wrapper_retry(*args, **kwargs):
+        async def wrapper_retry(*args, **kwargs):
             delay = initial_delay
             for attempt in range(max_retries):
                 try:
-                    return func(*args, **kwargs)
+                    return await func(*args, **kwargs)
                 except exceptions as e:
-                    logging.warning(f"Rate limit hit on attempt {attempt+1}/{max_retries}: {e}. Retrying in {delay} seconds...")
-                    time.sleep(delay)
-                    delay *= backoff_factor
-            raise Exception("Max retries exceeded")
+                    logging.warning(
+                        f"[ASYNC RETRY] Attempt {attempt+1}/{max_retries} failed with {e}. "
+                        f"Retrying in {delay} second(s)..."
+                    )
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(delay)
+                        delay *= backoff_factor
+                    else:
+                        # max retries exceeded
+                        raise
         return wrapper_retry
     return decorator_retry
 
