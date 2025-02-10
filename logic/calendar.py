@@ -121,26 +121,6 @@ async def generate_calendar_names(environment_desc: str, conversation_id: int) -
     logging.error("Unable to get structured calendar after retries. Returning fallback.")
     return fallback
 
-async def store_calendar_names(user_id: int, conversation_id: int, calendar_names: dict):
-    """
-    Stores the generated calendar names in the CurrentRoleplay table
-    under 'CalendarNames' key using asyncpg or your approach.
-    """
-    dsn = "YOUR_DSN_HERE"
-    conn = await asyncpg.connect(dsn=dsn)
-    try:
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'CalendarNames', $3)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id, json.dumps(calendar_names))
-        logging.info("CalendarNames stored successfully for user=%s, conversation=%s", user_id, conversation_id)
-    except Exception as e:
-        logging.error("Error storing calendar: %s", e, exc_info=True)
-    finally:
-        await conn.close()
-
 async def update_calendar_names(user_id: int, conversation_id: int, environment_desc: str) -> dict:
     """
     Generates immersive calendar names (structured), stores them, and returns the final dict.
