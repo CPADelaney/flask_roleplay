@@ -527,11 +527,11 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
 # Main game processing function
 async def async_process_new_game(user_id, conversation_data):
     logging.info("=== Starting async_process_new_game for user_id=%s with conversation_data=%s ===", user_id, conversation_data)
-    
-    # Step 1: Create or validate conversation.
+
     provided_conversation_id = conversation_data.get("conversation_id")
     conn = await asyncpg.connect(dsn=DB_DSN)
     try:
+        # Step 1: Create/validate conversation
         if not provided_conversation_id:
             preliminary_name = "New Game"
             logging.info("No conversation_id provided; creating a new conversation for user_id=%s", user_id)
@@ -552,7 +552,7 @@ async def async_process_new_game(user_id, conversation_data):
                 raise Exception(f"Conversation {conversation_id} not found or unauthorized")
             logging.info("Validated existing conversation with id=%s", conversation_id)
 
-        # *** New Block: Clear old game data early ***
+        # Clear old game data
         tables_to_clear = [
             "Events", "PlannedEvents", "PlayerInventory", "Quests",
             "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"
@@ -560,13 +560,13 @@ async def async_process_new_game(user_id, conversation_data):
         for table in tables_to_clear:
             await conn.execute(f"DELETE FROM {table} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
         logging.info("Cleared old game data for conversation_id=%s", conversation_id)
-        
-        # Step 2: Dynamically generate environment components, setting name, and a cohesive description.
+
+        # Step 2: Dynamically generate environment
         logging.info("Calling generate_mega_setting_logic for conversation_id=%s", conversation_id)
         mega_data = await asyncio.to_thread(generate_mega_setting_logic)
         logging.info("Mega data returned: %s", json.dumps(mega_data, indent=2))
         unique_envs = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
-        if not unique_envs or len(unique_envs) == 0:
+        if not unique_envs:
             unique_envs = [
                 "A sprawling cyberpunk metropolis under siege by monstrous clans",
                 "Floating archaic ruins steeped in ancient rituals",
@@ -575,19 +575,16 @@ async def async_process_new_game(user_id, conversation_data):
             logging.info("No environment components returned; using fallback: %s", unique_envs)
         else:
             logging.info("Unique environment components: %s", unique_envs)
-        
-        # Also log enhanced_features and stat_modifiers:
+
         enhanced_features = mega_data.get("enhanced_features", [])
         stat_modifiers = mega_data.get("stat_modifiers", {})
         logging.info("Enhanced features: %s", enhanced_features)
         logging.info("Stat modifiers: %s", stat_modifiers)
-        
+
         enhanced_features_str = ", ".join(enhanced_features) if enhanced_features else ""
         stat_modifiers_str = ", ".join([f"{k}: {v}" for k, v in stat_modifiers.items()]) if stat_modifiers else ""
-        logging.info("Enhanced features (string): %s", enhanced_features_str)
-        logging.info("Stat modifiers (string): %s", stat_modifiers_str)
-        
-        # --- Generate a dynamic setting name ---
+
+        # Generate a dynamic setting name
         name_prompt = "Given the following environment components:\n"
         for i, env in enumerate(unique_envs):
             name_prompt += f"Component {i+1}: {env}\n"
@@ -609,8 +606,8 @@ async def async_process_new_game(user_id, conversation_data):
                 dynamic_setting_name = "Default Setting Name"
         logging.info("Generated dynamic setting name: %s", dynamic_setting_name)
         environment_name = dynamic_setting_name
-        
-        # --- Generate a cohesive environment description ---
+
+        # Generate environment description
         env_desc_prompt = "Using the following environment components:\n"
         for i, env in enumerate(unique_envs):
             env_desc_prompt += f"Component {i+1}: {env}\n"
@@ -624,22 +621,20 @@ async def async_process_new_game(user_id, conversation_data):
         logging.info("Calling GPT for dynamic environment description with prompt: %s", env_desc_prompt)
         env_desc_reply = await spaced_gpt_call(conversation_id, "", env_desc_prompt)
         base_environment_desc = env_desc_reply.get("response")
-        if base_environment_desc is None or not base_environment_desc.strip():
+        if not base_environment_desc or not base_environment_desc.strip():
             stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
             if stored_env_desc:
                 base_environment_desc = stored_env_desc
             else:
-                logging.warning("GPT returned no dynamic environment description and none stored; using fallback text.")
+                logging.warning("GPT returned no environment description; using fallback.")
                 base_environment_desc = (
                     "An eclectic realm combining monstrous societies, futuristic tech, and archaic ruins floating across the sky. "
                     "Strange energies swirl, revealing hidden rituals and uncharted opportunities."
                 )
         else:
             base_environment_desc = base_environment_desc.strip()
-        
-        # --- Generate the setting history based on the dynamic description ---
-        # (This history will later be created using GPT.)
-        # First, store the EnvironmentDesc.
+
+        # Store environment desc
         logging.info("Storing EnvironmentDesc in CurrentRoleplay for conversation_id=%s", conversation_id)
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
@@ -648,36 +643,28 @@ async def async_process_new_game(user_id, conversation_data):
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, base_environment_desc)
 
-        # **************************************************
-        # NEW STEP (3.5): Generate notable NPCs immediately after setting.
-        # **************************************************
-        logging.info("Generating notable NPCs right after the setting for conversation_id=%s", conversation_id)
-        npc_count = 3  # Adjust the number as needed
+        # Generate some NPCs - Potentially problematic section
+        logging.info("Generating notable NPCs for conversation_id=%s", conversation_id)
+        npc_count = 3
         generated_npcs = []
         for i in range(npc_count):
             npc = await asyncio.to_thread(create_npc, user_id=user_id, conversation_id=conversation_id, introduced=False)
             generated_npcs.append(npc)
         logging.info("Generated NPCs: %s", generated_npcs)
-        # Gather a comma-separated list of NPC names for the history prompt.
         notable_npcs_str = ", ".join([
             npc.get("npc_name", f"NPC #{npc}") if isinstance(npc, dict) else f"NPC #{npc}"
             for npc in generated_npcs
         ])
 
-        # **************************************************
-        
-        # --- Now generate the setting history using the pre-generated NPCs ---
+        # Build environment history referencing NPCs
         history_prompt = (
-            "Based on the following environment description, generate a brief, evocative history "
-            "of this setting. Explain its origins, major past events, and its current state so that the narrative is well grounded. "
-            "Integrate the following notable NPCs into the history: " + notable_npcs_str + ". "
-            "Also include important locations (with details about the town), and key cultural information such as holidays, festivals, and beliefs. "
+            "Based on the following environment description, generate a brief, evocative history of this setting. "
+            f"Integrate the following notable NPCs: {notable_npcs_str}. "
             "\nEnvironment description: " + base_environment_desc
         )
         logging.info("Calling GPT for environment history with prompt: %s", history_prompt)
         history_reply = await spaced_gpt_call(conversation_id, base_environment_desc, history_prompt)
         if history_reply.get("type") == "function_call":
-            logging.info("GPT returned a function call for environment history. Processing function call.")
             function_args = history_reply.get("function_args", {})
             await apply_universal_update(user_id, conversation_id, function_args, conn)
             stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
@@ -686,25 +673,23 @@ async def async_process_new_game(user_id, conversation_data):
             else:
                 environment_history = "World context updated via GPT function call."
         else:
-            response_text = history_reply.get("response")
-            if response_text is None or not response_text.strip():
+            response_text = history_reply.get("response", "")
+            if not response_text.strip():
                 stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
                 if stored_env_desc:
                     environment_history = stored_env_desc
                 else:
-                    logging.warning("GPT returned no response text for environment history and none stored; using fallback text.")
-                    environment_history = "Ancient legends speak of forgotten gods and lost civilizations that once shaped this realm."
+                    environment_history = "Ancient legends speak of forgotten gods and lost civilizations..."
             else:
                 environment_history = response_text.strip()
-        
+
         environment_desc = f"{base_environment_desc}\n\nHistory: {environment_history}"
         logging.info("Constructed environment description: %s", environment_desc)
 
-        # *** NEW STEP: Generate immersive calendar names ***
-        # Use the environment description to get thematic names for the year, months, and days.
-        from logic.calendar import update_calendar_names  # Ensure this is imported at the top
+        # Generate immersive calendar
+        from logic.calendar import update_calendar_names
         calendar_data = await update_calendar_names(user_id, conversation_id, environment_desc)
-        logging.info("Generated calendar names: %s", calendar_names)
+        logging.info("Generated calendar names: %s", calendar_data)
             
         # Step 4: Generate and store notable Events.
         events_prompt = (
@@ -826,16 +811,31 @@ async def async_process_new_game(user_id, conversation_data):
                 ON CONFLICT DO NOTHING
             """, user_id, conversation_id, loc_name, loc_desc, json.dumps(open_hours))
      
-        # Step 6: Generate scenario name and quest summary (if conversation was newly created).
+        # Step 6: Generate scenario name & quest summary if new conversation
         scenario_name = "New Game"
         quest_blurb = ""
         if not provided_conversation_id:
-            logging.info("Generating scenario name and quest summary using GPT for environment: %s", environment_name)
-            scenario_name, quest_blurb = await asyncio.to_thread(gpt_generate_scenario_name_and_quest, environment_name, environment_desc)
-            logging.info("Generated scenario name: %s and quest blurb: %s", scenario_name, quest_blurb)
+            scenario_name, quest_blurb = await asyncio.to_thread(
+                gpt_generate_scenario_name_and_quest,
+                environment_name,
+                base_environment_desc
+            )
             await conn.execute("""
                 UPDATE conversations SET conversation_name=$1 WHERE id=$2
             """, scenario_name, conversation_id)
+
+        # Re-open DB for further steps
+        await conn.close()
+        conn = await asyncpg.connect(dsn=DB_DSN)
+
+        # Verify conversation
+        if provided_conversation_id:
+            row = await conn.fetchrow("""
+                SELECT id FROM conversations WHERE id=$1 AND user_id=$2
+            """, conversation_id, user_id)
+            if not row:
+                await conn.close()
+                raise Exception(f"Conversation {conversation_id} not found or unauthorized")
         
         # Step 7: Re-open connection for subsequent steps.
         logging.info("Re-opening DB connection for further operations on conversation_id=%s", conversation_id)
@@ -1109,66 +1109,65 @@ async def async_process_new_game(user_id, conversation_data):
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, json.dumps(chase_schedule))
         
-                # Step 16.5: Final NPC Adjustments via Combined GPT Call.
-                logging.info("Performing final adjustments on NPCs using a combined GPT call for conversation_id=%s", conversation_id)
-                npc_rows = await conn.fetch("""
-                    SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes, archetype_summary
-                    FROM NPCStats
-                    WHERE user_id=$1 AND conversation_id=$2
-                """, user_id, conversation_id)
-                
-                # Reuse the same 'immersive_days' from step 16
-                # (i.e., the list we extracted from `calendar_names.get("days")`)
-                actual_immersive_days = immersive_days
-        
-                
-                for npc_row in npc_rows:
-                    npc_id = npc_row["npc_id"]
-                    npc_data = {
-                        "npc_name": npc_row["npc_name"],
-                        "hobbies": json.loads(npc_row["hobbies"]) if isinstance(npc_row["hobbies"], str) else npc_row["hobbies"],
-                        "likes": json.loads(npc_row["likes"]) if isinstance(npc_row["likes"], str) else npc_row["likes"],
-                        "dislikes": json.loads(npc_row["dislikes"]) if isinstance(npc_row["dislikes"], str) else npc_row["dislikes"],
-                        "affiliations": json.loads(npc_row["affiliations"]) if isinstance(npc_row["affiliations"], str) else npc_row["affiliations"],
-                        "schedule": json.loads(npc_row["schedule"]) if isinstance(npc_row["schedule"], str) else npc_row["schedule"],
-                        "archetypes": json.loads(npc_row["archetypes"]) if isinstance(npc_row["archetypes"], str) else npc_row["archetypes"],
-                        "archetype_summary": npc_row.get("archetype_summary", "")
-                    }
-                    
-                    try:
-                        complete_npc = await call_gpt_with_retry(
-                            func=adjust_npc_complete,
-                            expected_keys={"likes", "dislikes", "hobbies", "affiliations", "schedule"},
-                            npc_data=npc_data,
-                            environment_desc=environment_desc,
-                            conversation_id=conversation_id,
-                            immersive_days=actual_immersive_days  # <--- now matches the same list we used for Chase
-                        )
-                    except Exception as e:
-                        logging.error("Error adjusting complete NPC details for NPC %s after retries: %s", npc_id, e)
-                        complete_npc = {
-                            "likes": npc_data.get("likes", []),
-                            "dislikes": npc_data.get("dislikes", []),
-                            "hobbies": npc_data.get("hobbies", []),
-                            "affiliations": npc_data.get("affiliations", []),
-                            "schedule": npc_data.get("schedule", {})
-                        }
-                    
-                    await conn.execute("""
-                        UPDATE NPCStats
-                        SET likes = $1,
-                            dislikes = $2,
-                            hobbies = $3,
-                            affiliations = $4,
-                            schedule = $5
-                        WHERE npc_id = $6 AND user_id = $7 AND conversation_id = $8
-                    """,
-                    json.dumps(complete_npc.get("likes", [])),
-                    json.dumps(complete_npc.get("dislikes", [])),
-                    json.dumps(complete_npc.get("hobbies", [])),
-                    json.dumps(complete_npc.get("affiliations", [])),
-                    json.dumps(complete_npc.get("schedule", {})),
-                    npc_id, user_id, conversation_id)       
+        # Step 16.5: Final NPC Adjustments
+        logging.info("Performing final adjustments on NPCs using a combined GPT call for conversation_id=%s", conversation_id)
+        npc_rows = await conn.fetch("""
+            SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes, archetype_summary
+            FROM NPCStats
+            WHERE user_id=$1 AND conversation_id=$2
+        """, user_id, conversation_id)
+
+        # Reuse the same 'immersive_days' from Step 16
+        actual_immersive_days = calendar_data.get("days", ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
+
+        for npc_row in npc_rows:
+            npc_id = npc_row["npc_id"]
+            npc_data = {
+                "npc_name": npc_row["npc_name"],
+                "hobbies": json.loads(npc_row["hobbies"]) if isinstance(npc_row["hobbies"], str) else npc_row["hobbies"],
+                "likes": json.loads(npc_row["likes"]) if isinstance(npc_row["likes"], str) else npc_row["likes"],
+                "dislikes": json.loads(npc_row["dislikes"]) if isinstance(npc_row["dislikes"], str) else npc_row["dislikes"],
+                "affiliations": json.loads(npc_row["affiliations"]) if isinstance(npc_row["affiliations"], str) else npc_row["affiliations"],
+                "schedule": json.loads(npc_row["schedule"]) if isinstance(npc_row["schedule"], str) else npc_row["schedule"],
+                "archetypes": json.loads(npc_row["archetypes"]) if isinstance(npc_row["archetypes"], str) else npc_row["archetypes"],
+                "archetype_summary": npc_row.get("archetype_summary", "")
+            }
+
+            try:
+                complete_npc = await call_gpt_with_retry(
+                    func=adjust_npc_complete,
+                    expected_keys={"likes", "dislikes", "hobbies", "affiliations", "schedule"},
+                    npc_data=npc_data,
+                    environment_desc=base_environment_desc,
+                    conversation_id=conversation_id,
+                    immersive_days=actual_immersive_days
+                )
+            except Exception as e:
+                logging.error("Error adjusting complete NPC details for NPC %s after retries: %s", npc_id, e)
+                complete_npc = {
+                    "likes": npc_data.get("likes", []),
+                    "dislikes": npc_data.get("dislikes", []),
+                    "hobbies": npc_data.get("hobbies", []),
+                    "affiliations": npc_data.get("affiliations", []),
+                    "schedule": npc_data.get("schedule", {})
+                }
+
+            await conn.execute("""
+                UPDATE NPCStats
+                SET likes = $1,
+                    dislikes = $2,
+                    hobbies = $3,
+                    affiliations = $4,
+                    schedule = $5
+                WHERE npc_id = $6 AND user_id = $7 AND conversation_id = $8
+            """,
+            json.dumps(complete_npc.get("likes", [])),
+            json.dumps(complete_npc.get("dislikes", [])),
+            json.dumps(complete_npc.get("hobbies", [])),
+            json.dumps(complete_npc.get("affiliations", [])),
+            json.dumps(complete_npc.get("schedule", {})),
+            npc_id, user_id, conversation_id)
+  
           
         # Step 17: Build aggregated roleplay context.
         logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
