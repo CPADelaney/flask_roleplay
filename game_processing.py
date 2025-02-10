@@ -19,17 +19,6 @@ from logic.calendar import update_calendar_names
 DB_DSN = "postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@monorail.proxy.rlwy.net:24727/railway"
 
 # ---------------------------------------------------------------------
-# Helper to query the CurrentRoleplay table for a stored value.
-async def get_stored_value(conn, user_id, conversation_id, key):
-    row = await conn.fetchrow(
-        "SELECT value FROM CurrentRoleplay WHERE user_id=$1 AND conversation_id=$2 AND key=$3",
-        user_id, conversation_id, key
-    )
-    if row:
-        return row["value"]
-    return None
-
-# ---------------------------------------------------------------------
 # Helper: spaced-out GPT call.
 async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0):
     logging.info("Waiting for %.1f seconds before calling GPT (conversation_id=%s)", delay, conversation_id)
@@ -68,7 +57,10 @@ async def call_gpt_with_retry(func, expected_keys: set, retries: int = 3, initia
                 logging.error("Max retries reached for %s", func.__name__)
                 raise
 
-# 1) Some JSON schemas for structured outputs
+###############################################################################
+# JSON Schemas for structured outputs
+###############################################################################
+
 ENV_NAME_SCHEMA = {
     "name": "EnvironmentName",
     "strict": True,
@@ -148,10 +140,7 @@ LOCATIONS_SCHEMA = {
                     "properties":{
                         "location_name":{"type":"string"},
                         "description":{"type":"string"},
-                        "open_hours":{
-                            "type":"array",
-                            "items":{"type":"string"}
-                        }
+                        "open_hours":{"type":"array","items":{"type":"string"}}
                     },
                     "required":["location_name","description","open_hours"],
                     "additionalProperties":False
@@ -159,6 +148,80 @@ LOCATIONS_SCHEMA = {
             }
         },
         "required":["locations"],
+        "additionalProperties":False
+    }
+}
+
+PLAYER_ROLE_SCHEMA = {
+    "name":"PlayerRole",
+    "strict":True,
+    "schema":{
+        "type":"object",
+        "properties":{
+            "player_role":{"type":"string"}
+        },
+        "required":["player_role"],
+        "additionalProperties":False
+    }
+}
+
+MAIN_QUEST_SCHEMA = {
+    "name":"MainQuest",
+    "strict":True,
+    "schema":{
+        "type":"object",
+        "properties":{
+            "quest_name":{"type":"string"},
+            "progress_detail":{"type":"string"}
+        },
+        "required":["quest_name","progress_detail"],
+        "additionalProperties":False
+    }
+}
+
+# For "ChaseSchedule", we define an object: { "schedule": { "Alpha": { "Morning": "...", ...}, "Beta": {...}, ... } }
+# That means the top-level has "schedule" as a required key.
+# Inside "schedule", each day is an object with Morning/Afternoon/Evening/Night. 
+# We'll use "additionalProperties" so day-names can vary.
+CHASE_SCHEDULE_SCHEMA = {
+    "name":"ChaseScheduleSchema",
+    "strict":True,
+    "schema":{
+        "type":"object",
+        "properties":{
+            "schedule":{
+                "type":"object",
+                "patternProperties":{
+                    "^.*$":{
+                        "type":"object",
+                        "properties":{
+                            "Morning":{"type":"string"},
+                            "Afternoon":{"type":"string"},
+                            "Evening":{"type":"string"},
+                            "Night":{"type":"string"}
+                        },
+                        "required":["Morning","Afternoon","Evening","Night"],
+                        "additionalProperties":False
+                    }
+                },
+                "additionalProperties":False
+            }
+        },
+        "required":["schedule"],
+        "additionalProperties":False
+    }
+}
+
+# For the final opening narrative from Nyx, let's store it in a single "narrative" string.
+OPENING_SCHEMA = {
+    "name":"OpeningNarrative",
+    "strict":True,
+    "schema":{
+        "type":"object",
+        "properties":{
+            "narrative":{"type":"string"}
+        },
+        "required":["narrative"],
         "additionalProperties":False
     }
 }
@@ -681,6 +744,9 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
 
 # ---------------------------------------------------------------------
 # The main function, but replaced calls with structured approach
+###############################################################################
+# The main function: everything is structured
+###############################################################################
 async def async_process_new_game(user_id, conversation_data):
     logging.info("=== Starting async_process_new_game for user_id=%s with conversation_data=%s ===", user_id, conversation_data)
 
@@ -726,7 +792,6 @@ async def async_process_new_game(user_id, conversation_data):
         stat_modifiers = mega_data.get("stat_modifiers", {})
 
         # 3.1) environment name (structured)
-        # We'll build system+user prompts
         system_text = "You produce a single JSON with 'setting_name' for the environment."
         user_text = (
             "Environment components:\n" + "\n".join(unique_envs) + "\n"
@@ -739,41 +804,39 @@ async def async_process_new_game(user_id, conversation_data):
             environment_name = env_name_obj["setting_name"]
         logging.info(f"Got environment_name => {environment_name}")
 
-        # 3.2) environment desc
+        # 3.2) environment desc (structured)
         system_text = "You produce a single JSON with 'setting_desc' describing the environment."
         user_text = (
             f"Environment components: {unique_envs}\n"
             f"Enhanced features: {enhanced_features}\n"
             f"Stat modifiers: {stat_modifiers}\n"
-            "Describe in a cohesive narrative how these combine into a unique, dynamic world. Output only {\"setting_desc\":\"...\"}."
+            "Describe in a cohesive narrative how these combine into a unique, dynamic world. "
+            "Output only {\"setting_desc\":\"...\"}."
         )
         env_desc_obj = await call_gpt_structured(system_text, user_text, ENV_DESC_SCHEMA)
         if not env_desc_obj:
-            base_environment_desc = "An eclectic realm with monstrous societies, futuristic tech, archaic ruins floating in the sky..."
+            base_environment_desc = "An eclectic realm of monstrous societies, futuristic tech, archaic ruins overhead..."
         else:
             base_environment_desc = env_desc_obj["setting_desc"]
-
+        
         # store environment desc
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
             VALUES ($1, $2, 'EnvironmentDesc', $3)
-            ON CONFLICT DO UPDATE SET value=EXCLUDED.value
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, base_environment_desc)
 
         # 3.3) generate some NPCs
         npc_count = 3
         generated_npcs = []
         for i in range(npc_count):
-            # We keep create_npc the same, or if it is the new structured approach you'd do
-            # `await create_npc(...)` if create_npc is now async
-            # Let's assume it's still a sync function with .to_thread
             new_npc_id = await asyncio.to_thread(create_npc, user_id, conversation_id, introduced=False)
             generated_npcs.append(new_npc_id)
         logging.info(f"Generated NPCs => {generated_npcs}")
 
-        # 3.4) environment history
-        # In structured approach, we might do:  { "history": "some text" }
-        system_text = "You produce a single JSON with 'history' containing a brief, evocative history."
+        # 3.4) environment history (structured)
+        system_text = "You produce a single JSON with 'history' containing a brief, evocative setting backstory."
         user_text = (
             f"Environment desc: {base_environment_desc}\n"
             f"NPCs: {generated_npcs}\n"
@@ -781,20 +844,16 @@ async def async_process_new_game(user_id, conversation_data):
         )
         env_hist_obj = await call_gpt_structured(system_text, user_text, ENV_HISTORY_SCHEMA)
         if not env_hist_obj:
-            environment_history = "World context updated but GPT fallback."
+            environment_history = "GPT refused or failed, fallback to a generic backstory."
         else:
             environment_history = env_hist_obj["history"]
         environment_desc = f"{base_environment_desc}\n\nHistory: {environment_history}"
 
-        # store environment desc with history if you'd like
-        # or just keep it in memory
-        # next, do calendar
-        from logic.calendar import update_calendar_names
+        # 3.5) calendar
         calendar_data = await update_calendar_names(user_id, conversation_id, environment_desc)
 
-        # 4) events - structured approach
-        # "events": an array of { name, description, start_time, end_time, location }
-        system_text = "You produce a JSON object with a single key 'events', which is an array of event objects."
+        # 4) environment events (structured)
+        system_text = "You produce a JSON object with 'events': array of event objects."
         user_text = (
             f"Environment description: {environment_desc}\n"
             "Each event => name, description, start_time, end_time, location.\n"
@@ -805,7 +864,7 @@ async def async_process_new_game(user_id, conversation_data):
             events_json = []
         else:
             events_json = events_obj["events"]
-        # store events in DB
+        # insert events
         for ev in events_json:
             name = ev.get("name","Unnamed Event")
             desc = ev.get("description","")
@@ -814,28 +873,29 @@ async def async_process_new_game(user_id, conversation_data):
             loc = ev.get("location","Unknown")
             await conn.execute("""
                 INSERT INTO Events (user_id, conversation_id, event_name, description, start_time, end_time, location)
-                VALUES ($1,$2,$3,$4,$5,$6,$7)
+                VALUES($1,$2,$3,$4,$5,$6,$7)
                 ON CONFLICT DO NOTHING
             """, user_id, conversation_id, name, desc, stime, etime, loc)
 
-        # 5) locations
-        system_text = "You produce a JSON object with 'locations': array of { location_name, description, open_hours[] }."
+        # 5) environment locations (structured)
+        system_text = "You produce a JSON object with 'locations': array of location objects."
         user_text = (
             f"Environment description: {environment_desc}\n"
-            "Return only {\"locations\":[...]}, no extra text."
+            "Return only {\"locations\":[...]}, no extra text. Each location => location_name, description, open_hours[]."
         )
         loc_obj = await call_gpt_structured(system_text, user_text, LOCATIONS_SCHEMA)
         if not loc_obj:
             locations_json = []
         else:
             locations_json = loc_obj["locations"]
+        # insert locations
         for loc in locations_json:
             loc_name = loc["location_name"]
             loc_desc = loc["description"]
             open_hours = loc["open_hours"]
             await conn.execute("""
                 INSERT INTO Locations (user_id, conversation_id, location_name, description, open_hours)
-                VALUES ($1,$2,$3,$4,$5)
+                VALUES($1,$2,$3,$4,$5)
                 ON CONFLICT DO NOTHING
             """, user_id, conversation_id, loc_name, loc_desc, json.dumps(open_hours))
 
@@ -848,56 +908,41 @@ async def async_process_new_game(user_id, conversation_data):
                 environment_name,
                 base_environment_desc
             )
-            await conn.execute("""UPDATE conversations SET conversation_name=$1 WHERE id=$2""",
-                scenario_name, conversation_id
-            )
+            await conn.execute("""
+                UPDATE conversations SET conversation_name=$1 
+                WHERE id=$2
+            """, scenario_name, conversation_id)
 
         # 7) store environment_name
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
             VALUES($1,$2,'CurrentSetting',$3)
-            ON CONFLICT DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id, environment_name)
-        
-        # Step 8: Verify conversation exists (if provided).
-        if provided_conversation_id:
-            logging.info("Verifying conversation existence for conversation_id=%s", conversation_id)
-            row = await conn.fetchrow("""
-                SELECT id FROM conversations WHERE id=$1 AND user_id=$2
-            """, conversation_id, user_id)
-            if not row:
-                await conn.close()
-                raise Exception(f"Conversation {conversation_id} not found or unauthorized")
-            logging.info("Verified conversation existence for conversation_id=%s", conversation_id)
-        
-        # Step 9: Clear old game data. (Deprecated)
-        
-        # Step 10: Insert environment data (MegaSettingModifiers).
-        modifiers_json = json.dumps(mega_data.get("stat_modifiers", {}))
-        logging.info("Storing MegaSettingModifiers: %s", modifiers_json)
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'MegaSettingModifiers', $3)
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id, environment_name)
+
+        # 8) Insert environment data (MegaSettingModifiers).
+        modifiers_json = json.dumps(mega_data.get("stat_modifiers", {}))
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES($1,$2,'MegaSettingModifiers',$3)
+            ON CONFLICT DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, modifiers_json)
-        
-        # Step 11: Insert missing settings.
-        logging.info("Inserting missing settings")
+
+        # 9) Insert missing settings
         await asyncio.to_thread(insert_missing_settings)
-        
-        # Step 12: Reset or create 'Chase' in PlayerStats.
-        logging.info("Resetting or creating PlayerStats for 'Chase' in conversation_id=%s", conversation_id)
+
+        # 10) Reset or create 'Chase' in PlayerStats
         await conn.execute("""
             DELETE FROM PlayerStats
-            WHERE user_id=$1 AND conversation_id=$2 AND player_name <> 'Chase'
+            WHERE user_id=$1 AND conversation_id=$2 
+              AND player_name <> 'Chase'
         """, user_id, conversation_id)
         chase_row = await conn.fetchrow("""
             SELECT id FROM PlayerStats
             WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
         """, user_id, conversation_id)
         if chase_row:
-            logging.info("Updating existing PlayerStats for 'Chase'")
             await conn.execute("""
                 UPDATE PlayerStats
                 SET corruption=10, confidence=60, willpower=50, obedience=20,
@@ -905,7 +950,6 @@ async def async_process_new_game(user_id, conversation_data):
                 WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
             """, user_id, conversation_id)
         else:
-            logging.info("Inserting new PlayerStats for 'Chase'")
             await conn.execute("""
                 INSERT INTO PlayerStats (
                   user_id, conversation_id, player_name,
@@ -913,349 +957,175 @@ async def async_process_new_game(user_id, conversation_data):
                   obedience, dependency, lust,
                   mental_resilience, physical_endurance
                 )
-                VALUES ($1, $2, 'Chase', 10, 60, 50, 20, 10, 15, 55, 40)
+                VALUES ($1,$2,'Chase',10,60,50,20,10,15,55,40)
             """, user_id, conversation_id)
-        
-        # Step 13: Store environment name as 'CurrentSetting'.
-        logging.info("Storing CurrentSetting as '%s' for conversation_id=%s", environment_name, conversation_id)
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'CurrentSetting', $3)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id, environment_name)
-        
-        # Step 14: Generate and store PlayerRole.
-        player_role_prompt = (
-            "Based on the current environment and setting, generate a concise description of Chase's typical day "
-            "(e.g., career/daily life). The description should reflect how his role fits into this world of dominant females. "
-            "In real life, Chase is a 31 year old data analyst, but this does not necessarily mean it will be the same. "
-            "Career can be anything (student, etc.), but make sure it fits and makes sense within setting context."
-            "Do not include any additional text, markdown, or narrative. Output only the JSON object."
+
+        # 11) PlayerRole (structured)
+        system_text = "You produce a JSON with 'player_role' describing daily life of Chase in a femdom environment."
+        user_text = (
+            f"Environment desc: {environment_desc}\n"
+            "Chase is 31, but can have any in-world occupation. Return only {\"player_role\":\"...\"}"
         )
-        logging.info("Generating PlayerRole with prompt: %s", player_role_prompt)
-        player_role_reply = await spaced_gpt_call(conversation_id, environment_desc, player_role_prompt)
-        
-        # Check if the response was returned in the "response" key or as part of a function call.
-        if player_role_reply.get("response"):
-            player_role_text = player_role_reply["response"].strip()
-        elif (player_role_reply.get("type") == "function_call" and
-              player_role_reply.get("function_args", {}).get("PlayerRole")):
-            player_role_text = player_role_reply["function_args"]["PlayerRole"].strip()
+        role_obj = await call_gpt_structured(system_text, user_text, PLAYER_ROLE_SCHEMA)
+        if not role_obj:
+            player_role_text = "Chase works a standard office job, scraping by."
         else:
-            stored_player_role = await get_stored_value(conn, user_id, conversation_id, "PlayerRole")
-            if stored_player_role:
-                player_role_text = stored_player_role
-            else:
-                logging.warning("GPT returned no PlayerRole text and none stored; using fallback.")
-                player_role_text = "Chase works a standard office job, barely scraping by."
-        
-        logging.info("Generated PlayerRole: %s", player_role_text)
+            player_role_text = role_obj["player_role"]
+        # store
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'PlayerRole', $3)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
+            VALUES($1,$2,'PlayerRole',$3)
+            ON CONFLICT DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, player_role_text)
 
-        
-        # Step 15: Generate and store MainQuest.
-        main_quest_prompt = (
-            "Based on the current environment, NPCs, and the fact that Chase is one of the only men in this world of dominant females, "
-            "generate a short summary of the main quest he is about to undertake. The quest should be intriguing and mysterious, "
-            "hinting at challenges ahead without revealing too much. "
-            "Ensure the quest is unique and engaging. Give it an equally creative name. Do not use the word 'of' in the quest name. "
-            "Do not include any additional text, markdown, or narrative. Output only the JSON object."
-            "Output only a JSON object with keys 'quest_name' and 'progress_detail'."
-            "Then extract those keys and use them in your INSERT statement."
+        # 12) MainQuest (structured)
+        system_text = "You produce a JSON with 'quest_name' and 'progress_detail' for a mysterious main quest."
+        user_text = (
+            f"Environment desc: {environment_desc}\n"
+            "Chase is one of the only men in a world of dominant females. Summarize the quest. "
+            "No extra text, only {\"quest_name\":\"...\",\"progress_detail\":\"...\"}."
         )
-        logging.info("Generating MainQuest with prompt: %s", main_quest_prompt)
-        main_quest_reply = await spaced_gpt_call(conversation_id, environment_desc, main_quest_prompt)
-        
-        if main_quest_reply.get("response"):
-            main_quest_text = main_quest_reply["response"].strip()
-        elif main_quest_reply.get("type") == "function_call":
-            func_args = main_quest_reply.get("function_args", {})
-            
-            # Remove markdown code fences if present (optional—apply similar logic as before)
-            # (Assume this was done before, so func_args is already a proper dict)
-            
-            # Get values from both keys, if they exist
-            main_quest_value = func_args.get("MainQuest", "").strip() if "MainQuest" in func_args else ""
-            quest_updates_value = func_args.get("quest_updates")
-            
-            # If quest_updates is a non-empty list, extract the quest name from the first update
-            quest_from_updates = ""
-            if isinstance(quest_updates_value, list) and len(quest_updates_value) > 0:
-                quest_from_updates = quest_updates_value[0].get("quest_name", "").strip()
-            
-            # Now decide which one to use or combine them:
-            if main_quest_value and quest_from_updates:
-                # For example, if the main quest value is very short (say, less than 10 characters), use the quest_updates value;
-                # otherwise, combine them (or choose one—here we combine them with a space)
-                if len(main_quest_value) < 10:
-                    main_quest_text = quest_from_updates
-                else:
-                    main_quest_text = main_quest_value + " " + quest_from_updates
-            elif main_quest_value:
-                main_quest_text = main_quest_value
-            elif quest_from_updates:
-                main_quest_text = quest_from_updates
-            else:
-                main_quest_text = ""
+        quest_obj = await call_gpt_structured(system_text, user_text, MAIN_QUEST_SCHEMA)
+        if not quest_obj:
+            main_quest_text = "Embark on a mysterious journey to prove your worth."
+            # progress_detail can be blank or something
+            progress_detail = ""
         else:
-            logging.warning("GPT returned no MainQuest text and none stored; using fallback.")
-            main_quest_text = "Embark on a mysterious quest that challenges everything Chase thought he knew."
-
-        logging.info("Generated MainQuest: %s", main_quest_text)
-        
-        # Instead of inserting into CurrentRoleplay, insert the quest into the Quests table.
-        # Here, we use the generated main_quest_text as the quest name.
-        # (Additional fields like progress_detail, quest_giver, and reward can be updated later via quest_updates.)
+            main_quest_text = quest_obj["quest_name"]
+            progress_detail = quest_obj["progress_detail"]
+        # store quest
         await conn.execute("""
             INSERT INTO Quests (user_id, conversation_id, quest_name, status, progress_detail, quest_giver, reward)
-            VALUES ($1, $2, $3, 'In Progress', '', '', '')
-        """, user_id, conversation_id, main_quest_text)
+            VALUES ($1, $2, $3, 'In Progress', $4, '', '')
+        """, user_id, conversation_id, main_quest_text, progress_detail)
 
-        # Step 16: Generate and store ChaseSchedule.
-        calendar_names = json.loads(await get_stored_value(conn, user_id, conversation_id, "CalendarNames"))
-        immersive_days = calendar_names.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
-        
-        # First, try to retrieve the immersive calendar names from CurrentRoleplay.
-        row = await conn.fetchrow("""
-            SELECT value 
-            FROM CurrentRoleplay 
+        # 13) ChaseSchedule (structured)
+        # We have a "CHASE_SCHEDULE_SCHEMA" that returns: { "schedule": { "Alpha": {...}, "Beta": {...}, ... } }
+        # We'll store that entire object as 'ChaseSchedule'
+        # Retrieve day names from 'CalendarNames' to help GPT
+        row_cal = await conn.fetchrow("""
+            SELECT value FROM CurrentRoleplay
             WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
         """, user_id, conversation_id)
-        if row:
+        if row_cal:
             try:
-                calendar_names = json.loads(row[0])
-                # Expect "days" to be an array of 7 names.
-                immersive_days = calendar_names.get(
-                    "days",
-                    ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-                )
-            except Exception as e:
-                logging.warning("Failed to parse CalendarNames: %s", e)
-                immersive_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                cal_json = json.loads(row_cal["value"])
+                day_names = cal_json.get("days", ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
+            except:
+                day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
         else:
-            immersive_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        
-        # Now, instruct GPT to use these immersive day names in the schedule.
-        schedule_prompt = (
-            f"Based on the current environment and Chase's role, generate a detailed weekly schedule for Chase. "
-            f"Use the following immersive day names for the week: {', '.join(immersive_days)}. "
-            "Return a function call payload with a parameter named \"ChaseSchedule\" that is a valid JSON object with keys for each day, "
-            "where each day has nested keys for \"Morning\", \"Afternoon\", \"Evening\", and \"Night\" representing Chase's activities. "
-            "Do not output any additional text or markdown formatting."
+            day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+
+        system_text = "You produce a JSON with top-level key 'schedule': an object mapping each day to Morning/Afternoon/Evening/Night."
+        user_text = (
+            f"Environment desc: {environment_desc}\n"
+            f"Chase's role: {player_role_text}\n"
+            "Use these day names: " + ", ".join(day_names) + ". "
+            "No extra text, only {\"schedule\":{\"DayName\":{\"Morning\":\"...\",\"Afternoon\":\"...\",\"Evening\":\"...\",\"Night\":\"...\"},...}}"
         )
-        logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
-        schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
-        
-        if schedule_reply.get("type") == "function_call":
-            logging.info("GPT returned a function call for ChaseSchedule. Processing update via apply_universal_update.")
-            fn_args = schedule_reply.get("function_args", {})
-            # The payload should include a key "ChaseSchedule"
-            await apply_universal_update(user_id, conversation_id, fn_args, conn)
-        
-            # After the update, retrieve the stored schedule from the database.
-            stored_schedule = await get_stored_value(conn, user_id, conversation_id, "ChaseSchedule")
-            if stored_schedule:
-                chase_schedule_generated = stored_schedule
-                logging.info("Retrieved stored ChaseSchedule: %s", chase_schedule_generated)
-            else:
-                logging.warning("No stored ChaseSchedule found after function call; using fallback JSON.")
-                # Build a fallback schedule dynamically:
-                fallback_schedule = {}
-                for day_name in immersive_days:
-                    fallback_schedule[day_name] = {
-                        "Morning":   f"Wake at {day_name} morning, have a quick breakfast",
-                        "Afternoon": f"Continue daily tasks on {day_name} afternoon",
-                        "Evening":   f"Relax or socialize on {day_name} evening",
-                        "Night":     f"Return to lodgings for rest on {day_name} night"
-                    }
-                chase_schedule_generated = json.dumps(fallback_schedule, indent=2)
-        
-        else:
-            # Process a plain text response.
-            chase_schedule_generated = schedule_reply.get("response", "{}")
-            logging.info("Raw ChaseSchedule response from GPT: %s", chase_schedule_generated)
-            # Strip code fences if present:
-            if chase_schedule_generated.startswith("```"):
-                lines = chase_schedule_generated.splitlines()
-                if lines and lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                chase_schedule_generated = "\n".join(lines).strip()
-        
-            # If GPT returned empty or an empty JSON object, use a dynamic fallback.
-            if not chase_schedule_generated or chase_schedule_generated.strip() in ["{}", ""]:
-                logging.warning("ChaseSchedule GPT response was empty; using fallback JSON.")
-                fallback_schedule = {}
-                for day_name in immersive_days:
-                    fallback_schedule[day_name] = {
-                        "Morning":   f"Wake at {day_name} morning, have a quick breakfast",
-                        "Afternoon": f"Continue daily tasks on {day_name} afternoon",
-                        "Evening":   f"Relax or socialize on {day_name} evening",
-                        "Night":     f"Return to lodgings for rest on {day_name} night"
-                    }
-                chase_schedule_generated = json.dumps(fallback_schedule, indent=2)
-        
-        try:
-            chase_schedule = json.loads(chase_schedule_generated)
-            logging.info("Parsed ChaseSchedule JSON successfully: %s", chase_schedule)
-        except Exception as e:
-            logging.warning("Failed to parse ChaseSchedule JSON; using fallback schedule. Exception: %s", e, exc_info=True)
-            # If JSON parsing fails, build a fallback again using immersive_days
-            fallback_schedule = {}
-            for day_name in immersive_days:
-                fallback_schedule[day_name] = {
-                    "Morning":   f"Wake at {day_name} morning, have a quick breakfast",
-                    "Afternoon": f"Continue daily tasks on {day_name} afternoon",
-                    "Evening":   f"Relax or socialize on {day_name} evening",
-                    "Night":     f"Return to lodgings for rest on {day_name} night"
+        schedule_obj = await call_gpt_structured(system_text, user_text, CHASE_SCHEDULE_SCHEMA)
+        if not schedule_obj:
+            # fallback
+            fallback = {}
+            for d in day_names:
+                fallback[d] = {
+                    "Morning": f"Wake up on {d}, quick breakfast",
+                    "Afternoon": f"Go about tasks on {d}",
+                    "Evening": f"Socialize or study on {d}",
+                    "Night": f"Return home and sleep on {d}"
                 }
-            chase_schedule = fallback_schedule
-        
-        logging.info("Final ChaseSchedule to be stored: %s", chase_schedule)
+            chase_schedule = fallback
+        else:
+            chase_schedule = schedule_obj["schedule"]
+
+        # store schedule
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'ChaseSchedule', $3)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
+            VALUES($1,$2,'ChaseSchedule',$3)
+            ON CONFLICT DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, json.dumps(chase_schedule))
-        
-        # Step 16.5: Final NPC Adjustments
-        logging.info("Performing final adjustments on NPCs using a combined GPT call for conversation_id=%s", conversation_id)
+
+        # 14) Final NPC adjustments same as before, calling adjust_npc_complete with call_gpt_with_retry
         npc_rows = await conn.fetch("""
             SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes, archetype_summary
             FROM NPCStats
             WHERE user_id=$1 AND conversation_id=$2
         """, user_id, conversation_id)
 
-        # Reuse the same 'immersive_days' from Step 16
-        actual_immersive_days = calendar_data.get("days", ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
-
-        for npc_row in npc_rows:
-            npc_id = npc_row["npc_id"]
-            npc_data = {
-                "npc_name": npc_row["npc_name"],
-                "hobbies": json.loads(npc_row["hobbies"]) if isinstance(npc_row["hobbies"], str) else npc_row["hobbies"],
-                "likes": json.loads(npc_row["likes"]) if isinstance(npc_row["likes"], str) else npc_row["likes"],
-                "dislikes": json.loads(npc_row["dislikes"]) if isinstance(npc_row["dislikes"], str) else npc_row["dislikes"],
-                "affiliations": json.loads(npc_row["affiliations"]) if isinstance(npc_row["affiliations"], str) else npc_row["affiliations"],
-                "schedule": json.loads(npc_row["schedule"]) if isinstance(npc_row["schedule"], str) else npc_row["schedule"],
-                "archetypes": json.loads(npc_row["archetypes"]) if isinstance(npc_row["archetypes"], str) else npc_row["archetypes"],
-                "archetype_summary": npc_row.get("archetype_summary", "")
+        actual_immersive_days = day_names  # or from calendar_data
+        for row_npc in npc_rows:
+            npc_id = row_npc["npc_id"]
+            npc_data_dict = {
+                "npc_name": row_npc["npc_name"],
+                "hobbies": json.loads(row_npc["hobbies"]),
+                "likes": json.loads(row_npc["likes"]),
+                "dislikes": json.loads(row_npc["dislikes"]),
+                "affiliations": json.loads(row_npc["affiliations"]),
+                "schedule": json.loads(row_npc["schedule"]),
+                "archetypes": json.loads(row_npc["archetypes"]),
+                "archetype_summary": row_npc["archetype_summary"] or ""
             }
-
             try:
-                complete_npc = await call_gpt_with_retry(
+                new_npc_data = await call_gpt_with_retry(
                     func=adjust_npc_complete,
-                    expected_keys={"likes", "dislikes", "hobbies", "affiliations", "schedule"},
-                    npc_data=npc_data,
+                    expected_keys={"likes","dislikes","hobbies","affiliations","schedule"},
+                    npc_data=npc_data_dict,
                     environment_desc=base_environment_desc,
                     conversation_id=conversation_id,
                     immersive_days=actual_immersive_days
                 )
             except Exception as e:
-                logging.error("Error adjusting complete NPC details for NPC %s after retries: %s", npc_id, e)
-                complete_npc = {
-                    "likes": npc_data.get("likes", []),
-                    "dislikes": npc_data.get("dislikes", []),
-                    "hobbies": npc_data.get("hobbies", []),
-                    "affiliations": npc_data.get("affiliations", []),
-                    "schedule": npc_data.get("schedule", {})
+                logging.error(f"NPC synergy adjustment failed for {npc_id}: {e}")
+                new_npc_data = {
+                    "likes": npc_data_dict["likes"],
+                    "dislikes": npc_data_dict["dislikes"],
+                    "hobbies": npc_data_dict["hobbies"],
+                    "affiliations": npc_data_dict["affiliations"],
+                    "schedule": npc_data_dict["schedule"]
                 }
-
+            # update in DB
             await conn.execute("""
                 UPDATE NPCStats
-                SET likes = $1,
-                    dislikes = $2,
-                    hobbies = $3,
-                    affiliations = $4,
-                    schedule = $5
-                WHERE npc_id = $6 AND user_id = $7 AND conversation_id = $8
+                SET likes=$1, dislikes=$2, hobbies=$3, affiliations=$4, schedule=$5
+                WHERE npc_id=$6 AND user_id=$7 AND conversation_id=$8
             """,
-            json.dumps(complete_npc.get("likes", [])),
-            json.dumps(complete_npc.get("dislikes", [])),
-            json.dumps(complete_npc.get("hobbies", [])),
-            json.dumps(complete_npc.get("affiliations", [])),
-            json.dumps(complete_npc.get("schedule", {})),
-            npc_id, user_id, conversation_id)
-  
-          
-        # Step 17: Build aggregated roleplay context.
-        logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
-        aggregator_data = await asyncio.to_thread(get_aggregated_roleplay_context, user_id, conversation_id, "Chase")
-        aggregator_text = await asyncio.to_thread(build_aggregator_text, aggregator_data)
-        logging.info("Aggregated context built: %s", aggregator_text)
-        
-        # Step 18: Opening narrative
-        ### Dynamically use the first day name from immersive_days
-        first_day_name = immersive_days[0] if immersive_days else "the first day"
-        opening_user_prompt = (
-            "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, avoiding clichéd phrases such as 'Ah, Chase'. "
-            "Format your greeting using Markdown sections. Briefly recount the new environment's background from the aggregator data, "
-            f"and announce that {first_day_name} morning has just begun. Make sure to reference the schedule stored in CurrentRoleplay, "
-            "which details Chase's planned activities for the day, and describe where he is scheduled to be. Also, include a nod to the "
-            "player's role and hint at the mysterious main quest awaiting him. "
-            "Stay fully in character and conclude with a teasing invitation for Chase to proceed, clearly mentioning the next destination from his schedule."
-        )
-
-        gpt_reply_dict = await spaced_gpt_call(conversation_id, aggregator_text, opening_user_prompt)
-        nyx_text = gpt_reply_dict.get("response")
-        if gpt_reply_dict.get("type") == "function_call" or not nyx_text:
-            logging.info("GPT tried function_call or returned no text; re-try with forced text.")
-            client = get_openai_client()
-            forced_messages = [
-                {"role": "system", "content": aggregator_text},
-                {"role": "user", "content": f"No function calls. Produce only a text narrative.\n\n{opening_user_prompt}"}
-            ]
-            fallback_response = await asyncio.to_thread(
-                client.chat.completions.create,
-                model="gpt-4o",
-                messages=forced_messages,
-                temperature=0.7
+            json.dumps(new_npc_data["likes"]),
+            json.dumps(new_npc_data["dislikes"]),
+            json.dumps(new_npc_data["hobbies"]),
+            json.dumps(new_npc_data["affiliations"]),
+            json.dumps(new_npc_data["schedule"]),
+            npc_id, user_id, conversation_id
             )
-            fallback_text = fallback_response.choices[0].message.content.strip()
-            nyx_text = fallback_text if fallback_text else "[No text returned from GPT]"
 
-        # Step 19: Store GPT response
-        structured_json_str = json.dumps(gpt_reply_dict)
-        await conn.execute("""
-            INSERT INTO messages (conversation_id, sender, content, structured_content)
-            VALUES ($1, $2, $3, $4)
-        """, conversation_id, "Nyx", nyx_text, structured_json_str)
+        # 15) Opening narrative from Nyx (structured)
+        # We'll define a short JSON schema that has { "narrative":"some string" }
+        # Then store it as a message from Nyx
+        system_text = "You produce a single JSON with 'narrative' that is the final opening text from Nyx."
+        user_text = (
+            "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style..."
+            f"Announce that {day_names[0]} morning has just begun. Summarize environment, schedule, main quest..."
+            "Output only {\"narrative\":\"some text\"} with no extra keys."
+        )
+        opening_obj = await call_gpt_structured(system_text, user_text, OPENING_SCHEMA)
+        if not opening_obj:
+            nyx_text = "[Nyx refuses to speak, so here's a fallback opening.]"
+        else:
+            nyx_text = opening_obj["narrative"]
 
-        # Update conversation to ready
+        # store in messages
         await conn.execute("""
-            UPDATE conversations 
-            SET conversation_name = $1, status = 'ready'
-            WHERE id = $2 AND user_id = $3
+            INSERT INTO messages (conversation_id, sender, content)
+            VALUES($1,$2,$3)
+        """, conversation_id, "Nyx", nyx_text)
+
+        # finalize conversation to ready
+        await conn.execute("""
+            UPDATE conversations
+            SET conversation_name=$1, status='ready'
+            WHERE id=$2 AND user_id=$3
         """, scenario_name, conversation_id, user_id)
 
-        # Step 20: Retrieve conversation history
-        rows = await conn.fetch("""
-            SELECT sender, content, created_at
-            FROM messages
-            WHERE conversation_id=$1
-            ORDER BY id ASC
-        """, conversation_id)
-        conversation_history = [{
-            "sender": row["sender"],
-            "content": row["content"],
-            "created_at": row["created_at"].isoformat()
-        } for row in rows]
-
-        await conn.execute("""
-            UPDATE conversations 
-            SET conversation_name = $1, status = 'ready'
-            WHERE id = $2 AND user_id = $3
-        """, scenario_name, conversation_id, user_id)
-
-        # Return
+        # return
         success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
         logging.info(success_msg)
         return {
@@ -1271,10 +1141,50 @@ async def async_process_new_game(user_id, conversation_data):
         logging.exception("Error in async_process_new_game:")
         return {"error": str(e)}
     finally:
-        try:
-            await conn.close()
-        except:
-            pass
+        await conn.close()
+
+###############################################################################
+# Helper function for generating scenario name and quest summary (unchanged)
+###############################################################################
+def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
+    client = get_openai_client()
+    unique_token = f"{random.randint(1000,9999)}_{int(time.time())}"
+    forbidden_words = ["mistress", "darkness", "manor", "chains", "twilight"]
+
+    system_instructions = f"""
+    You are setting up a new femdom daily-life sim scenario with a main quest.
+    Environment name: {env_name}
+    Environment desc: {env_desc}
+    Unique token: {unique_token}
+
+    Please produce:
+    1) A single line starting with 'ScenarioName:' followed by a short, creative (1–8 words) name 
+       that draws from the environment above. 
+       Avoid cliche words like {', '.join(forbidden_words)}.
+    2) Then one or two lines summarizing the main quest.
+
+    The conversation name must be unique; do not reuse names from older scenarios 
+    (you can ensure uniqueness using the token or environment cues).
+    """
+    messages = [{"role": "system", "content": system_instructions}]
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        temperature=0.9,
+        max_tokens=120,
+        frequency_penalty=0.3
+    )
+    msg = response.choices[0].message.content.strip()
+    logging.info(f"[gpt_generate_scenario_name_and_quest] Raw GPT output: {msg}")
+    scenario_name = "New Game"
+    quest_blurb = ""
+    for line in msg.splitlines():
+        line = line.strip()
+        if line.lower().startswith("scenarioname:"):
+            scenario_name = line.split(":", 1)[1].strip()
+        else:
+            quest_blurb += line + " "
+    return scenario_name.strip(), quest_blurb.strip()
 
 
 # ---------------------------------------------------------------------
@@ -1318,7 +1228,6 @@ def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
         else:
             quest_blurb += line + " "
     return scenario_name.strip(), quest_blurb.strip()
-
 
 # ---------------------------------------------------------------------
 # spawn_npcs remains unchanged.
