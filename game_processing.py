@@ -4,6 +4,7 @@ import random
 import time
 import asyncio
 import asyncpg
+import openai
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
 from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
@@ -67,6 +68,161 @@ async def call_gpt_with_retry(func, expected_keys: set, retries: int = 3, initia
                 logging.error("Max retries reached for %s", func.__name__)
                 raise
 
+# 1) Some JSON schemas for structured outputs
+ENV_NAME_SCHEMA = {
+    "name": "EnvironmentName",
+    "strict": True,
+    "schema": {
+        "type":"object",
+        "properties":{
+            "setting_name":{"type":"string"}
+        },
+        "required":["setting_name"],
+        "additionalProperties":False
+    }
+}
+
+ENV_DESC_SCHEMA = {
+    "name":"EnvironmentDesc",
+    "strict":True,
+    "schema":{
+        "type":"object",
+        "properties":{
+            "setting_desc":{"type":"string"}
+        },
+        "required":["setting_desc"],
+        "additionalProperties":False
+    }
+}
+
+ENV_HISTORY_SCHEMA = {
+    "name":"EnvironmentHistory",
+    "strict":True,
+    "schema":{
+        "type":"object",
+        "properties":{
+            "history":{"type":"string"}
+        },
+        "required":["history"],
+        "additionalProperties":False
+    }
+}
+
+EVENTS_SCHEMA = {
+    "name":"EnvironmentEvents",
+    "strict":True,
+    "schema":{
+        "type":"object",
+        "properties":{
+            "events":{
+                "type":"array",
+                "items":{
+                    "type":"object",
+                    "properties":{
+                        "name":{"type":"string"},
+                        "description":{"type":"string"},
+                        "start_time":{"type":"string"},
+                        "end_time":{"type":"string"},
+                        "location":{"type":"string"}
+                    },
+                    "required":["name","description","start_time","end_time","location"],
+                    "additionalProperties":False
+                }
+            }
+        },
+        "required":["events"],
+        "additionalProperties":False
+    }
+}
+
+LOCATIONS_SCHEMA = {
+    "name":"EnvironmentLocations",
+    "strict":True,
+    "schema":{
+        "type":"object",
+        "properties":{
+            "locations":{
+                "type":"array",
+                "items":{
+                    "type":"object",
+                    "properties":{
+                        "location_name":{"type":"string"},
+                        "description":{"type":"string"},
+                        "open_hours":{
+                            "type":"array",
+                            "items":{"type":"string"}
+                        }
+                    },
+                    "required":["location_name","description","open_hours"],
+                    "additionalProperties":False
+                }
+            }
+        },
+        "required":["locations"],
+        "additionalProperties":False
+    }
+}
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GPT_4O_MODEL = "gpt-4o"
+
+async def call_gpt_structured(
+    system_prompt:str,
+    user_prompt:str,
+    schema:dict,
+    max_retries:int=3,
+    temperature:float=0.7
+):
+    """
+    Calls GPT with the provided system + user prompt and a structured response_format (json_schema).
+    Returns the parsed object on success, or None on refusal/failure.
+    """
+    request_body = {
+        "model": GPT_4O_MODEL,
+        "messages": [
+            {"role":"system","content":system_prompt},
+            {"role":"user","content":user_prompt}
+        ],
+        "response_format":{
+            "type":"json_schema",
+            "json_schema":schema
+        },
+        "temperature": temperature
+    }
+
+    for attempt in range(1, max_retries+1):
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {OPENAI_API_KEY}",
+                        "Content-Type":"application/json"
+                    },
+                    json=request_body
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            choice = data["choices"][0]["message"]
+            if "refusal" in choice:
+                logging.warning(f"[call_gpt_structured] refusal attempt {attempt}: {choice['refusal']}")
+                continue
+            if "parsed" in choice:
+                return choice["parsed"]
+            logging.warning(f"[call_gpt_structured] attempt {attempt}: no 'parsed' found. Full msg => {choice}")
+        except Exception as e:
+            logging.error(f"[call_gpt_structured] attempt {attempt} error: {e}", exc_info=True)
+    return None  # fallback if we never succeed
+
+# Original helper to query stored value
+async def get_stored_value(conn, user_id, conversation_id, key):
+    row = await conn.fetchrow(
+        "SELECT value FROM CurrentRoleplay WHERE user_id=$1 AND conversation_id=$2 AND key=$3",
+        user_id, conversation_id, key
+    )
+    if row:
+        return row["value"]
+    return None
 
 # ---------------------------------------------------------------------
 # Universal update function (asynchronous version)
@@ -524,47 +680,41 @@ async def apply_universal_update(user_id, conversation_id, update_data, conn):
     return {"message": "Universal update successful"}
 
 # ---------------------------------------------------------------------
-# Main game processing function
+# The main function, but replaced calls with structured approach
 async def async_process_new_game(user_id, conversation_data):
     logging.info("=== Starting async_process_new_game for user_id=%s with conversation_data=%s ===", user_id, conversation_data)
 
     provided_conversation_id = conversation_data.get("conversation_id")
     conn = await asyncpg.connect(dsn=DB_DSN)
     try:
-        # Step 1: Create/validate conversation
+        # 1) create or validate conversation
         if not provided_conversation_id:
             preliminary_name = "New Game"
-            logging.info("No conversation_id provided; creating a new conversation for user_id=%s", user_id)
             row = await conn.fetchrow("""
                 INSERT INTO conversations (user_id, conversation_name)
                 VALUES ($1, $2)
                 RETURNING id
             """, user_id, preliminary_name)
             conversation_id = row["id"]
-            logging.info("Created new conversation with id=%s for user_id=%s", conversation_id, user_id)
         else:
             conversation_id = provided_conversation_id
-            logging.info("Validating provided conversation_id=%s for user_id=%s", conversation_id, user_id)
             row = await conn.fetchrow("""
                 SELECT id FROM conversations WHERE id=$1 AND user_id=$2
             """, conversation_id, user_id)
             if not row:
                 raise Exception(f"Conversation {conversation_id} not found or unauthorized")
-            logging.info("Validated existing conversation with id=%s", conversation_id)
 
-        # Clear old game data
+        # 2) clear old data
         tables_to_clear = [
             "Events", "PlannedEvents", "PlayerInventory", "Quests",
             "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"
         ]
         for table in tables_to_clear:
             await conn.execute(f"DELETE FROM {table} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
-        logging.info("Cleared old game data for conversation_id=%s", conversation_id)
+        logging.info("Cleared data for conv=%s", conversation_id)
 
-        # Step 2: Dynamically generate environment
-        logging.info("Calling generate_mega_setting_logic for conversation_id=%s", conversation_id)
+        # 3) generate environment components
         mega_data = await asyncio.to_thread(generate_mega_setting_logic)
-        logging.info("Mega data returned: %s", json.dumps(mega_data, indent=2))
         unique_envs = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
         if not unique_envs:
             unique_envs = [
@@ -572,246 +722,124 @@ async def async_process_new_game(user_id, conversation_data):
                 "Floating archaic ruins steeped in ancient rituals",
                 "Futuristic tech hubs that blend magic and machinery"
             ]
-            logging.info("No environment components returned; using fallback: %s", unique_envs)
-        else:
-            logging.info("Unique environment components: %s", unique_envs)
-
         enhanced_features = mega_data.get("enhanced_features", [])
         stat_modifiers = mega_data.get("stat_modifiers", {})
-        logging.info("Enhanced features: %s", enhanced_features)
-        logging.info("Stat modifiers: %s", stat_modifiers)
 
-        enhanced_features_str = ", ".join(enhanced_features) if enhanced_features else ""
-        stat_modifiers_str = ", ".join([f"{k}: {v}" for k, v in stat_modifiers.items()]) if stat_modifiers else ""
-
-        # Generate a dynamic setting name
-        name_prompt = "Given the following environment components:\n"
-        for i, env in enumerate(unique_envs):
-            name_prompt += f"Component {i+1}: {env}\n"
-        name_prompt += (
-            "Describe how these components come together to form a cohesive world and generate a short, creative name for the overall setting. "
-            "Return only the name."
+        # 3.1) environment name (structured)
+        # We'll build system+user prompts
+        system_text = "You produce a single JSON with 'setting_name' for the environment."
+        user_text = (
+            "Environment components:\n" + "\n".join(unique_envs) + "\n"
+            "Generate a short creative name for the overall setting. No extra text."
         )
-        logging.info("Calling GPT for dynamic setting name with prompt: %s", name_prompt)
-        setting_name_reply = await spaced_gpt_call(conversation_id, "", name_prompt)
-        dynamic_setting_name = setting_name_reply.get("response", "")
-        if dynamic_setting_name:
-            dynamic_setting_name = dynamic_setting_name.strip()
+        env_name_obj = await call_gpt_structured(system_text, user_text, ENV_NAME_SCHEMA)
+        if not env_name_obj:
+            environment_name = "Default Setting Name"
         else:
-            stored_setting = await get_stored_value(conn, user_id, conversation_id, "CurrentSetting")
-            if stored_setting:
-                dynamic_setting_name = stored_setting
-            else:
-                logging.warning("GPT returned no setting name and none stored; using fallback.")
-                dynamic_setting_name = "Default Setting Name"
-        logging.info("Generated dynamic setting name: %s", dynamic_setting_name)
-        environment_name = dynamic_setting_name
+            environment_name = env_name_obj["setting_name"]
+        logging.info(f"Got environment_name => {environment_name}")
 
-        # Generate environment description
-        env_desc_prompt = "Using the following environment components:\n"
-        for i, env in enumerate(unique_envs):
-            env_desc_prompt += f"Component {i+1}: {env}\n"
-        if enhanced_features_str:
-            env_desc_prompt += f"Enhanced features: {enhanced_features_str}\n"
-        if stat_modifiers_str:
-            env_desc_prompt += f"Stat modifiers: {stat_modifiers_str}\n"
-        env_desc_prompt += (
-            "Describe in a cohesive narrative how these components, features, and modifiers combine to form a unique, dynamic world."
+        # 3.2) environment desc
+        system_text = "You produce a single JSON with 'setting_desc' describing the environment."
+        user_text = (
+            f"Environment components: {unique_envs}\n"
+            f"Enhanced features: {enhanced_features}\n"
+            f"Stat modifiers: {stat_modifiers}\n"
+            "Describe in a cohesive narrative how these combine into a unique, dynamic world. Output only {\"setting_desc\":\"...\"}."
         )
-        logging.info("Calling GPT for dynamic environment description with prompt: %s", env_desc_prompt)
-        env_desc_reply = await spaced_gpt_call(conversation_id, "", env_desc_prompt)
-        base_environment_desc = env_desc_reply.get("response")
-        if not base_environment_desc or not base_environment_desc.strip():
-            stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
-            if stored_env_desc:
-                base_environment_desc = stored_env_desc
-            else:
-                logging.warning("GPT returned no environment description; using fallback.")
-                base_environment_desc = (
-                    "An eclectic realm combining monstrous societies, futuristic tech, and archaic ruins floating across the sky. "
-                    "Strange energies swirl, revealing hidden rituals and uncharted opportunities."
-                )
+        env_desc_obj = await call_gpt_structured(system_text, user_text, ENV_DESC_SCHEMA)
+        if not env_desc_obj:
+            base_environment_desc = "An eclectic realm with monstrous societies, futuristic tech, archaic ruins floating in the sky..."
         else:
-            base_environment_desc = base_environment_desc.strip()
+            base_environment_desc = env_desc_obj["setting_desc"]
 
-        # Store environment desc
-        logging.info("Storing EnvironmentDesc in CurrentRoleplay for conversation_id=%s", conversation_id)
+        # store environment desc
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
             VALUES ($1, $2, 'EnvironmentDesc', $3)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
+            ON CONFLICT DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, base_environment_desc)
 
-        # Generate some NPCs - Potentially problematic section
-        logging.info("Generating notable NPCs for conversation_id=%s", conversation_id)
+        # 3.3) generate some NPCs
         npc_count = 3
         generated_npcs = []
         for i in range(npc_count):
-            npc = await asyncio.to_thread(create_npc, user_id=user_id, conversation_id=conversation_id, introduced=False)
-            generated_npcs.append(npc)
-        logging.info("Generated NPCs: %s", generated_npcs)
-        notable_npcs_str = ", ".join([
-            npc.get("npc_name", f"NPC #{npc}") if isinstance(npc, dict) else f"NPC #{npc}"
-            for npc in generated_npcs
-        ])
+            # We keep create_npc the same, or if it is the new structured approach you'd do
+            # `await create_npc(...)` if create_npc is now async
+            # Let's assume it's still a sync function with .to_thread
+            new_npc_id = await asyncio.to_thread(create_npc, user_id, conversation_id, introduced=False)
+            generated_npcs.append(new_npc_id)
+        logging.info(f"Generated NPCs => {generated_npcs}")
 
-        # Build environment history referencing NPCs
-        history_prompt = (
-            "Based on the following environment description, generate a brief, evocative history of this setting. "
-            f"Integrate the following notable NPCs: {notable_npcs_str}. "
-            "\nEnvironment description: " + base_environment_desc
+        # 3.4) environment history
+        # In structured approach, we might do:  { "history": "some text" }
+        system_text = "You produce a single JSON with 'history' containing a brief, evocative history."
+        user_text = (
+            f"Environment desc: {base_environment_desc}\n"
+            f"NPCs: {generated_npcs}\n"
+            "Integrate these NPCs into the history. Return only {\"history\":\"...\"}."
         )
-        logging.info("Calling GPT for environment history with prompt: %s", history_prompt)
-        history_reply = await spaced_gpt_call(conversation_id, base_environment_desc, history_prompt)
-        if history_reply.get("type") == "function_call":
-            function_args = history_reply.get("function_args", {})
-            await apply_universal_update(user_id, conversation_id, function_args, conn)
-            stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
-            if stored_env_desc:
-                environment_history = stored_env_desc
-            else:
-                environment_history = "World context updated via GPT function call."
+        env_hist_obj = await call_gpt_structured(system_text, user_text, ENV_HISTORY_SCHEMA)
+        if not env_hist_obj:
+            environment_history = "World context updated but GPT fallback."
         else:
-            response_text = history_reply.get("response", "")
-            if not response_text.strip():
-                stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
-                if stored_env_desc:
-                    environment_history = stored_env_desc
-                else:
-                    environment_history = "Ancient legends speak of forgotten gods and lost civilizations..."
-            else:
-                environment_history = response_text.strip()
-
+            environment_history = env_hist_obj["history"]
         environment_desc = f"{base_environment_desc}\n\nHistory: {environment_history}"
-        logging.info("Constructed environment description: %s", environment_desc)
 
-        # Generate immersive calendar
+        # store environment desc with history if you'd like
+        # or just keep it in memory
+        # next, do calendar
         from logic.calendar import update_calendar_names
         calendar_data = await update_calendar_names(user_id, conversation_id, environment_desc)
-        logging.info("Generated calendar names: %s", calendar_data)
-            
-        # Step 4: Generate and store notable Events.
-        events_prompt = (
-            "Based on the following environment description, generate a JSON array of notable events and holidays in this setting. "
-            "Each event should be an object with keys 'name', 'description', 'start_time', 'end_time', and 'location'. "
-            "Return only the JSON array with no markdown formatting or extra text."
-            "\nEnvironment description: " + environment_desc
-        )
-        logging.info("Generating events with prompt: %s", events_prompt)
-        events_reply = await spaced_gpt_call(conversation_id, environment_desc, events_prompt)
-        
-        if events_reply.get("type") == "function_call":
-            logging.info("GPT returned a function call for events. Processing update via apply_universal_update.")
-            fn_args = events_reply.get("function_args", {})
-            await apply_universal_update(user_id, conversation_id, fn_args, conn)
-        else:
-            events_response = events_reply.get("response", "")
-            if events_response:
-                events_response = events_response.strip()
-                if events_response.startswith("```"):
-                    lines = events_response.splitlines()
-                    if lines and lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines and lines[-1].startswith("```"):
-                        lines = lines[:-1]
-                    events_response = "\n".join(lines).strip()
-            else:
-                logging.warning("Events GPT response was empty; using fallback.")
-                events_response = "[]"
-            
-            try:
-                events_json = json.loads(events_response) if events_response else []
-                logging.info("Parsed events JSON successfully: %s", events_json)
-            except Exception as e:
-                logging.warning("Failed to parse events JSON; using fallback. Exception: %s", e, exc_info=True)
-                events_json = []
-            
-            for event in events_json:
-                event_name = event.get("name", "Unnamed Event")
-                event_desc = event.get("description", "")
-                ev_start = event.get("start_time", "TBD Start")
-                ev_end = event.get("end_time", "TBD End")
-                ev_loc = event.get("location", "Unknown")
-                if not ev_start:
-                    ev_start = "TBD Start"
-                if not ev_end:
-                    ev_end = "TBD End"
-                if not ev_loc:
-                    ev_loc = "Unknown"
-                logging.info("Storing event: %s - %s | start_time: %s, end_time: %s, location: %s", event_name, event_desc, ev_start, ev_end, ev_loc)
-                await conn.execute("""
-                    INSERT INTO Events (user_id, conversation_id, event_name, description, start_time, end_time, location)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT DO NOTHING
-                """, user_id, conversation_id, event_name, event_desc, ev_start, ev_end, ev_loc)
 
-
-        # Step 5: Generate and store notable Locations.
-        locations_prompt = (
-            "Based on the following environment description, generate a JSON array of notable locations in this setting. "
-            "This location could be the name of a bar, a restaurant, a store, a school campus, or anything else, but should be a proper noun."
-            "Each element in the array must be an object with exactly three keys: 'location_name', 'description', and 'open_hours'. "
-            "The 'location_name' should be a short title for the location, the 'description' should be a brief overview of that location, "
-            "and 'open_hours' should be an array of strings representing the hours the location is open. "
-            "Return only the JSON array with no additional text, markdown, or formatting.\n"
-            "Environment description: " + environment_desc
+        # 4) events - structured approach
+        # "events": an array of { name, description, start_time, end_time, location }
+        system_text = "You produce a JSON object with a single key 'events', which is an array of event objects."
+        user_text = (
+            f"Environment description: {environment_desc}\n"
+            "Each event => name, description, start_time, end_time, location.\n"
+            "Return only {\"events\":[...]}, no extra text."
         )
-        logging.info("Generating locations with prompt: %s", locations_prompt)
-        locations_reply = await spaced_gpt_call(conversation_id, environment_desc, locations_prompt)
-        
-        # Check for a direct response or a function call.
-        if locations_reply.get("response"):
-            locations_response = locations_reply["response"].strip()
-        elif locations_reply.get("type") == "function_call":
-            args = locations_reply.get("function_args", {})
-            if "location_creations" in args:
-                value = args["location_creations"]
-                if isinstance(value, (list, dict)):
-                    locations_response = json.dumps(value)
-                else:
-                    locations_response = str(value)
-            else:
-                locations_response = ""
+        events_obj = await call_gpt_structured(system_text, user_text, EVENTS_SCHEMA)
+        if not events_obj:
+            events_json = []
         else:
-            locations_response = ""
-        
-        logging.info("Raw locations response from GPT: %s", locations_response)
-        
-        if locations_response:
-            locations_response = locations_response.strip()
-            # Remove markdown code fences if present.
-            if locations_response.startswith("```"):
-                logging.info("Locations response contains markdown code fences. Stripping them.")
-                lines = locations_response.splitlines()
-                if lines and lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                locations_response = "\n".join(lines).strip()
-            logging.info("Locations response after stripping markdown: %s", locations_response)
-        else:
-            logging.warning("Locations GPT response was empty; using fallback.")
-        
-        try:
-            locations_json = json.loads(locations_response) if locations_response else []
-            logging.info("Parsed locations JSON successfully: %s", locations_json)
-        except Exception as e:
-            logging.warning("Failed to parse locations JSON; using fallback. Exception: %s", e, exc_info=True)
+            events_json = events_obj["events"]
+        # store events in DB
+        for ev in events_json:
+            name = ev.get("name","Unnamed Event")
+            desc = ev.get("description","")
+            stime = ev.get("start_time","TBD Start")
+            etime = ev.get("end_time","TBD End")
+            loc = ev.get("location","Unknown")
+            await conn.execute("""
+                INSERT INTO Events (user_id, conversation_id, event_name, description, start_time, end_time, location)
+                VALUES ($1,$2,$3,$4,$5,$6,$7)
+                ON CONFLICT DO NOTHING
+            """, user_id, conversation_id, name, desc, stime, etime, loc)
+
+        # 5) locations
+        system_text = "You produce a JSON object with 'locations': array of { location_name, description, open_hours[] }."
+        user_text = (
+            f"Environment description: {environment_desc}\n"
+            "Return only {\"locations\":[...]}, no extra text."
+        )
+        loc_obj = await call_gpt_structured(system_text, user_text, LOCATIONS_SCHEMA)
+        if not loc_obj:
             locations_json = []
-        
+        else:
+            locations_json = loc_obj["locations"]
         for loc in locations_json:
-            loc_name = loc.get("location_name", "Unnamed Location")
-            loc_desc = loc.get("description", "")
-            open_hours = loc.get("open_hours", [])
-            logging.info("Storing location: %s - %s - open_hours: %s", loc_name, loc_desc, open_hours)
+            loc_name = loc["location_name"]
+            loc_desc = loc["description"]
+            open_hours = loc["open_hours"]
             await conn.execute("""
                 INSERT INTO Locations (user_id, conversation_id, location_name, description, open_hours)
-                VALUES ($1, $2, $3, $4, $5)
+                VALUES ($1,$2,$3,$4,$5)
                 ON CONFLICT DO NOTHING
             """, user_id, conversation_id, loc_name, loc_desc, json.dumps(open_hours))
-     
-        # Step 6: Generate scenario name & quest summary if new conversation
+
+        # 6) scenario name & quest summary if new conversation
         scenario_name = "New Game"
         quest_blurb = ""
         if not provided_conversation_id:
@@ -820,27 +848,16 @@ async def async_process_new_game(user_id, conversation_data):
                 environment_name,
                 base_environment_desc
             )
-            await conn.execute("""
-                UPDATE conversations SET conversation_name=$1 WHERE id=$2
-            """, scenario_name, conversation_id)
+            await conn.execute("""UPDATE conversations SET conversation_name=$1 WHERE id=$2""",
+                scenario_name, conversation_id
+            )
 
-        # Re-open DB for further steps
-        await conn.close()
-        conn = await asyncpg.connect(dsn=DB_DSN)
-
-        # Verify conversation
-        if provided_conversation_id:
-            row = await conn.fetchrow("""
-                SELECT id FROM conversations WHERE id=$1 AND user_id=$2
-            """, conversation_id, user_id)
-            if not row:
-                await conn.close()
-                raise Exception(f"Conversation {conversation_id} not found or unauthorized")
-        
-        # Step 7: Re-open connection for subsequent steps.
-        logging.info("Re-opening DB connection for further operations on conversation_id=%s", conversation_id)
-        await conn.close()
-        conn = await asyncpg.connect(dsn=DB_DSN)
+        # 7) store environment_name
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES($1,$2,'CurrentSetting',$3)
+            ON CONFLICT DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id, environment_name)
         
         # Step 8: Verify conversation exists (if provided).
         if provided_conversation_id:
@@ -1238,6 +1255,7 @@ async def async_process_new_game(user_id, conversation_data):
             WHERE id = $2 AND user_id = $3
         """, scenario_name, conversation_id, user_id)
 
+        # Return
         success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
         logging.info(success_msg)
         return {
@@ -1245,18 +1263,17 @@ async def async_process_new_game(user_id, conversation_data):
             "scenario_name": scenario_name,
             "environment_name": environment_name,
             "environment_desc": environment_desc,
-            "calendar_names": calendar_names,
-            "conversation_id": conversation_id,
+            "calendar_names": calendar_data,
+            "conversation_id": conversation_id
         }
 
     except Exception as e:
         logging.exception("Error in async_process_new_game:")
         return {"error": str(e)}
     finally:
-        logging.info("=== END: async_process_new_game ===")
         try:
             await conn.close()
-        except Exception:
+        except:
             pass
 
 
