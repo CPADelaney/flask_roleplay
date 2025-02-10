@@ -413,7 +413,7 @@ def retry_with_backoff_async(max_retries=5, initial_delay=1, backoff_factor=2, e
         return wrapper_retry
     return decorator_retry
 
-@retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,))
+@retry_with_backoff_async(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,))
 def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input: str) -> dict:
     client = get_openai_client()
 
