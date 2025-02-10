@@ -1000,7 +1000,7 @@ async def async_process_new_game(user_id, conversation_data):
             VALUES ($1, $2, $3, 'In Progress', '', '', '')
         """, user_id, conversation_id, main_quest_text)
 
-       # Step 16: Generate and store ChaseSchedule.
+        # Step 16: Generate and store ChaseSchedule.
         calendar_names = json.loads(await get_stored_value(conn, user_id, conversation_id, "CalendarNames"))
         immersive_days = calendar_names.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
         
@@ -1014,15 +1014,17 @@ async def async_process_new_game(user_id, conversation_data):
             try:
                 calendar_names = json.loads(row[0])
                 # Expect "days" to be an array of 7 names.
-                immersive_days = calendar_names.get("days", 
-                    ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
+                immersive_days = calendar_names.get(
+                    "days",
+                    ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                )
             except Exception as e:
                 logging.warning("Failed to parse CalendarNames: %s", e)
                 immersive_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         else:
             immersive_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-
-        # Now, update the schedule prompt to instruct GPT to use the immersive day names.
+        
+        # Now, instruct GPT to use these immersive day names in the schedule.
         schedule_prompt = (
             f"Based on the current environment and Chase's role, generate a detailed weekly schedule for Chase. "
             f"Use the following immersive day names for the week: {', '.join(immersive_days)}. "
@@ -1038,7 +1040,7 @@ async def async_process_new_game(user_id, conversation_data):
             fn_args = schedule_reply.get("function_args", {})
             # The payload should include a key "ChaseSchedule"
             await apply_universal_update(user_id, conversation_id, fn_args, conn)
-            
+        
             # After the update, retrieve the stored schedule from the database.
             stored_schedule = await get_stored_value(conn, user_id, conversation_id, "ChaseSchedule")
             if stored_schedule:
@@ -1046,15 +1048,22 @@ async def async_process_new_game(user_id, conversation_data):
                 logging.info("Retrieved stored ChaseSchedule: %s", chase_schedule_generated)
             else:
                 logging.warning("No stored ChaseSchedule found after function call; using fallback JSON.")
-                chase_schedule_generated = """{
-                    "Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast", "Afternoon": "Head to work at the local data office", "Evening": "Attend a casual meetup with friends", "Night": "Return to the inn for rest"},
-                    "Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise", "Afternoon": "Study mystical texts at the library", "Evening": "Work on personal creative projects", "Night": "Return to the inn and unwind"},
-                    "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"}
-                }"""
+                # Build a fallback schedule dynamically:
+                fallback_schedule = {}
+                for day_name in immersive_days:
+                    fallback_schedule[day_name] = {
+                        "Morning":   f"Wake at {day_name} morning, have a quick breakfast",
+                        "Afternoon": f"Continue daily tasks on {day_name} afternoon",
+                        "Evening":   f"Relax or socialize on {day_name} evening",
+                        "Night":     f"Return to lodgings for rest on {day_name} night"
+                    }
+                chase_schedule_generated = json.dumps(fallback_schedule, indent=2)
+        
         else:
             # Process a plain text response.
             chase_schedule_generated = schedule_reply.get("response", "{}")
             logging.info("Raw ChaseSchedule response from GPT: %s", chase_schedule_generated)
+            # Strip code fences if present:
             if chase_schedule_generated.startswith("```"):
                 lines = chase_schedule_generated.splitlines()
                 if lines and lines[0].startswith("```"):
@@ -1062,52 +1071,36 @@ async def async_process_new_game(user_id, conversation_data):
                 if lines and lines[-1].startswith("```"):
                     lines = lines[:-1]
                 chase_schedule_generated = "\n".join(lines).strip()
+        
+            # If GPT returned empty or an empty JSON object, use a dynamic fallback.
             if not chase_schedule_generated or chase_schedule_generated.strip() in ["{}", ""]:
                 logging.warning("ChaseSchedule GPT response was empty; using fallback JSON.")
-                chase_schedule_generated = """{
-                    "Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast", "Afternoon": "Head to work at the local data office", "Evening": "Attend a casual meetup with friends", "Night": "Return to the inn for rest"},
-                    "Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise", "Afternoon": "Study mystical texts at the library", "Evening": "Work on personal creative projects", "Night": "Return to the inn and unwind"},
-                    "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast", "Afternoon": "Run errands and visit the guild", "Evening": "Attend a community dinner", "Night": "Head back to the inn for some rest"},
-                    "Thursday": {"Morning": "Do light training at the local gym", "Afternoon": "Work at the office", "Evening": "Meet with friends at a nearby tavern", "Night": "Return home for sleep"},
-                    "Friday": {"Morning": "Wake up at the inn", "Afternoon": "Wrap up work and relax", "Evening": "Attend a small social gathering", "Night": "Take a leisurely late night stroll"},
-                    "Saturday": {"Morning": "Sleep in and enjoy a lazy start", "Afternoon": "Explore the bustling market", "Evening": "Watch a local performance", "Night": "Return to the inn to wind down"},
-                    "Sunday": {"Morning": "Take an early walk in the park", "Afternoon": "Reflect on the week and plan ahead", "Evening": "Have a light dinner with friends", "Night": "Enjoy some quiet time before sleep"}
-                }"""
+                fallback_schedule = {}
+                for day_name in immersive_days:
+                    fallback_schedule[day_name] = {
+                        "Morning":   f"Wake at {day_name} morning, have a quick breakfast",
+                        "Afternoon": f"Continue daily tasks on {day_name} afternoon",
+                        "Evening":   f"Relax or socialize on {day_name} evening",
+                        "Night":     f"Return to lodgings for rest on {day_name} night"
+                    }
+                chase_schedule_generated = json.dumps(fallback_schedule, indent=2)
+        
         try:
             chase_schedule = json.loads(chase_schedule_generated)
             logging.info("Parsed ChaseSchedule JSON successfully: %s", chase_schedule)
         except Exception as e:
             logging.warning("Failed to parse ChaseSchedule JSON; using fallback schedule. Exception: %s", e, exc_info=True)
-            chase_schedule = {
-                "Monday": {"Morning": "Wake at a cozy inn, have a quick breakfast",
-                           "Afternoon": "Head to work at the local data office",
-                           "Evening": "Attend a casual meetup with friends",
-                           "Night": "Return to the inn for rest"},
-                "Tuesday": {"Morning": "Jog along the city walls, enjoy the sunrise",
-                            "Afternoon": "Study mystical texts at the library",
-                            "Evening": "Work on personal creative projects",
-                            "Night": "Return to the inn and unwind"},
-                "Wednesday": {"Morning": "Wake at the inn and enjoy a hearty breakfast",
-                              "Afternoon": "Run errands and visit the guild",
-                              "Evening": "Attend a community dinner",
-                              "Night": "Head back to the inn for some rest"},
-                "Thursday": {"Morning": "Do light training at the local gym",
-                             "Afternoon": "Work at the office",
-                             "Evening": "Meet with friends at a nearby tavern",
-                             "Night": "Return home for sleep"},
-                "Friday": {"Morning": "Wake up at the inn",
-                           "Afternoon": "Wrap up work and relax",
-                           "Evening": "Attend a small social gathering",
-                           "Night": "Take a leisurely late night stroll"},
-                "Saturday": {"Morning": "Sleep in and enjoy a lazy start",
-                             "Afternoon": "Explore the bustling market",
-                             "Evening": "Watch a local performance",
-                             "Night": "Return to the inn to wind down"},
-                "Sunday": {"Morning": "Take an early walk in the park",
-                           "Afternoon": "Reflect on the week and plan ahead",
-                           "Evening": "Have a light dinner with friends",
-                           "Night": "Enjoy some quiet time before sleep"}
-            }
+            # If JSON parsing fails, build a fallback again using immersive_days
+            fallback_schedule = {}
+            for day_name in immersive_days:
+                fallback_schedule[day_name] = {
+                    "Morning":   f"Wake at {day_name} morning, have a quick breakfast",
+                    "Afternoon": f"Continue daily tasks on {day_name} afternoon",
+                    "Evening":   f"Relax or socialize on {day_name} evening",
+                    "Night":     f"Return to lodgings for rest on {day_name} night"
+                }
+            chase_schedule = fallback_schedule
+        
         logging.info("Final ChaseSchedule to be stored: %s", chase_schedule)
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
@@ -1115,65 +1108,67 @@ async def async_process_new_game(user_id, conversation_data):
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, json.dumps(chase_schedule))
-
-        # Step 16.5: Final NPC Adjustments via Combined GPT Call.
-        logging.info("Performing final adjustments on NPCs using a combined GPT call for conversation_id=%s", conversation_id)
-        npc_rows = await conn.fetch("""
-            SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes, archetype_summary
-            FROM NPCStats
-            WHERE user_id=$1 AND conversation_id=$2
-        """, user_id, conversation_id)
         
-        # Define the actual immersive day names provided by your environment.
-        actual_immersive_days = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Theta"]
+                # Step 16.5: Final NPC Adjustments via Combined GPT Call.
+                logging.info("Performing final adjustments on NPCs using a combined GPT call for conversation_id=%s", conversation_id)
+                npc_rows = await conn.fetch("""
+                    SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes, archetype_summary
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2
+                """, user_id, conversation_id)
+                
+                # Reuse the same 'immersive_days' from step 16
+                # (i.e., the list we extracted from `calendar_names.get("days")`)
+                actual_immersive_days = immersive_days
         
-        for npc_row in npc_rows:
-            npc_id = npc_row["npc_id"]
-            npc_data = {
-                "npc_name": npc_row["npc_name"],
-                "hobbies": json.loads(npc_row["hobbies"]) if isinstance(npc_row["hobbies"], str) else npc_row["hobbies"],
-                "likes": json.loads(npc_row["likes"]) if isinstance(npc_row["likes"], str) else npc_row["likes"],
-                "dislikes": json.loads(npc_row["dislikes"]) if isinstance(npc_row["dislikes"], str) else npc_row["dislikes"],
-                "affiliations": json.loads(npc_row["affiliations"]) if isinstance(npc_row["affiliations"], str) else npc_row["affiliations"],
-                "schedule": json.loads(npc_row["schedule"]) if isinstance(npc_row["schedule"], str) else npc_row["schedule"],
-                "archetypes": json.loads(npc_row["archetypes"]) if isinstance(npc_row["archetypes"], str) else npc_row["archetypes"],
-                "archetype_summary": npc_row.get("archetype_summary", "")
-            }
-            
-            try:
-                complete_npc = await call_gpt_with_retry(
-                    func=adjust_npc_complete,
-                    expected_keys={"likes", "dislikes", "hobbies", "affiliations", "schedule"},
-                    npc_data=npc_data,
-                    environment_desc=environment_desc,
-                    conversation_id=conversation_id,
-                    immersive_days=actual_immersive_days
-                )
-            except Exception as e:
-                logging.error("Error adjusting complete NPC details for NPC %s after retries: %s", npc_id, e)
-                complete_npc = {
-                    "likes": npc_data.get("likes", []),
-                    "dislikes": npc_data.get("dislikes", []),
-                    "hobbies": npc_data.get("hobbies", []),
-                    "affiliations": npc_data.get("affiliations", []),
-                    "schedule": npc_data.get("schedule", {})
-                }
-            
-            await conn.execute("""
-                UPDATE NPCStats
-                SET likes = $1,
-                    dislikes = $2,
-                    hobbies = $3,
-                    affiliations = $4,
-                    schedule = $5
-                WHERE npc_id = $6 AND user_id = $7 AND conversation_id = $8
-            """,
-            json.dumps(complete_npc.get("likes", [])),
-            json.dumps(complete_npc.get("dislikes", [])),
-            json.dumps(complete_npc.get("hobbies", [])),
-            json.dumps(complete_npc.get("affiliations", [])),
-            json.dumps(complete_npc.get("schedule", {})),
-            npc_id, user_id, conversation_id)       
+                
+                for npc_row in npc_rows:
+                    npc_id = npc_row["npc_id"]
+                    npc_data = {
+                        "npc_name": npc_row["npc_name"],
+                        "hobbies": json.loads(npc_row["hobbies"]) if isinstance(npc_row["hobbies"], str) else npc_row["hobbies"],
+                        "likes": json.loads(npc_row["likes"]) if isinstance(npc_row["likes"], str) else npc_row["likes"],
+                        "dislikes": json.loads(npc_row["dislikes"]) if isinstance(npc_row["dislikes"], str) else npc_row["dislikes"],
+                        "affiliations": json.loads(npc_row["affiliations"]) if isinstance(npc_row["affiliations"], str) else npc_row["affiliations"],
+                        "schedule": json.loads(npc_row["schedule"]) if isinstance(npc_row["schedule"], str) else npc_row["schedule"],
+                        "archetypes": json.loads(npc_row["archetypes"]) if isinstance(npc_row["archetypes"], str) else npc_row["archetypes"],
+                        "archetype_summary": npc_row.get("archetype_summary", "")
+                    }
+                    
+                    try:
+                        complete_npc = await call_gpt_with_retry(
+                            func=adjust_npc_complete,
+                            expected_keys={"likes", "dislikes", "hobbies", "affiliations", "schedule"},
+                            npc_data=npc_data,
+                            environment_desc=environment_desc,
+                            conversation_id=conversation_id,
+                            immersive_days=actual_immersive_days  # <--- now matches the same list we used for Chase
+                        )
+                    except Exception as e:
+                        logging.error("Error adjusting complete NPC details for NPC %s after retries: %s", npc_id, e)
+                        complete_npc = {
+                            "likes": npc_data.get("likes", []),
+                            "dislikes": npc_data.get("dislikes", []),
+                            "hobbies": npc_data.get("hobbies", []),
+                            "affiliations": npc_data.get("affiliations", []),
+                            "schedule": npc_data.get("schedule", {})
+                        }
+                    
+                    await conn.execute("""
+                        UPDATE NPCStats
+                        SET likes = $1,
+                            dislikes = $2,
+                            hobbies = $3,
+                            affiliations = $4,
+                            schedule = $5
+                        WHERE npc_id = $6 AND user_id = $7 AND conversation_id = $8
+                    """,
+                    json.dumps(complete_npc.get("likes", [])),
+                    json.dumps(complete_npc.get("dislikes", [])),
+                    json.dumps(complete_npc.get("hobbies", [])),
+                    json.dumps(complete_npc.get("affiliations", [])),
+                    json.dumps(complete_npc.get("schedule", {})),
+                    npc_id, user_id, conversation_id)       
           
         # Step 17: Build aggregated roleplay context.
         logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
