@@ -4,14 +4,16 @@ import os
 import json
 import random
 import logging
-import httpx
-import asyncio
-from logic.chatgpt_integration import get_openai_client
 from db.connection import get_db_connection
+from logic.chatgpt_integration import get_openai_client  # or however you import it
+from logic.memory_logic import get_shared_memory, record_npc_event
+from logic.social_links import create_social_link
 
 logging.basicConfig(level=logging.DEBUG)
 
-# Paths & data loads remain same...
+###################
+# 1) File Paths
+###################
 current_dir = os.path.dirname(os.path.abspath(__file__))
 archetypes_json_path = os.path.join(current_dir, "..", "data", "archetypes_data.json")
 archetypes_json_path = os.path.normpath(archetypes_json_path)
@@ -23,6 +25,9 @@ DATA_FILES = {
     "personalities": "data/npc_personalities.json"
 }
 
+###################
+# 2) Utility: Load External Data
+###################
 def load_data(file_path):
     """Loads JSON from file_path; returns Python data (dict or list)."""
     try:
@@ -32,12 +37,16 @@ def load_data(file_path):
         logging.error(f"Failed to load data from {file_path}: {e}")
         return {}
 
+###################
+# 3) Build Our DATA Dictionary
+###################
 DATA = {
     "hobbies": [],
     "likes": [],
     "dislikes": [],
     "personalities": []
 }
+
 for key, path in DATA_FILES.items():
     raw = load_data(path)
     if key == "hobbies":
@@ -49,15 +58,27 @@ for key, path in DATA_FILES.items():
     elif key == "personalities":
         DATA["personalities"] = raw.get("personality_pool", [])
 
-logging.debug("DATA loaded. hobbies => %s", DATA.get("hobbies"))
+logging.debug("DATA loaded. For example, hobbies => %s", DATA.get("hobbies"))
 
-REROLL_IDS = list(range(62,73))
+###################
+# 4) Reroll IDs & Clamping
+###################
+REROLL_IDS = list(range(62, 73))  # e.g. archetype IDs from 62..72
 
 def clamp(value, min_val, max_val):
+    """Utility to ensure a stat stays within [min_val..max_val]."""
     return max(min_val, min(value, max_val))
 
+###################
+# 5) Archetype Stat Combiner
+###################
 def combine_archetype_stats(archetype_rows):
-    # Same as your original code...
+    """
+    archetype_rows is a list of (id, name, baseline_stats).
+    baseline_stats might be JSON or a dict.
+    We randomly pick within each stat's range, add the modifier,
+    sum for all chosen archetypes, then average & clamp them.
+    """
     sums = {
         "dominance": 0,
         "cruelty": 0,
@@ -97,282 +118,184 @@ def combine_archetype_stats(archetype_rows):
     return sums
 
 def archetypes_to_json(rows):
+    """Convert (id, name, baseline_stats) => [ {"id": id, "name": name}, ... ]"""
     arr = []
     for (aid, aname, _bs) in rows:
         arr.append({"id": aid, "name": aname})
     return json.dumps(arr)
 
-#################################
-# 1) Synergy JSON Schema
-#################################
-synergy_schema = {
-    "name": "NPCSynergy",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "properties": {
-            "npc_name": {"type": "string"},
-            "archetype_summary": {"type": "string"}
-        },
-        "required": ["npc_name", "archetype_summary"],
-        "additionalProperties": False
-    }
-}
+###################
+# 5.5) NPC Age/Birthdate
+###################
 
-#################################
-# 2) Age+Birth JSON Schema
-#################################
-age_birth_schema = {
-    "name": "NPCAgeBirth",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "properties": {
-            "age": {"type": "integer"},
-            "birthdate": {"type": "string"}
-        },
-        "required": ["age","birthdate"],
-        "additionalProperties": False
-    }
-}
-
-#################################
-# 3) Physical Description Schema
-#################################
-phys_desc_schema = {
-    "name": "NPCPhysicalDescription",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "properties": {
-            "description": {"type": "string"}
-        },
-        "required": ["description"],
-        "additionalProperties": False
-    }
-}
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GPT_4O_MODEL = "gpt-4o-2024-08-06"   # or the snapshot you have
-
-async def call_gpt_structured(system_prompt, user_prompt, schema_dict, max_retries=3):
+def generate_npc_age_and_birthdate_gpt(npc_name, relationships=None, archetypes=None, current_year=1000):
     """
-    A helper that:
-      1) calls the Chat Completions endpoint w/ response_format = "json_schema"
-      2) checks for refusal or valid "parsed" in message
-      3) on success returns that parsed object
-      4) on fail or refusal, returns None
+    Uses GPT to generate an NPC's age and birthdate, incorporating familial relationship details
+    and archetype cues if provided.
+    
+    For example, if the NPC is described as having a familial relationship (e.g., she is a mother),
+    ensure that her age is at least 20 years older than her child.
+    Also, if one of her archetypes is "student", she should be relatively young.
+    
+    Returns a tuple: (age, birthdate) where 'age' is an integer and 'birthdate' is a string in 'YYYY-MM-DD' format.
     """
-    request_body = {
-        "model": GPT_4O_MODEL,
-        "messages": [
-            {"role":"system","content": system_prompt},
-            {"role":"user","content": user_prompt}
-        ],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": schema_dict
-        }
-    }
+    # Build a string summarizing any relationship constraints.
+    if relationships:
+        rel_strings = []
+        for rel in relationships:
+            # Example: "mother of Alice" or "sister of Bob"
+            rel_type = rel.get("type", "relation")
+            target_name = rel.get("target_name", "someone")
+            rel_strings.append(f"{rel_type} of {target_name}")
+        rel_info = "; ".join(rel_strings)
+    else:
+        rel_info = "None"
+    
+    # Build a string summarizing the NPC's archetypes.
+    if archetypes:
+        if isinstance(archetypes, list):
+            archetype_info = ", ".join(archetypes)
+        else:
+            archetype_info = str(archetypes)
+    else:
+        archetype_info = "None"
+    
+    prompt = (
+        f"Generate a JSON object with keys 'age' and 'birthdate' for an NPC in a roleplay game. "
+        f"The NPC's name is '{npc_name}'. The current in-game year is {current_year}. "
+        f"If the NPC is described as having a familial relationship (for example, if she is a mother), ensure that her age is at least 20 years older than her child. "
+        f"Also, consider the following archetypes for the NPC: {archetype_info}. For instance, if one of the archetypes is 'student', then the NPC should be relatively young. "
+        f"Here are the relationship details: {rel_info}. "
+        "If there are no familial constraints, choose an age between 18 and 50. "
+        "Then, compute the birthdate as (current_year - age) using a random month (1-12) and day (1-28). "
+        "Return only a JSON object with keys 'age' (an integer) and 'birthdate' (a string in the format YYYY-MM-DD)."
+    )
+    
+    logging.info("Generating NPC age and birthdate with prompt: %s", prompt)
+    try:
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0.7,
+            max_tokens=150
+        )
+        result_text = response.choices[0].message.content.strip()
+        logging.info("GPT age/birthdate response: %s", result_text)
+        # Remove markdown code fences if present.
+        if result_text.startswith("```"):
+            lines = result_text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            result_text = "\n".join(lines).strip()
+        result = json.loads(result_text)
+        age = result.get("age")
+        birthdate = result.get("birthdate")
+        return age, birthdate
+    except Exception as e:
+        logging.error("Error generating NPC age and birthdate via GPT: %s", e, exc_info=True)
+        # Fallback to random generation if GPT fails.
+        return generate_npc_age_and_birthdate()
 
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {OPENAI_API_KEY}",
-                        "Content-Type": "application/json"
-                    },
-                    json=request_body
-                )
-                resp.raise_for_status()
-                data = resp.json()
 
-            choice = data["choices"][0]["message"]
-            if "refusal" in choice:
-                logging.warning(f"Refusal attempt {attempt+1}: {choice['refusal']}")
-                continue
-
-            if "parsed" in choice:
-                return choice["parsed"]
-            else:
-                logging.warning(f"Attempt {attempt+1}: No parsed object in the message. Full message => {choice}")
-        except Exception as e:
-            logging.error(f"call_gpt_structured attempt {attempt+1} error: {e}", exc_info=True)
-    # If we reach here => failure
-    return None
-
-#################################
-# 4) Synergy function
-#################################
-async def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
+###################
+# 6) GPT Synergy Functions
+###################
+def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
     """
-    Calls GPT with structured outputs. We want exactly:
-      {
-        "npc_name": str,
-        "archetype_summary": str
-      }
-    If it fails or refuses, we fallback.
+    Calls GPT to produce a JSON object containing:
+      - "npc_name": a creative (or provided) NPC name,
+      - "archetype_summary": a short personality/backstory summary.
+    
+    If provided_npc_name is given, instruct GPT to use that value.
     """
-
     if not archetypes_list:
         default_name = provided_npc_name if provided_npc_name else "Unknown"
-        return {
+        return json.dumps({
             "npc_name": default_name,
             "archetype_summary": "No special archetype synergy."
-        }
-
+        })
+    
     archetype_names = [a["name"] for a in archetypes_list]
+    
     if provided_npc_name:
-        name_instruction = f"Use the provided NPC name: '{provided_npc_name}'."
+        name_instruction = f"Use the provided NPC name: '{provided_npc_name}'. Do not invent a new name."
     else:
         name_instruction = "Generate a creative, fitting name for the NPC."
-
-    system_text = (
-        "You are an expert creative writer, merging multiple archetypes into one NPC. "
-        "Output strictly in the JSON schema: npc_name (string), archetype_summary (string)."
-    )
-    user_text = (
-        f"Archetypes: {', '.join(archetype_names)}.\n"
+    
+    system_instructions = (
+        f"You are an expert creative writer. You are tasked with writing a personality/backstory summary for an NPC "
+        f"who combines these archetypes: {', '.join(archetype_names)}.\n"
         f"{name_instruction}\n"
-        "No extra keys or text. The final JSON must have exactly npc_name and archetype_summary."
+        "Your response must be a single valid JSON object with exactly two keys:\n"
+        "  \"npc_name\": a creative, unique, and fitting name for the NPC,\n"
+        "  \"archetype_summary\": describe the unique personality that emerges from merging the independent archetypes into one cohesive, unified archetype.\n"
+        "Do not include any extra text, markdown formatting, or newlines outside of the JSON. Output only the JSON object."
     )
-
-    parsed = await call_gpt_structured(system_text, user_text, synergy_schema)
-    if parsed is None:
-        # fallback
-        default_name = provided_npc_name if provided_npc_name else f"NPC_{random.randint(1000,9999)}"
-        return {
-            "npc_name": default_name,
-            "archetype_summary": "Could not generate synergy text."
-        }
-    return parsed
-
-def get_archetype_extras_summary(archetypes_list, provided_npc_name):
-    if not archetypes_list:
-        return f"No extra details available for {provided_npc_name}."
-   
-    extras_text_list = []
-    for arc in archetypes_list:
-        pr = " ".join(arc.get("progression_rules", []))
-        ut = " ".join(arc.get("unique_traits", []))
-        pk = " ".join(arc.get("preferred_kinks", []))
-        extras_text_list.append(
-            f"{arc['name']}: Progression: {pr}; Traits: {ut}; Kinks: {pk}"
-        )
-   
-    combined_extras = "\n\n".join(extras_text_list)
-   
-    system_instructions = f"""
-    You are a creative writer tasked with synthesizing the following extra details 
-    from several archetypes in a femdom context into one cohesive, unified description 
-    for an NPC named "{provided_npc_name}". Instead of describing each archetype separately, 
-    imagine their traits, progression rules, and unique kinks merging into one complex persona.
-    Here are the details:
-    {combined_extras}
-   
-    Please produce a concise description (3-5 sentences) that integrates all these details 
-    into a singular, powerful image. Emphasize how the combined traits reinforce 
-    an overall dominant and compelling personality.
-    Output only the final description text—no extra commentary or formatting.
-    """
-
+    
+    gpt_client = get_openai_client()
+    messages = [{"role": "system", "content": system_instructions}]
     try:
-        gpt_client = get_openai_client()  # or however you get the GPT client
         response = gpt_client.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role":"system","content": system_instructions}],
+            messages=messages,
             temperature=0.7,
             max_tokens=300
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        logging.error(f"[get_archetype_extras_summary] GPT error: {e}", exc_info=True)
+        logging.error(f"[get_archetype_synergy_description] GPT error: {e}")
+        default_name = provided_npc_name if provided_npc_name else "Unknown"
+        return json.dumps({
+            "npc_name": default_name,
+            "archetype_summary": "An NPC with these archetypes has a mysterious blend of traits, but GPT call failed."
+        })
+
+def get_archetype_extras_summary(archetypes_list, provided_npc_name):
+    if not archetypes_list:
+        return f"No extra details available for {provided_npc_name}."
+    
+    extras_text_list = []
+    for arc in archetypes_list:
+        pr = " ".join(arc.get("progression_rules", []))
+        ut = " ".join(arc.get("unique_traits", []))
+        pk = " ".join(arc.get("preferred_kinks", []))
+        extras_text_list.append(f"{arc['name']}: Progression: {pr}; Traits: {ut}; Kinks: {pk}")
+    
+    combined_extras = "\n\n".join(extras_text_list)
+    
+    system_instructions = f"""
+    You are a creative writer tasked with synthesizing the following extra details from several archetypes in a femdom context into one cohesive, unified description for an NPC named "{provided_npc_name}". Instead of describing each archetype separately, imagine that their traits, progression rules, and unique kinks merge into a single, complex persona. 
+    Here are the details:
+    {combined_extras}
+    
+    Please produce a concise description (3-5 sentences) that integrates all these details into a singular, powerful image of an NPC named "{provided_npc_name}". Emphasize how the combined traits reinforce an overall dominant and compelling personality.
+    Output only the final description text without any extra commentary or formatting.
+    """
+    
+    gpt_client = get_openai_client()
+    messages = [{"role": "system", "content": system_instructions}]
+    
+    try:
+        response = gpt_client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=300
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logging.error(f"[get_archetype_extras_summary] GPT error: {e}")
         return f"An extra archetype summary for {provided_npc_name} could not be generated."
 
-#################################
-# 5) Age & Birthdate function
-#################################
-async def generate_npc_age_and_birthdate_gpt_structured(npc_name, relationships=None, archetypes=None, current_year=1000):
-    """
-    Returns a dict with "age" (int) and "birthdate" (str).
-    If fail, fallback to random.
-    """
-    if relationships:
-        rel_strings = []
-        for rel in relationships:
-            # e.g. mother of Alice
-            rel_type = rel.get("type","relation")
-            target_name = rel.get("target_name","someone")
-            rel_strings.append(f"{rel_type} of {target_name}")
-        rel_info = "; ".join(rel_strings)
-    else:
-        rel_info = "None"
 
-    if archetypes:
-        if isinstance(archetypes,list):
-            arch_info = ", ".join(archetypes)
-        else:
-            arch_info = str(archetypes)
-    else:
-        arch_info = "None"
-
-    system_text = (
-        "You will produce a JSON with 'age' (integer) and 'birthdate' (YYYY-MM-DD) "
-        "for an NPC in a femdom daily-life sim. Must adhere to the schema, no extra keys."
-    )
-    user_text = (
-        f"NPC name: {npc_name}\n"
-        f"Current in-game year: {current_year}\n"
-        f"Relationships: {rel_info}\n"
-        f"Archetypes: {arch_info}\n"
-        "If mother, age≥20 yrs older than child. If 'student', keep age young. "
-        "Compute birthdate as (current_year - age) with a random month/day. "
-        "Strictly return only {\"age\":..., \"birthdate\":\"...\"} with no extra text."
-    )
-
-    parsed = await call_gpt_structured(system_text, user_text, age_birth_schema)
-    if not parsed:
-        # fallback
-        fallback_age = random.randint(18,50)
-        fallback_month = random.randint(1,12)
-        fallback_day = random.randint(1,28)
-        fallback_birthdate = f"{current_year - fallback_age}-{fallback_month:02d}-{fallback_day:02d}"
-        return {"age": fallback_age, "birthdate": fallback_birthdate}
-    return parsed
-
-#################################
-# 6) Physical Description function
-#################################
-async def get_physical_description_structured(npc_name, final_stats, chosen_arcs):
-    """
-    Returns { "description": "some text" }
-    """
-    stats_str = ", ".join([f"{k}:{v}" for k,v in final_stats.items()])
-    arcs_str = ", ".join([arc["name"] for arc in chosen_arcs]) if chosen_arcs else "None"
-
-    system_text = (
-        "Generate a robust, vivid physical description for an NPC in a femdom sim. "
-        "Output must be valid JSON with exactly one key 'description'."
-    )
-    user_text = (
-        f"NPC name: {npc_name}\n"
-        f"Stats: {stats_str}\n"
-        f"Archetypes: {arcs_str}\n"
-        "No extra commentary or markdown. Just {\"description\":\"...\"}."
-    )
-
-    parsed = await call_gpt_structured(system_text, user_text, phys_desc_schema)
-    if not parsed:
-        return {"description": "A striking NPC with an enigmatic, captivating appearance."}
-    return parsed
-
-###############################
-# 7) create_npc - Rewritten
-###############################
-async def create_npc(user_id, conversation_id, npc_name=None, introduced=False,
-                     sex="female", reroll_extra=False, total_archetypes=4, relationships=None):
+###################
+# 7) Create NPC
+###################
+def create_npc(user_id, conversation_id, npc_name=None, introduced=False,
+               sex="female", reroll_extra=False, total_archetypes=4, relationships=None):
     if not npc_name:
         npc_name = ""
     logging.info(f"[create_npc] user_id={user_id}, conv_id={conversation_id}, name={npc_name or '[None]'}, introduced={introduced}, sex={sex}")
@@ -381,6 +304,7 @@ async def create_npc(user_id, conversation_id, npc_name=None, introduced=False,
     cursor = conn.cursor()
 
     chosen_arcs_rows = []
+    chosen_arcs_list_for_json = []  # for GPT functions
     final_stats = {}
 
     if sex.lower() == "male":
@@ -388,23 +312,22 @@ async def create_npc(user_id, conversation_id, npc_name=None, introduced=False,
             "dominance": random.randint(0, 30),
             "cruelty": random.randint(0, 30),
             "closeness": random.randint(0, 30),
-            "trust": random.randint(-30,30),
-            "respect": random.randint(-30,30),
-            "intensity": random.randint(0,30)
+            "trust": random.randint(-30, 30),
+            "respect": random.randint(-30, 30),
+            "intensity": random.randint(0, 30)
         }
     else:
-        # female path => gather archetypes from DB
         cursor.execute("SELECT id, name, baseline_stats FROM Archetypes")
         all_arcs = cursor.fetchall()
         if not all_arcs:
-            logging.warning("No archetypes in DB. Using random for female.")
+            logging.warning("[create_npc] No archetypes in DB. Using pure-random for female.")
             final_stats = {
-                "dominance": random.randint(0,40),
-                "cruelty": random.randint(0,40),
-                "closeness": random.randint(0,40),
-                "trust": random.randint(-40,40),
-                "respect": random.randint(-40,40),
-                "intensity": random.randint(0,40)
+                "dominance": random.randint(0, 40),
+                "cruelty": random.randint(0, 40),
+                "closeness": random.randint(0, 40),
+                "trust": random.randint(-40, 40),
+                "respect": random.randint(-40, 40),
+                "intensity": random.randint(0, 40)
             }
         else:
             reroll_pool = [row for row in all_arcs if row[0] in REROLL_IDS]
@@ -416,40 +339,48 @@ async def create_npc(user_id, conversation_id, npc_name=None, introduced=False,
             if reroll_extra and reroll_pool:
                 chosen_arcs_rows.append(random.choice(reroll_pool))
             final_stats = combine_archetype_stats(chosen_arcs_rows)
-
-    # Convert chosen archetypes to JSON
+    
     chosen_arcs_json_str = archetypes_to_json(chosen_arcs_rows)
     try:
-        chosen_arcs_list = json.loads(chosen_arcs_json_str)
-    except:
-        logging.error("Error parsing chosen_arcs JSON, fallback to empty.")
-        chosen_arcs_list = []
+        chosen_arcs_list_for_json = json.loads(chosen_arcs_json_str)
+    except Exception as e:
+        logging.error("Error parsing chosen archetypes JSON: %s", e)
+        chosen_arcs_list_for_json = []
 
-    # 1) synergy step => we want a synergy text + possibly an npc_name
-    synergy_data = {}
-    if chosen_arcs_list:
-        synergy_data = await get_archetype_synergy_description(chosen_arcs_list, npc_name)
-        # synergy_data => {"npc_name":"...", "archetype_summary":"..."}
-        new_npc_name = synergy_data["npc_name"]
-        synergy_text = synergy_data["archetype_summary"]
+    # Generate synergy text and a dynamic NPC name if archetypes exist.
+    if chosen_arcs_list_for_json:
+        synergy_json = get_archetype_synergy_description(chosen_arcs_list_for_json, npc_name)
+        if not synergy_json:
+            logging.error("GPT returned an empty synergy JSON; using fallback.")
+            synergy_json = json.dumps({
+                "npc_name": npc_name if npc_name else f"NPC_{random.randint(1000,9999)}",
+                "archetype_summary": "No synergy text available."
+            })
+        try:
+            synergy_data = json.loads(synergy_json)
+            new_npc_name = synergy_data.get("npc_name", npc_name)
+            synergy_text = synergy_data.get("archetype_summary", "")
+            if isinstance(synergy_text, list):
+                synergy_text = " ".join(synergy_text)
+        except Exception as e:
+            logging.error("Failed to parse synergy JSON; using fallback.", exc_info=True)
+            new_npc_name = npc_name if npc_name else f"NPC_{random.randint(1000,9999)}"
+            synergy_text = "No synergy text available."
+        extras_summary = get_archetype_extras_summary(chosen_arcs_list_for_json, new_npc_name)
     else:
         new_npc_name = npc_name if npc_name else f"NPC_{random.randint(1000,9999)}"
         synergy_text = "No synergy text available."
+        extras_summary = "No extra archetype details available."
+    
+    # Generate physical description using the final NPC name.
+    physical_description = get_physical_description(new_npc_name, final_stats, chosen_arcs_list_for_json)
+    
+    # Extract the archetype names from the chosen archetypes list (if available)
+    archetype_names = [arc["name"] for arc in chosen_arcs_list_for_json] if chosen_arcs_list_for_json else []
+    # Use GPT to generate age and birthdate using both relationship details and archetype cues.
+    npc_age, birthdate = generate_npc_age_and_birthdate_gpt(new_npc_name, relationships, archetypes=archetype_names, current_year=1000)
 
-    # 2) extras summary => you can still do a simpler text approach or define a second schema. We'll keep it simpler:
-    extras_summary = get_archetype_extras_summary(chosen_arcs_list, new_npc_name)  # same as old code, or rewrite as structured if you prefer
-
-    # 3) age+birth => call structured approach
-    archetype_names = [arc["name"] for arc in chosen_arcs_list]
-    age_birth_data = await generate_npc_age_and_birthdate_gpt_structured(new_npc_name, relationships, archetype_names, current_year=1000)
-    npc_age = age_birth_data["age"]
-    birthdate = age_birth_data["birthdate"]
-
-    # 4) physical desc => structured
-    phys_desc_obj = await get_physical_description_structured(new_npc_name, final_stats, chosen_arcs_list)
-    physical_description = phys_desc_obj["description"]
-
-    # Insert row
+    
     try:
         cursor.execute(
             """
@@ -471,8 +402,7 @@ async def create_npc(user_id, conversation_id, npc_name=None, introduced=False,
             )
             RETURNING npc_id
             """,
-            (user_id, conversation_id,
-             new_npc_name, introduced, sex.lower(),
+            (user_id, conversation_id, new_npc_name, introduced, sex.lower(),
              final_stats["dominance"], final_stats["cruelty"],
              final_stats["closeness"], final_stats["trust"],
              final_stats["respect"], final_stats["intensity"],
@@ -481,7 +411,7 @@ async def create_npc(user_id, conversation_id, npc_name=None, introduced=False,
         )
         new_id = cursor.fetchone()[0]
         conn.commit()
-        logging.info(f"[create_npc] Inserted npc_id={new_id}, name={new_npc_name}, stats={final_stats}, age={npc_age}, birthdate={birthdate}, synergy={synergy_text[:40]}...")
+        logging.info(f"[create_npc] Inserted npc_id={new_id} with stats={final_stats}, age={npc_age}, birthdate={birthdate}. Archetypes count={len(chosen_arcs_rows)}. New NPC name: {new_npc_name}")
     except Exception as e:
         conn.rollback()
         logging.error(f"[create_npc] DB error: {e}", exc_info=True)
