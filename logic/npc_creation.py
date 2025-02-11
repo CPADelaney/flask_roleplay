@@ -4,7 +4,7 @@ import random
 import logging
 
 from logic.chatgpt_integration import get_openai_client
-from logic.gpt_utils import spaced_gpt_call_with_retry
+from logic.gpt_utils import spaced_gpt_call
 from db.connection import get_db_connection
 from logic.memory_logic import get_shared_memory, record_npc_event
 from logic.social_links import create_social_link
