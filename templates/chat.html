@@ -409,38 +409,12 @@
       await loadConversations();
       selectConversation(currentConvId);
   
-      // Optionally, start NPC generation after a short delay.
-      setTimeout(async () => {
-        await spawnNPCs();
-      }, 1000);
-  
       // Start polling the conversation status and update the UI dynamically when ready.
       pollConversationStatus(currentConvId);
       
     } catch (err) {
       console.error("startNewGame error:", err);
       alert("Failed to start new game!");
-    }
-  }
-
-  
-  async function spawnNPCs() {
-    try {
-      const res = await fetch("/spawn_npcs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ conversation_id: currentConvId })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        alert("Error spawning NPCs: " + (data.error || res.status));
-        return;
-      }
-      console.log("NPCs spawned:", data.npc_ids);
-    } catch (err) {
-      console.error("spawnNPCs error:", err);
-      alert("Error spawning NPCs");
     }
   }
 
