@@ -394,7 +394,7 @@ async def async_process_new_game(user_id, conversation_data):
         # { "npc_creations":[...], "ChaseSchedule":{...} }
 
         # 15) Store the new NPCs & chase schedule in one pass
-        await apply_universal_update(user_id, conversation_id, npc_plus_chase_data, conn)
+        await apply_universal_updates_async(user_id, conversation_id, npc_plus_chase_data, conn)
 
         # ---------------------------------------------------------------------
         # 15.1) OPTIONAL: Final NPC "Completion" Step
