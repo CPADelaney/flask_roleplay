@@ -11,7 +11,7 @@ from logic.aggregator import get_aggregated_roleplay_context
 from logic.gpt_helpers import adjust_npc_complete
 from routes.story_routes import build_aggregator_text
 from logic.gpt_utils import spaced_gpt_call
-from logic.apply_updates import apply_universal_update  # your existing universal update function
+from logic.universal_updater import apply_universal_updates_async  # your existing universal update function
 from logic.calendar import update_calendar_names
 
 # Use your Railway DSN (update as needed)
