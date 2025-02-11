@@ -17,8 +17,6 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
     logging.info(json.dumps(data, indent=2))
     
     try:
-        # Since we receive user_id & conversation_id from function params,
-        # confirm we also have them in data if needed
         data_user_id = data.get("user_id")
         data_conv_id = data.get("conversation_id")
 
