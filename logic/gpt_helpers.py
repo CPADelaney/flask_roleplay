@@ -1,162 +1,150 @@
 # logic/gpt_helpers.py
-from logic.gpt_utils import spaced_gpt_call  # Import from the separate GPT utils module
-import httpx
 import json
 import logging
-import os
-import asyncio
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-# The JSON schema as explained:
-npc_schema = {
-    "name": "NPCDetails",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "properties": {
-            "likes": {
-                "type": "array",
-                "items": {"type": "string"}
-            },
-            "dislikes": {
-                "type": "array",
-                "items": {"type": "string"}
-            },
-            "hobbies": {
-                "type": "array",
-                "items": {"type": "string"}
-            },
-            "affiliations": {
-                "type": "array",
-                "items": {"type": "string"}
-            },
-            "schedule": {
-                "type": "object",
-                "description": "A dictionary keyed by day name, each day is {Morning,Afternoon,Evening,Night}",
-                "additionalProperties": {
-                    "type": "object",
-                    "properties": {
-                        "Morning": {"type": "string"},
-                        "Afternoon": {"type": "string"},
-                        "Evening": {"type": "string"},
-                        "Night": {"type": "string"}
-                    },
-                    "required": ["Morning","Afternoon","Evening","Night"],
-                    "additionalProperties": False
-                }
-            }
-        },
-        "required": ["likes","dislikes","hobbies","affiliations","schedule"],
-        "additionalProperties": False
-    }
-}
+from logic.gpt_utils import spaced_gpt_call  # Import from the separate GPT utils module
 
 async def adjust_npc_complete(npc_data, environment_desc, conversation_id, immersive_days=None):
     """
     Adapt NPC details by combining preference adjustments and schedule/affiliation generation
-    into one GPT call using Structured Outputs and JSON schema.
+    into one GPT call. Tailor all details to an environment dominated by powerful females.
+    
+    We ask GPT to produce a JSON with exactly these keys:
+      - "likes": (array of strings)
+      - "dislikes": (array of strings)
+      - "hobbies": (array of strings)
+      - "affiliations": (array of strings)
+      - "schedule": (object with custom day names, each having "Morning","Afternoon","Evening","Night")
 
-    The GPT call ensures we get exactly these keys:
-      - likes (array of strings)
-      - dislikes (array of strings)
-      - hobbies (array of strings)
-      - affiliations (array of strings)
-      - schedule (object keyed by day names, each day has Morning,Afternoon,Evening,Night)
+    The schedule must use the immersive day names (e.g., "Alpha", "Beta", etc.) you provide. If none
+    are provided, a fallback array is used.
 
-    Returns a dict with the five fields. If the model refuses or something fails,
-    we return fallback from npc_data.
+    Parameters:
+      npc_data: dict of the NPC's current details (preferences, archetype summary, etc.).
+      environment_desc: str describing the environment.
+      conversation_id: conversation context id for the GPT call.
+      immersive_days: a list of immersive day names (e.g. ["Alpha","Beta","Gamma"]) for the schedule.
+                     Defaults to ["Sol","Luna","Terra","Vesta","Mercury","Venus","Mars"] if None.
+
+    Returns:
+      A dict with keys "likes", "dislikes", "hobbies", "affiliations", "schedule".
+      If GPT fails after retries, returns fallback from npc_data.
     """
-    # Default day names if none provided
+    # Use provided day names or fallback
     if immersive_days is None:
-        immersive_days = ["Sol","Luna","Terra","Vesta","Mercury","Venus","Mars"]
+        immersive_days = ["Sol", "Luna", "Terra", "Vesta", "Mercury", "Venus", "Mars"]
 
+    # Retrieve NPC details
     archetype_summary = npc_data.get("archetype_summary", "")
     likes = npc_data.get("likes", [])
     dislikes = npc_data.get("dislikes", [])
     hobbies = npc_data.get("hobbies", [])
 
-    # Build your system prompt or message
-    # We'll just do a single "system" style message for clarity:
-    system_text = (
-        "You are adjusting an NPC for a femdom environment. "
-        "Given the existing likes, dislikes, and hobbies, produce an updated set that fits. "
-        "Also produce 'affiliations' and a 'schedule'. "
-        "Use these day names for the schedule: "
-        f"{', '.join(immersive_days)}. "
-        "Schedule must have keys for each day, each day has Morning/Afternoon/Evening/Night. "
-        "Return only JSON adhering to the schema, no extra keys or text."
-    )
-
-    # The user message might pass in more context if needed. Let's keep it simple:
-    user_text = (
-        f"NPC Archetype Summary: {archetype_summary}\n\n"
-        f"Likes: {likes}\nDislikes: {dislikes}\nHobbies: {hobbies}\n"
+    # Build the combined prompt
+    prompt = (
+        "Given the following NPC information:\n"
+        f"Archetype Summary: {archetype_summary}\n"
         f"Environment: {environment_desc}\n\n"
-        "Please produce final JSON with keys: likes, dislikes, hobbies, affiliations, schedule."
+        "NPC Preferences:\n"
+        f"Likes: {likes}\n"
+        f"Dislikes: {dislikes}\n"
+        f"Hobbies: {hobbies}\n\n"
+        "Instructions:\n"
+        "1. Adapt the above preferences so that they are specifically tailored "
+        "   to an environment dominated by powerful females.\n"
+        "2. Determine the NPC's affiliations (teams, clubs, partnerships, associations, etc.) "
+        "   that fit within this environment.\n"
+        "3. Create a detailed weekly schedule using these immersive day names: "
+        f"{', '.join(immersive_days)}. For each day, include 'Morning', 'Afternoon', "
+        "'Evening', 'Night'.\n\n"
+        "Return only a JSON object with exactly the following five keys (and no extra keys):\n"
+        "  - \"likes\"\n"
+        "  - \"dislikes\"\n"
+        "  - \"hobbies\"\n"
+        "  - \"affiliations\"\n"
+        "  - \"schedule\"\n"
     )
 
-    request_body = {
-        "model": "gpt-4o-2024-08-06",  # or a newer model that supports structured outputs
-        "messages": [
-            {"role": "system", "content": system_text},
-            {"role": "user", "content": user_text}
-        ],
-        # The key part: response_format specifying the JSON schema
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": npc_schema
-        },
-        # Possibly set "strict" at top-level if your doc version requires it. 
-        # But we've included "strict": true inside the schema definition above.
-    }
+    logging.info("Adjusting complete NPC details with prompt: %s", prompt)
 
-    logging.info("Sending structured outputs request for NPC. Prompt: %s", user_text)
-
-    # Attempt up to 3 retries if the model refuses or fails
     max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {OPENAI_API_KEY}",
-                        "Content-Type": "application/json"
-                    },
-                    json=request_body,
-                    timeout=120
-                )
-                resp.raise_for_status()
-                data = resp.json()
+    retry_count = 0
 
-            # data is the entire completion. We want data["choices"][0]["message"].
-            choice = data["choices"][0]["message"]
-            # If the model refused, the "refusal" field will appear:
-            if "refusal" in choice:
-                logging.warning(f"NPC schema attempt {attempt+1}: model refused: {choice['refusal']}")
-                continue  # try again or break out, your call
+    while retry_count < max_retries:
+        reply = await spaced_gpt_call(conversation_id, environment_desc, prompt)
 
-            # Otherwise, the structured JSON is in `choice["parsed"]`
-            if "parsed" not in choice:
-                logging.warning(f"NPC schema attempt {attempt+1}: no 'parsed' found in message? Full: {choice}")
+        # 1) If GPT used a function call
+        if reply.get("type") == "function_call":
+            args = reply.get("function_args", {})
+
+            # Case 1: Top-level keys are exactly present
+            if all(key in args for key in ["likes", "dislikes", "hobbies", "affiliations", "schedule"]):
+                return {
+                    "likes": args["likes"],
+                    "dislikes": args["dislikes"],
+                    "hobbies": args["hobbies"],
+                    "affiliations": args["affiliations"],
+                    "schedule": args["schedule"]
+                }
+
+            # Case 2: GPT puts them inside "npc_updates"
+            elif "npc_updates" in args:
+                updates = args["npc_updates"]
+                if isinstance(updates, list) and len(updates) > 0:
+                    update_obj = updates[0]
+                    if all(key in update_obj for key in ["likes", "dislikes", "hobbies", "affiliations", "schedule"]):
+                        return update_obj
+
+            # (Optional) Case 3: GPT might nest them under "npc_creations" (if you ever do that)
+            elif "npc_creations" in args:
+                creations = args["npc_creations"]
+                if isinstance(creations, list) and len(creations) > 0:
+                    creation_obj = creations[0]
+                    if all(key in creation_obj for key in ["likes", "dislikes", "hobbies", "affiliations", "schedule"]):
+                        return creation_obj
+
+            # If it reached here, it didn't have the required 5 keys
+            logging.warning("Incomplete keys in function_args; retrying.")
+            retry_count += 1
+            continue
+
+        # 2) If GPT returned a plain text "response" (non-function-call)
+        elif reply.get("response"):
+            try:
+                response_text = reply["response"].strip()
+
+                # Strip code fences if present
+                if response_text.startswith("```"):
+                    lines = response_text.splitlines()
+                    if lines and lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    response_text = "\n".join(lines).strip()
+
+                data_parsed = json.loads(response_text)
+
+                if all(key in data_parsed for key in ["likes", "dislikes", "hobbies", "affiliations", "schedule"]):
+                    return data_parsed
+                else:
+                    logging.warning("Response JSON missing expected keys; retrying.")
+                    retry_count += 1
+                    continue
+            except Exception as e:
+                logging.error("Error parsing JSON from response: %s", e)
+                retry_count += 1
                 continue
 
-            parsed = choice["parsed"]
-            # e.g. { "likes": [...], "dislikes": [...], "hobbies": [...], "affiliations": [...], "schedule": {...}}
-            return parsed
+        # 3) If neither function_call nor text is valid
+        else:
+            logging.warning("GPT did not return a valid response; retrying.")
+            retry_count += 1
 
-        except httpx.HTTPStatusError as e:
-            logging.error(f"HTTP error: {e} attempt {attempt+1}")
-        except Exception as e:
-            logging.error(f"Error parsing or calling GPT for NPC. Attempt {attempt+1}: {e}")
-
-    # If we reach here, all attempts failed or it kept refusing => fallback
-    logging.error("NPC structured call failed after retries. Returning fallback from npc_data.")
+    # If all retries failed, fall back
+    logging.error("Max retries reached; returning original values.")
     return {
-        "likes": npc_data.get("likes", []),
-        "dislikes": npc_data.get("dislikes", []),
-        "hobbies": npc_data.get("hobbies", []),
+        "likes": likes,
+        "dislikes": dislikes,
+        "hobbies": hobbies,
         "affiliations": npc_data.get("affiliations", []),
         "schedule": npc_data.get("schedule", {})
     }
