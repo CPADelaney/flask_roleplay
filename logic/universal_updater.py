@@ -166,6 +166,17 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                         WHERE npc_id=$2 AND user_id=$3 AND conversation_id=$4
                     """, json.dumps(existing_schedule), npc_id, user_id, conversation_id)
 
+        # 3.5) Player schedule updates
+        chase_sched = data.get("ChaseSchedule")
+        if chase_sched:
+            # store it in CurrentRoleplay
+            await conn.execute("""
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES ($1, $2, 'ChaseSchedule', $3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value=EXCLUDED.value
+            """, user_id, conversation_id, json.dumps(chase_sched))        
+
         # 4) Process character_stat_updates
         char_update = data.get("character_stat_updates", {})
         logging.info(f"[apply_universal_updates_async] character_stat_updates: {char_update}")
