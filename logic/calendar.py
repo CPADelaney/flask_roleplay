@@ -80,7 +80,7 @@ def store_calendar_names(user_id, conversation_id, calendar_names):
         cursor.close()
         conn.close()
 
-def update_calendar_names(user_id, conversation_id, environment_desc):
+async def update_calendar_names(user_id, conversation_id, environment_desc) -> dict:
     """
     Generates immersive calendar names based on the provided environment description,
     stores them, and returns the resulting dictionary.
