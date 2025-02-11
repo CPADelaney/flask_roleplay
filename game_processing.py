@@ -5,896 +5,367 @@ import time
 import asyncio
 import asyncpg
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
-from logic.npc_creation import create_npc
+from logic.npc_creation import create_npc, assign_random_relationships
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.aggregator import get_aggregated_roleplay_context
 from logic.gpt_helpers import adjust_npc_complete
 from routes.story_routes import build_aggregator_text
 from logic.gpt_utils import spaced_gpt_call
-from logic.npc_creation import assign_random_relationships
+from logic.apply_updates import apply_universal_update  # your existing universal update function
 from logic.calendar import update_calendar_names
 
 # Use your Railway DSN (update as needed)
 DB_DSN = "postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@monorail.proxy.rlwy.net:24727/railway"
 
-# ---------------------------------------------------------------------
-# Helper to query the CurrentRoleplay table for a stored value.
-async def get_stored_value(conn, user_id, conversation_id, key):
-    row = await conn.fetchrow(
-        "SELECT value FROM CurrentRoleplay WHERE user_id=$1 AND conversation_id=$2 AND key=$3",
-        user_id, conversation_id, key
-    )
-    if row:
-        return row["value"]
-    return None
-
-# ---------------------------------------------------------------------
-# Helper: spaced-out GPT call.
-async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0):
-    logging.info("Waiting for %.1f seconds before calling GPT (conversation_id=%s)", delay, conversation_id)
-    await asyncio.sleep(delay)
-    logging.info("Calling GPT with conversation_id=%s", conversation_id)
-    result = await asyncio.to_thread(get_chatgpt_response, conversation_id, context, prompt)
-    logging.info("GPT returned response: %s", result)
-    return result
-
-# ---------------------------------------------------------------------
-# Helper: retry call upon failure
-
-async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0, max_retries=5):
+# -------------------------------------------------------------------------
+# ADVANCED RETRY/BACKOFF: folded in from the original 'spaced_gpt_call'
+# -------------------------------------------------------------------------
+async def spaced_gpt_call_with_retry(conversation_id, context, prompt, delay=1.0, max_retries=5):
     """
     Calls GPT with a short initial delay, then attempts an exponential backoff
     if we get a 429 (rate limit) error. 
     """
     wait_before_call = delay
     attempt = 1
-    
+
     while attempt <= max_retries:
-        logging.info("Waiting for %.1f seconds before calling GPT (conversation_id=%s) (attempt=%d)",
-                     wait_before_call, conversation_id, attempt)
+        logging.info(
+            "Waiting %.1f seconds before calling GPT (conversation_id=%s) (attempt=%d)",
+            wait_before_call, conversation_id, attempt
+        )
         await asyncio.sleep(wait_before_call)
-        
+
         try:
             # Perform the actual GPT request in a thread (the same logic you had).
             logging.info("Calling GPT with conversation_id=%s, attempt=%d", conversation_id, attempt)
-            result = await asyncio.to_thread(get_chatgpt_response, conversation_id, context, prompt)
-
+            result = await asyncio.to_thread(_sync_gpt_request, conversation_id, context, prompt)
             logging.info("GPT returned response (attempt=%d): %s", attempt, result)
             return result  # If success, return immediately
 
         except Exception as e:
-            # Detect 429 if you are using requests or httpx. If `get_chatgpt_response` internally
-            # raises an openai.error.RateLimitError or you can parse the error code, do so:
-            # Example:
+            # Detect 429 or RateLimitError
             if "429" in str(e) or "RateLimitError" in str(e):
                 logging.warning(f"Got 429 (Rate Limit) on attempt {attempt}. Backing off.")
-                # exponential backoff
                 attempt += 1
                 wait_before_call *= 2
                 if attempt > max_retries:
                     logging.error("Max retries reached after repeated 429 errors.")
                     raise
             else:
-                # If it's some other error, re-raise immediately or handle differently
                 logging.error("Non-429 error encountered: %s", e, exc_info=True)
                 raise
 
-    # If we exit the loop (which we shouldn't if we raise on last attempt)
     raise RuntimeError("Failed to call GPT after repeated attempts.")
 
-# ---------------------------------------------------------------------
-# Universal update function (asynchronous version)
-async def apply_universal_update(user_id, conversation_id, update_data, conn):
-    logging.info("=== [apply_universal_update] START ===")
-    logging.info("Update data keys: %s", list(update_data.keys()))
-    logging.info("Full update data:\n%s", json.dumps(update_data, indent=2))
-    
-    # NEW: Check for a top-level "ChaseSchedule" key and store it if found.
-    if "ChaseSchedule" in update_data:
-        chase_schedule_value = update_data["ChaseSchedule"]
-        logging.info("Storing ChaseSchedule from update data.")
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'ChaseSchedule', $3)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id, json.dumps(chase_schedule_value))
-    
-    # 1) roleplay_updates
-    rp_updates = update_data.get("roleplay_updates", {})
-    logging.info("[apply_universal_update] roleplay_updates: %s", rp_updates)
-    # If rp_updates is a list, merge them into a single dictionary.
-    if isinstance(rp_updates, list):
-        merged_rp_updates = {}
-        for d in rp_updates:
-            if isinstance(d, dict):
-                merged_rp_updates.update(d)
-        rp_updates = merged_rp_updates
-    for key, val in rp_updates.items():
-        stored_val = json.dumps(val) if isinstance(val, (dict, list)) else str(val)
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value = EXCLUDED.value
-        """, user_id, conversation_id, key, stored_val)
-        logging.info("Inserted/Updated CurrentRoleplay: key=%s, value=%s", key, stored_val)
+def _sync_gpt_request(conversation_id, context, prompt):
+    """
+    Synchronous function that calls get_openai_client() and sends the request.
+    You could also keep this in logic.chatgpt_integration if you prefer.
+    """
+    client = get_openai_client()
+    # For example, you might use something like:
+    #   client.chat.completions.create(model=..., messages=..., etc.)
+    # We'll demonstrate a simplified example:
+    messages = [
+        {"role": "system", "content": context},
+        {"role": "user", "content": prompt},
+    ]
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        temperature=0.7
+    )
 
-    
-    # 2) npc_creations
-    npc_creations = update_data.get("npc_creations", [])
-    logging.info("[apply_universal_update] npc_creations: %s", npc_creations)
-    for npc_data in npc_creations:
-        name = npc_data.get("npc_name", "Unnamed NPC")
-        introduced = npc_data.get("introduced", False)
-        arche = npc_data.get("archetypes", [])
-        dom = npc_data.get("dominance", 0)
-        cru = npc_data.get("cruelty", 0)
-        clos = npc_data.get("closeness", 0)
-        tru = npc_data.get("trust", 0)
-        resp = npc_data.get("respect", 0)
-        inten = npc_data.get("intensity", 0)
-        hbs = npc_data.get("hobbies", [])
-        pers = npc_data.get("personality_traits", [])
-        lks = npc_data.get("likes", [])
-        dlks = npc_data.get("dislikes", [])
-        affil = npc_data.get("affiliations", [])
-        sched = npc_data.get("schedule", {})
-        mem = npc_data.get("memory", [])
-        if isinstance(mem, str):
-            mem = [mem]
-        monica_lvl = npc_data.get("monica_level", 0)
-        sex = npc_data.get("sex", None)
-        
-        row = await conn.fetchrow("""
-            SELECT npc_id FROM NPCStats
-            WHERE user_id=$1 AND conversation_id=$2 AND LOWER(npc_name)=$3
-            LIMIT 1
-        """, user_id, conversation_id, name.lower())
-        if row:
-            logging.info("Skipping NPC creation, '%s' already exists.", name)
-            continue
-        logging.info("Creating NPC: %s, introduced=%s, dominance=%s, cruelty=%s", name, introduced, dom, cru)
-        await conn.execute("""
-            INSERT INTO NPCStats (
-                user_id, conversation_id, npc_name, introduced,
-                archetypes, dominance, cruelty, closeness, trust, respect, intensity,
-                hobbies, personality_traits, likes, dislikes,
-                affiliations, schedule, memory, monica_level, sex
-            )
-            VALUES (
-                $1, $2, $3, $4,
-                $5, $6, $7, $8, $9, $10, $11,
-                $12, $13, $14, $15,
-                $16, $17, $18, $19, $20
-            )
-        """, user_id, conversation_id, name, introduced, json.dumps(arche),
-           dom, cru, clos, tru, resp, inten,
-           json.dumps(hbs), json.dumps(pers), json.dumps(lks), json.dumps(dlks),
-           json.dumps(affil), json.dumps(sched), json.dumps(mem),
-           monica_lvl, sex)
-        logging.info("NPC creation insert complete for %s", name)
-    
-    # 3) npc_updates
-    npc_updates = update_data.get("npc_updates", [])
-    logging.info("[apply_universal_update] npc_updates: %s", npc_updates)
-    for up in npc_updates:
-        # First try to get npc_id from the payload
-        npc_id = up.get("npc_id")
-        # If npc_id is 0 or falsy, attempt a lookup by npc_name
-        if not npc_id or npc_id == 0:
-            npc_name = up.get("npc_name")
-            if npc_name:
-                logging.warning("Provided npc_id is invalid (0); looking up NPCStats for npc_name=%s", npc_name)
-                row = await conn.fetchrow(
-                    "SELECT npc_id FROM NPCStats WHERE user_id=$1 AND conversation_id=$2 AND npc_name=$3",
-                    user_id, conversation_id, npc_name
-                )
-                if row:
-                    npc_id = row["npc_id"]
-                    logging.info("Lookup successful: found npc_id=%s for npc_name=%s", npc_id, npc_name)
-                else:
-                    logging.warning("No NPC found in NPCStats for npc_name=%s; skipping update.", npc_name)
-                    continue
-            else:
-                logging.warning("Skipping npc_update: missing both npc_id and npc_name.")
-                continue
-    
-        # (Optional: add a check to ensure npc_id != user_id if needed)
-        if npc_id == user_id:
-            logging.warning("Skipping NPC update for npc_id=%s as it matches the player id.", npc_id)
-            continue
-    
-        fields_map = {
-            "npc_name": "npc_name",
-            "introduced": "introduced",
-            "dominance": "dominance",
-            "cruelty": "cruelty",
-            "closeness": "closeness",
-            "trust": "trust",
-            "respect": "respect",
-            "intensity": "intensity",
-            "monica_level": "monica_level",
-            "sex": "sex"
-        }
-        set_clauses = []
-        set_vals = []
-        for field_key, db_col in fields_map.items():
-            if field_key in up:
-                set_clauses.append(f"{db_col} = $%d" % (len(set_vals) + 1))
-                set_vals.append(up[field_key])
-        if set_clauses:
-            set_str = ", ".join(set_clauses)
-            set_vals.extend([npc_id, user_id, conversation_id])
-            query = f"""
-                UPDATE NPCStats
-                SET {set_str}
-                WHERE npc_id=$%d AND user_id=$%d AND conversation_id=$%d
-            """ % (len(set_vals)-2, len(set_vals)-1, len(set_vals))
-            logging.info("Updating NPC %s with fields %s", npc_id, set_clauses)
-            await conn.execute(query, *set_vals)
-            logging.info("Updated NPC %s", npc_id)
-        if "memory" in up:
-            new_mem_entries = up["memory"]
-            if isinstance(new_mem_entries, str):
-                new_mem_entries = [new_mem_entries]
-            logging.info("Appending memory to NPC %s: %s", npc_id, new_mem_entries)
-            # Convert the list to a JSON string.
-            memory_json = json.dumps(new_mem_entries)
-            await conn.execute("""
-                UPDATE NPCStats
-                SET memory = COALESCE(memory, '[]'::jsonb) || $1::jsonb
-                WHERE npc_id=$2 AND user_id=$3 AND conversation_id=$4
-            """, memory_json, npc_id, user_id, conversation_id)
-        if "schedule" in up:
-            new_schedule = up["schedule"]
-            logging.info("Overwriting schedule for NPC %s: %s", npc_id, new_schedule)
-            await conn.execute("""
-                UPDATE NPCStats
-                SET schedule=$1
-                WHERE npc_id=$2 AND user_id=$3 AND conversation_id=$4
-            """, json.dumps(new_schedule), npc_id, user_id, conversation_id)
-        if "schedule_updates" in up:
-            partial_sched = up["schedule_updates"]
-            logging.info("Merging schedule_updates for NPC %s: %s", npc_id, partial_sched)
-            row = await conn.fetchrow("""
-                SELECT schedule FROM NPCStats
-                WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
-            """, npc_id, user_id, conversation_id)
-            if row:
-                existing_schedule = row[0] or {}
-                for day_key, times_map in partial_sched.items():
-                    if day_key not in existing_schedule:
-                        existing_schedule[day_key] = {}
-                    existing_schedule[day_key].update(times_map)
-                await conn.execute("""
-                    UPDATE NPCStats
-                    SET schedule=$1
-                    WHERE npc_id=$2 AND user_id=$3 AND conversation_id=$4
-                """, json.dumps(existing_schedule), npc_id, user_id, conversation_id)
-        if "affiliations" in up:
-            logging.info("Updating affiliations for NPC %s: %s", npc_id, up["affiliations"])
-            await conn.execute("""
-                UPDATE NPCStats
-                SET affiliations = $1
-                WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
-            """, json.dumps(up["affiliations"]), npc_id, user_id, conversation_id)
-    
-        if "current_location" in up:
-            logging.info("Updating current location for NPC %s: %s", npc_id, up["current_location"])
-            await conn.execute("""
-                UPDATE NPCStats
-                SET current_location = $1
-                WHERE npc_id = $2 AND user_id = $3 AND conversation_id = $4
-            """, up["current_location"], npc_id, user_id, conversation_id)
-    
-    # 4) character_stat_updates
-    char_update = update_data.get("character_stat_updates", {})
-    logging.info("[apply_universal_update] character_stat_updates: %s", char_update)
-    if char_update:
-        p_name = char_update.get("player_name", "Chase")
-        stats = char_update.get("stats", {})
-        stat_map = {
-            "corruption": "corruption",
-            "confidence": "confidence",
-            "willpower": "willpower",
-            "obedience": "obedience",
-            "dependency": "dependency",
-            "lust": "lust",
-            "mental_resilience": "mental_resilience",
-            "physical_endurance": "physical_endurance"
-        }
-        set_clauses = []
-        set_vals = []
-        for k, col in stat_map.items():
-            if k in stats:
-                set_clauses.append(f"{col}=$%d" % (len(set_vals)+1))
-                set_vals.append(stats[k])
-        if set_clauses:
-            set_str = ", ".join(set_clauses)
-            set_vals.extend([p_name, user_id, conversation_id])
-            query = f"""
-                UPDATE PlayerStats
-                SET {set_str}
-                WHERE player_name=$%d AND user_id=$%d AND conversation_id=$%d
-            """ % (len(set_vals)-2, len(set_vals)-1, len(set_vals))
-            logging.info("Updating player stats for %s: %s", p_name, stats)
-            await conn.execute(query, *set_vals)
-    
-    # 5) relationship_updates
-    rel_updates = update_data.get("relationship_updates", [])
-    logging.info("[apply_universal_update] relationship_updates: %s", rel_updates)
-    for r in rel_updates:
-        npc_id = r.get("npc_id")
-        if not npc_id:
-            logging.warning("Skipping relationship update: missing npc_id.")
-            continue
-        aff_list = r.get("affiliations", None)
-        if aff_list is not None:
-            logging.info("Updating affiliations for NPC %s: %s", npc_id, aff_list)
-            await conn.execute("""
-                UPDATE NPCStats
-                SET affiliations=$1
-                WHERE npc_id=$2 AND user_id=$3 AND conversation_id=$4
-            """, json.dumps(aff_list), npc_id, user_id, conversation_id)
-    
-    # 6) shared_memory_updates
-    shared_memory_updates = update_data.get("shared_memory_updates", [])
-    logging.info("[apply_universal_update] shared_memory_updates: %s", shared_memory_updates)
-    for sm_update in shared_memory_updates:
-        npc_id = sm_update.get("npc_id")
-        relationship = sm_update.get("relationship")
-        if not npc_id or not relationship:
-            logging.warning("Skipping shared memory update: missing npc_id or relationship data.")
-            continue
-        row = await conn.fetchrow("""
-            SELECT npc_name FROM NPCStats
-            WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
-        """, npc_id, user_id, conversation_id)
-        if not row:
-            logging.warning("Shared memory update: NPC with id %s not found.", npc_id)
-            continue
-        npc_name = row[0]
-        from logic.memory import get_shared_memory
-        shared_memory_text = get_shared_memory(user_id, conversation_id, relationship, npc_name)
-        logging.info("Generated shared memory for NPC %s: %s", npc_id, shared_memory_text)
-        await conn.execute("""
-            UPDATE NPCStats
-            SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb($1::text)
-            WHERE npc_id=$2 AND user_id=$3 AND conversation_id=$4
-        """, shared_memory_text, npc_id, user_id, conversation_id)
-        logging.info("Appended shared memory to NPC %s", npc_id)
+    # Convert to the typical { "response": "...", "type": "...", "function_args": {...} } shape
+    # If the model returns a function call:
+    finish_reason = resp.choices[0].finish_reason
+    content = resp.choices[0].message.get("content", "")
+    function_call = resp.choices[0].message.get("function_call")
 
-    
-    # 7) npc_introductions
-    npc_intros = update_data.get("npc_introductions", [])
-    logging.info("[apply_universal_update] npc_introductions: %s", npc_intros)
-    for intro in npc_intros:
-        nid = intro.get("npc_id")
-        if nid:
-            logging.info("Marking NPC %s as introduced", nid)
-            await conn.execute("""
-                UPDATE NPCStats
-                SET introduced=TRUE
-                WHERE npc_id=$1 AND user_id=$2 AND conversation_id=$3
-            """, nid, user_id, conversation_id)
-    
-    # 8) location_creations
-    loc_creations = update_data.get("location_creations", [])
-    logging.info("[apply_universal_update] location_creations: %s", loc_creations)
-    for loc in loc_creations:
-        loc_name = loc.get("location_name", "Unnamed")
-        desc = loc.get("description", "")
-        open_hours = loc.get("open_hours", [])
-        row = await conn.fetchrow("""
-            SELECT id FROM Locations
-            WHERE user_id=$1 AND conversation_id=$2 AND LOWER(location_name)=$3
-            LIMIT 1
-        """, user_id, conversation_id, loc_name.lower())
-        if row:
-            logging.info("Skipping location creation, '%s' already exists.", loc_name)
-            continue
-        logging.info("Inserting location => location_name=%s, description=%s, open_hours=%s", loc_name, desc, open_hours)
-        await conn.execute("""
-            INSERT INTO Locations (user_id, conversation_id, location_name, description, open_hours)
-            VALUES ($1, $2, $3, $4, $5)
-        """, user_id, conversation_id, loc_name, desc, json.dumps(open_hours))
-        logging.info("Inserted location: %s", loc_name)
-    
-    # 9) event_list_updates
-    event_updates = update_data.get("event_list_updates", [])
-    logging.info("[apply_universal_update] event_list_updates: %s", event_updates)
-    for ev in event_updates:
-        # For PlannedEvents, we now expect npc_id, year, month, day, and time_of_day.
-        if "npc_id" in ev and "day" in ev and "time_of_day" in ev:
-            npc_id = ev["npc_id"]
-            year = ev.get("year", 1)
-            month = ev.get("month", 1)
-            day = ev["day"]
-            tod = ev["time_of_day"]
-            ov_loc = ev.get("override_location", "Unknown")
-            row = await conn.fetchrow("""
-                SELECT event_id FROM PlannedEvents
-                WHERE user_id=$1 AND conversation_id=$2
-                  AND npc_id=$3 AND year=$4 AND month=$5 AND day=$6 AND time_of_day=$7
-                LIMIT 1
-            """, user_id, conversation_id, npc_id, year, month, day, tod)
-            if row:
-                logging.info("Skipping planned event creation; year=%s, month=%s, day=%s, time_of_day=%s, npc=%s already exists.", year, month, day, tod, npc_id)
-                continue
-            logging.info("Inserting PlannedEvent => npc_id=%s, year=%s, month=%s, day=%s, time_of_day=%s, override_loc=%s", npc_id, year, month, day, tod, ov_loc)
-            await conn.execute("""
-                INSERT INTO PlannedEvents (user_id, conversation_id, npc_id, year, month, day, time_of_day, override_location)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            """, user_id, conversation_id, npc_id, year, month, day, tod, ov_loc)
-        else:
-            # For global events, we also expect the full date info.
-            ev_name = ev.get("event_name", "UnnamedEvent")
-            ev_desc = ev.get("description", "")
-            ev_start = ev.get("start_time", "TBD Start")
-            ev_end = ev.get("end_time", "TBD End")
-            ev_loc = ev.get("location", "Unknown")
-            ev_year = ev.get("year", 1)
-            ev_month = ev.get("month", 1)
-            ev_day = ev.get("day", 1)
-            ev_tod = ev.get("time_of_day", "Morning")
-            row = await conn.fetchrow("""
-                SELECT id FROM Events
-                WHERE user_id=$1 AND conversation_id=$2
-                  AND LOWER(event_name)=$3
-                LIMIT 1
-            """, user_id, conversation_id, ev_name.lower())
-            if row:
-                logging.info("Skipping event creation; '%s' already exists.", ev_name)
-                continue
-            logging.info("Inserting Event => %s, loc=%s, times=%s-%s, year=%s, month=%s, day=%s, time_of_day=%s", ev_name, ev_loc, ev_start, ev_end, ev_year, ev_month, ev_day, ev_tod)
-            await conn.execute("""
-                INSERT INTO Events (
-                    user_id, conversation_id,
-                    event_name, description, start_time, end_time, location,
-                    year, month, day, time_of_day
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            """, user_id, conversation_id, ev_name, ev_desc, ev_start, ev_end, ev_loc, ev_year, ev_month, ev_day, ev_tod)
-    
-    # 10) inventory_updates
-    inv_updates = update_data.get("inventory_updates", {})
-    logging.info("[apply_universal_update] inventory_updates: %s", inv_updates)
-    if inv_updates:
-        p_n = inv_updates.get("player_name", "Chase")
-        added = inv_updates.get("added_items", [])
-        removed = inv_updates.get("removed_items", [])
-        for item in added:
-            if isinstance(item, dict):
-                item_name = item.get("item_name", "Unnamed")
-                item_desc = item.get("item_description", "")
-                item_fx   = item.get("item_effect", "")
-                category  = item.get("category", "")
-                logging.info("Adding item for %s: %s", p_n, item_name)
-                await conn.execute("""
-                    INSERT INTO PlayerInventory (user_id, conversation_id, player_name, item_name, item_description, item_effect, category, quantity)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, 1)
-                    ON CONFLICT (user_id, conversation_id, player_name, item_name)
-                    DO UPDATE SET quantity = PlayerInventory.quantity + 1
-                """, user_id, conversation_id, p_n, item_name, item_desc, item_fx, category)
-            elif isinstance(item, str):
-                logging.info("Adding item (string) for %s: %s", p_n, item)
-                await conn.execute("""
-                    INSERT INTO PlayerInventory (user_id, conversation_id, player_name, item_name, quantity)
-                    VALUES ($1, $2, $3, $4, 1)
-                    ON CONFLICT (user_id, conversation_id, player_name, item_name)
-                    DO UPDATE SET quantity = PlayerInventory.quantity + 1
-                """, user_id, conversation_id, p_n, item)
-        for item in removed:
-            if isinstance(item, dict):
-                i_name = item.get("item_name")
-                if i_name:
-                    logging.info("Removing item for %s: %s", p_n, i_name)
-                    await conn.execute("""
-                        DELETE FROM PlayerInventory
-                        WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 AND item_name=$4
-                    """, user_id, conversation_id, p_n, i_name)
-            elif isinstance(item, str):
-                logging.info("Removing item for %s: %s", p_n, item)
-                await conn.execute("""
-                    DELETE FROM PlayerInventory
-                    WHERE user_id=$1 AND conversation_id=$2 AND player_name=$3 AND item_name=$4
-                """, user_id, conversation_id, p_n, item)
-    
-    # 11) quest_updates
-    quest_updates = update_data.get("quest_updates", [])
-    logging.info("[apply_universal_update] quest_updates: %s", quest_updates)
-    for qu in quest_updates:
-        qid = qu.get("quest_id")
-        status = qu.get("status", "In Progress")
-        detail = qu.get("progress_detail", "")
-        qgiver = qu.get("quest_giver", "")
-        reward = qu.get("reward", "")
-        qname  = qu.get("quest_name", None)
-        if qid:
-            logging.info("Updating Quest %s: status=%s, detail=%s", qid, status, detail)
-            await conn.execute("""
-                UPDATE Quests
-                SET status=$1, progress_detail=$2, quest_giver=$3, reward=$4
-                WHERE quest_id=$5 AND user_id=$6 AND conversation_id=$7
-            """, status, detail, qgiver, reward, qid, user_id, conversation_id)
-            row = await conn.fetchrow("""
-                SELECT 1 FROM Quests WHERE quest_id=$1 AND user_id=$2 AND conversation_id=$3
-            """, qid, user_id, conversation_id)
-            if not row:
-                logging.info("No existing quest with ID %s, inserting new.", qid)
-                await conn.execute("""
-                    INSERT INTO Quests (user_id, conversation_id, quest_id, quest_name, status, progress_detail, quest_giver, reward)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                """, user_id, conversation_id, qid, qname, status, detail, qgiver, reward)
-        else:
-            logging.info("Inserting new quest: %s, status=%s", qname, status)
-            await conn.execute("""
-                INSERT INTO Quests (user_id, conversation_id, quest_name, status, progress_detail, quest_giver, reward)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-            """, user_id, conversation_id, qname or "Unnamed Quest", status, detail, qgiver, reward)
-    
-    logging.info("=== [apply_universal_update] Success! ===")
-    return {"message": "Universal update successful"}
+    result = {}
+    if function_call:
+        result["type"] = "function_call"
+        # Extract the arguments
+        result["function_args"] = {}
+        if function_call.get("arguments"):
+            try:
+                # arguments is typically JSON in a string
+                parsed = json.loads(function_call["arguments"])
+                result["function_args"] = parsed
+            except:
+                # fallback if it's not valid JSON
+                result["function_args"] = {"raw": function_call["arguments"]}
+    else:
+        result["type"] = "text"
+        result["response"] = content
 
-# ---------------------------------------------------------------------
-# Main game processing function
+    return result
+
+# -------------------------------------------------------------------------
+# SINGLE-PASS PROMPTS
+# -------------------------------------------------------------------------
+ENV_PROMPT = """
+You are setting up a new femdom daily-life sim environment. Return one JSON with these keys:
+  "setting_name": a short creative name,
+  "environment_desc": a 1-3 paragraph environment description,
+  "environment_history": a short, evocative history,
+  "events": array of { name, description, start_time, end_time, location },
+  "locations": array of { location_name, description, open_hours },
+  "scenario_name": conversation scenario name,
+  "quest_data": { quest_name, quest_description } # main quest
+
+No extra text, only the JSON.
+
+Environment components:
+{env_components}
+Enhanced features: {enhanced_features}
+Stat modifiers: {stat_modifiers}
+"""
+
+NPC_PROMPT = """
+We now need to create the NPCs and the player's schedule in one pass.
+
+Return one JSON with keys:
+  "npc_creations": array of NPC objects, each with:
+    "npc_name", 
+    "likes":[], "dislikes":[], "hobbies":[],
+    "affiliations":[],
+    "schedule":{ dayName:{Morning,Afternoon,Evening,Night}, ... }
+  "ChaseSchedule": same day structure for the player
+
+Use these day names for the schedule: {day_names}
+
+Context:
+{environment_desc}
+
+No extra commentary. Only that JSON object.
+"""
+
+DB_DSN = "postgresql://postgres:XXX@HOST:PORT/DBNAME"
+
+# -------------------------------------------------------------------------
+# GPT call wrappers (single-block approach) with function-call handling
+# -------------------------------------------------------------------------
+async def call_gpt_for_environment_data(conversation_id, env_comps, enh_feats, stat_mods):
+    """
+    Single GPT call for environment-level data.
+    Returns a dict with:
+    {
+      "setting_name": str,
+      "environment_desc": str,
+      "environment_history": str,
+      "events": [...],
+      "locations": [...],
+      "scenario_name": str,
+      "quest_data": { "quest_name": ..., "quest_description": ... }
+    }
+    """
+    prompt = ENV_PROMPT.format(
+        env_components="\n".join(env_comps),
+        enhanced_features=", ".join(enh_feats),
+        stat_modifiers=", ".join(f"{k}: {v}" for k,v in stat_mods.items())
+    )
+
+    # Use the advanced spaced_gpt_call_with_retry
+    result = await spaced_gpt_call_with_retry(conversation_id, "", prompt, delay=1.0)
+
+    # If GPT used function calls, parse them
+    if result.get("type") == "function_call":
+        # We assume the returned function_args is exactly the JSON we need
+        fn_args = result.get("function_args", {})
+        return fn_args
+    else:
+        # Otherwise parse the text
+        raw_text = result.get("response","").strip()
+        # remove code fences if present
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            # drop the fences
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw_text = "\n".join(lines).strip()
+
+        try:
+            data = json.loads(raw_text)
+            return data
+        except Exception as e:
+            logging.error("Error parsing environment JSON: %s", e, exc_info=True)
+            return {}
+
+async def call_gpt_for_npcs_and_chase(conversation_id, environment_desc, day_names):
+    """
+    Single GPT call for multiple NPCs plus ChaseSchedule in one pass:
+    {
+      "npc_creations":[ {...}, {...}],
+      "ChaseSchedule": {...}
+    }
+    """
+    prompt = NPC_PROMPT.format(
+        environment_desc=environment_desc,
+        day_names=", ".join(day_names)
+    )
+
+    result = await spaced_gpt_call_with_retry(conversation_id, environment_desc, prompt, delay=1.0)
+
+    # If GPT used function calls, parse them
+    if result.get("type") == "function_call":
+        return result.get("function_args", {})
+    else:
+        raw_text = result.get("response", "").strip()
+        # remove code fences
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw_text = "\n".join(lines).strip()
+
+        try:
+            data = json.loads(raw_text)
+            return data
+        except Exception as e:
+            logging.error("Error parsing NPC+Chase JSON: %s", e, exc_info=True)
+            return {}
+
+# -------------------------------------------------------------------------
+# MAIN NEW GAME FLOW with single-block GPT calls + advanced features
+# -------------------------------------------------------------------------
 async def async_process_new_game(user_id, conversation_data):
-    logging.info("=== Starting async_process_new_game for user_id=%s with conversation_data=%s ===", user_id, conversation_data)
-    
-    # Step 1: Create or validate conversation.
-    provided_conversation_id = conversation_data.get("conversation_id")
+    logging.info("=== Starting async_process_new_game for user_id=%s ===", user_id)
+    provided_convo_id = conversation_data.get("conversation_id")
+
     conn = await asyncpg.connect(dsn=DB_DSN)
     try:
-        if not provided_conversation_id:
-            preliminary_name = "New Game"
-            logging.info("No conversation_id provided; creating a new conversation for user_id=%s", user_id)
+        # 1) Create or validate conversation
+        if not provided_convo_id:
             row = await conn.fetchrow("""
                 INSERT INTO conversations (user_id, conversation_name)
-                VALUES ($1, $2)
+                VALUES ($1, 'New Game')
                 RETURNING id
-            """, user_id, preliminary_name)
+            """, user_id)
             conversation_id = row["id"]
-            logging.info("Created new conversation with id=%s for user_id=%s", conversation_id, user_id)
         else:
-            conversation_id = provided_conversation_id
-            logging.info("Validating provided conversation_id=%s for user_id=%s", conversation_id, user_id)
+            conversation_id = provided_convo_id
             row = await conn.fetchrow("""
                 SELECT id FROM conversations WHERE id=$1 AND user_id=$2
             """, conversation_id, user_id)
             if not row:
                 raise Exception(f"Conversation {conversation_id} not found or unauthorized")
-            logging.info("Validated existing conversation with id=%s", conversation_id)
 
-        # *** New Block: Clear old game data early ***
-        tables_to_clear = [
-            "Events", "PlannedEvents", "PlayerInventory", "Quests",
-            "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"
+        # 2) Clear old data
+        tables = [
+            "Events","PlannedEvents","PlayerInventory","Quests",
+            "NPCStats","Locations","SocialLinks","CurrentRoleplay"
         ]
-        for table in tables_to_clear:
-            await conn.execute(f"DELETE FROM {table} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
-        logging.info("Cleared old game data for conversation_id=%s", conversation_id)
-        
-        # Step 2: Dynamically generate environment components, setting name, and a cohesive description.
-        logging.info("Calling generate_mega_setting_logic for conversation_id=%s", conversation_id)
+        for t in tables:
+            await conn.execute(f"DELETE FROM {t} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
+
+        # 3) Gather environment components
         mega_data = await asyncio.to_thread(generate_mega_setting_logic)
-        logging.info("Mega data returned: %s", json.dumps(mega_data, indent=2))
-        unique_envs = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
-        if not unique_envs or len(unique_envs) == 0:
-            unique_envs = [
+        env_comps = mega_data.get("selected_settings") or mega_data.get("unique_environments") or []
+        if not env_comps:
+            env_comps = [
                 "A sprawling cyberpunk metropolis under siege by monstrous clans",
                 "Floating archaic ruins steeped in ancient rituals",
                 "Futuristic tech hubs that blend magic and machinery"
             ]
-            logging.info("No environment components returned; using fallback: %s", unique_envs)
-        else:
-            logging.info("Unique environment components: %s", unique_envs)
-        
-        # Also log enhanced_features and stat_modifiers:
-        enhanced_features = mega_data.get("enhanced_features", [])
-        stat_modifiers = mega_data.get("stat_modifiers", {})
-        logging.info("Enhanced features: %s", enhanced_features)
-        logging.info("Stat modifiers: %s", stat_modifiers)
-        
-        enhanced_features_str = ", ".join(enhanced_features) if enhanced_features else ""
-        stat_modifiers_str = ", ".join([f"{k}: {v}" for k, v in stat_modifiers.items()]) if stat_modifiers else ""
-        logging.info("Enhanced features (string): %s", enhanced_features_str)
-        logging.info("Stat modifiers (string): %s", stat_modifiers_str)
-        
-        # --- Generate a dynamic setting name ---
-        name_prompt = "Given the following environment components:\n"
-        for i, env in enumerate(unique_envs):
-            name_prompt += f"Component {i+1}: {env}\n"
-        name_prompt += (
-            "Describe how these components come together to form a cohesive world and generate a short, creative name for the overall setting. "
-            "Return only the name."
-        )
-        logging.info("Calling GPT for dynamic setting name with prompt: %s", name_prompt)
-        setting_name_reply = await spaced_gpt_call(conversation_id, "", name_prompt)
-        dynamic_setting_name = setting_name_reply.get("response", "")
-        if dynamic_setting_name:
-            dynamic_setting_name = dynamic_setting_name.strip()
-        else:
-            stored_setting = await get_stored_value(conn, user_id, conversation_id, "CurrentSetting")
-            if stored_setting:
-                dynamic_setting_name = stored_setting
-            else:
-                logging.warning("GPT returned no setting name and none stored; using fallback.")
-                dynamic_setting_name = "Default Setting Name"
-        logging.info("Generated dynamic setting name: %s", dynamic_setting_name)
-        environment_name = dynamic_setting_name
-        
-        # --- Generate a cohesive environment description ---
-        env_desc_prompt = "Using the following environment components:\n"
-        for i, env in enumerate(unique_envs):
-            env_desc_prompt += f"Component {i+1}: {env}\n"
-        if enhanced_features_str:
-            env_desc_prompt += f"Enhanced features: {enhanced_features_str}\n"
-        if stat_modifiers_str:
-            env_desc_prompt += f"Stat modifiers: {stat_modifiers_str}\n"
-        env_desc_prompt += (
-            "Describe in a cohesive narrative how these components, features, and modifiers combine to form a unique, dynamic world."
-        )
-        logging.info("Calling GPT for dynamic environment description with prompt: %s", env_desc_prompt)
-        env_desc_reply = await spaced_gpt_call(conversation_id, "", env_desc_prompt)
-        base_environment_desc = env_desc_reply.get("response")
-        if base_environment_desc is None or not base_environment_desc.strip():
-            stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
-            if stored_env_desc:
-                base_environment_desc = stored_env_desc
-            else:
-                logging.warning("GPT returned no dynamic environment description and none stored; using fallback text.")
-                base_environment_desc = (
-                    "An eclectic realm combining monstrous societies, futuristic tech, and archaic ruins floating across the sky. "
-                    "Strange energies swirl, revealing hidden rituals and uncharted opportunities."
-                )
-        else:
-            base_environment_desc = base_environment_desc.strip()
-        
-        # --- Generate the setting history based on the dynamic description ---
-        # (This history will later be created using GPT.)
-        # First, store the EnvironmentDesc.
-        logging.info("Storing EnvironmentDesc in CurrentRoleplay for conversation_id=%s", conversation_id)
+        enh_feats = mega_data.get("enhanced_features", [])
+        stat_mods = mega_data.get("stat_modifiers", {})
+
+        # 4) Single GPT call => environment data
+        env_data = await call_gpt_for_environment_data(conversation_id, env_comps, enh_feats, stat_mods)
+
+        # Fallback logic if GPT omitted keys
+        setting_name = env_data.get("setting_name", "Default Setting Name")
+        environment_desc = env_data.get("environment_desc", "A fallback environment desc.")
+        environment_history = env_data.get("environment_history", "No history provided.")
+        scenario_name = env_data.get("scenario_name", "New Game")
+        quest_data = env_data.get("quest_data", {})
+        quest_name = quest_data.get("quest_name", "UnnamedQuest")
+        quest_desc = quest_data.get("quest_description", "Quest summary")
+
+        # Arrays
+        events_list = env_data.get("events", [])
+        locations_list = env_data.get("locations", [])
+
+        # Combine environment_desc + environment_history
+        combined_env = f"{environment_desc}\n\nHistory: {environment_history}"
+
+        # 5) Store environment info in CurrentRoleplay
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'EnvironmentDesc', $3)
+            VALUES($1,$2,'EnvironmentDesc',$3)
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id, base_environment_desc)
+        """, user_id, conversation_id, combined_env)
 
-        # **************************************************
-        # NEW STEP (3.5): Generate notable NPCs immediately after setting.
-        # **************************************************
-        logging.info("Generating notable NPCs right after the setting for conversation_id=%s", conversation_id)
-        npc_count = 3  # Adjust the number as needed
-        generated_npcs = []
-        for i in range(npc_count):
-            npc = await asyncio.to_thread(create_npc, user_id=user_id, conversation_id=conversation_id, introduced=False)
-            generated_npcs.append(npc)
-        logging.info("Generated NPCs: %s", generated_npcs)
-        # Gather a comma-separated list of NPC names for the history prompt.
-        notable_npcs_str = ", ".join([
-            npc.get("npc_name", f"NPC #{npc}") if isinstance(npc, dict) else f"NPC #{npc}"
-            for npc in generated_npcs
-        ])
+        # Insert environment name as well
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES($1,$2,'CurrentSetting',$3)
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id, setting_name)
 
-        # **************************************************
-        
-        # --- Now generate the setting history using the pre-generated NPCs ---
-        history_prompt = (
-            "Based on the following environment description, generate a brief, evocative history "
-            "of this setting. Explain its origins, major past events, and its current state so that the narrative is well grounded. "
-            "Integrate the following notable NPCs into the history: " + notable_npcs_str + ". "
-            "Also include important locations (with details about the town), and key cultural information such as holidays, festivals, and beliefs. "
-            "\nEnvironment description: " + base_environment_desc
-        )
-        logging.info("Calling GPT for environment history with prompt: %s", history_prompt)
-        history_reply = await spaced_gpt_call(conversation_id, base_environment_desc, history_prompt)
-        if history_reply.get("type") == "function_call":
-            logging.info("GPT returned a function call for environment history. Processing function call.")
-            function_args = history_reply.get("function_args", {})
-            await apply_universal_update(user_id, conversation_id, function_args, conn)
-            stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
-            if stored_env_desc:
-                environment_history = stored_env_desc
-            else:
-                environment_history = "World context updated via GPT function call."
-        else:
-            response_text = history_reply.get("response")
-            if response_text is None or not response_text.strip():
-                stored_env_desc = await get_stored_value(conn, user_id, conversation_id, "EnvironmentDesc")
-                if stored_env_desc:
-                    environment_history = stored_env_desc
-                else:
-                    logging.warning("GPT returned no response text for environment history and none stored; using fallback text.")
-                    environment_history = "Ancient legends speak of forgotten gods and lost civilizations that once shaped this realm."
-            else:
-                environment_history = response_text.strip()
-        
-        environment_desc = f"{base_environment_desc}\n\nHistory: {environment_history}"
-        logging.info("Constructed environment description: %s", environment_desc)
+        # 6) Insert events
+        for eobj in events_list:
+            ename = eobj.get("name","Unnamed Event")
+            edesc = eobj.get("description","")
+            stime = eobj.get("start_time","TBD Start")
+            etime = eobj.get("end_time","TBD End")
+            eloc = eobj.get("location","Unknown")
+            await conn.execute("""
+                INSERT INTO Events (user_id, conversation_id, event_name, description, start_time, end_time, location)
+                VALUES($1,$2,$3,$4,$5,$6,$7)
+            """, user_id, conversation_id, ename, edesc, stime, etime, eloc)
 
-        # *** NEW STEP: Generate immersive calendar names ***
-        # Use the environment description to get thematic names for the year, months, and days.
-        from logic.calendar import update_calendar_names  # Ensure this is imported at the top
-        calendar_names = update_calendar_names(user_id, conversation_id, environment_desc)
-        logging.info("Generated calendar names: %s", calendar_names)
-            
-        # Step 4: Generate and store notable Events.
-        events_prompt = (
-            "Based on the following environment description, generate a JSON array of notable events and holidays in this setting. "
-            "Each event should be an object with keys 'name', 'description', 'start_time', 'end_time', and 'location'. "
-            "Return only the JSON array with no markdown formatting or extra text."
-            "\nEnvironment description: " + environment_desc
-        )
-        logging.info("Generating events with prompt: %s", events_prompt)
-        events_reply = await spaced_gpt_call(conversation_id, environment_desc, events_prompt)
-        
-        if events_reply.get("type") == "function_call":
-            logging.info("GPT returned a function call for events. Processing update via apply_universal_update.")
-            fn_args = events_reply.get("function_args", {})
-            await apply_universal_update(user_id, conversation_id, fn_args, conn)
-        else:
-            events_response = events_reply.get("response", "")
-            if events_response:
-                events_response = events_response.strip()
-                if events_response.startswith("```"):
-                    lines = events_response.splitlines()
-                    if lines and lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines and lines[-1].startswith("```"):
-                        lines = lines[:-1]
-                    events_response = "\n".join(lines).strip()
-            else:
-                logging.warning("Events GPT response was empty; using fallback.")
-                events_response = "[]"
-            
-            try:
-                events_json = json.loads(events_response) if events_response else []
-                logging.info("Parsed events JSON successfully: %s", events_json)
-            except Exception as e:
-                logging.warning("Failed to parse events JSON; using fallback. Exception: %s", e, exc_info=True)
-                events_json = []
-            
-            for event in events_json:
-                event_name = event.get("name", "Unnamed Event")
-                event_desc = event.get("description", "")
-                ev_start = event.get("start_time", "TBD Start")
-                ev_end = event.get("end_time", "TBD End")
-                ev_loc = event.get("location", "Unknown")
-                if not ev_start:
-                    ev_start = "TBD Start"
-                if not ev_end:
-                    ev_end = "TBD End"
-                if not ev_loc:
-                    ev_loc = "Unknown"
-                logging.info("Storing event: %s - %s | start_time: %s, end_time: %s, location: %s", event_name, event_desc, ev_start, ev_end, ev_loc)
-                await conn.execute("""
-                    INSERT INTO Events (user_id, conversation_id, event_name, description, start_time, end_time, location)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT DO NOTHING
-                """, user_id, conversation_id, event_name, event_desc, ev_start, ev_end, ev_loc)
-
-
-        # Step 5: Generate and store notable Locations.
-        locations_prompt = (
-            "Based on the following environment description, generate a JSON array of notable locations in this setting. "
-            "This location could be the name of a bar, a restaurant, a store, a school campus, or anything else, but should be a proper noun."
-            "Each element in the array must be an object with exactly three keys: 'location_name', 'description', and 'open_hours'. "
-            "The 'location_name' should be a short title for the location, the 'description' should be a brief overview of that location, "
-            "and 'open_hours' should be an array of strings representing the hours the location is open. "
-            "Return only the JSON array with no additional text, markdown, or formatting.\n"
-            "Environment description: " + environment_desc
-        )
-        logging.info("Generating locations with prompt: %s", locations_prompt)
-        locations_reply = await spaced_gpt_call(conversation_id, environment_desc, locations_prompt)
-        
-        # Check for a direct response or a function call.
-        if locations_reply.get("response"):
-            locations_response = locations_reply["response"].strip()
-        elif locations_reply.get("type") == "function_call":
-            args = locations_reply.get("function_args", {})
-            if "location_creations" in args:
-                value = args["location_creations"]
-                if isinstance(value, (list, dict)):
-                    locations_response = json.dumps(value)
-                else:
-                    locations_response = str(value)
-            else:
-                locations_response = ""
-        else:
-            locations_response = ""
-        
-        logging.info("Raw locations response from GPT: %s", locations_response)
-        
-        if locations_response:
-            locations_response = locations_response.strip()
-            # Remove markdown code fences if present.
-            if locations_response.startswith("```"):
-                logging.info("Locations response contains markdown code fences. Stripping them.")
-                lines = locations_response.splitlines()
-                if lines and lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                locations_response = "\n".join(lines).strip()
-            logging.info("Locations response after stripping markdown: %s", locations_response)
-        else:
-            logging.warning("Locations GPT response was empty; using fallback.")
-        
-        try:
-            locations_json = json.loads(locations_response) if locations_response else []
-            logging.info("Parsed locations JSON successfully: %s", locations_json)
-        except Exception as e:
-            logging.warning("Failed to parse locations JSON; using fallback. Exception: %s", e, exc_info=True)
-            locations_json = []
-        
-        for loc in locations_json:
-            loc_name = loc.get("location_name", "Unnamed Location")
-            loc_desc = loc.get("description", "")
-            open_hours = loc.get("open_hours", [])
-            logging.info("Storing location: %s - %s - open_hours: %s", loc_name, loc_desc, open_hours)
+        # 7) Insert locations
+        for loc in locations_list:
+            lname = loc.get("location_name","Unnamed")
+            ldesc = loc.get("description","")
+            ohours = loc.get("open_hours",[])
             await conn.execute("""
                 INSERT INTO Locations (user_id, conversation_id, location_name, description, open_hours)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT DO NOTHING
-            """, user_id, conversation_id, loc_name, loc_desc, json.dumps(open_hours))
-     
-        # Step 6: Generate scenario name and quest summary (if conversation was newly created).
-        scenario_name = "New Game"
-        quest_blurb = ""
-        if not provided_conversation_id:
-            logging.info("Generating scenario name and quest summary using GPT for environment: %s", environment_name)
-            scenario_name, quest_blurb = await asyncio.to_thread(gpt_generate_scenario_name_and_quest, environment_name, environment_desc)
-            logging.info("Generated scenario name: %s and quest blurb: %s", scenario_name, quest_blurb)
-            await conn.execute("""
-                UPDATE conversations SET conversation_name=$1 WHERE id=$2
-            """, scenario_name, conversation_id)
-        
-        # Step 7: Re-open connection for subsequent steps.
-        logging.info("Re-opening DB connection for further operations on conversation_id=%s", conversation_id)
-        await conn.close()
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        
-        # Step 8: Verify conversation exists (if provided).
-        if provided_conversation_id:
-            logging.info("Verifying conversation existence for conversation_id=%s", conversation_id)
-            row = await conn.fetchrow("""
-                SELECT id FROM conversations WHERE id=$1 AND user_id=$2
-            """, conversation_id, user_id)
-            if not row:
-                await conn.close()
-                raise Exception(f"Conversation {conversation_id} not found or unauthorized")
-            logging.info("Verified conversation existence for conversation_id=%s", conversation_id)
-        
-        # Step 9: Clear old game data. (Deprecated)
-        
-        # Step 10: Insert environment data (MegaSettingModifiers).
-        modifiers_json = json.dumps(mega_data.get("stat_modifiers", {}))
-        logging.info("Storing MegaSettingModifiers: %s", modifiers_json)
+                VALUES($1,$2,$3,$4,$5)
+            """, user_id, conversation_id, lname, ldesc, json.dumps(ohours))
+
+        # 8) Insert main quest
+        await conn.execute("""
+            INSERT INTO Quests (user_id, conversation_id, quest_name, status, progress_detail, quest_giver, reward)
+            VALUES($1,$2,$3, 'In Progress',$4, '', '')
+        """, user_id, conversation_id, quest_name, quest_desc)
+
+        # 9) Update conversation name
+        await conn.execute("""
+            UPDATE conversations
+            SET conversation_name=$1
+            WHERE id=$2 AND user_id=$3
+        """, scenario_name, conversation_id, user_id)
+
+        # 10) Store stat modifiers
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'MegaSettingModifiers', $3)
+            VALUES($1,$2,'MegaSettingModifiers',$3)
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id, modifiers_json)
-        
-        # Step 11: Insert missing settings.
-        logging.info("Inserting missing settings")
+        """, user_id, conversation_id, json.dumps(stat_mods))
+
+        # 11) Insert missing settings (some global flags, etc.)
         await asyncio.to_thread(insert_missing_settings)
-        
-        # Step 12: Reset or create 'Chase' in PlayerStats.
-        logging.info("Resetting or creating PlayerStats for 'Chase' in conversation_id=%s", conversation_id)
+
+        # 12) Create or reset "Chase" stats
         await conn.execute("""
             DELETE FROM PlayerStats
             WHERE user_id=$1 AND conversation_id=$2 AND player_name <> 'Chase'
         """, user_id, conversation_id)
-        chase_row = await conn.fetchrow("""
+        row_chase = await conn.fetchrow("""
             SELECT id FROM PlayerStats
             WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
         """, user_id, conversation_id)
-        if chase_row:
-            logging.info("Updating existing PlayerStats for 'Chase'")
+        if row_chase:
             await conn.execute("""
                 UPDATE PlayerStats
                 SET corruption=10, confidence=60, willpower=50, obedience=20,
@@ -902,464 +373,125 @@ async def async_process_new_game(user_id, conversation_data):
                 WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
             """, user_id, conversation_id)
         else:
-            logging.info("Inserting new PlayerStats for 'Chase'")
             await conn.execute("""
                 INSERT INTO PlayerStats (
                   user_id, conversation_id, player_name,
-                  corruption, confidence, willpower,
-                  obedience, dependency, lust,
-                  mental_resilience, physical_endurance
+                  corruption,confidence,willpower,obedience,dependency,lust,
+                  mental_resilience,physical_endurance
                 )
-                VALUES ($1, $2, 'Chase', 10, 60, 50, 20, 10, 15, 55, 40)
+                VALUES($1,$2,'Chase',10,60,50,20,10,15,55,40)
             """, user_id, conversation_id)
-        
-        # Step 13: Store environment name as 'CurrentSetting'.
-        logging.info("Storing CurrentSetting as '%s' for conversation_id=%s", environment_name, conversation_id)
+
+        # 13) Generate immersive calendar names & store them
+        calendar_data = await update_calendar_names(user_id, conversation_id, combined_env)
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'CurrentSetting', $3)
+            VALUES($1,$2,'CalendarNames',$3)
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id, environment_name)
-        
-        # Step 14: Generate and store PlayerRole.
-        player_role_prompt = (
-            "Based on the current environment and setting, generate a concise description of Chase's typical day "
-            "(e.g., career/daily life). The description should reflect how his role fits into this world of dominant females. "
-            "In real life, Chase is a 31 year old data analyst, but this does not necessarily mean it will be the same. "
-            "Career can be anything (student, etc.), but make sure it fits and makes sense within setting context."
-            "Do not include any additional text, markdown, or narrative. Output only the JSON object."
-        )
-        logging.info("Generating PlayerRole with prompt: %s", player_role_prompt)
-        player_role_reply = await spaced_gpt_call(conversation_id, environment_desc, player_role_prompt)
-        
-        # Check if the response was returned in the "response" key or as part of a function call.
-        if player_role_reply.get("response"):
-            player_role_text = player_role_reply["response"].strip()
-        elif (player_role_reply.get("type") == "function_call" and
-              player_role_reply.get("function_args", {}).get("PlayerRole")):
-            player_role_text = player_role_reply["function_args"]["PlayerRole"].strip()
-        else:
-            stored_player_role = await get_stored_value(conn, user_id, conversation_id, "PlayerRole")
-            if stored_player_role:
-                player_role_text = stored_player_role
-            else:
-                logging.warning("GPT returned no PlayerRole text and none stored; using fallback.")
-                player_role_text = "Chase works a standard office job, barely scraping by."
-        
-        logging.info("Generated PlayerRole: %s", player_role_text)
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'PlayerRole', $3)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id, player_role_text)
+        """, user_id, conversation_id, json.dumps(calendar_data))
 
-        
-        # Step 15: Generate and store MainQuest.
-        main_quest_prompt = (
-            "Based on the current environment, NPCs, and the fact that Chase is one of the only men in this world of dominant females, "
-            "generate a short summary of the main quest he is about to undertake. The quest should be intriguing and mysterious, "
-            "hinting at challenges ahead without revealing too much. "
-            "Ensure the quest is unique and engaging. Give it an equally creative name. Do not use the word 'of' in the quest name. "
-            "Do not include any additional text, markdown, or narrative. Output only the JSON object."
-            "Output only a JSON object with keys 'quest_name' and 'progress_detail'."
-            "Then extract those keys and use them in your INSERT statement."
-        )
-        logging.info("Generating MainQuest with prompt: %s", main_quest_prompt)
-        main_quest_reply = await spaced_gpt_call(conversation_id, environment_desc, main_quest_prompt)
-        
-        if main_quest_reply.get("response"):
-            main_quest_text = main_quest_reply["response"].strip()
-        elif main_quest_reply.get("type") == "function_call":
-            func_args = main_quest_reply.get("function_args", {})
-            
-            # Remove markdown code fences if present (optional—apply similar logic as before)
-            # (Assume this was done before, so func_args is already a proper dict)
-            
-            # Get values from both keys, if they exist
-            main_quest_value = func_args.get("MainQuest", "").strip() if "MainQuest" in func_args else ""
-            quest_updates_value = func_args.get("quest_updates")
-            
-            # If quest_updates is a non-empty list, extract the quest name from the first update
-            quest_from_updates = ""
-            if isinstance(quest_updates_value, list) and len(quest_updates_value) > 0:
-                quest_from_updates = quest_updates_value[0].get("quest_name", "").strip()
-            
-            # Now decide which one to use or combine them:
-            if main_quest_value and quest_from_updates:
-                # For example, if the main quest value is very short (say, less than 10 characters), use the quest_updates value;
-                # otherwise, combine them (or choose one—here we combine them with a space)
-                if len(main_quest_value) < 10:
-                    main_quest_text = quest_from_updates
-                else:
-                    main_quest_text = main_quest_value + " " + quest_from_updates
-            elif main_quest_value:
-                main_quest_text = main_quest_value
-            elif quest_from_updates:
-                main_quest_text = quest_from_updates
-            else:
-                main_quest_text = ""
-        else:
-            logging.warning("GPT returned no MainQuest text and none stored; using fallback.")
-            main_quest_text = "Embark on a mysterious quest that challenges everything Chase thought he knew."
+        # default fallback
+        day_names = calendar_data.get("days", ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
 
-        logging.info("Generated MainQuest: %s", main_quest_text)
-        
-        # Instead of inserting into CurrentRoleplay, insert the quest into the Quests table.
-        # Here, we use the generated main_quest_text as the quest name.
-        # (Additional fields like progress_detail, quest_giver, and reward can be updated later via quest_updates.)
-        await conn.execute("""
-            INSERT INTO Quests (user_id, conversation_id, quest_name, status, progress_detail, quest_giver, reward)
-            VALUES ($1, $2, $3, 'In Progress', '', '', '')
-        """, user_id, conversation_id, main_quest_text)
-
-        # Step 16: Generate and store ChaseSchedule.
-        calendar_names = json.loads(await get_stored_value(conn, user_id, conversation_id, "CalendarNames"))
-        immersive_days = calendar_names.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
-        
-        # First, try to retrieve the immersive calendar names from CurrentRoleplay.
-        row = await conn.fetchrow("""
-            SELECT value 
-            FROM CurrentRoleplay 
-            WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
-        """, user_id, conversation_id)
-        if row:
-            try:
-                calendar_names = json.loads(row[0])
-                # Expect "days" to be an array of 7 names.
-                immersive_days = calendar_names.get(
-                    "days",
-                    ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-                )
-            except Exception as e:
-                logging.warning("Failed to parse CalendarNames: %s", e)
-                immersive_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        else:
-            immersive_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        
-        # Now, instruct GPT to use these immersive day names in the schedule.
-        schedule_prompt = (
-            f"Based on the current environment and Chase's role, generate a detailed weekly schedule for Chase. "
-            f"Use the following immersive day names for the week: {', '.join(immersive_days)}. "
-            "Return a function call payload with a parameter named \"ChaseSchedule\" that is a valid JSON object with keys for each day, "
-            "where each day has nested keys for \"Morning\", \"Afternoon\", \"Evening\", and \"Night\" representing Chase's activities. "
-            "Do not output any additional text or markdown formatting."
+        # 14) Single GPT call => NPCs + Chase schedule
+        npc_plus_chase_data = await call_gpt_for_npcs_and_chase(
+            conversation_id=conversation_id,
+            environment_desc=combined_env,
+            day_names=day_names
         )
-        logging.info("Generating ChaseSchedule with prompt: %s", schedule_prompt)
-        schedule_reply = await spaced_gpt_call(conversation_id, environment_desc, schedule_prompt)
-        
-        if schedule_reply.get("type") == "function_call":
-            logging.info("GPT returned a function call for ChaseSchedule. Processing update via apply_universal_update.")
-            fn_args = schedule_reply.get("function_args", {})
-            # The payload should include a key "ChaseSchedule"
-            await apply_universal_update(user_id, conversation_id, fn_args, conn)
-        
-            # After the update, retrieve the stored schedule from the database.
-            stored_schedule = await get_stored_value(conn, user_id, conversation_id, "ChaseSchedule")
-            if stored_schedule:
-                chase_schedule_generated = stored_schedule
-                logging.info("Retrieved stored ChaseSchedule: %s", chase_schedule_generated)
-            else:
-                logging.warning("No stored ChaseSchedule found after function call; using fallback JSON.")
-                # Build a fallback schedule dynamically:
-                fallback_schedule = {}
-                for day_name in immersive_days:
-                    fallback_schedule[day_name] = {
-                        "Morning":   f"Wake at {day_name} morning, have a quick breakfast",
-                        "Afternoon": f"Continue daily tasks on {day_name} afternoon",
-                        "Evening":   f"Relax or socialize on {day_name} evening",
-                        "Night":     f"Return to lodgings for rest on {day_name} night"
-                    }
-                chase_schedule_generated = json.dumps(fallback_schedule, indent=2)
-        
-        else:
-            # Process a plain text response.
-            chase_schedule_generated = schedule_reply.get("response", "{}")
-            logging.info("Raw ChaseSchedule response from GPT: %s", chase_schedule_generated)
-            # Strip code fences if present:
-            if chase_schedule_generated.startswith("```"):
-                lines = chase_schedule_generated.splitlines()
-                if lines and lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                chase_schedule_generated = "\n".join(lines).strip()
-        
-            # If GPT returned empty or an empty JSON object, use a dynamic fallback.
-            if not chase_schedule_generated or chase_schedule_generated.strip() in ["{}", ""]:
-                logging.warning("ChaseSchedule GPT response was empty; using fallback JSON.")
-                fallback_schedule = {}
-                for day_name in immersive_days:
-                    fallback_schedule[day_name] = {
-                        "Morning":   f"Wake at {day_name} morning, have a quick breakfast",
-                        "Afternoon": f"Continue daily tasks on {day_name} afternoon",
-                        "Evening":   f"Relax or socialize on {day_name} evening",
-                        "Night":     f"Return to lodgings for rest on {day_name} night"
-                    }
-                chase_schedule_generated = json.dumps(fallback_schedule, indent=2)
-        
-        try:
-            chase_schedule = json.loads(chase_schedule_generated)
-            logging.info("Parsed ChaseSchedule JSON successfully: %s", chase_schedule)
-        except Exception as e:
-            logging.warning("Failed to parse ChaseSchedule JSON; using fallback schedule. Exception: %s", e, exc_info=True)
-            # If JSON parsing fails, build a fallback again using immersive_days
-            fallback_schedule = {}
-            for day_name in immersive_days:
-                fallback_schedule[day_name] = {
-                    "Morning":   f"Wake at {day_name} morning, have a quick breakfast",
-                    "Afternoon": f"Continue daily tasks on {day_name} afternoon",
-                    "Evening":   f"Relax or socialize on {day_name} evening",
-                    "Night":     f"Return to lodgings for rest on {day_name} night"
-                }
-            chase_schedule = fallback_schedule
-        
-        logging.info("Final ChaseSchedule to be stored: %s", chase_schedule)
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES ($1, $2, 'ChaseSchedule', $3)
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id, json.dumps(chase_schedule))
-        
-        # Step 16.5: Final NPC Adjustments via Combined GPT Call.
-        logging.info("Performing final adjustments on NPCs using a combined GPT call for conversation_id=%s", conversation_id)
-        npc_rows = await conn.fetch(
-            """
-            SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes, archetype_summary
+        # { "npc_creations":[...], "ChaseSchedule":{...} }
+
+        # 15) Store the new NPCs & chase schedule in one pass
+        await apply_universal_update(user_id, conversation_id, npc_plus_chase_data, conn)
+
+        # ---------------------------------------------------------------------
+        # 15.1) OPTIONAL: Final NPC "Completion" Step
+        # Query newly-created NPCs and refine them with adjust_npc_complete
+        # If you want them to remain as-is, you can skip this block.
+        # ---------------------------------------------------------------------
+        npc_rows = await conn.fetch("""
+            SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes
             FROM NPCStats
             WHERE user_id=$1 AND conversation_id=$2
-            """,
-            user_id,
-            conversation_id
-        )
-        
-        # Reuse the same 'immersive_days' from Step 16
-        actual_immersive_days = immersive_days
-        
-        for npc_row in npc_rows:
-            npc_id = npc_row["npc_id"]
+        """, user_id, conversation_id)
+
+        for row in npc_rows:
             npc_data = {
-                "npc_name": npc_row["npc_name"],
-                "hobbies": json.loads(npc_row["hobbies"]) if isinstance(npc_row["hobbies"], str) else npc_row["hobbies"],
-                "likes": json.loads(npc_row["likes"]) if isinstance(npc_row["likes"], str) else npc_row["likes"],
-                "dislikes": json.loads(npc_row["dislikes"]) if isinstance(npc_row["dislikes"], str) else npc_row["dislikes"],
-                "affiliations": json.loads(npc_row["affiliations"]) if isinstance(npc_row["affiliations"], str) else npc_row["affiliations"],
-                "schedule": json.loads(npc_row["schedule"]) if isinstance(npc_row["schedule"], str) else npc_row["schedule"],
-                "archetypes": json.loads(npc_row["archetypes"]) if isinstance(npc_row["archetypes"], str) else npc_row["archetypes"],
-                "archetype_summary": npc_row.get("archetype_summary", "")
+                "npc_name": row["npc_name"],
+                "hobbies": json.loads(row["hobbies"]) if row["hobbies"] else [],
+                "likes": json.loads(row["likes"]) if row["likes"] else [],
+                "dislikes": json.loads(row["dislikes"]) if row["dislikes"] else [],
+                "affiliations": json.loads(row["affiliations"]) if row["affiliations"] else [],
+                "schedule": json.loads(row["schedule"]) if row["schedule"] else {},
+                "archetypes": json.loads(row["archetypes"]) if row["archetypes"] else [],
             }
-        
+
             try:
-                # Directly call 'adjust_npc_complete', which handles its own internal retry logic
-                complete_npc = await adjust_npc_complete(
+                refined_npc = await adjust_npc_complete(
                     npc_data=npc_data,
-                    environment_desc=environment_desc,
+                    environment_desc=combined_env,
                     conversation_id=conversation_id,
-                    immersive_days=actual_immersive_days
+                    immersive_days=day_names
                 )
             except Exception as e:
-                # If adjust_npc_complete fails entirely (e.g., hits repeated rate-limits or unexpected error),
-                # fall back to the original data
-                logging.error(
-                    "Error adjusting complete NPC details for NPC %s after internal retries: %s",
-                    npc_id,
-                    e,
-                    exc_info=True
-                )
-                complete_npc = {
-                    "likes": npc_data.get("likes", []),
-                    "dislikes": npc_data.get("dislikes", []),
-                    "hobbies": npc_data.get("hobbies", []),
-                    "affiliations": npc_data.get("affiliations", []),
-                    "schedule": npc_data.get("schedule", {})
-                }
-        
-            # Finally update the NPCStats row
-            await conn.execute(
-                """
+                logging.error("Error in adjust_npc_complete for NPC '%s': %s", npc_data["npc_name"], e)
+                refined_npc = npc_data  # fallback to original
+
+            # Now update the DB with the refined data
+            await conn.execute("""
                 UPDATE NPCStats
-                SET likes = $1,
-                    dislikes = $2,
-                    hobbies = $3,
-                    affiliations = $4,
-                    schedule = $5
-                WHERE npc_id = $6 AND user_id = $7 AND conversation_id = $8
-                """,
-                json.dumps(complete_npc.get("likes", [])),
-                json.dumps(complete_npc.get("dislikes", [])),
-                json.dumps(complete_npc.get("hobbies", [])),
-                json.dumps(complete_npc.get("affiliations", [])),
-                json.dumps(complete_npc.get("schedule", {})),
-                npc_id,
+                SET likes=$1, dislikes=$2, hobbies=$3, affiliations=$4, schedule=$5
+                WHERE npc_id=$6 AND user_id=$7 AND conversation_id=$8
+            """,
+                json.dumps(refined_npc.get("likes", [])),
+                json.dumps(refined_npc.get("dislikes", [])),
+                json.dumps(refined_npc.get("hobbies", [])),
+                json.dumps(refined_npc.get("affiliations", [])),
+                json.dumps(refined_npc.get("schedule", {})),
+                row["npc_id"],
                 user_id,
                 conversation_id
             )
 
-
-          
-        # Step 17: Build aggregated roleplay context.
-        logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
+        # 16) Build aggregator context & produce final narrative
         aggregator_data = await asyncio.to_thread(get_aggregated_roleplay_context, user_id, conversation_id, "Chase")
         aggregator_text = await asyncio.to_thread(build_aggregator_text, aggregator_data)
-        logging.info("Aggregated context built: %s", aggregator_text)
-        
-        # Step 18: Opening narrative
-        ### Dynamically use the first day name from immersive_days
-        first_day_name = immersive_days[0] if immersive_days else "the first day"
-        opening_user_prompt = (
-            "Begin the scenario now, Nyx. Greet Chase with your sadistic, mocking style, avoiding clichéd phrases such as 'Ah, Chase'. "
-            "Format your greeting using Markdown sections. Briefly recount the new environment's background from the aggregator data, "
-            f"and announce that {first_day_name} morning has just begun. Make sure to reference the schedule stored in CurrentRoleplay, "
-            "which details Chase's planned activities for the day, and describe where he is scheduled to be. Also, include a nod to the "
-            "player's role and hint at the mysterious main quest awaiting him. "
-            "Stay fully in character and conclude with a teasing invitation for Chase to proceed, clearly mentioning the next destination from his schedule."
+
+        first_day_name = day_names[0] if day_names else "the first day"
+        opening_prompt = (
+            f"Begin the scenario now, referencing aggregator context. "
+            f"{first_day_name} morning has just begun..."
         )
+        final_reply = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, opening_prompt)
+        nyx_text = final_reply.get("response", "[No text returned]")
 
-        gpt_reply_dict = await spaced_gpt_call(conversation_id, aggregator_text, opening_user_prompt)
-        nyx_text = gpt_reply_dict.get("response")
-        if gpt_reply_dict.get("type") == "function_call" or not nyx_text:
-            logging.info("GPT tried function_call or returned no text; re-try with forced text.")
-            client = get_openai_client()
-            forced_messages = [
-                {"role": "system", "content": aggregator_text},
-                {"role": "user", "content": f"No function calls. Produce only a text narrative.\n\n{opening_user_prompt}"}
-            ]
-            fallback_response = await asyncio.to_thread(
-                client.chat.completions.create,
-                model="gpt-4o",
-                messages=forced_messages,
-                temperature=0.7
-            )
-            fallback_text = fallback_response.choices[0].message.content.strip()
-            nyx_text = fallback_text if fallback_text else "[No text returned from GPT]"
-
-        # Step 19: Store GPT response
-        structured_json_str = json.dumps(gpt_reply_dict)
+        # 17) Insert the final opening message
         await conn.execute("""
-            INSERT INTO messages (conversation_id, sender, content, structured_content)
-            VALUES ($1, $2, $3, $4)
-        """, conversation_id, "Nyx", nyx_text, structured_json_str)
+            INSERT INTO messages (conversation_id, sender, content)
+            VALUES($1,$2,$3)
+        """, conversation_id, "Nyx", nyx_text)
 
-        # Update conversation to ready
+        # 18) Mark conversation ready
         await conn.execute("""
-            UPDATE conversations 
-            SET conversation_name = $1, status = 'ready'
-            WHERE id = $2 AND user_id = $3
+            UPDATE conversations
+            SET conversation_name=$1, status='ready'
+            WHERE id=$2 AND user_id=$3
         """, scenario_name, conversation_id, user_id)
 
-        # Step 20: Retrieve conversation history
-        rows = await conn.fetch("""
-            SELECT sender, content, created_at
-            FROM messages
-            WHERE conversation_id=$1
-            ORDER BY id ASC
-        """, conversation_id)
-        conversation_history = [{
-            "sender": row["sender"],
-            "content": row["content"],
-            "created_at": row["created_at"].isoformat()
-        } for row in rows]
-
-        await conn.execute("""
-            UPDATE conversations 
-            SET conversation_name = $1, status = 'ready'
-            WHERE id = $2 AND user_id = $3
-        """, scenario_name, conversation_id, user_id)
-
-        success_msg = f"New game started. Environment={environment_name}, conversation_id={conversation_id}"
+        success_msg = f"New game started. environment={setting_name}, conversation_id={conversation_id}"
         logging.info(success_msg)
         return {
             "message": success_msg,
             "scenario_name": scenario_name,
-            "environment_name": environment_name,
-            "environment_desc": environment_desc,
-            "calendar_names": calendar_names,
-            "conversation_id": conversation_id,
+            "environment_name": setting_name,
+            "environment_desc": combined_env,
+            "calendar_names": calendar_data,
+            "conversation_id": conversation_id
         }
 
     except Exception as e:
         logging.exception("Error in async_process_new_game:")
         return {"error": str(e)}
-    finally:
-        logging.info("=== END: async_process_new_game ===")
-        try:
-            await conn.close()
-        except Exception:
-            pass
-
-
-# ---------------------------------------------------------------------
-# Helper function for generating scenario name and quest summary.
-def gpt_generate_scenario_name_and_quest(env_name: str, env_desc: str):
-    client = get_openai_client()
-    unique_token = f"{random.randint(1000,9999)}_{int(time.time())}"
-    forbidden_words = ["mistress", "darkness", "manor", "chains", "twilight"]
-
-    system_instructions = f"""
-    You are setting up a new femdom daily-life sim scenario with a main quest.
-    Environment name: {env_name}
-    Environment desc: {env_desc}
-    Unique token: {unique_token}
-
-    Please produce:
-    1) A single line starting with 'ScenarioName:' followed by a short, creative (1–8 words) name 
-       that draws from the environment above. 
-       Avoid cliche words like {', '.join(forbidden_words)}.
-    2) Then one or two lines summarizing the main quest.
-
-    The conversation name must be unique; do not reuse names from older scenarios 
-    (you can ensure uniqueness using the token or environment cues).
-    """
-    messages = [{"role": "system", "content": system_instructions}]
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages,
-        temperature=0.9,
-        max_tokens=120,
-        frequency_penalty=0.3
-    )
-    msg = response.choices[0].message.content.strip()
-    logging.info(f"[gpt_generate_scenario_name_and_quest] Raw GPT output: {msg}")
-    scenario_name = "New Game"
-    quest_blurb = ""
-    for line in msg.splitlines():
-        line = line.strip()
-        if line.lower().startswith("scenarioname:"):
-            scenario_name = line.split(":", 1)[1].strip()
-        else:
-            quest_blurb += line + " "
-    return scenario_name.strip(), quest_blurb.strip()
-
-
-# ---------------------------------------------------------------------
-# spawn_npcs remains unchanged.
-async def spawn_npcs():
-    user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"error": "Not logged in"}), 401
-
-    data = request.get_json() or {}
-    conversation_id = data.get("conversation_id")
-    if not conversation_id:
-        return jsonify({"error": "Missing conversation_id"}), 400
-
-    conn = await asyncpg.connect(dsn=DB_DSN)
-    try:
-        row = await conn.fetchrow("SELECT id FROM conversations WHERE id=$1 AND user_id=$2", conversation_id, user_id)
-        if not row:
-            return jsonify({"error": "Conversation not found or unauthorized"}), 403
-
-        spawn_tasks = [
-            asyncio.to_thread(create_npc, user_id=user_id, conversation_id=conversation_id, introduced=False)
-            for _ in range(5)
-        ]
-        spawned_npc_ids = await asyncio.gather(*spawn_tasks)
-        logging.info("Spawned NPCs concurrently: %s", spawned_npc_ids)
-        return jsonify({"message": "NPCs spawned", "npc_ids": spawned_npc_ids}), 200
-    except Exception as e:
-        logging.exception("Error in /spawn_npcs:")
-        return jsonify({"error": str(e)}), 500
     finally:
         await conn.close()
