@@ -9,7 +9,7 @@ from logic.social_links import (
     update_link_type_and_level, add_link_event
 )
 
-async def apply_universal_updates_async(data: dict) -> dict:
+async def apply_universal_updates_async(user_id, conversation_id, data, conn) -> dict:
     """
     Asynchronously processes the universal_update payload, inserting or updating DB records.
     This version uses asyncpg's API (without a synchronous cursor).
