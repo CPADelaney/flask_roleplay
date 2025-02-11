@@ -391,8 +391,10 @@ async def async_process_new_game(user_id, conversation_data):
             environment_desc=combined_env,
             day_names=day_names
         )
-        # { "npc_creations":[...], "ChaseSchedule":{...} }
 
+        npc_plus_chase_data["user_id"] = user_id
+        npc_plus_chase_data["conversation_id"] = conversation_id
+        
         # 15) Store the new NPCs & chase schedule in one pass
         await apply_universal_updates_async(user_id, conversation_id, npc_plus_chase_data, conn)
 
