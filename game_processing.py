@@ -102,7 +102,7 @@ Return one JSON with these keys:
   "setting_name": a short creative name,
   "environment_desc": a 1-3 paragraph environment description,
   "environment_history": a short, evocative history,
-  "events": array of {{ name, description, start_time, end_time, location }},
+  "events": array of {{ name, description, start_time, end_time, location, year, month, day, time_of_day }},
   "locations": array of {{ location_name, description, open_hours }},
   "scenario_name": conversation scenario name,
   "quest_data": {{ quest_name, quest_description }}
@@ -303,15 +303,30 @@ async def async_process_new_game(user_id, conversation_data):
 
         # 6) Insert events
         for eobj in events_list:
-            ename = eobj.get("name","Unnamed Event")
-            edesc = eobj.get("description","")
-            stime = eobj.get("start_time","TBD Start")
-            etime = eobj.get("end_time","TBD End")
-            eloc = eobj.get("location","Unknown")
+            ename = eobj.get("name", "Unnamed Event")
+            edesc = eobj.get("description", "")
+            stime = eobj.get("start_time", "TBD Start")
+            etime = eobj.get("end_time", "TBD End")
+            eloc  = eobj.get("location", "Unknown")
+        
+            # New fields:
+            eyear = eobj.get("year", 1)
+            emonth = eobj.get("month", 1)
+            eday = eobj.get("day", 1)
+            etod = eobj.get("time_of_day", "Morning")
+        
             await conn.execute("""
-                INSERT INTO Events (user_id, conversation_id, event_name, description, start_time, end_time, location)
-                VALUES($1,$2,$3,$4,$5,$6,$7)
-            """, user_id, conversation_id, ename, edesc, stime, etime, eloc)
+                INSERT INTO Events (
+                    user_id, conversation_id, 
+                    event_name, description, start_time, end_time, location,
+                    year, month, day, time_of_day
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            """, 
+                user_id, conversation_id, 
+                ename, edesc, stime, etime, eloc,
+                eyear, emonth, eday, etod
+            )
 
         # 7) Insert locations
         for loc in locations_list:
