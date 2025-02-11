@@ -1,108 +1,88 @@
 # logic/gpt_helpers.py
+
 import json
 import logging
-from logic.gpt_utils import spaced_gpt_call  # Import from the separate GPT utils module
+import copy
 
-async def adjust_npc_complete(npc_data, environment_desc, conversation_id, immersive_days=None):
+from logic.gpt_utils import spaced_gpt_call  # or spaced_gpt_call_with_retry
+
+# The keys we consider "required" for a complete NPC
+REQUIRED_KEYS = ["likes", "dislikes", "hobbies", "affiliations", "schedule"]
+
+async def adjust_npc_complete(npc_data, environment_desc, conversation_id, immersive_days=None, max_retries=3):
     """
-    Adapt NPC details by combining preference adjustments and schedule/affiliation generation
-    into one GPT call. Tailor all details to an environment dominated by powerful females.
-    
-    We ask GPT to produce a JSON with exactly these keys:
-      - "likes": (array of strings)
-      - "dislikes": (array of strings)
-      - "hobbies": (array of strings)
-      - "affiliations": (array of strings)
-      - "schedule": (object with custom day names, each having "Morning","Afternoon","Evening","Night")
+    Adapt NPC details in multiple partial GPT calls if necessary. 
+    Instead of requiring GPT to return everything at once, we gather partial 
+    data and only re-ask for missing keys.
 
-    The schedule must use the immersive day names you provide. If none
-    are provided, we fallback to ["Sol","Luna","Terra","Vesta","Mercury","Venus","Mars"].
+    npc_data: dict with partial info about the NPC (e.g. likes, etc.)
+    environment_desc: the broader environment/story setting.
+    conversation_id: for logging or GPT call context.
+    immersive_days: list of custom day names for schedule
+    max_retries: how many times we keep asking GPT for missing keys
 
-    Returns:
-      dict with keys "likes", "dislikes", "hobbies", "affiliations", "schedule".
-      If GPT fails after 3 tries, returns fallback from npc_data.
+    Returns: dict with the keys ["likes","dislikes","hobbies","affiliations","schedule"] 
+             (any missing keys are filled with empty lists/objects).
     """
+
     if immersive_days is None:
         immersive_days = ["Sol", "Luna", "Terra", "Vesta", "Mercury", "Venus", "Mars"]
 
-    # Retrieve existing preferences
-    archetype_summary = npc_data.get("archetype_summary", "")
-    likes = npc_data.get("likes", [])
-    dislikes = npc_data.get("dislikes", [])
-    hobbies = npc_data.get("hobbies", [])
+    # We'll keep merging data into 'refined_npc'
+    refined_npc = copy.deepcopy(npc_data)
 
-    # Build the prompt
-    prompt = (
-        "Given the following NPC information:\n"
-        f"Archetype Summary: {archetype_summary}\n"
-        f"Environment: {environment_desc}\n\n"
-        "NPC Preferences:\n"
-        f"Likes: {likes}\n"
-        f"Dislikes: {dislikes}\n"
-        f"Hobbies: {hobbies}\n\n"
-        "Instructions:\n"
-        "1. Adapt these preferences so that they are specifically tailored "
-        "   to an environment dominated by powerful females.\n"
-        "2. Determine the NPC's affiliations (teams, clubs, partnerships, associations, etc.)\n"
-        "   that fit within this environment.\n"
-        "3. Create a detailed weekly schedule using these immersive day names: "
-        f"{', '.join(immersive_days)}. For each day, include 'Morning', 'Afternoon', "
-        "'Evening', 'Night'.\n\n"
-        "Return only a JSON object with exactly the following five keys:\n"
-        "\"likes\", \"dislikes\", \"hobbies\", \"affiliations\", \"schedule\".\n"
-        "No extra keys or text."
-    )
+    # Figure out which keys are initially missing or empty
+    missing_keys = set(REQUIRED_KEYS)
+    # If refined_npc already has any required keys with non-empty data, remove them from missing
+    for key in list(missing_keys):
+        # If it exists and isn't empty, consider it "filled"
+        val = refined_npc.get(key, None)
+        if val:  # e.g. if likes is already a non-empty list
+            missing_keys.remove(key)
 
-    logging.info("Adjusting complete NPC details with prompt: %s", prompt)
-
-    max_retries = 3
     retry_count = 0
+    while missing_keys and retry_count < max_retries:
+        missing_list_str = ", ".join(missing_keys)
+        # Build a prompt *only* for the missing pieces.
+        # We also show the partial data we already have, 
+        # so GPT can keep it in context.
+        prompt = f"""
+We have an NPC in a femdom environment. We already have partial data:
+{json.dumps(refined_npc, indent=2)}
 
-    while retry_count < max_retries:
-        # Call GPT with your new spaced_gpt_call, including a short initial delay
+We are missing these keys: {missing_list_str}.
+
+We want a JSON object containing ONLY these missing keys. 
+If you can't provide some key, set it to an empty array ([]) or empty object ({{}}).
+
+Immersive day names for schedule: {', '.join(immersive_days)}
+
+Return strictly JSON, no extra text or function calls.
+"""
+
+        logging.info(f"[adjust_npc_complete] Attempt={retry_count+1}, missing_keys={missing_keys}")
         reply = await spaced_gpt_call(
-            conversation_id,
-            environment_desc,
-            prompt,
-            delay=1.0,         # you can adjust
-            max_retries=5      # how many times to try if we see 429
+            conversation_id=conversation_id,
+            context=environment_desc,
+            prompt=prompt,
+            delay=1.0,
+            max_retries=3  # or however many times you want to handle 429
         )
 
-        # If GPT responded with a function call
+        # Check what we got back
         if reply.get("type") == "function_call":
-            args = reply.get("function_args", {})
-            # If top-level keys are exactly present
-            if all(k in args for k in ["likes","dislikes","hobbies","affiliations","schedule"]):
-                return {
-                    "likes": args["likes"],
-                    "dislikes": args["dislikes"],
-                    "hobbies": args["hobbies"],
-                    "affiliations": args["affiliations"],
-                    "schedule": args["schedule"]
-                }
-            # Or possibly in npc_updates
-            elif "npc_updates" in args:
-                updates = args["npc_updates"]
-                if isinstance(updates, list) and len(updates) > 0:
-                    first_update = updates[0]
-                    if all(k in first_update for k in ["likes","dislikes","hobbies","affiliations","schedule"]):
-                        return first_update
-            # Or possibly in npc_creations
-            elif "npc_creations" in args:
-                creations = args["npc_creations"]
-                if isinstance(creations, list) and len(creations) > 0:
-                    creation_obj = creations[0]
-                    if all(k in creation_obj for k in ["likes","dislikes","hobbies","affiliations","schedule"]):
-                        return creation_obj
+            # GPT returned a function call
+            function_args = reply.get("function_args", {})
+            # Merge only the missing keys from function_args
+            for mk in list(missing_keys):
+                if mk in function_args:
+                    refined_npc[mk] = function_args[mk]
+                    missing_keys.remove(mk)
 
-            logging.warning("Incomplete keys in function_args; retrying. Attempt=%d", retry_count+1)
-            retry_count += 1
-            continue
-
-        # If GPT returned plain text "response"
         elif reply.get("response"):
+            # Plain text JSON
             response_text = reply["response"].strip()
-            # Remove fences if present
+            # remove fences
             if response_text.startswith("```"):
                 lines = response_text.splitlines()
                 if lines and lines[0].startswith("```"):
@@ -112,26 +92,24 @@ async def adjust_npc_complete(npc_data, environment_desc, conversation_id, immer
                 response_text = "\n".join(lines).strip()
 
             try:
-                data_parsed = json.loads(response_text)
-                if all(k in data_parsed for k in ["likes","dislikes","hobbies","affiliations","schedule"]):
-                    return data_parsed
-                else:
-                    logging.warning("Response JSON missing keys; retrying. Attempt=%d", retry_count+1)
-                    retry_count += 1
+                parsed_data = json.loads(response_text)
+                # Merge only the missing keys
+                for mk in list(missing_keys):
+                    if mk in parsed_data:
+                        refined_npc[mk] = parsed_data[mk]
+                        missing_keys.remove(mk)
             except Exception as e:
-                logging.error("Error parsing JSON from response: %s. Attempt=%d", e, retry_count+1)
-                retry_count += 1
+                logging.warning(f"Failed to parse JSON in partial refine: {e}")
 
+        retry_count += 1
+
+    # If still missing anything after all attempts, fill with defaults
+    for mk in missing_keys:
+        # e.g. empty list or object
+        if mk == "schedule":
+            refined_npc[mk] = {}
         else:
-            logging.warning("GPT did not return function_call or response. Attempt=%d", retry_count+1)
-            retry_count += 1
+            refined_npc[mk] = []
 
-    # If we exhausted all attempts
-    logging.error("Max attempts reached in adjust_npc_complete; returning fallback from npc_data.")
-    return {
-        "likes": likes,
-        "dislikes": dislikes,
-        "hobbies": hobbies,
-        "affiliations": npc_data.get("affiliations", []),
-        "schedule": npc_data.get("schedule", {})
-    }
+    # refined_npc now has all required keys
+    return refined_npc
