@@ -15,7 +15,7 @@ from logic.universal_updater import apply_universal_updates_async  # your existi
 from logic.calendar import update_calendar_names
 
 # Use your Railway DSN (update as needed)
-# DB_DSN = "postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@monorail.proxy.rlwy.net:24727/railway"
+DB_DSN = "postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@monorail.proxy.rlwy.net:24727/railway"
 
 # -------------------------------------------------------------------------
 # ADVANCED RETRY/BACKOFF: folded in from the original 'spaced_gpt_call'
@@ -140,8 +140,6 @@ Context:
 
 No extra commentary. Only that JSON object.
 """
-
-DB_DSN = "postgresql://postgres:XXX@HOST:PORT/DBNAME"
 
 # -------------------------------------------------------------------------
 # GPT call wrappers (single-block approach) with function-call handling
