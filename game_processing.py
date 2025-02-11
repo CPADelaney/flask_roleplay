@@ -41,32 +41,46 @@ async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0):
 # ---------------------------------------------------------------------
 # Helper: retry call upon failure
 
-async def call_gpt_with_retry(func, expected_keys: set, retries: int = 3, initial_delay: float = 1, **kwargs):
+async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0, max_retries=5):
     """
-    Calls a GPT helper function (an async function) with the given keyword arguments.
-    Checks that the returned dictionary contains the expected keys.
-    Retries the call (with exponential backoff) up to `retries` times if keys are missing or an exception occurs.
+    Calls GPT with a short initial delay, then attempts an exponential backoff
+    if we get a 429 (rate limit) error. 
     """
-    delay = initial_delay
-    for attempt in range(1, retries + 1):
+    wait_before_call = delay
+    attempt = 1
+    
+    while attempt <= max_retries:
+        logging.info("Waiting for %.1f seconds before calling GPT (conversation_id=%s) (attempt=%d)",
+                     wait_before_call, conversation_id, attempt)
+        await asyncio.sleep(wait_before_call)
+        
         try:
-            result = await func(**kwargs)
-            # Check which keys are missing
-            missing_keys = expected_keys - set(result.keys())
-            if missing_keys:
-                logging.warning("Attempt %d: %s returned missing keys: %s", attempt, func.__name__, missing_keys)
-                raise ValueError("Missing keys: " + ", ".join(missing_keys))
-            logging.info("Attempt %d: %s returned all expected keys.", attempt, func.__name__)
-            return result
+            # Perform the actual GPT request in a thread (the same logic you had).
+            logging.info("Calling GPT with conversation_id=%s, attempt=%d", conversation_id, attempt)
+            result = await asyncio.to_thread(get_chatgpt_response, conversation_id, context, prompt)
+
+            logging.info("GPT returned response (attempt=%d): %s", attempt, result)
+            return result  # If success, return immediately
+
         except Exception as e:
-            logging.error("Attempt %d: Error calling %s: %s", attempt, func.__name__, e, exc_info=True)
-            if attempt < retries:
-                await asyncio.sleep(delay)
-                delay *= 2
+            # Detect 429 if you are using requests or httpx. If `get_chatgpt_response` internally
+            # raises an openai.error.RateLimitError or you can parse the error code, do so:
+            # Example:
+            if "429" in str(e) or "RateLimitError" in str(e):
+                logging.warning(f"Got 429 (Rate Limit) on attempt {attempt}. Backing off.")
+                # exponential backoff
+                attempt += 1
+                wait_before_call *= 2
+                if attempt > max_retries:
+                    logging.error("Max retries reached after repeated 429 errors.")
+                    raise
             else:
-                logging.error("Max retries reached for %s", func.__name__)
+                # If it's some other error, re-raise immediately or handle differently
+                logging.error("Non-429 error encountered: %s", e, exc_info=True)
                 raise
 
+    # If we exit the loop (which we shouldn't if we raise on last attempt)
+    raise RuntimeError("Failed to call GPT after repeated attempts.")
 
 # ---------------------------------------------------------------------
 # Universal update function (asynchronous version)
