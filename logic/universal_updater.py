@@ -9,20 +9,19 @@ from logic.social_links import (
 )
 
 async def apply_universal_updates_async(user_id, conversation_id, data, conn) -> dict:
-    """
-    Asynchronously processes the universal_update payload, inserting or updating DB records.
-    Uses the DB connection object passed in as conn; does NOT open/close its own connection.
-    """
     logging.info("=== [apply_universal_updates_async] Incoming data ===")
     logging.info(json.dumps(data, indent=2))
-    
-    try:
-        data_user_id = data.get("user_id")
-        data_conv_id = data.get("conversation_id")
 
-        if not data_user_id or not data_conv_id:
-            logging.error("Missing user_id or conversation_id in universal_update data.")
-            return {"error": "Missing user_id or conversation_id in universal_update"}
+    try:
+        # Start a transaction context. If any statement fails,
+        # all changes since the start of the block will be undone.
+        async with conn.transaction():
+            data_user_id = data.get("user_id")
+            data_conv_id = data.get("conversation_id")
+            if not data_user_id or not data_conv_id:
+                logging.error("Missing user_id or conversation_id in universal_update data.")
+                return {"error": "Missing user_id or conversation_id in universal_update"}
+
 
         # 1) Process roleplay_updates
         rp_updates = data.get("roleplay_updates", {})
@@ -449,15 +448,15 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                     ON CONFLICT DO NOTHING
                 """, user_id, conversation_id, player_name, perk_name, perk_desc, perk_fx)
 
-        # Commit the changes here if you want each update to finalize in DB
-        await conn.commit()
-        logging.info("=== [apply_universal_updates_async] Success! ===")
+        # If we get here with no exceptions, the transaction is COMMITTED automatically.
+        logging.info("=== [apply_universal_updates_async] Success (transaction committed) ===")
         return {"message": "Universal update successful"}
 
     except Exception as e:
-        logging.exception("[apply_universal_updates_async] Error encountered")
-        await conn.rollback()
+        # If any statement inside the transaction block fails:
+        #  - The transaction is automatically rolled back
+        #  - We catch the error here
+        logging.exception("[apply_universal_updates_async] Error encountered (transaction rolled back)")
         return {"error": str(e)}
-
 # Optional alias if other code uses apply_universal_updates:
 apply_universal_updates = apply_universal_updates_async
