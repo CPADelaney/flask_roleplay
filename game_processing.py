@@ -1125,17 +1125,19 @@ async def async_process_new_game(user_id, conversation_data):
         
         # Step 16.5: Final NPC Adjustments via Combined GPT Call.
         logging.info("Performing final adjustments on NPCs using a combined GPT call for conversation_id=%s", conversation_id)
-        npc_rows = await conn.fetch("""
+        npc_rows = await conn.fetch(
+            """
             SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes, archetype_summary
             FROM NPCStats
             WHERE user_id=$1 AND conversation_id=$2
-        """, user_id, conversation_id)
-                
-        # Reuse the same 'immersive_days' from step 16
-        # (i.e., the list we extracted from `calendar_names.get("days")`)
+            """,
+            user_id,
+            conversation_id
+        )
+        
+        # Reuse the same 'immersive_days' from Step 16
         actual_immersive_days = immersive_days
         
-                
         for npc_row in npc_rows:
             npc_id = npc_row["npc_id"]
             npc_data = {
@@ -1148,18 +1150,24 @@ async def async_process_new_game(user_id, conversation_data):
                 "archetypes": json.loads(npc_row["archetypes"]) if isinstance(npc_row["archetypes"], str) else npc_row["archetypes"],
                 "archetype_summary": npc_row.get("archetype_summary", "")
             }
-                    
+        
             try:
-                complete_npc = await call_gpt_with_retry(
-                    func=adjust_npc_complete,
-                    expected_keys={"likes", "dislikes", "hobbies", "affiliations", "schedule"},
+                # Directly call 'adjust_npc_complete', which handles its own internal retry logic
+                complete_npc = await adjust_npc_complete(
                     npc_data=npc_data,
                     environment_desc=environment_desc,
                     conversation_id=conversation_id,
-                    immersive_days=actual_immersive_days  # <--- now matches the same list we used for Chase
+                    immersive_days=actual_immersive_days
                 )
             except Exception as e:
-                logging.error("Error adjusting complete NPC details for NPC %s after retries: %s", npc_id, e)
+                # If adjust_npc_complete fails entirely (e.g., hits repeated rate-limits or unexpected error),
+                # fall back to the original data
+                logging.error(
+                    "Error adjusting complete NPC details for NPC %s after internal retries: %s",
+                    npc_id,
+                    e,
+                    exc_info=True
+                )
                 complete_npc = {
                     "likes": npc_data.get("likes", []),
                     "dislikes": npc_data.get("dislikes", []),
@@ -1167,8 +1175,10 @@ async def async_process_new_game(user_id, conversation_data):
                     "affiliations": npc_data.get("affiliations", []),
                     "schedule": npc_data.get("schedule", {})
                 }
-                    
-            await conn.execute("""
+        
+            # Finally update the NPCStats row
+            await conn.execute(
+                """
                 UPDATE NPCStats
                 SET likes = $1,
                     dislikes = $2,
@@ -1176,13 +1186,18 @@ async def async_process_new_game(user_id, conversation_data):
                     affiliations = $4,
                     schedule = $5
                 WHERE npc_id = $6 AND user_id = $7 AND conversation_id = $8
-            """,
-            json.dumps(complete_npc.get("likes", [])),
-            json.dumps(complete_npc.get("dislikes", [])),
-            json.dumps(complete_npc.get("hobbies", [])),
-            json.dumps(complete_npc.get("affiliations", [])),
-            json.dumps(complete_npc.get("schedule", {})),
-            npc_id, user_id, conversation_id)       
+                """,
+                json.dumps(complete_npc.get("likes", [])),
+                json.dumps(complete_npc.get("dislikes", [])),
+                json.dumps(complete_npc.get("hobbies", [])),
+                json.dumps(complete_npc.get("affiliations", [])),
+                json.dumps(complete_npc.get("schedule", {})),
+                npc_id,
+                user_id,
+                conversation_id
+            )
+
+
           
         # Step 17: Build aggregated roleplay context.
         logging.info("Building aggregated roleplay context for conversation_id=%s", conversation_id)
