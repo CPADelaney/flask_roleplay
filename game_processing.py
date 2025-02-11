@@ -123,7 +123,7 @@ Return one JSON with keys:
     "npc_name", 
     "likes":[], "dislikes":[], "hobbies":[],
     "affiliations":[],
-    "schedule":{ dayName:{Morning,Afternoon,Evening,Night}, ... }
+    "schedule":{{ dayName:{{Morning,Afternoon,Evening,Night}}, ... }}
   "ChaseSchedule": same day structure for the player
 
 Use these day names for the schedule: {day_names}
