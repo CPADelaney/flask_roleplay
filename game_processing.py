@@ -64,7 +64,7 @@ def _sync_gpt_request(conversation_id, context, prompt):
         {"role": "user", "content": prompt},
     ]
     resp = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=messages,
         temperature=0.7
     )
