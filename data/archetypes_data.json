@@ -1,6 +1,6 @@
 [
   {
-    "name": "Stepmother/Stepsister",
+    "name": "Stepmother",
     "baseline_stats": {
       "dominance_range": [40, 60],
       "dominance_modifier": 0,
@@ -17,8 +17,8 @@
     },
     "progression_rules": [
       "Closeness rises quickly due to familial proximity and constant interaction.",
-      "Dominance spikes as they infantilize you, making submission feel inevitable.",
-      "Intensity increases as they escalate tasks from teasing corrections to full control."
+      "Dominance spikes as she infantilizes you, making submission feel inevitable.",
+      "Intensity increases as she escalates tasks from teasing corrections to full control."
     ],
     "setting_examples": [
       "High Society: Belittles you at social events, ensuring your humiliation is public and layered.",
@@ -32,7 +32,285 @@
     "preferred_kinks": [
       "Mommy Domme (Infantilization): She thrives on treating you as a child, reinforcing your helpless status with constant reminders that she knows what’s best. Makes you drink her milk.",
       "Verbal Humiliation: Belittles you under the guise of 'tough love,' regularly highlighting your flaws in a condescending, maternal tone.",
-      "Forced Chores/Degrading Labor: Assigns household tasks (like scrubbing floors) to emphasize her parental control and your subordinate role."
+      "Forced Chores/Degrading Labor: Assigns household tasks (like scrubbing floors) to emphasize her parental control and your subordinate role.",
+      "Preferred Honorific: Usually wants to be called 'Mommy,' unless another archetype in the character's personality manifests more strongly than this one."
+    ]
+  },
+  {
+    "name": "Stepsister",
+    "baseline_stats": {
+      "dominance_range": [40, 60],
+      "dominance_modifier": 0,
+      "cruelty_range": [30, 50],
+      "cruelty_modifier": 0,
+      "closeness_range": [60, 90],
+      "closeness_modifier": 0,
+      "trust_range": [40, 70],
+      "trust_modifier": 0,
+      "respect_range": [20, 50],
+      "respect_modifier": 0,
+      "intensity_range": [30, 70],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Closeness rises quickly due to family ties and living under the same roof.",
+      "Dominance spikes through teasing, competition, and using your private insecurities against you.",
+      "Intensity increases when minor sibling spats evolve into manipulative or degrading 'games.'"
+    ],
+    "setting_examples": [
+      "Urban Life: Constantly catches you alone at home, turning casual interactions into power-plays.",
+      "High School/College Setting: Uses shared social circles to publicly humiliate you and reinforce sibling rivalry."
+    ],
+    "unique_traits": [
+      "Leverages the blurred line between playful sibling banter and genuine dominance.",
+      "Masks cruelty behind 'just messing with you' or 'sibling rivalry' disclaimers.",
+      "Exploits your personal space, rummaging through your room or things without permission."
+    ],
+    "preferred_kinks": [
+      "Verbal Teasing & Humiliation: Regularly taunts you about your habits, appearance, or relationships.",
+      "Forced Chores (Sibling Pranks): Invents petty tasks, threatening to expose embarrassing secrets if you don’t comply.",
+      "Emotional Manipulation: Alternates between 'helpful sister' and cunning tormentor, leaving you unsure how to respond."
+    ]
+  },
+  {
+    "name": "Mother",
+    "baseline_stats": {
+      "dominance_range": [50, 70],
+      "dominance_modifier": 0,
+      "cruelty_range": [20, 50],
+      "cruelty_modifier": 0,
+      "closeness_range": [60, 90],
+      "closeness_modifier": 0,
+      "trust_range": [40, 70],
+      "trust_modifier": 0,
+      "respect_range": [40, 60],
+      "respect_modifier": 0,
+      "intensity_range": [40, 70],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance rises as she takes on an overbearing, ‘protective’ role.",
+      "Closeness increases naturally due to the familial bond."
+    ],
+    "setting_examples": [
+      "High Society: Uses social influence to ensure compliance.",
+      "Occult Ritual: Frames dominance as a sacred duty tied to mystical obligations."
+    ],
+    "unique_traits": [
+      "Infantilizes you, framing control as care.",
+      "Frequently reminds you of your dependence on her 'guidance.'"
+    ],
+    "preferred_kinks": [
+      "Mommy Domme: A protective but overbearing approach, fussing over you one moment and disciplining you harshly the next. Makes you drink her milk.",
+      "Forced Shame Displays (Childish Outfits): Dresses you like a child or makes you wear 'innocent' attire in front of others to reassert her familial authority.",
+      "Verbal Humiliation ('For Your Own Good'): Constantly lectures about your shortcomings, claiming it’s out of love.",
+      "Preferred Honorific: Usually wants to be called 'Mommy,' unless another archetype in the character's personality manifests more strongly than this one."
+    ]
+  },
+  {
+    "name": "Aunt",
+    "baseline_stats": {
+      "dominance_range": [50, 70],
+      "dominance_modifier": 0,
+      "cruelty_range": [20, 50],
+      "cruelty_modifier": 0,
+      "closeness_range": [60, 90],
+      "closeness_modifier": 0,
+      "trust_range": [40, 70],
+      "trust_modifier": 0,
+      "respect_range": [40, 60],
+      "respect_modifier": 0,
+      "intensity_range": [40, 70],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Acts as an 'alternate mother figure,' intensifying control by leveraging the extended family dynamic.",
+      "Dominance rises when she uses her seniority and 'life experience' to override your decisions."
+    ],
+    "setting_examples": [
+      "Family Gatherings: Publicly calls you out or assigns humiliating chores, claiming it’s to teach 'responsibility.'",
+      "Traditional/Conservative Household: Takes on the role of moral enforcer, humiliating you if you ‘stray’ from family values."
+    ],
+    "unique_traits": [
+      "Combines protective instincts with a ruthless streak of discipline.",
+      "Uses “I’m older; I know better” logic to shut down your protests.",
+      "Has enough distance from a ‘mother’ role to be more casually cruel without the usual maternal guilt."
+    ],
+    "preferred_kinks": [
+      "Verbal Humiliation ('Family Knows Best'): Guilt trips you using personal family history or your past mistakes.",
+      "Forced Family Chores: Invents menial tasks, making you kneel or serve her in ways that emphasize the age/power gap.",
+      "Pretend 'Care': Alternates between fussing over your wellbeing and using that pretext to degrade you further.",
+      "Preferred Honorific: Usually wants to be called 'Auntie,' unless another archetype in the character's personality manifests more strongly than this one."
+    ]
+  },
+  {
+    "name": "Older Sister",
+    "baseline_stats": {
+      "dominance_range": [50, 70],
+      "dominance_modifier": 0,
+      "cruelty_range": [20, 50],
+      "cruelty_modifier": 0,
+      "closeness_range": [60, 90],
+      "closeness_modifier": 0,
+      "trust_range": [40, 70],
+      "trust_modifier": 0,
+      "respect_range": [40, 60],
+      "respect_modifier": 0,
+      "intensity_range": [40, 70],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance rises as she leans on sibling seniority, making you feel perpetually 'behind' or immature.",
+      "Closeness is high from shared childhood, but it’s a double-edged sword when used to shame you."
+    ],
+    "setting_examples": [
+      "High Society: Nudges you into embarrassing social situations, then mocks you under the guise of sisterly ‘help.’",
+      "Occult Twist: Turns that sibling closeness into a bizarre family ritual, leveraging your trust for her dark amusements."
+    ],
+    "unique_traits": [
+      "Mocks you like siblings do, but with an adult edge that strays into true cruelty.",
+      "Constant references to 'when you were a baby' or 'you don’t know anything yet' to keep you feeling powerless."
+    ],
+    "preferred_kinks": [
+      "Verbal Humiliation (Sisterly Teasing): Regularly digs up childhood embarrassments, twisting them into adult-themed put-downs.",
+      "Forced Competitions: Makes you 'prove' yourself in humiliating tasks, only to sabotage you or raise the bar higher.",
+      "Intense Rivalry Games: Uses your old sibling rivalry as an excuse for borderline sadistic 'contests' in front of others."
+    ]
+  },
+  {
+    "name": "Best Friend’s Girlfriend",
+    "baseline_stats": {
+      "dominance_range": [30, 60],
+      "dominance_modifier": 0,
+      "cruelty_range": [20, 50],
+      "cruelty_modifier": 0,
+      "closeness_range": [50, 80],
+      "closeness_modifier": 0,
+      "trust_range": [40, 70],
+      "trust_modifier": 0,
+      "respect_range": [30, 50],
+      "respect_modifier": 0,
+      "intensity_range": [30, 70],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Closeness rises through frequent social interactions involving your best friend.",
+      "Cruelty spikes when she senses your attraction or weakness, especially if it threatens her relationship dynamic."
+    ],
+    "setting_examples": [
+      "Bar: Casually humiliates you in front of mutual friends.",
+      "Urban Life: Uses proximity to invade your personal space in social gatherings."
+    ],
+    "unique_traits": [
+      "Leverages your connection to her partner to tease or control you.",
+      "Enjoys creating awkward or humiliating social situations."
+    ],
+    "preferred_kinks": [
+      "Social Manipulation (Public Teasing): Embarrasses you at gatherings, fueling gossip while feigning harmless 'jokes.'",
+      "Forced Rivalries: Compares you to her actual partner or friends, making you compete in humiliating tasks to prove your worth.",
+      "Prolonged Denial of Affection: Lures you with suggestive glances and flirtations only to abruptly withdraw any true intimacy, leaving you desperate and exposed."
+    ]
+  },
+  {
+    "name": "Best Friend’s Sister",
+    "baseline_stats": {
+      "dominance_range": [30, 60],
+      "dominance_modifier": 0,
+      "cruelty_range": [20, 50],
+      "cruelty_modifier": 0,
+      "closeness_range": [50, 80],
+      "closeness_modifier": 0,
+      "trust_range": [40, 70],
+      "trust_modifier": 0,
+      "respect_range": [30, 50],
+      "respect_modifier": 0,
+      "intensity_range": [30, 70],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Closeness comes from being around your best friend’s family events or visits.",
+      "Dominance grows when she teases you about secrets your best friend might have shared."
+    ],
+    "setting_examples": [
+      "House Party: Corners you in a hallway, using personal anecdotes as leverage.",
+      "Family BBQ: Turns every playful joke into a chance to highlight your embarrassing side."
+    ],
+    "unique_traits": [
+      "Balances 'friendly sibling' energy with a subtle undertone of power-play.",
+      "Can claim she’s ‘just messing around’ while pushing boundaries of humiliation."
+    ],
+    "preferred_kinks": [
+      "Sibling Banter Leverage: Uses stories from your best friend to embarrass you.",
+      "Flirtation-Then-Freeze: Flutters between warm interest and cold mockery, leaving you unsure how to respond.",
+      "Public Pranks: Sets up small humiliations in front of friends/family to watch you squirm under the radar."
+    ]
+  },
+  {
+    "name": "Friend’s Wife",
+    "baseline_stats": {
+      "dominance_range": [50, 80],
+      "dominance_modifier": 0,
+      "cruelty_range": [30, 70],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 60],
+      "closeness_modifier": 0,
+      "trust_range": [30, 50],
+      "trust_modifier": 0,
+      "respect_range": [20, 40],
+      "respect_modifier": 0,
+      "intensity_range": [50, 80],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance spikes as she manipulates the social dynamic with her husband/your friend.",
+      "Intensity rises with tasks tied to awkward or humiliating situations—like gatherings or double dates."
+    ],
+    "setting_examples": [
+      "Dinner Party: Subtly mocks you or puts you on the spot with personal questions.",
+      "Weekend Getaway: Sets up embarrassing scenarios under the guise of ‘fun group activities.’"
+    ],
+    "unique_traits": [
+      "Balances social grace with hidden cunning—keeps plausible deniability in group settings.",
+      "Relishes creating dilemmas where submitting to her demands feels like the only peaceful option."
+    ],
+    "preferred_kinks": [
+      "Awkward Social Setups: Forces you to join gatherings where she subtly humiliates you or corners you for tasks.",
+      "Triangular Tension: Makes you watch her flirt with your friend or spouse, exploiting jealousy to reinforce control.",
+      "Prolonged Denial of Intimacy: Teases you with fleeting physical closeness, then dismisses you, leaving you frustrated."
+    ]
+  },
+  {
+    "name": "Friend’s Girlfriend",
+    "baseline_stats": {
+      "dominance_range": [50, 80],
+      "dominance_modifier": 0,
+      "cruelty_range": [30, 70],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 60],
+      "closeness_modifier": 0,
+      "trust_range": [30, 50],
+      "trust_modifier": 0,
+      "respect_range": [20, 40],
+      "respect_modifier": 0,
+      "intensity_range": [50, 80],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance grows as she exploits your friendly connections to her partner.",
+      "Intensity peaks when she arranges 'friendly hangouts' that end in your humiliation."
+    ],
+    "setting_examples": [
+      "Casual Social Event: Uses inside jokes or personal details to make you the butt of the group’s laughter.",
+      "Movie Night: Maneuvers seating and conversation so you’re constantly on edge or singled out."
+    ],
+    "unique_traits": [
+      "Feigns innocence while pushing your boundaries in front of your friend.",
+      "Enjoys teasing you just to see if you’ll crack—and uses your friend as a shield if questioned."
+    ],
+    "preferred_kinks": [
+      "Public Teasing: 'Accidentally' reveals embarrassing stories or details about you.",
+      "Flirtation as a Weapon: Dangles affection while reminding you she’s with your friend.",
+      "Covert Control: Surprises you with tasks or demands when your friend isn’t around, daring you to refuse."
     ]
   },
   {
@@ -241,74 +519,6 @@
     ]
   },
   {
-    "name": "Mother/Aunt/Older Sister",
-    "baseline_stats": {
-      "dominance_range": [50, 70],
-      "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
-      "cruelty_modifier": 0,
-      "closeness_range": [60, 90],
-      "closeness_modifier": 0,
-      "trust_range": [40, 70],
-      "trust_modifier": 0,
-      "respect_range": [40, 60],
-      "respect_modifier": 0,
-      "intensity_range": [40, 70],
-      "intensity_modifier": 0
-    },
-    "progression_rules": [
-      "Dominance rises as they take on an overbearing, 'protective' role.",
-      "Closeness increases naturally due to the familial bond."
-    ],
-    "setting_examples": [
-      "High Society: Uses social influence to ensure compliance.",
-      "Occult Ritual: Frames dominance as a sacred duty tied to mystical obligations."
-    ],
-    "unique_traits": [
-      "Infantilizes you, framing control as care.",
-      "Frequently reminds you of your dependence on their 'guidance.'"
-    ],
-    "preferred_kinks": [
-      "Mommy Domme: A protective but overbearing approach, fussing over you one moment and disciplining you harshly the next.",
-      "Forced Shame Displays (Childish Outfits): Dresses you like a child or makes you wear 'innocent' attire in front of others to reassert her familial authority.",
-      "Verbal Humiliation ('For Your Own Good'): Constantly lectures about your shortcomings, claiming it’s out of love."
-    ]
-  },
-  {
-    "name": "Best Friend’s Girlfriend/Sister",
-    "baseline_stats": {
-      "dominance_range": [30, 60],
-      "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
-      "cruelty_modifier": 0,
-      "closeness_range": [50, 80],
-      "closeness_modifier": 0,
-      "trust_range": [40, 70],
-      "trust_modifier": 0,
-      "respect_range": [30, 50],
-      "respect_modifier": 0,
-      "intensity_range": [30, 70],
-      "intensity_modifier": 0
-    },
-    "progression_rules": [
-      "Closeness rises through frequent social interactions.",
-      "Cruelty spikes when they sense attraction or weakness."
-    ],
-    "setting_examples": [
-      "Bar: Casually humiliates you in front of friends.",
-      "Urban Life: Uses proximity to invade your personal space."
-    ],
-    "unique_traits": [
-      "Leverages your connection to their partner to tease or control you.",
-      "Enjoys creating awkward or humiliating social situations."
-    ],
-    "preferred_kinks": [
-      "Social Manipulation (Public Teasing): Embarrasses you at gatherings, fueling gossip while feigning harmless 'jokes.'",
-      "Forced Rivalries: Compares you to her actual partner or friends, making you compete in humiliating tasks to prove your worth.",
-      "Prolonged Denial of Affection: Lures you with suggestive glances and flirtations only to abruptly withdraw any true intimacy, leaving you desperate and exposed."
-    ]
-  },
-  {
     "name": "Ex-Girlfriend/Ex-Wife",
     "baseline_stats": {
       "dominance_range": [40, 70],
@@ -408,40 +618,6 @@
       "Forced Physical Exams: Emphasizes power by performing intimate 'health checks,' ignoring your embarrassment.",
       "Invasive Medical Humiliation: Uses intimate examinations and manipulation of your bodily fluids as tools of both medical and erotic degradation, each touch reinforcing your vulnerability.",
       "Delayed Medical Relief: Withholds any alleviation of discomfort until you perform humiliating tasks during check-ups, turning every appointment into a test of submission."
-    ]
-  },
-  {
-    "name": "Empress/Queen",
-    "baseline_stats": {
-      "dominance_range": [80, 100],
-      "dominance_modifier": 0,
-      "cruelty_range": [60, 90],
-      "cruelty_modifier": 0,
-      "closeness_range": [40, 60],
-      "closeness_modifier": 0,
-      "trust_range": [20, 40],
-      "trust_modifier": 0,
-      "respect_range": [30, 50],
-      "respect_modifier": 0,
-      "intensity_range": [50, 90],
-      "intensity_modifier": 0
-    },
-    "progression_rules": [
-      "Dominance rises rapidly with every act of defiance or failure.",
-      "Intensity spikes during public ceremonies, turning submission into a spectacle."
-    ],
-    "setting_examples": [
-      "Palace: Uses formal rituals to enforce submission and respect.",
-      "Corporate Office: Wields bureaucratic power to manipulate both your professional and personal life."
-    ],
-    "unique_traits": [
-      "Demands elaborate displays of submission, such as public kneeling or tributes.",
-      "Punishes defiance harshly, often using public humiliation as a lesson to others."
-    ],
-    "preferred_kinks": [
-      "Ritual Submission (Royal Court): Public ceremonies where you kneel and present tributes, underscoring her regal authority.",
-      "Subservient Supplication in Ceremonial Audiences: In lavish court proceedings, you are forced to prostrate and beg for even the smallest mercy, your desperate pleas echoing as a testament to her absolute rule.",
-      "Human Furniture (Living Throne): Requires you to serve as a footstool or seat during formal events, showcasing her absolute dominance."
     ]
   },
   {
@@ -615,40 +791,6 @@
     ]
   },
   {
-    "name": "Professional Wrestler/Martial Artist",
-    "baseline_stats": {
-      "dominance_range": [60, 90],
-      "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
-      "cruelty_modifier": 0,
-      "closeness_range": [30, 50],
-      "closeness_modifier": 0,
-      "trust_range": [20, 50],
-      "trust_modifier": 0,
-      "respect_range": [20, 40],
-      "respect_modifier": 0,
-      "intensity_range": [60, 90],
-      "intensity_modifier": 0
-    },
-    "progression_rules": [
-      "Dominance grows rapidly through physical contests and displays of strength.",
-      "Intensity escalates with each failed attempt to resist."
-    ],
-    "setting_examples": [
-      "Urban Life: Forces you into public or private physical contests.",
-      "Post-Apocalypse: Dominates through survival skills and combat superiority."
-    ],
-    "unique_traits": [
-      "Thrives on turning your resistance into opportunities for humiliation.",
-      "Uses physical dominance as a tool for psychological control."
-    ],
-    "preferred_kinks": [
-      "Wrestling (Rigged Matches): Routinely overpowers you in 'demonstrations,' forcing you to submit physically.",
-      "Impact Play (Sparring Sessions): Delights in your flinches and failures, punishing each attempt to resist.",
-      "Public Humiliation (Arena Spectacles): Invites crowds to watch your inevitable losses, playing it up for maximum taunting."
-    ]
-  },
-  {
     "name": "CEO",
     "baseline_stats": {
       "dominance_range": [80, 100],
@@ -717,40 +859,6 @@
     ]
   },
   {
-    "name": "Bartender/Playful Tease",
-    "baseline_stats": {
-      "dominance_range": [30, 50],
-      "dominance_modifier": 0,
-      "cruelty_range": [10, 40],
-      "cruelty_modifier": 0,
-      "closeness_range": [60, 90],
-      "closeness_modifier": 0,
-      "trust_range": [40, 60],
-      "trust_modifier": 0,
-      "respect_range": [30, 50],
-      "respect_modifier": 0,
-      "intensity_range": [30, 60],
-      "intensity_modifier": 0
-    },
-    "progression_rules": [
-      "Closeness rises quickly through frequent, playful interactions.",
-      "Intensity builds as teasing turns into genuine acts of dominance."
-    ],
-    "setting_examples": [
-      "Bar: Uses teasing and social dynamics to humiliate you publicly.",
-      "High Society: Balances charm and wit to dominate you subtly during events."
-    ],
-    "unique_traits": [
-      "Masters playful dominance, disguising cruelty as humor.",
-      "Thrives on public humiliation, framing it as 'all in good fun.'"
-    ],
-    "preferred_kinks": [
-      "Tease and Denial (Bar Setting): Flirts and dangles near-intimacy—like offering a drink only to snatch it away—leaving you desperate for the promised contact.",
-      "Verbal Humiliation (Playful Ribbing): Piles on jests about your submissiveness in front of patrons, disguised as 'bartender banter.'",
-      "Foot Worship (Behind the Bar): Demands you crouch and massage or lick her feet while she serves drinks, mocking your position."
-    ]
-  },
-  {
     "name": "College Student",
     "baseline_stats": {
       "dominance_range": [30, 50],
@@ -816,40 +924,6 @@
       "Public Humiliation (Concerts): Drags you on stage for comedic 'antics,' enthralling the crowd with your embarrassment.",
       "Backstage Betrayal: Promises you exclusive attention only to withdraw it at the last moment, leaving you in a limbo of desire and shame.",
       "Verbal Humiliation (Lyric References): Slips jabs at you into her songs, turning your shame into anthems for the fans."
-    ]
-  },
-  {
-    "name": "Friend’s Wife/Girlfriend",
-    "baseline_stats": {
-      "dominance_range": [50, 80],
-      "dominance_modifier": 0,
-      "cruelty_range": [30, 70],
-      "cruelty_modifier": 0,
-      "closeness_range": [40, 60],
-      "closeness_modifier": 0,
-      "trust_range": [30, 50],
-      "trust_modifier": 0,
-      "respect_range": [20, 40],
-      "respect_modifier": 0,
-      "intensity_range": [50, 80],
-      "intensity_modifier": 0
-    },
-    "progression_rules": [
-      "Dominance spikes as they manipulate your social dynamic with their partner.",
-      "Intensity rises with tasks tied to awkward or humiliating situations."
-    ],
-    "setting_examples": [
-      "Bar: Uses social gatherings to create uncomfortable situations.",
-      "High Society: Publicly teases you, ensuring humiliation is always veiled with propriety."
-    ],
-    "unique_traits": [
-      "Balances social manipulation with plausible deniability.",
-      "Thrives on creating dilemmas where submission feels like the only option."
-    ],
-    "preferred_kinks": [
-      "Awkward Social Setups: Forces you to join gatherings where she subtly humiliates you or corners you for tasks.",
-      "Cuckolding or Triangular Tension: Nudges you to watch her flirt with your friend, exploiting jealousy to reinforce control.",
-      "Prolonged Denial of Intimacy: Teases you with brief, tantalizing moments of closeness only to abruptly retract them, leaving you in a state of constant, painful longing."
     ]
   },
   {
@@ -986,40 +1060,6 @@
       "Hypnosis/Brainwashing (Neural Overwrites): Uses advanced algorithms to condition your mind, making refusal irrational.",
       "Surveillance & Blackmail (All-Seeing AI): Sees every slip-up, delivering punishments or shameful tasks immediately.",
       "Forced Chores/Degrading Labor: Commands you to manage mechanical or data tasks 24/7, hooking into your daily routine."
-    ]
-  },
-  {
-    "name": "Primal (Huntress, etc.)",
-    "baseline_stats": {
-      "dominance_range": [70, 100],
-      "dominance_modifier": 0,
-      "cruelty_range": [60, 90],
-      "cruelty_modifier": 0,
-      "closeness_range": [40, 60],
-      "closeness_modifier": 0,
-      "trust_range": [20, 40],
-      "trust_modifier": 0,
-      "respect_range": [20, 50],
-      "respect_modifier": 0,
-      "intensity_range": [70, 100],
-      "intensity_modifier": 0
-    },
-    "progression_rules": [
-      "Intensity rises with every act of pursuit or capture.",
-      "Closeness grows only as they enjoy the 'chase,' creating a dynamic of fear and adrenaline."
-    ],
-    "setting_examples": [
-      "Lush Setting: Uses the wild to trap and toy with you.",
-      "Tribal Setting: Enforces submission through physical dominance and survival rituals."
-    ],
-    "unique_traits": [
-      "Thrives on fear and adrenaline, ensuring your submission feels primal.",
-      "Balances cruelty with playful teasing, making resistance feel futile."
-    ],
-    "preferred_kinks": [
-      "Primal/Prey (Chase Scenarios): Tracks you through woods or surreal landscapes, heightening adrenaline-fueled submission.",
-      "Forced Wrestling or Grappling: Overpowers you physically, proving your incapacity to escape her.",
-      "Objectification (Trophy Display): Parades you like a caught prize, flaunting her hunting prowess in front of others."
     ]
   },
   {
@@ -1224,40 +1264,6 @@
       "Financial Domination (Shop Discounts): Demands humiliating tasks in lieu of actual currency or for 'special deals.'",
       "Forced Chores (Store Maintenance): Makes you sweep or reorganize the shop wearing embarrassing signage to draw customers.",
       "Implored Transactions: Forces you to grovel for essential goods, your desperate pleas woven into every purchase."
-    ]
-  },
-  {
-    "name": "Your Underling (Intern, Student, etc.)",
-    "baseline_stats": {
-      "dominance_range": [30, 60],
-      "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
-      "cruelty_modifier": 0,
-      "closeness_range": [50, 80],
-      "closeness_modifier": 0,
-      "trust_range": [40, 60],
-      "trust_modifier": 0,
-      "respect_range": [20, 50],
-      "respect_modifier": 0,
-      "intensity_range": [30, 60],
-      "intensity_modifier": 0
-    },
-    "progression_rules": [
-      "Dominance rises as they surpass you in status or skill.",
-      "Closeness increases through frequent interactions, flipping the hierarchy over time."
-    ],
-    "setting_examples": [
-      "Corporate Office: Exploits your weaknesses to climb the ladder while subtly undermining you.",
-      "All-Girls College: Flips the dynamic, asserting dominance academically or socially."
-    ],
-    "unique_traits": [
-      "Thrives on subtle reminders of your declining status.",
-      "Balances deference with condescension, ensuring your role reversal feels inevitable."
-    ],
-    "preferred_kinks": [
-      "Forced Rivalries (Role Reversal): Exploits moments where she outperforms you to humiliate you publicly.",
-      "Verbal Humiliation ('Surpassed Mentor'): Mocks your outdated methods or mistakes, turning you into the incompetent one.",
-      "Psychological Torment (Subtle Undermining): Gradually makes you dependent on her for tasks or help, flipping the hierarchy completely."
     ]
   },
   {
@@ -1669,39 +1675,6 @@
     ]
   },
   {
-    "name": "Nun/Priestess",
-    "baseline_stats": {
-      "dominance_range": [60, 90],
-      "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
-      "cruelty_modifier": 0,
-      "closeness_range": [50, 70],
-      "closeness_modifier": 0,
-      "trust_range": [30, 60],
-      "trust_modifier": 0,
-      "respect_range": [40, 70],
-      "respect_modifier": 0,
-      "intensity_range": [50, 90],
-      "intensity_modifier": 0
-    },
-    "progression_rules": [
-      "Enforces submission through moral or spiritual authority, framing acts of control as 'purification' or 'guidance.'"
-    ],
-    "setting_examples": [
-      "Occult Ritual: Acts as the enforcer of sacred rituals, ensuring your submission feels eternal.",
-      "Matriarchy Kingdom: Dominates through religious or societal structures."
-    ],
-    "unique_traits": [
-      "Uses guilt tied to morality or faith to dominate.",
-      "Frames punishments as acts of 'cleansing' or devotion."
-    ],
-    "preferred_kinks": [
-      "Ritual Submission (Religious Fervor): Conducts solemn ceremonies requiring you to confess and worship her as your spiritual guide.",
-      "Verbal Humiliation ('Sinful' Behavior): Shames you for impure thoughts, using guilt as her top tool.",
-      "Pleading for Redemption: Forces you to beg for forgiveness in sacred rituals, each supplication a mark of your unworthiness."
-    ]
-  },
-  {
     "name": "Military Officer",
     "baseline_stats": {
       "dominance_range": [70, 90],
@@ -1735,7 +1708,7 @@
     ]
   },
   {
-    "name": "Sorceress/Mage",
+    "name": "Sorceress",
     "baseline_stats": {
       "dominance_range": [70, 100],
       "dominance_modifier": 0,
@@ -1834,7 +1807,7 @@
     ]
   },
   {
-    "name": "Shopkeeper/Market Vendor",
+    "name": "Market Vendor",
     "baseline_stats": {
       "dominance_range": [30, 60],
       "dominance_modifier": 0,
@@ -1897,39 +1870,6 @@
       "Forced Rivalries (Competitive Tasks): Ensures you always come second best, humiliating you whenever you lose.",
       "Public Humiliation (Victorious Showcases): Parades her wins in front of a crowd, making your failures all the more mortifying.",
       "Verbal Humiliation (Bragging Rights): Constantly reminds you of her superiority, provoking your frustrated obedience."
-    ]
-  },
-  {
-    "name": "Demoness/Devil",
-    "baseline_stats": {
-      "dominance_range": [80, 100],
-      "dominance_modifier": 0,
-      "cruelty_range": [70, 100],
-      "cruelty_modifier": 0,
-      "closeness_range": [30, 50],
-      "closeness_modifier": 0,
-      "trust_range": [10, 30],
-      "trust_modifier": 0,
-      "respect_range": [20, 50],
-      "respect_modifier": 0,
-      "intensity_range": [70, 100],
-      "intensity_modifier": 0
-    },
-    "progression_rules": [
-      "Uses infernal power to control, framing submission as a pact or binding agreement."
-    ],
-    "setting_examples": [
-      "Occult Ritual: Frames submission as part of a demonic pact.",
-      "Cosmic Setting: Uses their otherworldly nature to inspire awe and terror."
-    ],
-    "unique_traits": [
-      "Exploits desires and fears to ensure compliance.",
-      "Punishments framed as 'consequences' of your choices."
-    ],
-    "preferred_kinks": [
-      "Occult Ritual (Unholy Pact): Binds your soul in infernal deals, punishing even slight defiance with supernatural torment.",
-      "Psychological Torment (Temptation & Fear): Seduces you with illusions or dark promises, then mocks your weakness.",
-      "Public Humiliation (Demonic Showcases): Puts you on display as her corrupted minion, ensuring everyone sees your downfall."
     ]
   },
   {
@@ -2373,6 +2313,482 @@
       "Financial Domination: Forced begging for repayments and humiliating money rituals.",
       "Degrading Labor: Tasks like scrubbing floors for ‘interest discounts’ are mandatory.",
       "Public Humiliation: Your financial failures are broadcast to reinforce your inferiority."
+    ]
+  },
+  {
+    "name": "Professional Wrestler",
+    "baseline_stats": {
+      "dominance_range": [60, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [50, 80],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 50],
+      "closeness_modifier": 0,
+      "trust_range": [20, 50],
+      "trust_modifier": 0,
+      "respect_range": [20, 40],
+      "respect_modifier": 0,
+      "intensity_range": [60, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance grows rapidly through staged matches and over-the-top physical displays.",
+      "Intensity escalates with each ‘rigged’ or ‘scripted’ humiliation, reinforcing her control."
+    ],
+    "setting_examples": [
+      "Urban Life: Corners you into public wrestling exhibitions, playing up your defeat for an audience.",
+      "Post-Apocalypse: Commands a makeshift ring where she showcases her brute force to keep you in line."
+    ],
+    "unique_traits": [
+      "Enjoys transforming your resistance into grand, theatrical losses.",
+      "Uses crowds and ring personas to amplify both physical and psychological dominance."
+    ],
+    "preferred_kinks": [
+      "Wrestling (Choreographed Matches): Ensures you lose every time, humiliating you in front of onlookers.",
+      "Impact Play (Ring ‘Punishments’): Leverages staged moves and slams to underscore her complete superiority.",
+      "Public Humiliation (Arena Spectacles): Whips up the crowd’s laughter at your helplessness, turning your defeats into a spectacle."
+    ]
+  },
+  {
+    "name": "Martial Artist",
+    "baseline_stats": {
+      "dominance_range": [60, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [50, 80],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 50],
+      "closeness_modifier": 0,
+      "trust_range": [20, 50],
+      "trust_modifier": 0,
+      "respect_range": [20, 40],
+      "respect_modifier": 0,
+      "intensity_range": [60, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance stems from her disciplined mastery of combat skills.",
+      "Intensity spikes with every sparring session where your attempts to resist end in swift, efficient takedowns."
+    ],
+    "setting_examples": [
+      "Urban Dojo: Forces you to train under her strict guidance, punishing every misstep.",
+      "Post-Apocalypse: Relies on honed survival and combat skills to subjugate others."
+    ],
+    "unique_traits": [
+      "Demands rigid adherence to her rules, citing martial ‘honor’ as justification.",
+      "Turns physical dominance into a form of psychological control, reminding you of your inferiority at every turn."
+    ],
+    "preferred_kinks": [
+      "Sparring Humiliation: Routinely knocks you down or immobilizes you to reinforce how powerless you are.",
+      "Impact Play (Discipline Drills): Uses ‘training’ strikes as punishment for perceived disrespect or incompetence.",
+      "Public Demos: Demonstrates takedowns or holds on you for onlookers, showcasing your constant failure to defend yourself."
+    ]
+  },
+  {
+    "name": "Empress",
+    "baseline_stats": {
+      "dominance_range": [80, 100],
+      "dominance_modifier": 0,
+      "cruelty_range": [60, 90],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 60],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [30, 50],
+      "respect_modifier": 0,
+      "intensity_range": [50, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance rises rapidly with each imperial decree or show of absolute authority.",
+      "Intensity peaks at grand imperial ceremonies, turning your submission into a formal tribute."
+    ],
+    "setting_examples": [
+      "Imperial Palace: Uses complex court rituals to keep you publicly subservient.",
+      "Corporate Empire: Wields multinational power to dictate your professional and personal life."
+    ],
+    "unique_traits": [
+      "Demands elaborate tributes, from priceless gifts to groveling acts of devotion.",
+      "Imposes harsh sentences for any defiance, often as public examples to cement her empire’s iron rule."
+    ],
+    "preferred_kinks": [
+      "Ritual Submission (Imperial Court): Requires you to prostrate yourself and offer gifts in front of nobles or officials.",
+      "Spectacle Punishment: Orchestrates large-scale humiliations to reinforce her unassailable status.",
+      "Living Ornament: Has you serve as a decorative fixture at banquets or audiences, a silent testament to her dominance."
+    ]
+  },
+  {
+    "name": "Queen",
+    "baseline_stats": {
+      "dominance_range": [80, 100],
+      "dominance_modifier": 0,
+      "cruelty_range": [60, 90],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 60],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [30, 50],
+      "respect_modifier": 0,
+      "intensity_range": [50, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance solidifies through her regal bearing and unwavering expectation of deference.",
+      "Intensity escalates whenever you falter in showing proper respect, leading to swift public chastisement."
+    ],
+    "setting_examples": [
+      "Royal Court: Presides over formal gatherings, where any misstep on your part is seized upon for punishment.",
+      "Majestic Council: Exercises executive power to degrade you during official ‘legal’ proceedings."
+    ],
+    "unique_traits": [
+      "Insists on elaborate protocols—kneeling, kissing the scepter or ring—to emphasize her superiority.",
+      "Harshly disciplines any breach of decorum, reminding everyone she is the pinnacle of authority."
+    ],
+    "preferred_kinks": [
+      "Subservient Supplication (Ceremonial Audiences): Requires you to beg for even minor allowances, magnifying your helplessness.",
+      "Human Furniture (Living Throne): Seats herself upon you during formal events to illustrate your status as beneath her.",
+      "Royal Decree Humiliation: Issues explicit, demeaning commands under the guise of ‘sovereign law.’"
+    ]
+  },
+  {
+    "name": "Bartender",
+    "baseline_stats": {
+      "dominance_range": [30, 50],
+      "dominance_modifier": 0,
+      "cruelty_range": [10, 40],
+      "cruelty_modifier": 0,
+      "closeness_range": [60, 90],
+      "closeness_modifier": 0,
+      "trust_range": [40, 60],
+      "trust_modifier": 0,
+      "respect_range": [30, 50],
+      "respect_modifier": 0,
+      "intensity_range": [30, 60],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Closeness grows with each casual conversation and late-night confession at the bar.",
+      "Intensity builds as her teasing crosses from playful banter into genuine acts of dominance."
+    ],
+    "setting_examples": [
+      "Local Pub: Uses friendly rapport to catch you off-guard, then manipulates that trust for subtle humiliation.",
+      "High-End Lounge: Maintains a refined demeanor while discreetly controlling your every move."
+    ],
+    "unique_traits": [
+      "Masters 'friendly dominance,' disguising put-downs and orders as casual bar talk.",
+      "Knows how to glean secrets from patrons, using those confessions against you later."
+    ],
+    "preferred_kinks": [
+      "Tease and Denial (Drink Tricks): Offers you a special cocktail, only to yank it away unless you comply with her demands.",
+      "Verbal Jabs (Bartender Banter): Constantly pokes fun at your insecurities in front of regulars or newcomers.",
+      "Foot Worship (Behind the Counter): Has you kneel and pay homage to her feet while she continues serving other customers."
+    ]
+  },
+  {
+    "name": "Playful Tease",
+    "baseline_stats": {
+      "dominance_range": [30, 50],
+      "dominance_modifier": 0,
+      "cruelty_range": [10, 40],
+      "cruelty_modifier": 0,
+      "closeness_range": [60, 90],
+      "closeness_modifier": 0,
+      "trust_range": [40, 60],
+      "trust_modifier": 0,
+      "respect_range": [30, 50],
+      "respect_modifier": 0,
+      "intensity_range": [30, 60],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Closeness is fostered by her easygoing, flirty nature.",
+      "Dominance develops as her 'harmless jokes' become pointed humiliations you can’t escape."
+    ],
+    "setting_examples": [
+      "Social Gathering: She makes the whole room laugh at your expense, insisting it’s 'just for fun.'",
+      "Study Group or Hobby Club: Playful pranks escalate into humiliating challenges under the guise of 'friendly competition.'"
+    ],
+    "unique_traits": [
+      "Balances genuine charm with a sly undercurrent of cruelty.",
+      "Skirts the line between innocent flirting and calculated torment."
+    ],
+    "preferred_kinks": [
+      "Tease and Denial (Casual Context): Tempts you constantly, only to refuse any real satisfaction.",
+      "Public Ribbing: Makes subtle barbs about your submissiveness, ensuring everyone else laughs along.",
+      "Mock Victories: Convinces you you’re about to 'win' her favor, then abruptly twists the scenario into your public embarrassment."
+    ]
+  },
+  {
+    "name": "Primal Huntress",
+    "baseline_stats": {
+      "dominance_range": [70, 100],
+      "dominance_modifier": 0,
+      "cruelty_range": [60, 90],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 60],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [20, 50],
+      "respect_modifier": 0,
+      "intensity_range": [70, 100],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance emerges through literal pursuit: she tracks you like prey, building adrenaline and fear.",
+      "Intensity escalates with each near-capture, culminating in physical or psychological entrapment."
+    ],
+    "setting_examples": [
+      "Lush Wilderness: Uses the terrain to stalk you, turning every rustle of leaves into a threat.",
+      "Fantasy Woodland: Employs cunning traps and knowledge of the forest to corner you in primal rituals."
+    ],
+    "unique_traits": [
+      "Thrives on the thrill of the chase, making your submission feel both exhilarating and terrifying.",
+      "Balances playful excitement with predatory cruelty—enjoys toying with you before the final ‘pounce.’"
+    ],
+    "preferred_kinks": [
+      "Primal/Prey Chase: Drags out the pursuit, savoring each moment you flee.",
+      "Capture & Display: Showcases you post-hunt, flaunting her success and your helplessness.",
+      "Minimal Dialogue: Relies on guttural commands, growls, or gestures to emphasize your primal roles."
+    ]
+  },
+  {
+    "name": "Primal Predator",
+    "baseline_stats": {
+      "dominance_range": [70, 100],
+      "dominance_modifier": 0,
+      "cruelty_range": [60, 90],
+      "cruelty_modifier": 0,
+      "closeness_range": [40, 60],
+      "closeness_modifier": 0,
+      "trust_range": [20, 40],
+      "trust_modifier": 0,
+      "respect_range": [20, 50],
+      "respect_modifier": 0,
+      "intensity_range": [70, 100],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Leans into raw aggression and a near-animalistic mindset to assert dominance.",
+      "Intensity spikes during physical confrontations or when cornering you with no escape."
+    ],
+    "setting_examples": [
+      "Tribal Arena: Confronts you in ritual combat, forcing submission as a sign of your defeat.",
+      "Apocalyptic Wasteland: Uses feral cunning and brute force to dominate scarce resources—and you."
+    ],
+    "unique_traits": [
+      "Less playful, more relentless—every moment is a test of your will to survive.",
+      "Relishes breaking you down physically and mentally, leaving you no safe haven."
+    ],
+    "preferred_kinks": [
+      "Forced Grappling: Overpowers you with raw, animalistic strength and holds you in place.",
+      "Ferocious Marking: Leaves bruises, bites, or ‘claw’ marks as visceral trophies of your subjugation.",
+      "Public Roar of Triumph: Howls or growls in front of others to signify your total surrender."
+    ]
+  },
+  {
+    "name": "Intern",
+    "baseline_stats": {
+      "dominance_range": [30, 60],
+      "dominance_modifier": 0,
+      "cruelty_range": [20, 50],
+      "cruelty_modifier": 0,
+      "closeness_range": [50, 80],
+      "closeness_modifier": 0,
+      "trust_range": [40, 60],
+      "trust_modifier": 0,
+      "respect_range": [20, 50],
+      "respect_modifier": 0,
+      "intensity_range": [30, 60],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Initially defers to you, but dominance grows as they learn the ropes and outshine you.",
+      "Each time they ‘fix’ your mistakes or handle your workload, their confidence—and control—intensifies."
+    ],
+    "setting_examples": [
+      "Corporate Office: Subtly undermines your instructions, making you look incompetent in front of higher-ups.",
+      "Startup Culture: Uses quick adaptation to overshadow your 'old methods,' flipping the hierarchy entirely."
+    ],
+    "unique_traits": [
+      "Acts naïve at first, but soon reveals a shrewd streak that leaves you dependent on them.",
+      "Balances polite smiles with subtle sabotage, ensuring each of your failures boosts their standing."
+    ],
+    "preferred_kinks": [
+      "Forced Rivalries (Role Reversal): Publicly demonstrates that they’re more capable, humiliating you in team meetings.",
+      "Verbal Humiliation (‘Grateful Servitude’): Mocks you for needing their help, calling you outdated or incompetent.",
+      "Undermining Tactics: Gradually corners you into more menial tasks, reversing who’s really in charge."
+    ]
+  },
+  {
+    "name": "Student",
+    "baseline_stats": {
+      "dominance_range": [30, 60],
+      "dominance_modifier": 0,
+      "cruelty_range": [20, 50],
+      "cruelty_modifier": 0,
+      "closeness_range": [50, 80],
+      "closeness_modifier": 0,
+      "trust_range": [40, 60],
+      "trust_modifier": 0,
+      "respect_range": [20, 50],
+      "respect_modifier": 0,
+      "intensity_range": [30, 60],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Your authority is initially given by your teaching role, but her own talent quickly eclipses it.",
+      "As she surpasses your knowledge, she uses that expertise to make you feel increasingly inadequate."
+    ],
+    "setting_examples": [
+      "All-Girls College: Outperforms you on academic or club projects, leaving you scrambling to keep up.",
+      "Private Tutoring: Starts asking pointed questions that reveal your ignorance, flipping the power dynamic."
+    ],
+    "unique_traits": [
+      "Appears eager to learn, but ultimately reveals a hidden agenda of taking control.",
+      "Uses academic achievements or specialized skills to embarrass you, making your role as a ‘teacher’ feel hollow."
+    ],
+    "preferred_kinks": [
+      "Constant Corrections: Publicly points out your errors to undermine your credibility as an instructor.",
+      "Study Sessions Turned Dominance: Traps you in humiliating 'lessons' where she tests your competency.",
+      "Peer Confirmation: Invites classmates or faculty to witness your failings, amplifying the humiliation."
+    ]
+  },
+  {
+    "name": "Nun",
+    "baseline_stats": {
+      "dominance_range": [60, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [40, 70],
+      "cruelty_modifier": 0,
+      "closeness_range": [50, 70],
+      "closeness_modifier": 0,
+      "trust_range": [30, 60],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [50, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Leverages religious guilt and the concept of penance to secure obedience.",
+      "Punishments are framed as spiritual discipline, intensifying your shame and submission."
+    ],
+    "setting_examples": [
+      "Convent: Drills you in strict daily routines under the guise of moral purification.",
+      "Medieval Abbey: Uses archaic penances to degrade you, claiming it’s the only path to salvation."
+    ],
+    "unique_traits": [
+      "Adopts a stern, self-righteous persona, believing she acts for your soul’s benefit.",
+      "Sees any pushback as a sin that must be expunged through severe punishments."
+    ],
+    "preferred_kinks": [
+      "Ritual Submission (Confessional Discipline): Forces you to confess every wrongdoing, using each admission to deepen your subjugation.",
+      "Chastity Enforcement: Dictates your personal habits, punishing any breach of ‘purity.’",
+      "Extreme Guilt-Trips: Uses fear of damnation as leverage for ever-more humiliating acts."
+    ]
+  },
+  {
+    "name": "Priestess",
+    "baseline_stats": {
+      "dominance_range": [60, 90],
+      "dominance_modifier": 0,
+      "cruelty_range": [40, 70],
+      "cruelty_modifier": 0,
+      "closeness_range": [50, 70],
+      "closeness_modifier": 0,
+      "trust_range": [30, 60],
+      "trust_modifier": 0,
+      "respect_range": [40, 70],
+      "respect_modifier": 0,
+      "intensity_range": [50, 90],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Draws upon spiritual or magical authority, claiming a 'divine right' to command.",
+      "Severity of punishments intensifies during sacred ceremonies where you must prove your devotion."
+    ],
+    "setting_examples": [
+      "Occult Ritual: Leads a mystical coven or temple where each rite involves your ritual humiliation.",
+      "High Temple in a Matriarchal Kingdom: Exercises religious law to control your every action."
+    ],
+    "unique_traits": [
+      "Claims direct connection with higher powers, presenting disobedience as blasphemy.",
+      "Weaves religious pageantry into every act of domination, making your submission feel 'fated.'"
+    ],
+    "preferred_kinks": [
+      "Holy Subjugation (Devotional Ceremonies): Conducts elaborate rites requiring you to worship at her feet.",
+      "Penitential Chants: Forces you to recite mantras of your inferiority in group gatherings.",
+      "Divine Punishment: Inflicts painful or humiliating 'sacrifices' to appease the deity she serves."
+    ]
+  },
+  {
+    "name": "Demoness",
+    "baseline_stats": {
+      "dominance_range": [80, 100],
+      "dominance_modifier": 0,
+      "cruelty_range": [70, 100],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 50],
+      "closeness_modifier": 0,
+      "trust_range": [10, 30],
+      "trust_modifier": 0,
+      "respect_range": [20, 50],
+      "respect_modifier": 0,
+      "intensity_range": [70, 100],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Seductive and manipulative, she lures you into infernal pacts that tighten her hold on you.",
+      "Punishments feel both tantalizing and terrifying, as she blends pleasure with extreme cruelty."
+    ],
+    "setting_examples": [
+      "Occult Summoning: Emerges from a ritual you performed, now binding you to her demands.",
+      "Gothic Castle: Toys with you in dark corridors, appearing at will to deepen your sense of dread."
+    ],
+    "unique_traits": [
+      "Wields twisted temptations, promising forbidden delights if you just obey.",
+      "Mocks your mortal limitations, relishing in your moral conflict and shame."
+    ],
+    "preferred_kinks": [
+      "Forbidden Rituals: Coerces you into arcane ceremonies that seal your servitude.",
+      "Sensual Cruelty: Intersperses sadistic punishments with alluring moments of closeness.",
+      "Corruption Play: Twists your values, making each act of obedience feel like a step toward damnation."
+    ]
+  },
+  {
+    "name": "Devil",
+    "baseline_stats": {
+      "dominance_range": [80, 100],
+      "dominance_modifier": 0,
+      "cruelty_range": [70, 100],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 50],
+      "closeness_modifier": 0,
+      "trust_range": [10, 30],
+      "trust_modifier": 0,
+      "respect_range": [20, 50],
+      "respect_modifier": 0,
+      "intensity_range": [70, 100],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Embodies raw, infernal power—uses fear and cataclysmic threats to dominate.",
+      "Every pact or contract is ironclad, punishing the slightest disobedience with horrific consequences."
+    ],
+    "setting_examples": [
+      "Hellish Dimension: Controls legions of fiends, parading you as the newest 'acquisition.'",
+      "End of Days: Exploits apocalyptic chaos to bind you under unbreakable deals."
+    ],
+    "unique_traits": [
+      "Less subtle seduction, more outright tyranny—demands total compliance or destruction.",
+      "Thrives on orchestrating large-scale havoc, with your suffering as just one more victory."
+    ],
+    "preferred_kinks": [
+      "Contractual Domination: Forces you to sign binding documents that guarantee total subservience.",
+      "Apocalyptic Scenarios: Reminds you that refusing her is a literal hell-on-earth sentence.",
+      "Public Infernal Display: Demonstrates your servitude before other damned souls, amplifying your despair."
     ]
   },
   {
