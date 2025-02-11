@@ -58,48 +58,40 @@ async def spaced_gpt_call_with_retry(conversation_id, context, prompt, delay=1.0
     raise RuntimeError("Failed to call GPT after repeated attempts.")
 
 def _sync_gpt_request(conversation_id, context, prompt):
-    """
-    Synchronous function that calls get_openai_client() and sends the request.
-    You could also keep this in logic.chatgpt_integration if you prefer.
-    """
     client = get_openai_client()
-    # For example, you might use something like:
-    #   client.chat.completions.create(model=..., messages=..., etc.)
-    # We'll demonstrate a simplified example:
     messages = [
         {"role": "system", "content": context},
         {"role": "user", "content": prompt},
     ]
     resp = client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-4",
         messages=messages,
         temperature=0.7
     )
 
-    # Convert to the typical { "response": "...", "type": "...", "function_args": {...} } shape
-    # If the model returns a function call:
+    # The new library returns pydantic-style objects, not dictionaries.
     finish_reason = resp.choices[0].finish_reason
-    content = resp.choices[0].message.get("content", "")
-    function_call = resp.choices[0].message.get("function_call")
+
+    # Access content & function_call directly:
+    content = resp.choices[0].message.content or ""
+    function_call = resp.choices[0].message.function_call
 
     result = {}
     if function_call:
+        # If there's a function_call, parse arguments if present.
         result["type"] = "function_call"
-        # Extract the arguments
-        result["function_args"] = {}
-        if function_call.get("arguments"):
-            try:
-                # arguments is typically JSON in a string
-                parsed = json.loads(function_call["arguments"])
-                result["function_args"] = parsed
-            except:
-                # fallback if it's not valid JSON
-                result["function_args"] = {"raw": function_call["arguments"]}
+        arguments_str = function_call.arguments or ""
+        try:
+            result["function_args"] = json.loads(arguments_str)
+        except:
+            result["function_args"] = {"raw": arguments_str}
     else:
+        # Otherwise, treat this as normal text completion
         result["type"] = "text"
         result["response"] = content
 
     return result
+
 
 # -------------------------------------------------------------------------
 # SINGLE-PASS PROMPTS
