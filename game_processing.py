@@ -105,14 +105,15 @@ def _sync_gpt_request(conversation_id, context, prompt):
 # SINGLE-PASS PROMPTS
 # -------------------------------------------------------------------------
 ENV_PROMPT = """
-You are setting up a new femdom daily-life sim environment. Return one JSON with these keys:
+You are setting up a new femdom daily-life sim environment.
+Return one JSON with these keys:
   "setting_name": a short creative name,
   "environment_desc": a 1-3 paragraph environment description,
   "environment_history": a short, evocative history,
-  "events": array of { name, description, start_time, end_time, location },
-  "locations": array of { location_name, description, open_hours },
+  "events": array of {{ name, description, start_time, end_time, location }},
+  "locations": array of {{ location_name, description, open_hours }},
   "scenario_name": conversation scenario name,
-  "quest_data": { quest_name, quest_description } # main quest
+  "quest_data": {{ quest_name, quest_description }}
 
 No extra text, only the JSON.
 
