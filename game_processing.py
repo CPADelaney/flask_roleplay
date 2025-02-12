@@ -14,7 +14,7 @@ from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.aggregator import get_aggregated_roleplay_context
 from logic.gpt_helpers import adjust_npc_complete
 from routes.story_routes import build_aggregator_text
-from logic.gpt_utils import spaced_gpt_call
+from logic.gpt_utils import spaced_gpt_call, safe_int
 from logic.universal_updater import apply_universal_updates_async
 from logic.calendar import update_calendar_names
 
@@ -400,13 +400,15 @@ async def async_process_new_game(user_id, conversation_data):
             edesc = eobj.get("description", "")
             stime = eobj.get("start_time", "TBD Start")
             etime = eobj.get("end_time", "TBD End")
-            eloc = eobj.get("location", "Unknown")
-
-            eyear = eobj.get("year", 1)
-            emonth = eobj.get("month", 1)
-            eday = eobj.get("day", 1)
-            etod = eobj.get("time_of_day", "Morning")
-
+            eloc  = eobj.get("location", "Unknown")
+        
+            # Safely parse these as int:
+            eyear  = safe_int(eobj.get("year"), 1)
+            emonth = safe_int(eobj.get("month"), 1)
+            eday   = safe_int(eobj.get("day"), 1)
+        
+            etod   = eobj.get("time_of_day", "Morning")
+        
             await conn.execute("""
                 INSERT INTO Events (
                     user_id, conversation_id,
