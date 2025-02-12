@@ -3,11 +3,6 @@ import logging
 import asyncio
 from logic.chatgpt_integration import get_chatgpt_response
 
-import asyncio
-import logging
-import time
-from logic.chatgpt_integration import get_chatgpt_response
-
 async def spaced_gpt_call(
     conversation_id,
     context,
