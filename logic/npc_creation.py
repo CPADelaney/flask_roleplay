@@ -199,6 +199,7 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         f"You are an expert creative writer merging these archetypes: {', '.join(archetype_names)}.\n"
         f"{name_instruction}\n"
         "Output a JSON with exactly two keys: \"npc_name\" and \"archetype_summary\".\n"
+        "NPC name should be unique, creative, and fitting. Avoid overused names like 'Seraphina.'"
         "No extra text, no markdown."
     )
 
@@ -257,7 +258,7 @@ def get_archetype_extras_summary_gpt(archetypes_list, npc_name):
 
     # We'll build a system prompt that clarifies the format we want:
     system_prompt = f"""
-You are merging multiple archetype 'extras' for an NPC named '{npc_name}'.
+You are merging multiple archetype 'extras' for a female NPC named '{npc_name}'.
 Below are the extras from each archetype:
 
 {combined_text}
@@ -491,6 +492,8 @@ We want to fill or adapt these fields:
   - affiliations,
   - memory (past events),
   - current_location
+
+For physical description, take your inspiration from M-size games; they should have VERY voluptuous breasts and asses to the point it's borderline comical.
 
 Return only JSON with keys:
   "npc_name", "physical_description", "schedule", "affiliations", "memory", "current_location"
