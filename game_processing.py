@@ -558,16 +558,6 @@ async def async_process_new_game(user_id, conversation_data):
         # ---------------------------------------------------------------------
         # OLD Single GPT call => NPCs + Chase schedule (optional)
         # ---------------------------------------------------------------------
-        npc_plus_chase_data = await call_gpt_for_npcs_and_chase(
-            conversation_id=conversation_id,
-            environment_desc=combined_env,
-            day_names=day_names
-        )
-        npc_plus_chase_data["user_id"] = user_id
-        npc_plus_chase_data["conversation_id"] = conversation_id
-
-        # 15) Store the GPT NPCs & chase schedule in one pass
-        await apply_universal_updates_async(user_id, conversation_id, npc_plus_chase_data, conn)
 
         # 15.1) Optionally do a final "complete" pass
         npc_rows = await conn.fetch("""
@@ -575,28 +565,6 @@ async def async_process_new_game(user_id, conversation_data):
             FROM NPCStats
             WHERE user_id=$1 AND conversation_id=$2
         """, user_id, conversation_id)
-
-        for row in npc_rows:
-            npc_data = {
-                "npc_name": row["npc_name"],
-                "hobbies": json.loads(row["hobbies"]) if row["hobbies"] else [],
-                "likes": json.loads(row["likes"]) if row["likes"] else [],
-                "dislikes": json.loads(row["dislikes"]) if row["dislikes"] else [],
-                "affiliations": json.loads(row["affiliations"]) if row["affiliations"] else [],
-                "schedule": json.loads(row["schedule"]) if row["schedule"] else {},
-                "archetypes": json.loads(row["archetypes"]) if row["archetypes"] else [],
-            }
-
-            try:
-                refined_npc = await adjust_npc_complete(
-                    npc_data=npc_data,
-                    environment_desc=combined_env,
-                    conversation_id=conversation_id,
-                    immersive_days=day_names
-                )
-            except Exception as e:
-                logging.error("Error in adjust_npc_complete for NPC '%s': %s", npc_data["npc_name"], e)
-                refined_npc = npc_data  # fallback
 
             # Update NPCStats
             await conn.execute("""
