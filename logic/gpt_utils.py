@@ -58,3 +58,13 @@ async def spaced_gpt_call(
                 raise
 
     raise RuntimeError("spaced_gpt_call ended unexpectedly without returning or raising.")  # safety
+
+def safe_int(val, default=1):
+    """
+    Attempts to convert val to int.
+    If val is None or invalid, returns default.
+    """
+    try:
+        return int(val)
+    except:
+        return default
