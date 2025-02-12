@@ -18,6 +18,8 @@ from db.connection import get_db_connection  # Not used anymore if using asyncpg
 
 # Use your Railway DSN (public URL for local development)
 DB_DSN = os.getenv("DB_DSN") 
+logging.info(f"[new_game] Using DB_DSN={DB_DSN}")  # Add right after retrieving
+
 
 new_game_bp = Blueprint('new_game_bp', __name__)
 
