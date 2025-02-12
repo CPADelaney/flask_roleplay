@@ -134,22 +134,30 @@ Stat modifiers: {stat_modifiers}
 """
 
 NPC_PROMPT = """
-We now need to create the NPCs and the player's schedule in one pass.
-
-Return one JSON with keys:
-  "npc_creations": array of NPC objects, each with:
-    "npc_name", 
-    "likes":[], "dislikes":[], "hobbies":[],
-    "affiliations":[],
-    "schedule":{ dayName:{Morning,Afternoon,Evening,Night}, ... }
-  "ChaseSchedule": same day structure for the player
-
-Use these day names for the schedule: {day_names}
-
-Context:
+You are finalizing schedules for multiple NPCs in this environment:
 {environment_desc}
 
-No extra commentary. Only that JSON object.
+Here is each NPC’s **fully refined** data (but schedule is missing):
+{refined_npc_data}
+
+We also need a schedule for the player "Chase."
+
+Ensure NPC and player schedules are immersive and make sense within the current setting, as well as with the character's role.
+
+Return exactly one JSON with keys:
+  "npc_creations": [ { ... }, ... ],
+  "ChaseSchedule": {...}
+
+Where each NPC in "npc_creations" has:
+  - "npc_name" (same as in refined_npc_data)
+  - "likes", "dislikes", "hobbies", "affiliations"
+  - "schedule": with day-based subkeys (Morning, Afternoon, Evening, Night) 
+     for these days: {day_names}
+
+Constraints:
+- The schedules must reflect each NPC’s existing archetypes/likes/dislikes/hobbies/etc.
+- Example: an NPC with a 'student' archetype is likely to have class most of the week.
+- Output only JSON, no extra commentary.
 """
 
 # -------------------------------------------------------------------------
@@ -243,6 +251,108 @@ async def call_gpt_for_npcs_and_chase(conversation_id, environment_desc, day_nam
         except Exception as e:
             logging.error("Error parsing NPC+Chase JSON: %s", e, exc_info=True)
             return {}
+
+async def refine_multiple_npcs_individually(
+    count: int,
+    environment_desc: str,
+    day_names: list,
+    conversation_id: int
+) -> list:
+    """
+    1) Creates `count` partial NPCs (female by default).
+    2) For each partial, calls refine_npc_with_gpt(...) => environment-appropriate.
+    3) Calls adjust_npc_complete(...) to fill missing keys if GPT didn't provide them.
+    4) Returns a list of fully refined NPC dictionaries (still missing schedule).
+    """
+    from logic.gpt_helpers import adjust_npc_complete  # assuming your code structure
+
+    refined_npcs = []
+
+    for _ in range(count):
+        # Step A: partial creation
+        partial_npc = create_npc_partial(sex="female", total_archetypes=3)
+
+        # If your DB column is a date type, parse:
+        birth_str = partial_npc["birthdate"]  # e.g. "1000-02-10"
+        partial_npc["birthdate"] = datetime.strptime(birth_str, "%Y-%m-%d").date()
+
+        # Step B: refine with GPT to remove anachronisms, etc.
+        refined_result = await refine_npc_with_gpt(
+            npc_partial=partial_npc,
+            environment_desc=environment_desc,
+            day_names=day_names,
+            conversation_id=conversation_id
+        )
+
+        # Merge
+        for k, v in refined_result.items():
+            partial_npc[k] = v
+
+        # Step C: ensure all required keys are present
+        # e.g. "likes","dislikes","hobbies","affiliations","schedule" 
+        # (We do a final check, even though we haven't done the big schedule pass yet.)
+        adjusted_npc = await adjust_npc_complete(
+            npc_data=partial_npc,
+            environment_desc=environment_desc,
+            conversation_id=conversation_id,
+            immersive_days=day_names,  # pass dayNames if you want schedule placeholders
+            max_retries=2  # or however many times you want
+        )
+
+        refined_npcs.append(adjusted_npc)
+
+    return refined_npcs
+
+async def call_gpt_for_final_schedules(
+    conversation_id: int,
+    refined_npcs: list,
+    environment_desc: str,
+    day_names: list
+) -> dict:
+    """
+    Single GPT call that assigns a final schedule to each NPC, plus "ChaseSchedule."
+    Returns:
+      {
+        "npc_creations": [ { "npc_name":..., "likes":..., "schedule":...}, ...],
+        "ChaseSchedule": { ... } 
+      }
+    """
+    # We'll pass the refined NPC data as JSON so GPT can see their final traits
+    refined_json_str = json.dumps(refined_npcs, indent=2)
+
+    prompt = NPC_PROMPT.format(
+        environment_desc=environment_desc,
+        refined_npc_data=refined_json_str,
+        day_names=", ".join(day_names)
+    )
+
+    result = await spaced_gpt_call_with_retry(
+        conversation_id,  # or pass environment_desc as "system" context if you prefer
+        environment_desc, 
+        prompt,
+        delay=1.0
+    )
+
+    if result.get("type") == "function_call":
+        return result.get("function_args", {})
+    else:
+        raw_text = result.get("response", "").strip()
+        # remove triple backticks if present
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw_text = "\n".join(lines).strip()
+
+        try:
+            data = json.loads(raw_text)
+            return data
+        except Exception as e:
+            logging.error(f"[call_gpt_for_final_schedules] parse error: {e}", exc_info=True)
+            return {}
+
 
 # -------------------------------------------------------------------------
 # MAIN NEW GAME FLOW with single-block GPT calls + advanced features
