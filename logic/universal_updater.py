@@ -40,13 +40,15 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
 
             # 2) Process npc_creations
             npc_creations = data.get("npc_creations", [])
-            logging.info(f"[apply_universal_updates_async] npc_creations: {npc_creations}")
+            logging.info(f"[universal_updater] npc_creations => count={len(npc_creations)}")
+
             for npc_data in npc_creations:
                 name = npc_data.get("npc_name", "Unnamed NPC")
                 introduced = npc_data.get("introduced", False)
-                arche_json = json.dumps(npc_data.get("archetypes", []))
+                archetypes_list = npc_data.get("archetypes", [])
+                logging.info(f"[universal_updater] Checking creation => name='{name}', introduced={introduced}, archetypesCount={len(archetypes_list)}")
 
-                # Birthdate fix: parse the string into a date if it's not None
+                # birthdate fix
                 birth_str = npc_data.get("birthdate")
                 if isinstance(birth_str, str):
                     try:
@@ -62,11 +64,12 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                     WHERE user_id=$1 AND conversation_id=$2 AND LOWER(npc_name)=$3
                     LIMIT 1
                 """, user_id, conversation_id, name.lower())
+
                 if row:
-                    logging.info(f"  Skipping NPC creation, '{name}' already exists.")
+                    logging.info(f"[universal_updater] Skipping creation. NPC '{name}' already in DB as npc_id={row['npc_id']}.")
                     continue
 
-                logging.info(f"  Creating NPC: {name}, introduced={introduced}")
+                logging.info(f"[universal_updater] => Inserting new NPC '{name}' with birthdate={birth_date_obj}")
                 await conn.execute("""
                     INSERT INTO NPCStats (
                         user_id, conversation_id,
@@ -75,22 +78,24 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                         archetypes, archetype_summary, archetype_extras_summary,
                         physical_description, memory, monica_level,
                         age, birthdate
-                    )
-                    VALUES (
+                    ) VALUES (
                         $1, $2, $3, $4, $5,
                         $6, $7, $8, $9, $10, $11,
                         $12, $13, $14, $15,
                         '[]'::jsonb, 0,
                         $16, $17
                     )
-                """,
+                """, 
                     user_id, conversation_id,
-                    name, introduced, npc_data.get("sex", "female").lower(),
-                    npc_data.get("dominance", 0), npc_data.get("cruelty", 0), npc_data.get("closeness", 0),
-                    npc_data.get("trust", 0), npc_data.get("respect", 0), npc_data.get("intensity", 0),
-                    arche_json, npc_data.get("archetype_summary", ""), npc_data.get("archetype_extras_summary", ""),
-                    npc_data.get("physical_description", ""),
-                    npc_data.get("age", None), birth_date_obj
+                    name, introduced, npc_data.get("sex","female").lower(),
+                    npc_data.get("dominance",0), npc_data.get("cruelty",0), npc_data.get("closeness",0),
+                    npc_data.get("trust",0), npc_data.get("respect",0), npc_data.get("intensity",0),
+                    json.dumps(archetypes_list),
+                    npc_data.get("archetype_summary",""),
+                    npc_data.get("archetype_extras_summary",""),
+                    npc_data.get("physical_description",""),
+                    npc_data.get("age"),
+                    birth_date_obj
                 )
 
             # 3) Process npc_updates
@@ -476,10 +481,10 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
             logging.info("=== [apply_universal_updates_async] Success (transaction committed) ===")
             return {"message": "Universal update successful"}
 
+        logging.info("=== [apply_universal_updates_async] Success (transaction committed) ===")
+        return {"message": "Universal update successful"}
+
     except Exception as e:
-        # If any statement inside the transaction block fails:
-        #  - The transaction is automatically rolled back
-        #  - We catch the error here
         logging.exception("[apply_universal_updates_async] Error encountered (transaction rolled back)")
         return {"error": str(e)}
 
