@@ -146,8 +146,8 @@ We also need a schedule for the player "Chase."
 Ensure NPC and player schedules are immersive and make sense within the current setting, as well as with the character's role.
 
 Return exactly one JSON with keys:
-  "npc_creations": [ { ... }, ... ],
-  "ChaseSchedule": {...}
+  "npc_creations": [ {{ ... }}, ... ],
+  "ChaseSchedule": {{}}
 
 Where each NPC in "npc_creations" has:
   - "npc_name" (same as in refined_npc_data)
