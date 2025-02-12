@@ -1,5 +1,6 @@
-[
-  "archetypes": {
+{
+  "archetypes": [
+    {
     "name": "Stepmother",
     "baseline_stats": {
       "dominance_range": [40, 60],
@@ -4304,3 +4305,4 @@
     ]
   }
 ]
+}
