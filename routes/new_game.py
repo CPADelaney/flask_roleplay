@@ -4,6 +4,7 @@ import logging
 import json
 import random
 import time
+import os
 import asyncio
 from flask import Blueprint, request, jsonify, session
 import asyncpg
@@ -16,7 +17,7 @@ from routes.story_routes import build_aggregator_text
 from db.connection import get_db_connection  # Not used anymore if using asyncpg
 
 # Use your Railway DSN (public URL for local development)
-DB_DSN = "postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@monorail.proxy.rlwy.net:24727/railway"
+DB_DSN = os.getenv("DB_DSN") 
 
 new_game_bp = Blueprint('new_game_bp', __name__)
 
