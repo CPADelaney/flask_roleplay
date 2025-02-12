@@ -1,8 +1,9 @@
+# tasks.py
 import os
 import json
 import logging
 import asyncio
-# We no longer create Celery here. Instead we import the existing one:
+# We do NOT create a new Celery() here; we import the existing one from main.py
 from main import celery_app
 
 from logic.npc_creation import create_npc
