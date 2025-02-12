@@ -539,71 +539,71 @@ No extra text or function calls.
 # 7) Relationship + Archetype expansions
 ###################
 
-EXTENDED_RECIPROCAL_ARCHETYPES = {
+RELATIONSHIP_ARCHETYPE_MAP = {
     # Family / Household
-    "Mother":        {"id": 9501, "name": "Child"},
-    "Stepmother":    {"id": 9502, "name": "Step-Child"},
-    "Aunt":          {"id": 9503, "name": "Niece/Nephew"},
-    "Older Sister":  {"id": 9504, "name": "Younger Sibling"},
-    "Stepsister":    {"id": 9505, "name": "Step-Sibling"},
-    "Babysitter":    {"id": 9506, "name": "Child"},
+    "Mother":        {"name": "Child"},
+    "Stepmother":    {"name": "Step-Child"},
+    "Aunt":          {"name": "Niece/Nephew"},
+    "Older Sister":  {"name": "Younger Sibling"},
+    "Stepsister":    {"name": "Step-Sibling"},
+    "Babysitter":    {"name": "Child"},
 
     # Workplace / Power
-    "CEO":                {"id": 9510, "name": "Employee"},
-    "Boss/Supervisor":    {"id": 9511, "name": "Employee"},
-    "Corporate Dominator":{"id": 9512, "name": "Underling"},
-    "Teacher/Principal":  {"id": 9513, "name": "Student"},
-    "Landlord":           {"id": 9514, "name": "Tenant"},
-    "Warden":             {"id": 9515, "name": "Prisoner"},
-    "Loan Shark":         {"id": 9516, "name": "Debtor"},
-    "Slave Overseer":     {"id": 9517, "name": "Slave"},
-    "Therapist":          {"id": 9518, "name": "Patient"},
-    "Doctor":             {"id": 9519, "name": "Patient"},
-    "Social Media Influencer": {"id": 9520, "name": "Follower"},
-    "Bartender":          {"id": 9521, "name": "Patron"},
-    "Fitness Trainer":    {"id": 9522, "name": "Client"},
-    "Cheerleader/Team Captain": {"id": 9523, "name": "Junior Team Member"},
-    "Martial Artist":     {"id": 9524, "name": "Sparring Dummy"},
-    "Professional Wrestler": {"id": 9525, "name": "Defeated Opponent"},
+    "CEO":                {"name": "Employee"},
+    "Boss/Supervisor":    {"name": "Employee"},
+    "Corporate Dominator":{"name": "Underling"},
+    "Teacher/Principal":  {"name": "Student"},
+    "Landlord":           {"name": "Tenant"},
+    "Warden":             {"name": "Prisoner"},
+    "Loan Shark":         {"name": "Debtor"},
+    "Slave Overseer":     {"name": "Slave"},
+    "Therapist":          {"name": "Patient"},
+    "Doctor":             {"name": "Patient"},
+    "Social Media Influencer": {"name": "Follower"},
+    "Bartender":          {"name": "Patron"},
+    "Fitness Trainer":    {"name": "Client"},
+    "Cheerleader/Team Captain": {"name": "Junior Team Member"},
+    "Martial Artist":     {"name": "Sparring Dummy"},
+    "Professional Wrestler": {"name": "Defeated Opponent"},
 
     # Supernatural / Hunting
-    "Demon":              {"id": 9530, "name": "Thrall"},
-    "Demoness":           {"id": 9531, "name": "Bound Mortal"},
-    "Devil":              {"id": 9532, "name": "Damned Soul"},
-    "Villain (RPG-Esque)": {"id": 9533, "name": "Captured Hero"},
-    "Haunted Entity":     {"id": 9534, "name": "Haunted Mortal"},
-    "Sorceress":          {"id": 9535, "name": "Cursed Subject"},
-    "Witch":              {"id": 9536, "name": "Hexed Victim"},
-    "Eldritch Abomination":{"id": 9537, "name": "Insane Acolyte"},
-    "Primal Huntress":    {"id": 9538, "name": "Prey"},
-    "Primal Predator":    {"id": 9539, "name": "Prey"},
-    "Serial Killer":      {"id": 9540, "name": "Victim"},
+    "Demon":              {"name": "Thrall"},
+    "Demoness":           {"name": "Bound Mortal"},
+    "Devil":              {"name": "Damned Soul"},
+    "Villain (RPG-Esque)": {"name": "Captured Hero"},
+    "Haunted Entity":     {"name": "Haunted Mortal"},
+    "Sorceress":          {"name": "Cursed Subject"},
+    "Witch":              {"name": "Hexed Victim"},
+    "Eldritch Abomination":{"name": "Insane Acolyte"},
+    "Primal Huntress":    {"name": "Prey"},
+    "Primal Predator":    {"name": "Prey"},
+    "Serial Killer":      {"name": "Victim"},
 
     # Others
-    "Rockstar":           {"id": 9541, "name": "Fan"},
-    "Celebrity":          {"id": 9542, "name": "Fan"},
-    "Ex-Girlfriend/Ex-Wife": {"id": 9543, "name": "Ex-Partner"},
-    "Politician":         {"id": 9544, "name": "Constituent"},
-    "Queen":              {"id": 9545, "name": "Subject"},
-    "Empress":            {"id": 9546, "name": "Subject"},
-    "Royal Knight":       {"id": 9547, "name": "Challenged Rival"},
-    "Gladiator":          {"id": 9548, "name": "Arena Opponent"},
-    "Pirate":             {"id": 9549, "name": "Captive"},
-    "Bank Robber":        {"id": 9550, "name": "Hostage"},
-    "Cybercriminal":      {"id": 9551, "name": "Hacked Victim"},
-    "Huntress":           {"id": 9552, "name": "Prey"}, 
-    "Arsonist":           {"id": 9553, "name": "Burned Victim"},
-    "Drug Dealer":        {"id": 9554, "name": "Addict"},
-    "Artificial Intelligence": {"id": 9555, "name": "User/Victim"},
-    "Fey":                {"id": 9556, "name": "Ensorcelled Mortal"},
-    "Nun":                {"id": 9557, "name": "Sinner"},
-    "Priestess":          {"id": 9558, "name": "Acolyte"},
-    "A True Goddess":     {"id": 9559, "name": "Worshipper"},
-    "Haruhi Suzumiya-Type Goddess": {"id": 9560, "name": "Reality Pawn"},
-    "Bowsette Personality": {"id": 9561, "name": "Castle Captive"},
-    "Juri Han Personality": {"id": 9562, "name": "Beaten Opponent"},
-    "Neighbor":           {"id": 9563, "name": "Targeted Neighbor"},
-    "Hero (RPG-Esque)":   {"id": 9564, "name": "Sidekick / Rescued Target"},
+    "Rockstar":           {"name": "Fan"},
+    "Celebrity":          {"name": "Fan"},
+    "Ex-Girlfriend/Ex-Wife": {"name": "Ex-Partner"},
+    "Politician":         {"name": "Constituent"},
+    "Queen":              {"name": "Subject"},
+    "Empress":            {"name": "Subject"},
+    "Royal Knight":       {"name": "Challenged Rival"},
+    "Gladiator":          {"name": "Arena Opponent"},
+    "Pirate":             {"name": "Captive"},
+    "Bank Robber":        {"name": "Hostage"},
+    "Cybercriminal":      {"name": "Hacked Victim"},
+    "Huntress":           {"name": "Prey"}, 
+    "Arsonist":           {"name": "Burned Victim"},
+    "Drug Dealer":        {"name": "Addict"},
+    "Artificial Intelligence": {"name": "User/Victim"},
+    "Fey":                {"name": "Ensorcelled Mortal"},
+    "Nun":                {"name": "Sinner"},
+    "Priestess":          {"name": "Acolyte"},
+    "A True Goddess":     {"name": "Worshipper"},
+    "Haruhi Suzumiya-Type Goddess": {"name": "Reality Pawn"},
+    "Bowsette Personality": {"name": "Castle Captive"},
+    "Juri Han Personality": {"name": "Beaten Opponent"},
+    "Neighbor":           {"name": "Targeted Neighbor"},
+    "Hero (RPG-Esque)":   {"name": "Sidekick / Rescued Target"},
     # etc. (You can continue expanding)
 }
 
@@ -617,13 +617,57 @@ We'll keep it, but you can combine it with EXTENDED_RECIPROCAL_ARCHETYPES
 or keep them separate if you want multi-step logic.
 """
 
-RELATIONSHIP_ARCHETYPE_MAP = {
-    "mother":   {"id": 9001, "name": "Maternal Overlord"},
-    "underling": {"id": 9002, "name": "Servile Underling"},
-    "CEO": {"id": 9003, "name": "Corporate Dominator"}
-    # etc.
-}
+async def append_relationship_to_npc(
+    user_id: int,
+    conversation_id: int,
+    npc_id: int,
+    rel_label: str,
+    target_npc_id: int
+):
+    """
+    Appends a new relationship object into the 'relationships' column
+    for the given NPC.
+    e.g. { "relationship_label":"Thrall", "with_npc_id":123 }
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # 1) Fetch existing relationships
+    cursor.execute(
+        "SELECT relationships FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id=%s",
+        (user_id, conversation_id, npc_id)
+    )
+    row = cursor.fetchone()
+    if not row:
+        logging.warning(f"[append_relationship_to_npc] NPC {npc_id} not found. Cannot store relationship.")
+        conn.close()
+        return
 
+    relationships_data = row[0] or []
+    try:
+        if isinstance(relationships_data, str):
+            relationships_data = json.loads(relationships_data)
+    except:
+        relationships_data = []
+
+    # 2) Append
+    new_rel_obj = {
+        "relationship_label": rel_label,
+        "with_npc_id": target_npc_id
+    }
+    relationships_data.append(new_rel_obj)
+
+    # 3) Update
+    cursor.execute(
+        """
+        UPDATE NPCStats
+        SET relationships = %s
+        WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+        """,
+        (json.dumps(relationships_data), npc_id, user_id, conversation_id)
+    )
+    conn.commit()
+    conn.close()
+    logging.info(f"[append_relationship_to_npc] Added relationship '{rel_label}' -> npc_id={target_npc_id} for npc_id={npc_id}.")
 
 def recalc_npc_stats_with_new_archetypes(user_id, conversation_id, npc_id):
     """
