@@ -667,12 +667,11 @@ async def refine_multiple_npcs_individually(
     refined_npcs = []
 
     for _ in range(count):
-        # Step A: partial creation
-        partial_npc = create_npc_partial(sex="female", total_archetypes=3)
+        partial_npc = create_npc_partial(sex="female")
+        birth_val = partial_npc.get("birthdate", None)
 
-        # If your DB column is a date type, parse:
-        birth_str = partial_npc["birthdate"]  # e.g. "1000-02-10"
-        partial_npc["birthdate"] = datetime.strptime(birth_str, "%Y-%m-%d").date()
+        if isinstance(birth_val, str):
+            partial_npc["birthdate"] = datetime.strptime(birth_val, "%Y-%m-%d").date()
 
         # Step B: refine with GPT to remove anachronisms, etc.
         refined_result = await refine_npc_with_gpt(
