@@ -649,6 +649,57 @@ def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_na
 
     logging.info(f"[assign_random_relationships] done for NPC '{new_npc_name}' (id={new_npc_id}).")
 
+async def refine_multiple_npcs_individually(
+    count: int,
+    environment_desc: str,
+    day_names: list,
+    conversation_id: int
+) -> list:
+    """
+    1) Creates `count` partial NPCs (female by default).
+    2) For each partial, calls refine_npc_with_gpt(...) => environment-appropriate.
+    3) Calls adjust_npc_complete(...) to fill missing keys if GPT didn't provide them.
+    4) Returns a list of fully refined NPC dictionaries (still missing schedule).
+    """
+    from logic.gpt_helpers import adjust_npc_complete  # assuming your code structure
+
+    refined_npcs = []
+
+    for _ in range(count):
+        # Step A: partial creation
+        partial_npc = create_npc_partial(sex="female", total_archetypes=3)
+
+        # If your DB column is a date type, parse:
+        birth_str = partial_npc["birthdate"]  # e.g. "1000-02-10"
+        partial_npc["birthdate"] = datetime.strptime(birth_str, "%Y-%m-%d").date()
+
+        # Step B: refine with GPT to remove anachronisms, etc.
+        refined_result = await refine_npc_with_gpt(
+            npc_partial=partial_npc,
+            environment_desc=environment_desc,
+            day_names=day_names,
+            conversation_id=conversation_id
+        )
+
+        # Merge
+        for k, v in refined_result.items():
+            partial_npc[k] = v
+
+        # Step C: ensure all required keys are present
+        # e.g. "likes","dislikes","hobbies","affiliations","schedule" 
+        # (We do a final check, even though we haven't done the big schedule pass yet.)
+        adjusted_npc = await adjust_npc_complete(
+            npc_data=partial_npc,
+            environment_desc=environment_desc,
+            conversation_id=conversation_id,
+            immersive_days=day_names,  # pass dayNames if you want schedule placeholders
+            max_retries=2  # or however many times you want
+        )
+
+        refined_npcs.append(adjusted_npc)
+
+    return refined_npcs
+
 ###################
 # 9) spawn_and_refine_npcs_with_relationships
 ###################
