@@ -848,8 +848,7 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
     """
     Create relationships between the new NPC and other entities (player or NPCs)
     and store them in the new 'relationships' column in NPCStats.
-    This function now uses dynamic reciprocal relationship generation and appends
-    relationship records rather than modifying the archetypes.
+    This function now uses dynamic reciprocal relationship generation.
     """
     familial = ["mother", "sister", "aunt"]
     non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
@@ -875,15 +874,16 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
     for candidate_id, candidate_name, candidate_arche_summary in rows:
         if random.random() < 0.3:
             rel_type = random.choice(familial) if random.random() < 0.2 else random.choice(non_familial)
-            # Avoid duplicates:
+            # Avoid duplicates
             if not any(r.get("target") == candidate_id for r in relationships):
                 relationships.append({
                     "target": candidate_id,
                     "target_name": candidate_name,
-                    "type": rel_type
+                    "type": rel_type,
+                    "target_archetype_summary": candidate_arche_summary or ""
                 })
 
-    # Process each relationship:
+    # Process each relationship
     for rel in relationships:
         from logic.memory_logic import get_shared_memory, record_npc_event
         from logic.social_links import create_social_link
@@ -891,23 +891,22 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
         memory_text = get_shared_memory(user_id, conversation_id, rel, new_npc_name)
         record_npc_event(user_id, conversation_id, new_npc_id, memory_text)
 
-        # Create a social link as before
+        # Create the social link as before
         if rel["target"] == "player":
             create_social_link(user_id, conversation_id, "player", 0, "npc", new_npc_id, link_type=rel["type"], link_level=0)
-            # Append relationship record for the NPC toward the player (using 0 as a special ID)
             await append_relationship_to_npc(user_id, conversation_id, new_npc_id, rel["type"], 0)
         else:
             create_social_link(user_id, conversation_id, "npc", rel["target"], "npc", new_npc_id, link_type=rel["type"], link_level=0)
-            # Get the current NPC's archetype summary to help determine context
-            current_arche_summary = ""  # You might fetch this from your NPC data; for now, we leave it empty.
-            # Generate reciprocal relationship dynamically:
-            reciprocal = dynamic_reciprocal_relationship(rel["type"], current_arche_summary)
-            # Append relationship record for new NPC
+            # Use the candidate's archetype summary for context if available
+            target_summary = rel.get("target_archetype_summary", "")
+            reciprocal = dynamic_reciprocal_relationship(rel["type"], target_summary)
+            # Append relationship for new NPC toward the target
             await append_relationship_to_npc(user_id, conversation_id, new_npc_id, rel["type"], rel["target"])
-            # And for the other NPC (the target), store the reciprocal relationship:
+            # And append reciprocal relationship for the target NPC toward the new NPC
             await append_relationship_to_npc(user_id, conversation_id, rel["target"], reciprocal, new_npc_id)
 
     logging.info(f"[assign_random_relationships] Done for NPC '{new_npc_name}' (id={new_npc_id}).")
+
 
 async def refine_multiple_npcs_individually(
     count: int,
