@@ -565,8 +565,29 @@ async def async_process_new_game(user_id, conversation_data):
             FROM NPCStats
             WHERE user_id=$1 AND conversation_id=$2
         """, user_id, conversation_id)
-
-            # Update NPCStats
+        
+        for row in npc_rows:
+            npc_data = {
+                "npc_name": row["npc_name"],
+                "hobbies": json.loads(row["hobbies"]) if row["hobbies"] else [],
+                "likes": json.loads(row["likes"]) if row["likes"] else [],
+                "dislikes": json.loads(row["dislikes"]) if row["dislikes"] else [],
+                "affiliations": json.loads(row["affiliations"]) if row["affiliations"] else [],
+                "schedule": json.loads(row["schedule"]) if row["schedule"] else {},
+                "archetypes": json.loads(row["archetypes"]) if row["archetypes"] else [],
+            }
+        
+            try:
+                refined_npc = await adjust_npc_complete(
+                    npc_data=npc_data,
+                    environment_desc=combined_env,
+                    conversation_id=conversation_id,
+                    immersive_days=day_names
+                )
+            except Exception as e:
+                logging.error("Error in adjust_npc_complete for NPC '%s': %s", npc_data["npc_name"], e)
+                refined_npc = npc_data  # fallback
+        
             await conn.execute("""
                 UPDATE NPCStats
                 SET likes=$1, dislikes=$2, hobbies=$3, affiliations=$4, schedule=$5
@@ -581,7 +602,6 @@ async def async_process_new_game(user_id, conversation_data):
                 user_id,
                 conversation_id
             )
-
         # 16) Build aggregator context & produce final narrative
         aggregator_data = await asyncio.to_thread(
             get_aggregated_roleplay_context,
