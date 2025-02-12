@@ -3,6 +3,7 @@ import json
 import random
 import time
 import asyncio
+import os
 import asyncpg
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
 # IMPORTANT: Make sure you're importing the new function that handles partial creation + GPT refine + relationship assignment
@@ -16,7 +17,7 @@ from logic.universal_updater import apply_universal_updates_async
 from logic.calendar import update_calendar_names
 
 # Use your Railway DSN (update as needed)
-DB_DSN = "postgresql://postgres:PASS@HOST:PORT/railway"
+DB_DSN = os.getenv("DB_DSN") 
 
 # -------------------------------------------------------------------------
 # ADVANCED RETRY/BACKOFF: folded in from the original 'spaced_gpt_call'
