@@ -44,7 +44,17 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
             introduced = npc_data.get("introduced", False)
             arche_json = json.dumps(npc_data.get("archetypes", []))
 
-            # Check if NPC already exists (case-insensitive match)
+            # Birthdate fix: parse the string into a date if it's not None
+            birth_str = npc_data.get("birthdate")
+            if isinstance(birth_str, str):
+                try:
+                    birth_date_obj = datetime.strptime(birth_str, "%Y-%m-%d").date()
+                except ValueError:
+                    # fallback if string isn't valid
+                    birth_date_obj = date(1000, 2, 10)
+            else:
+                birth_date_obj = None
+
             row = await conn.fetchrow("""
                 SELECT npc_id FROM NPCStats
                 WHERE user_id=$1 AND conversation_id=$2 AND LOWER(npc_name)=$3
@@ -78,7 +88,7 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                 npc_data.get("trust", 0), npc_data.get("respect", 0), npc_data.get("intensity", 0),
                 arche_json, npc_data.get("archetype_summary", ""), npc_data.get("archetype_extras_summary", ""),
                 npc_data.get("physical_description", ""),
-                npc_data.get("age", None), npc_data.get("birthdate", None)
+                npc_data.get("age", None), birth_date_obj
             )
 
         # 3) Process npc_updates
