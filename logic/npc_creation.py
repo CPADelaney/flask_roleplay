@@ -225,11 +225,95 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
             "archetype_summary": "GPT call failed or synergy unavailable."
         })
 
-def get_archetype_extras_summary(archetypes_list, npc_name):
+def get_archetype_extras_summary_gpt(archetypes_list, npc_name):
+    """
+    Calls GPT to merge each archetype's progression_rules, unique_traits, and preferred_kinks
+    into one cohesive textual summary. Returns a string stored as "archetype_extras_summary".
+
+    The final JSON must have exactly 1 key: "archetype_extras_summary".
+    If GPT can't provide it, fallback to a minimal text.
+    """
+    import json
+
+    if not archetypes_list:
+        return "No extras summary available."
+
+    # Gather the data from each archetype
     lines = []
     for arc in archetypes_list:
-        lines.append(f"{arc['name']}: synergy or extra traits.")
-    return f"Additional synergy details for {npc_name}:\n" + "\n".join(lines)
+        name = arc["name"]
+        # These fields might be missing or empty, so we guard with .get(...)
+        progression = arc.get("progression_rules", [])
+        traits = arc.get("unique_traits", [])
+        kinks = arc.get("preferred_kinks", [])
+        lines.append(
+            f"Archetype: {name}\n"
+            f"  progression_rules: {progression}\n"
+            f"  unique_traits: {traits}\n"
+            f"  preferred_kinks: {kinks}\n"
+        )
+
+    combined_text = "\n".join(lines)
+
+    # We'll build a system prompt that clarifies the format we want:
+    system_prompt = f"""
+You are merging multiple archetype 'extras' for an NPC named '{npc_name}'.
+Below are the extras from each archetype:
+
+{combined_text}
+
+We want to unify these details (progression_rules, unique_traits, preferred_kinks)
+into one cohesive textual summary that references how these merges shape the NPC’s special powers,
+quirks, or flavor.
+
+Return **strictly valid JSON** with exactly 1 top-level key:
+  "archetype_extras_summary"
+
+The value should be a single string that concisely describes how these rules/traits/kinks
+blend into one cohesive set of extras for this NPC.
+
+No extra commentary, no additional keys, no code fences.
+If you cannot comply, return an empty JSON object {{}}.
+"""
+
+    # Next, we do a GPT call with system_prompt
+    client = get_openai_client()
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": system_prompt}],
+            temperature=0.7,
+            max_tokens=400
+        )
+        raw_text = resp.choices[0].message.content.strip()
+        logging.info(f"[get_archetype_extras_summary_gpt] raw GPT extras => {raw_text!r}")
+
+        # Remove fences if present
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            # remove first triple-backticks
+            if lines and lines[0].startswith("```"):
+                lines.pop(0)
+            # remove last triple-backticks
+            if lines and lines[-1].startswith("```"):
+                lines.pop()
+            raw_text = "\n".join(lines).strip()
+
+        parsed = json.loads(raw_text)
+        if (
+            isinstance(parsed, dict)
+            and "archetype_extras_summary" in parsed
+        ):
+            # Valid
+            return parsed["archetype_extras_summary"]
+        else:
+            logging.warning("[get_archetype_extras_summary_gpt] Missing 'archetype_extras_summary' key, falling back.")
+            return "No extras summary available."
+
+    except Exception as e:
+        logging.warning(f"[get_archetype_extras_summary_gpt] error => {e}")
+        return "No extras summary available."
+
 def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
     """
     Generate synergy text for the given archetypes via GPT, returning a JSON string
@@ -337,8 +421,8 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
         synergy_name = f"NPC_{random.randint(1000,9999)}"
         synergy_text = "No synergy text"
 
-    # Build extras
-    extras_text = get_archetype_extras_summary(chosen_arcs, synergy_name)
+    # 2) extras approach (call GPT):
+    extras_text = get_archetype_extras_summary_gpt(chosen_arcs, synergy_name)
     arcs_for_json = [{"name": arc["name"]} for arc in chosen_arcs]
 
     # Random flavor
