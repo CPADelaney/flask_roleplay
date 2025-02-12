@@ -6,7 +6,6 @@ import asyncio
 import os
 import asyncpg
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
-# IMPORTANT: Make sure you're importing the new function that handles partial creation + GPT refine + relationship assignment
 from logic.npc_creation import spawn_and_refine_npcs_with_relationships
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.aggregator import get_aggregated_roleplay_context
@@ -16,15 +15,11 @@ from logic.gpt_utils import spaced_gpt_call
 from logic.universal_updater import apply_universal_updates_async
 from logic.calendar import update_calendar_names
 
-# Use your Railway DSN (update as needed)
 DB_DSN = os.getenv("DB_DSN") 
 
-# -------------------------------------------------------------------------
-# ADVANCED RETRY/BACKOFF: folded in from the original 'spaced_gpt_call'
-# -------------------------------------------------------------------------
 async def spaced_gpt_call_with_retry(conversation_id, context, prompt, delay=1.0, max_retries=5):
     """
-    Calls GPT with a short initial delay, then attempts an exponential backoff
+    Calls GPT with a short initial delay, then attempts exponential backoff
     if we get a 429 (rate limit) error.
     """
     wait_before_call = delay
@@ -38,23 +33,21 @@ async def spaced_gpt_call_with_retry(conversation_id, context, prompt, delay=1.0
         await asyncio.sleep(wait_before_call)
 
         try:
-            # Perform the actual GPT request in a thread (the same logic you had).
-            logging.info("Calling GPT with conversation_id=%s, attempt=%d", conversation_id, attempt)
+            logging.info("Calling GPT (conversation_id=%s, attempt=%d)", conversation_id, attempt)
             result = await asyncio.to_thread(_sync_gpt_request, conversation_id, context, prompt)
-            logging.info("GPT returned response (attempt=%d): %s", attempt, result)
+            logging.info("GPT returned (attempt=%d): %s", attempt, result)
             return result  # If success, return immediately
 
         except Exception as e:
-            # Detect 429 or RateLimitError
             if "429" in str(e) or "RateLimitError" in str(e):
-                logging.warning(f"Got 429 (Rate Limit) on attempt {attempt}. Backing off.")
+                logging.warning("Got 429 on attempt %d; backing off.", attempt)
                 attempt += 1
                 wait_before_call *= 2
                 if attempt > max_retries:
                     logging.error("Max retries reached after repeated 429 errors.")
                     raise
             else:
-                logging.error("Non-429 error encountered: %s", e, exc_info=True)
+                logging.error("Non-429 error: %s", e, exc_info=True)
                 raise
 
     raise RuntimeError("Failed to call GPT after repeated attempts.")
@@ -72,7 +65,6 @@ def _sync_gpt_request(conversation_id, context, prompt):
     )
 
     finish_reason = resp.choices[0].finish_reason
-
     content = resp.choices[0].message.content or ""
     function_call = resp.choices[0].message.function_call
 
@@ -86,28 +78,14 @@ def _sync_gpt_request(conversation_id, context, prompt):
         except:
             result["function_args"] = {"raw": arguments_str}
     else:
-        # Otherwise, treat this as normal text completion
         result["type"] = "text"
         result["response"] = content
 
     return result
 
-
 # -------------------------------------------------------------------------
 # SINGLE-PASS PROMPTS
 # -------------------------------------------------------------------------
-
-
-mega_desc = mega_data.get("mega_description", "A fallback description if none found.")
-mega_name = mega_data.get("mega_name", "Untitled Mega Setting")
-
-prompt = ENV_PROMPT.format(
-    mega_name=mega_name,
-    mega_desc=mega_desc,
-    env_components="\n".join(env_comps),
-    enhanced_features=", ".join(enh_feats),
-    stat_modifiers=", ".join(f"{k}: {v}" for k, v in stat_mods.items())
-)
 
 ENV_PROMPT = """
 You are setting up a new femdom daily-life sim environment.
@@ -153,7 +131,6 @@ Enhanced features: {enhanced_features}
 Stat modifiers: {stat_modifiers}
 """
 
-
 NPC_PROMPT = """
 We now need to create the NPCs and the player's schedule in one pass.
 
@@ -174,9 +151,16 @@ No extra commentary. Only that JSON object.
 """
 
 # -------------------------------------------------------------------------
-# GPT call wrappers (single-block approach) with function-call handling
+# GPT call wrappers (single-block approach)
 # -------------------------------------------------------------------------
-async def call_gpt_for_environment_data(conversation_id, env_comps, enh_feats, stat_mods):
+async def call_gpt_for_environment_data(
+    conversation_id,
+    env_comps,
+    enh_feats,
+    stat_mods,
+    mega_name,
+    mega_desc
+):
     """
     Single GPT call for environment-level data.
     Returns a dict with:
@@ -187,24 +171,29 @@ async def call_gpt_for_environment_data(conversation_id, env_comps, enh_feats, s
       "events": [...],
       "locations": [...],
       "scenario_name": str,
-      "quest_data": { "quest_name": ..., "quest_description": ... }
+      "quest_data": {...}
     }
     """
+    # Build the final prompt from the global ENV_PROMPT
     prompt = ENV_PROMPT.format(
+        mega_name=mega_name,
+        mega_desc=mega_desc,
         env_components="\n".join(env_comps),
         enhanced_features=", ".join(enh_feats),
         stat_modifiers=", ".join(f"{k}: {v}" for k,v in stat_mods.items())
     )
 
+    # IMPORTANT: Now there's only one call that passes 6 args
     result = await spaced_gpt_call_with_retry(conversation_id, "", prompt, delay=1.0)
 
     if result.get("type") == "function_call":
         fn_args = result.get("function_args", {})
         return fn_args
     else:
-        raw_text = result.get("response","").strip()
+        raw_text = result.get("response", "").strip()
         if raw_text.startswith("```"):
             lines = raw_text.splitlines()
+            # remove triple backticks
             if lines and lines[0].startswith("```"):
                 lines = lines[1:]
             if lines and lines[-1].startswith("```"):
@@ -221,6 +210,7 @@ async def call_gpt_for_environment_data(conversation_id, env_comps, enh_feats, s
 async def call_gpt_for_npcs_and_chase(conversation_id, environment_desc, day_names):
     """
     Single GPT call for multiple NPCs plus ChaseSchedule in one pass.
+    Returns dict:
     {
       "npc_creations":[ {...}, {...}],
       "ChaseSchedule": {...}
@@ -283,7 +273,10 @@ async def async_process_new_game(user_id, conversation_data):
             "NPCStats","Locations","SocialLinks","CurrentRoleplay"
         ]
         for t in tables:
-            await conn.execute(f"DELETE FROM {t} WHERE user_id=$1 AND conversation_id=$2", user_id, conversation_id)
+            await conn.execute(
+                f"DELETE FROM {t} WHERE user_id=$1 AND conversation_id=$2",
+                user_id, conversation_id
+            )
 
         # 3) Gather environment components
         mega_data = await asyncio.to_thread(generate_mega_setting_logic)
@@ -296,9 +289,18 @@ async def async_process_new_game(user_id, conversation_data):
             ]
         enh_feats = mega_data.get("enhanced_features", [])
         stat_mods = mega_data.get("stat_modifiers", {})
+        mega_name = mega_data.get("mega_name", "Untitled Mega Setting")
+        mega_desc = mega_data.get("mega_description", "No environment generated")
 
-        # 4) Single GPT call => environment data
-        env_data = await call_gpt_for_environment_data(conversation_id, env_comps, enh_feats, stat_mods)
+        # 4) Single GPT call => environment data (Important: pass all 6 args)
+        env_data = await call_gpt_for_environment_data(
+            conversation_id,
+            env_comps,
+            enh_feats,
+            stat_mods,
+            mega_name,
+            mega_desc
+        )
 
         # Fallback logic if GPT omitted keys
         setting_name = env_data.get("setting_name", "Default Setting Name")
@@ -336,7 +338,7 @@ async def async_process_new_game(user_id, conversation_data):
             edesc = eobj.get("description", "")
             stime = eobj.get("start_time", "TBD Start")
             etime = eobj.get("end_time", "TBD End")
-            eloc  = eobj.get("location", "Unknown")
+            eloc = eobj.get("location", "Unknown")
 
             eyear = eobj.get("year", 1)
             emonth = eobj.get("month", 1)
@@ -410,8 +412,8 @@ async def async_process_new_game(user_id, conversation_data):
             await conn.execute("""
                 INSERT INTO PlayerStats (
                   user_id, conversation_id, player_name,
-                  corruption,confidence,willpower,obedience,dependency,lust,
-                  mental_resilience,physical_endurance
+                  corruption, confidence, willpower, obedience, dependency, lust,
+                  mental_resilience, physical_endurance
                 )
                 VALUES($1,$2,'Chase',10,60,50,20,10,15,55,40)
             """, user_id, conversation_id)
@@ -430,7 +432,6 @@ async def async_process_new_game(user_id, conversation_data):
         # ---------------------------------------------------------------------
         # NEW STEP: Use spawn_and_refine_npcs_with_relationships to create + refine + do relationships
         # ---------------------------------------------------------------------
-        # Example: Spawn 5 NPCs in one pass
         spawn_result = await spawn_and_refine_npcs_with_relationships(
             user_id=user_id,
             conversation_id=conversation_id,
@@ -442,8 +443,7 @@ async def async_process_new_game(user_id, conversation_data):
         logging.info("Spawn and refine result: %s", spawn_result)
 
         # ---------------------------------------------------------------------
-        # If you still want the single GPT call => NPCs + Chase schedule
-        # then unify them. Or you can skip. We'll keep it to preserve old flow:
+        # OLD Single GPT call => NPCs + Chase schedule (optional)
         # ---------------------------------------------------------------------
         npc_plus_chase_data = await call_gpt_for_npcs_and_chase(
             conversation_id=conversation_id,
@@ -485,7 +485,7 @@ async def async_process_new_game(user_id, conversation_data):
                 logging.error("Error in adjust_npc_complete for NPC '%s': %s", npc_data["npc_name"], e)
                 refined_npc = npc_data  # fallback
 
-            # update DB
+            # Update NPCStats
             await conn.execute("""
                 UPDATE NPCStats
                 SET likes=$1, dislikes=$2, hobbies=$3, affiliations=$4, schedule=$5
@@ -502,8 +502,16 @@ async def async_process_new_game(user_id, conversation_data):
             )
 
         # 16) Build aggregator context & produce final narrative
-        aggregator_data = await asyncio.to_thread(get_aggregated_roleplay_context, user_id, conversation_id, "Chase")
-        aggregator_text = await asyncio.to_thread(build_aggregator_text, aggregator_data)
+        aggregator_data = await asyncio.to_thread(
+            get_aggregated_roleplay_context,
+            user_id,
+            conversation_id,
+            "Chase"
+        )
+        aggregator_text = await asyncio.to_thread(
+            build_aggregator_text,
+            aggregator_data
+        )
 
         first_day_name = day_names[0] if day_names else "the first day"
         opening_prompt = (
@@ -513,7 +521,7 @@ async def async_process_new_game(user_id, conversation_data):
         final_reply = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, opening_prompt)
         nyx_text = final_reply.get("response", "[No text returned]")
 
-        # 17) Insert the final opening message
+        # 17) Insert final opening message
         await conn.execute("""
             INSERT INTO messages (conversation_id, sender, content)
             VALUES($1,$2,$3)
@@ -526,7 +534,9 @@ async def async_process_new_game(user_id, conversation_data):
             WHERE id=$2 AND user_id=$3
         """, scenario_name, conversation_id, user_id)
 
-        success_msg = f"New game started. environment={setting_name}, conversation_id={conversation_id}"
+        success_msg = (
+            f"New game started. environment={setting_name}, conversation_id={conversation_id}"
+        )
         logging.info(success_msg)
         return {
             "message": success_msg,
