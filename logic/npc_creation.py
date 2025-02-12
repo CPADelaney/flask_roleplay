@@ -261,26 +261,27 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
         "npc_name": synergy_name,
         "introduced": False,
         "sex": sex.lower(),
-
         "dominance": final_stats["dominance"],
         "cruelty": final_stats["cruelty"],
         "closeness": final_stats["closeness"],
         "trust": final_stats["trust"],
         "respect": final_stats["respect"],
         "intensity": final_stats["intensity"],
-
         "archetypes": arcs_for_json,
         "archetype_summary": synergy_text,
         "archetype_extras_summary": extras_text,
-
         "hobbies": hobbies,
         "personality_traits": personalities,
         "likes": likes,
         "dislikes": dislikes,
-
         "age": random.randint(20, 45),
-        "birthdate": "1000-02-10"
+        "birthdate": "1000-02-10"  # originally just a string
     }
+
+    # --- FIX: Convert birthdate string to a real date ---
+    birth_str = npc_dict["birthdate"]  # e.g. "1000-02-10"
+    npc_dict["birthdate"] = datetime.strptime(birth_str, "%Y-%m-%d").date()
+
     return npc_dict
 
 ###################
