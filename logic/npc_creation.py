@@ -495,6 +495,20 @@ We want to fill or adapt these fields:
 
 For physical description, take your inspiration from M-size games; they should have VERY voluptuous breasts and asses to the point it's borderline comical.
 
+**SCHEDULE REQUIREMENTS**:
+1. Use EXACTLY these day names in this order: {', '.join(day_names)}.
+2. For each day, provide "morning", "afternoon", "evening", and "night" sub-keys.
+3. Avoid giving the same location/activity in all four time-slots.
+   - E.g. No day should have the exact same location for morning, afternoon, evening, and night.
+4. The schedule must reflect the NPC’s likes, dislikes, hobbies, archetypes, or role 
+   (e.g. a 'student' is in classes most mornings/afternoons).
+5. Make it feel somewhat realistic (even if it's futuristic or fantasy).
+
+**MEMORY REQUIREMENTS**:
+- Provide at least three distinct memory entries if the NPC has any important relationships already defined.
+  Each memory should be a short reference to a past event that reveals more about how these relationships formed 
+  or any relevant backstory.
+
 Return only JSON with keys:
   "npc_name", "physical_description", "schedule", "affiliations", "memory", "current_location"
 
