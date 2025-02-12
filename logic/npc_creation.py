@@ -42,6 +42,33 @@ DATA = {
     "archetypes_table": []
 }
 
+NPC_PROMPT = """
+You are finalizing schedules for multiple NPCs in this environment:
+{environment_desc}
+
+Here is each NPC’s **fully refined** data (but schedule is missing):
+{refined_npc_data}
+
+We also need a schedule for the player "Chase."
+
+Ensure NPC and player schedules are immersive and make sense within the current setting, as well as with the character's role.
+
+Return exactly one JSON with keys:
+  "npc_creations": [ { ... }, ... ],
+  "ChaseSchedule": {...}
+
+Where each NPC in "npc_creations" has:
+  - "npc_name" (same as in refined_npc_data)
+  - "likes", "dislikes", "hobbies", "affiliations"
+  - "schedule": with day-based subkeys (Morning, Afternoon, Evening, Night) 
+     for these days: {day_names}
+
+Constraints:
+- The schedules must reflect each NPC’s existing archetypes/likes/dislikes/hobbies/etc.
+- Example: an NPC with a 'student' archetype is likely to have class most of the week.
+- Output only JSON, no extra commentary.
+"""
+
 def init_data():
     """Load all local JSON data into the DATA dictionary for reuse."""
     hobbies_json = load_json_file(DATA_FILES["hobbies"])
@@ -670,6 +697,57 @@ async def refine_multiple_npcs_individually(
 
     return refined_npcs
 
+async def call_gpt_for_final_schedules(
+    conversation_id: int,
+    refined_npcs: list,
+    environment_desc: str,
+    day_names: list
+) -> dict:
+    """
+    Single GPT call that assigns a final schedule to each NPC, plus "ChaseSchedule."
+    Returns:
+      {
+        "npc_creations": [ { "npc_name":..., "likes":..., "schedule":...}, ...],
+        "ChaseSchedule": { ... } 
+      }
+    """
+    # We'll pass the refined NPC data as JSON so GPT can see their final traits
+    refined_json_str = json.dumps(refined_npcs, indent=2)
+
+    prompt = NPC_PROMPT.format(
+        environment_desc=environment_desc,
+        refined_npc_data=refined_json_str,
+        day_names=", ".join(day_names)
+    )
+
+    result = await spaced_gpt_call(
+        conversation_id,  # or pass environment_desc as "system" context if you prefer
+        environment_desc, 
+        prompt,
+        delay=1.0
+    )
+
+    if result.get("type") == "function_call":
+        return result.get("function_args", {})
+    else:
+        raw_text = result.get("response", "").strip()
+        # remove triple backticks if present
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw_text = "\n".join(lines).strip()
+
+        try:
+            data = json.loads(raw_text)
+            return data
+        except Exception as e:
+            logging.error(f"[call_gpt_for_final_schedules] parse error: {e}", exc_info=True)
+            return {}
+
+
 ###################
 # 9) spawn_and_refine_npcs_with_relationships
 ###################
@@ -695,7 +773,6 @@ async def spawn_and_refine_npcs_with_relationships(
     )
 
     # 2) final schedules
-    from logic.npc_creation import call_gpt_for_final_schedules
     schedule_data = await call_gpt_for_final_schedules(
         conversation_id=conversation_id,
         refined_npcs=refined_npcs_no_schedules,
