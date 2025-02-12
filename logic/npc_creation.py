@@ -768,7 +768,7 @@ async def add_archetype_to_npc(user_id, conversation_id, npc_id, new_arc):
 # 8) assign_random_relationships
 ###################
 
-def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_name):
+async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_name):
     """
     Potentially create a relationship with the player, or existing NPCs.
     Then record memory, create social link, optionally add an archetype.
@@ -776,7 +776,7 @@ def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_na
     familial = ["mother", "sister", "aunt"]
     non_familial = ["enemy", "friend", "lover", "neighbor",
                     "colleague", "classmate", "teammate",
-                    "underling", "CEO"]
+                    "underling", "CEO", "rival"]
 
     relationships = []
 
@@ -824,12 +824,12 @@ def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_na
         else:
             create_social_link(user_id, conversation_id, "npc", rel["target"], "npc", new_npc_id, link_type=rel["type"], link_level=0)
 
-        # special arc if in RELATIONSHIP_ARCHETYPE_MAP
+        # if there's a special archetype for this relationship, we do:
         special_arc = RELATIONSHIP_ARCHETYPE_MAP.get(rel["type"])
         if special_arc:
             logging.info(f"[assign_random_relationships] Relationship '{rel['type']}' => add {special_arc}")
-            import asyncio
-            asyncio.run(add_archetype_to_npc(user_id, conversation_id, new_npc_id, special_arc))
+            # *** FIX: We await the add_archetype_to_npc(...) call ***
+            await add_archetype_to_npc(user_id, conversation_id, new_npc_id, special_arc)
 
     logging.info(f"[assign_random_relationships] done for NPC '{new_npc_name}' (id={new_npc_id}).")
 
@@ -1005,8 +1005,9 @@ async def spawn_and_refine_npcs_with_relationships(
         """, user_id, conversation_id, npc_name)
         if row:
             new_npc_id = row["npc_id"]
-            assign_random_relationships(user_id, conversation_id, new_npc_id, npc_name)
+            # *** NOTICE we "await" now! ***
+            await assign_random_relationships(
+                user_id, conversation_id, new_npc_id, npc_name
+            )
         else:
             logging.warning(f"No DB row found for newly created NPC '{npc_name}'")
-
-    return {"message": f"Spawned {count} NPCs and assigned relationships."}
