@@ -183,6 +183,7 @@ def combine_archetype_stats(archetype_list):
 def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
     if not archetypes_list:
         default_name = provided_npc_name or f"NPC_{random.randint(1000,9999)}"
+        logging.info("[get_archetype_synergy_description] No archetypes => using placeholder name.")
         return json.dumps({
             "npc_name": default_name,
             "archetype_summary": "No special archetype synergy."
@@ -201,6 +202,8 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         "No extra text, no markdown."
     )
 
+    logging.info(f"[get_archetype_synergy_description] GPT prompt => {system_msg}")
+
     try:
         client = get_openai_client()
         resp = client.chat.completions.create(
@@ -209,7 +212,11 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
             temperature=0.7,
             max_tokens=300
         )
-        return resp.choices[0].message.content.strip()
+        synergy_str = resp.choices[0].message.content.strip()
+
+        logging.info(f"[get_archetype_synergy_description] Raw synergy GPT output => {synergy_str}")
+
+        return synergy_str
     except Exception as e:
         logging.error(f"[get_archetype_synergy_description] error: {e}")
         fallback_name = provided_npc_name or f"NPC_{random.randint(1000,9999)}"
@@ -230,8 +237,8 @@ def get_archetype_extras_summary(archetypes_list, npc_name):
 
 def create_npc_partial(sex="female", total_archetypes=3) -> dict:
     """
-    Creates a partial NPC. Leaves 'birthdate' as string so GPT can see it as text.
-    (No date parsing here -> no 'toordinal' error).
+    Creates a partial NPC. Leaves 'birthdate' as a simple string. 
+    Adds extra logs so we can see the name immediately after synergy logic.
     """
     if sex.lower() == "male":
         final_stats = {
@@ -252,7 +259,8 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
         synergy_data = json.loads(synergy_str)
         synergy_name = synergy_data.get("npc_name", f"NPC_{random.randint(1000,9999)}")
         synergy_text = synergy_data.get("archetype_summary", "")
-    except:
+    except Exception as e:
+        logging.warning(f"[create_npc_partial] synergy parse error: {e}")
         synergy_name = f"NPC_{random.randint(1000,9999)}"
         synergy_text = "No synergy text"
 
@@ -264,9 +272,9 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
     lpool = DATA["likes_pool"]
     dpool = DATA["dislikes_pool"]
 
-    year  = random.randint(990, 1040)    # tweak range as you like
+    year  = random.randint(990, 1040)
     month = random.randint(1, 12)
-    day   = random.randint(1, 28)       # just keep it valid for any month
+    day   = random.randint(1, 28)
     birth_str = f"{year:04d}-{month:02d}-{day:02d}"
 
     npc_dict = {
@@ -287,10 +295,16 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
         "likes": random.sample(lpool, min(3, len(lpool))),
         "dislikes": random.sample(dpool, min(3, len(dpool))),
         "age": random.randint(20, 45),
-        # Keep as string so GPT won't crash with 'date not serializable'
         "birthdate": birth_str
     }
+
+    logging.info(
+        f"[create_npc_partial] Created partial NPC => name='{npc_dict['npc_name']}', "
+        f"archetypes={[arc['name'] for arc in chosen_arcs]}, "
+        f"birthdate={npc_dict['birthdate']}"
+    )
     return npc_dict
+
 
 ###################
 # 6) refine_npc_with_gpt
@@ -323,16 +337,18 @@ Return only JSON with keys:
 No extra text or function calls.
 """
 
-    await asyncio.sleep(1.0)
+    logging.info(f"[refine_npc_with_gpt] Requesting GPT refine => partial_npc_name='{npc_partial['npc_name']}'")
+
     raw_gpt = await asyncio.to_thread(
         get_chatgpt_response,
         conversation_id,
         environment_desc,
         prompt
     )
+    # ^ If you do spaced_gpt_call, then you'd do that. But let's assume get_chatgpt_response is your function.
 
     if raw_gpt.get("type") == "function_call":
-        return raw_gpt.get("function_args", {})
+        result_dict = raw_gpt.get("function_args", {})
     else:
         text = raw_gpt.get("response", "").strip()
         if text.startswith("```"):
@@ -344,10 +360,18 @@ No extra text or function calls.
             text = "\n".join(lines).strip()
 
         try:
-            return json.loads(text)
+            result_dict = json.loads(text)
         except Exception as e:
             logging.warning(f"[refine_npc_with_gpt] parse error: {e}")
-            return {}
+            result_dict = {}
+
+    logging.info(
+        f"[refine_npc_with_gpt] GPT refine result => npc_name={result_dict.get('npc_name')}, "
+        f"affiliations={result_dict.get('affiliations')}, schedule_len={len(result_dict.get('schedule', {}))}"
+    )
+
+    return result_dict
+
 
 
 ###################
@@ -654,19 +678,14 @@ async def refine_multiple_npcs_individually(
     day_names: list,
     conversation_id: int
 ) -> list:
-    """
-    1) Creates partial NPCs => keeps birthdate as string.
-    2) refine_npc_with_gpt => remove anachronisms
-    3) adjust_npc_complete => fill missing fields
-    """
     from logic.gpt_helpers import adjust_npc_complete
 
     refined_npcs = []
 
-    for _ in range(count):
+    for i in range(count):
         partial_npc = create_npc_partial(sex="female")
+        logging.info(f"[refine_multiple_npcs] Step1 partial => index={i}, name='{partial_npc['npc_name']}'")
 
-        # Step B: refine with GPT
         refined_result = await refine_npc_with_gpt(
             npc_partial=partial_npc,
             environment_desc=environment_desc,
@@ -674,11 +693,11 @@ async def refine_multiple_npcs_individually(
             conversation_id=conversation_id
         )
 
-        # Merge
         for k, v in refined_result.items():
             partial_npc[k] = v
+        logging.info(f"[refine_multiple_npcs] After refine => name='{partial_npc['npc_name']}'")
 
-        # Step C: ensure all required keys are present
+        # Step C: ensure required keys
         adjusted_npc = await adjust_npc_complete(
             npc_data=partial_npc,
             environment_desc=environment_desc,
@@ -686,9 +705,12 @@ async def refine_multiple_npcs_individually(
             immersive_days=day_names,
             max_retries=2
         )
+        logging.info(f"[refine_multiple_npcs] After adjust_npc_complete => name='{adjusted_npc['npc_name']}'")
+
         refined_npcs.append(adjusted_npc)
 
     return refined_npcs
+
 
 async def call_gpt_for_final_schedules(
     conversation_id: int,
@@ -696,16 +718,12 @@ async def call_gpt_for_final_schedules(
     environment_desc: str,
     day_names: list
 ) -> dict:
-    """
-    Single GPT call that assigns a final schedule to each NPC, plus "ChaseSchedule."
-    Returns:
-      {
-        "npc_creations": [ { "npc_name":..., "likes":..., "schedule":...}, ...],
-        "ChaseSchedule": { ... } 
-      }
-    """
-    # We'll pass the refined NPC data as JSON so GPT can see their final traits
     refined_json_str = json.dumps(refined_npcs, indent=2)
+
+    logging.info(
+        f"[call_gpt_for_final_schedules] about to request schedule for {len(refined_npcs)} NPC(s). "
+        f"Example name[0] = {refined_npcs[0].get('npc_name') if refined_npcs else 'NONE'}"
+    )
 
     prompt = NPC_PROMPT.format(
         environment_desc=environment_desc,
@@ -714,31 +732,32 @@ async def call_gpt_for_final_schedules(
     )
 
     result = await spaced_gpt_call(
-        conversation_id,  # or pass environment_desc as "system" context if you prefer
-        environment_desc, 
+        conversation_id,
+        environment_desc,
         prompt,
         delay=1.0
     )
 
     if result.get("type") == "function_call":
-        return result.get("function_args", {})
+        schedule_data = result.get("function_args", {})
     else:
         raw_text = result.get("response", "").strip()
         # remove triple backticks if present
         if raw_text.startswith("```"):
-            lines = raw_text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            raw_text = "\n".join(lines).strip()
-
+            ...
         try:
-            data = json.loads(raw_text)
-            return data
+            schedule_data = json.loads(raw_text)
         except Exception as e:
-            logging.error(f"[call_gpt_for_final_schedules] parse error: {e}", exc_info=True)
-            return {}
+            logging.error(f"[call_gpt_for_final_schedules] parse error: {e}")
+            schedule_data = {}
+
+    logging.info(
+        f"[call_gpt_for_final_schedules] GPT returned => npc_creations keys: "
+        f"{[npc.get('npc_name') for npc in schedule_data.get('npc_creations', [])]}, "
+        f"HasChaseSchedule={bool(schedule_data.get('ChaseSchedule'))}"
+    )
+
+    return schedule_data
 
 
 ###################
@@ -752,20 +771,16 @@ async def spawn_and_refine_npcs_with_relationships(
     conn,
     count=3
 ):
-    """
-    1) Create partial NPCs => refine individually => no date objects
-    2) Single GPT call => final schedules for NPCs + "Chase"
-    3) store => relationships
-    """
-    # 1) refine individually
     refined_npcs_no_schedules = await refine_multiple_npcs_individually(
         count=count,
         environment_desc=environment_desc,
         day_names=day_names,
         conversation_id=conversation_id
     )
+    logging.info("[spawn_and_refine_npcs] All partial + refine done. Checking final name(s):")
+    for npc_ref in refined_npcs_no_schedules:
+        logging.info(f"   => name='{npc_ref['npc_name']}', likes={npc_ref.get('likes')}, schedule={npc_ref.get('schedule')}")
 
-    # 2) final schedules
     schedule_data = await call_gpt_for_final_schedules(
         conversation_id=conversation_id,
         refined_npcs=refined_npcs_no_schedules,
@@ -792,8 +807,9 @@ async def spawn_and_refine_npcs_with_relationships(
             npc_ref["likes"]        = matched_sched_npc.get("likes", npc_ref["likes"])
             npc_ref["dislikes"]     = matched_sched_npc.get("dislikes", npc_ref["dislikes"])
             npc_ref["hobbies"]      = matched_sched_npc.get("hobbies", npc_ref["hobbies"])
+            logging.info(f"[spawn_and_refine_npcs] Merged schedule for '{npc_ref['npc_name']}'.")
         else:
-            logging.warning(f"No schedule for NPC '{npc_ref['npc_name']}'")
+            logging.warning(f"[spawn_and_refine_npcs] No schedule for NPC '{npc_ref['npc_name']}'")
         final_npcs.append(npc_ref)
 
     chase_schedule = schedule_data.get("ChaseSchedule",{})
@@ -805,8 +821,16 @@ async def spawn_and_refine_npcs_with_relationships(
         "npc_creations": final_npcs,
         "ChaseSchedule": chase_schedule
     }
+
+    logging.info("[spawn_and_refine_npcs] Final NPC data before universal_updater =>")
+    for npc_obj in final_npcs:
+        logging.info(
+            f"  => name='{npc_obj['npc_name']}', scheduleDays={list(npc_obj.get('schedule', {}).keys())}, "
+            f"likesLen={len(npc_obj.get('likes', []))}"
+        )
+
     res = await apply_universal_updates_async(user_id, conversation_id, payload, conn)
-    logging.info(f"[spawn_and_refine_npcs_with_relationships] universal update => {res}")
+    logging.info(f"[spawn_and_refine_npcs] universal update => {res}")
 
     # 5) assign relationships
     for npc_data in final_npcs:
