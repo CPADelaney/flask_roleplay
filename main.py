@@ -22,21 +22,36 @@ from db.connection import get_db_connection
 
 
 def create_celery_app():
-    """Create and return a Celery application instance."""
+    """
+    Create and configure a single Celery app instance.
+
+    This is where you read environment variables for your broker, backend, etc.
+    That way, tasks.py can just import 'celery_app' instead of creating its own.
+    """
+    # Retrieve the RabbitMQ (or Redis) URL from environment variables:
+    RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
+    
     celery_app = Celery("my_celery_app")
+    celery_app.conf.broker_url = RABBITMQ_URL
+    celery_app.conf.result_backend = "rpc://"  # or "redis://localhost:6379/1"
 
-    # Example settings—adjust to your environment:
-    celery_app.conf.broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-    celery_app.conf.result_backend = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
+    # Additional config (if needed)
+    celery_app.conf.update(
+        task_serializer='json',
+        accept_content=['json'],
+        result_serializer='json',
+        timezone='UTC',
+        enable_utc=True,
+        worker_log_format="%(levelname)s:%(name)s:%(message)s",
+        worker_redirect_stdouts_level='INFO'
+    )
 
-    # If you have a separate config file or want to discover tasks from multiple modules:
-    # celery_app.config_from_object('celeryconfig')
-    # celery_app.autodiscover_tasks(['some_package'])
     return celery_app
 
-
 def create_flask_app():
-    """Create and configure the Flask application."""
+    """
+    Create and configure the Flask application.
+    """
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_dev_key")  # fallback for local dev
 
@@ -60,15 +75,6 @@ def create_flask_app():
     # Example Routes
     # -----------------
 
-    @app.route("/test_task", methods=["GET"])
-    def run_test_task():
-        """
-        Example: triggers our Celery task asynchronously.
-        """
-        # Instead of importing tasks from tasks.py, we'll call the below inlined @celery_app.task
-        result = test_task.delay()
-        return jsonify({"job_id": result.id})
-
     @app.route("/chat")
     def chat_page():
         if "user_id" not in session:
@@ -77,7 +83,7 @@ def create_flask_app():
 
     @app.route("/login_page", methods=["GET"])
     def login_page():
-        return render_template("login.html")  # Create a templates/login.html file
+        return render_template("login.html")
 
     @app.route("/login", methods=["POST"])
     def login():
@@ -152,29 +158,11 @@ def create_flask_app():
 
     return app
 
-
-#
-# Instantiate Celery and Flask
-#
+# Instantiate both Celery and Flask
 celery_app = create_celery_app()
 app = create_flask_app()
 
 
-#
-# Example Celery task
-#
-@celery_app.task
-def test_task():
-    """
-    Example Celery task: sleeps a bit, returns a simple string.
-    You can add more tasks as needed or in a separate tasks.py.
-    """
-    import time
-    time.sleep(2)
-    return "Task finished successfully!"
-
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # Start Flask normally
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
