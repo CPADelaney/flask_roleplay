@@ -13,7 +13,6 @@ from routes.settings_routes import insert_missing_settings, generate_mega_settin
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.aggregator import get_aggregated_roleplay_context
 from routes.story_routes import build_aggregator_text
-from tasks import process_new_game_task  # or wherever tasks.py is located
 from db.connection import get_db_connection  # Not used anymore if using asyncpg
 
 # Use your Railway DSN (public URL for local development)
@@ -51,6 +50,7 @@ async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0):
 
 @new_game_bp.route('/start_new_game', methods=['POST'])
 def start_new_game():
+    from tasks import process_new_game_task  # or wherever tasks.py is located
     logging.info("=== /start_new_game endpoint called (offloading to background task) ===")
     
     user_id = session.get("user_id")
