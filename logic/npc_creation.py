@@ -1033,7 +1033,7 @@ async def spawn_and_refine_npcs_with_relationships(
     )
     logging.info("[spawn_and_refine_npcs] All partial + refine done. Checking final name(s):")
     for npc_ref in refined_npcs_no_schedules:
-        logging.info(f"   => name='{npc_ref['npc_name']}', likes={npc_ref.get('likes')}, schedule={npc_ref.get('schedule')}")
+        logging.info(f"   => name='{npc_ref['npc_name']}', likes={npc_ref.get('likes')}, dislikes={npc_ref.get('dislikes')}, hobbies={npc_ref.get('hobbies')}, schedule={npc_ref.get('schedule')}")
 
     schedule_data = await call_gpt_for_final_schedules(
         conversation_id=conversation_id,
