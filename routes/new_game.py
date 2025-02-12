@@ -1,4 +1,4 @@
-routes/new_game.py
+# routes/new_game.py
 
 import logging
 import json
