@@ -181,9 +181,6 @@ def combine_archetype_stats(archetype_list):
 ###################
 
 def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
-    """
-    Summon GPT for synergy text. Return JSON with "npc_name" and "archetype_summary".
-    """
     if not archetypes_list:
         default_name = provided_npc_name or f"NPC_{random.randint(1000,9999)}"
         return json.dumps({
@@ -233,8 +230,8 @@ def get_archetype_extras_summary(archetypes_list, npc_name):
 
 def create_npc_partial(sex="female", total_archetypes=3) -> dict:
     """
-    Creates a partial NPC with either random stats (if male) or combined archetype stats (if female).
-    Always keeps 'birthdate' as a string so GPT can see it as plain text.
+    Creates a partial NPC. Leaves 'birthdate' as string so GPT can see it as text.
+    (No date parsing here -> no 'toordinal' error).
     """
     if sex.lower() == "male":
         final_stats = {
@@ -262,16 +259,10 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
     extras_text = get_archetype_extras_summary(chosen_arcs, synergy_name)
     arcs_for_json = [{"name": arc["name"]} for arc in chosen_arcs]
 
-    # random flavor
     hpool = DATA["hobbies_pool"]
     ppool = DATA["personality_pool"]
     lpool = DATA["likes_pool"]
     dpool = DATA["dislikes_pool"]
-
-    hobbies = random.sample(hpool, min(3, len(hpool)))
-    personalities = random.sample(ppool, min(3, len(ppool)))
-    likes = random.sample(lpool, min(3, len(lpool)))
-    dislikes = random.sample(dpool, min(3, len(dpool)))
 
     npc_dict = {
         "npc_name": synergy_name,
@@ -286,18 +277,15 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
         "archetypes": arcs_for_json,
         "archetype_summary": synergy_text,
         "archetype_extras_summary": extras_text,
-        "hobbies": hobbies,
-        "personality_traits": personalities,
-        "likes": likes,
-        "dislikes": dislikes,
+        "hobbies": random.sample(hpool, min(3, len(hpool))),
+        "personality_traits": random.sample(ppool, min(3, len(ppool))),
+        "likes": random.sample(lpool, min(3, len(lpool))),
+        "dislikes": random.sample(dpool, min(3, len(dpool))),
         "age": random.randint(20, 45),
-        # Keep birthdate a simple string for GPT
+        # Keep as string so GPT won't crash with 'date not serializable'
         "birthdate": "1000-02-10"
     }
-    birth_str = npc_dict["birthdate"]  # e.g. "1000-02-10"
-    if isinstance(birth_str, str):
-        npc_dict["birthdate"] = datetime.strptime(birth_str, "%Y-%m-%d").date()
-        return npc_dict
+    return npc_dict
 
 ###################
 # 6) refine_npc_with_gpt
@@ -309,14 +297,6 @@ async def refine_npc_with_gpt(
     day_names: list,
     conversation_id: int
 ) -> dict:
-    """
-    Asks GPT to fill/adapt: npc_name, physical_description, schedule, affiliations, memory, current_location.
-    Returns a JSON object with these keys only:
-      "npc_name", "physical_description", "schedule", "affiliations", "memory", "current_location"
-    """
-    # Make sure everything is JSON-serializable (no date objects).
-    # If birthdate was a date, convert it to a string. But we kept it as a string, so we should be fine.
-    
     prompt = f"""
 We have a partially created NPC in a femdom environment. Partial data:
 {json.dumps(npc_partial, indent=2)}
@@ -326,10 +306,10 @@ Environment description:
 
 We want to fill or adapt these fields:
   - npc_name (confirm or revise),
-  - physical_description (a paragraph),
+  - physical_description,
   - schedule (using day names => {day_names}),
   - affiliations,
-  - memory (short array of meaningful past events),
+  - memory (past events),
   - current_location
 
 Return only JSON with keys:
@@ -340,7 +320,10 @@ No extra text or function calls.
 
     await asyncio.sleep(1.0)
     raw_gpt = await asyncio.to_thread(
-        get_chatgpt_response, conversation_id, environment_desc, prompt
+        get_chatgpt_response,
+        conversation_id,
+        environment_desc,
+        prompt
     )
 
     if raw_gpt.get("type") == "function_call":
@@ -356,8 +339,7 @@ No extra text or function calls.
             text = "\n".join(lines).strip()
 
         try:
-            parsed = json.loads(text)
-            return parsed
+            return json.loads(text)
         except Exception as e:
             logging.warning(f"[refine_npc_with_gpt] parse error: {e}")
             return {}
