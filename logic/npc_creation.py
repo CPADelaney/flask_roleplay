@@ -230,80 +230,157 @@ def get_archetype_extras_summary(archetypes_list, npc_name):
     for arc in archetypes_list:
         lines.append(f"{arc['name']}: synergy or extra traits.")
     return f"Additional synergy details for {npc_name}:\n" + "\n".join(lines)
+def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
+    """
+    Generate synergy text for the given archetypes via GPT, returning a JSON string
+    with exactly two top-level keys: "npc_name" and "archetype_summary".
 
-###################
-# 5) Create partial NPC
-###################
+    This version is stricter about the output, logs the raw GPT response, 
+    strips code fences, and falls back gracefully if it can't parse valid JSON.
+    """
+    if not archetypes_list:
+        default_name = provided_npc_name or f"NPC_{random.randint(1000,9999)}"
+        return json.dumps({
+            "npc_name": default_name,
+            "archetype_summary": "No special archetype synergy."
+        })
+
+    archetype_names = [a["name"] for a in archetypes_list]
+
+    if provided_npc_name:
+        name_instruction = f'Use the provided NPC name: "{provided_npc_name}".'
+    else:
+        name_instruction = "Invent a creative, unique name for the NPC."
+
+    system_prompt = (
+        "You are an expert at merging multiple archetypes into a single cohesive persona. "
+        "Output **strictly valid JSON** with exactly these two keys:\n"
+        '  "npc_name" (string)\n'
+        '  "archetype_summary" (string)\n'
+        "No additional keys, no extra commentary, no markdown fences.\n\n"
+        "If you cannot comply, output an empty JSON object {}.\n\n"
+        f"Archetypes to merge: {', '.join(archetype_names)}\n"
+        f"{name_instruction}\n"
+    )
+
+    try:
+        client = get_openai_client()
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": system_prompt}],
+            temperature=0.7,
+            max_tokens=300
+        )
+        synergy_raw = resp.choices[0].message.content.strip()
+        logging.info(f"[get_archetype_synergy_description] Raw synergy GPT output => {synergy_raw!r}")
+
+        # Strip code fences if present
+        if synergy_raw.startswith("```"):
+            lines = synergy_raw.splitlines()
+            # remove the first ``` line
+            if lines and lines[0].startswith("```"):
+                lines.pop(0)
+            # remove the last ``` line if present
+            if lines and lines[-1].startswith("```"):
+                lines.pop()
+            synergy_raw = "\n".join(lines).strip()
+
+        # Attempt to parse JSON
+        synergy_data = json.loads(synergy_raw)
+
+        # Validate the essential keys are present
+        if not isinstance(synergy_data, dict):
+            logging.warning("[get_archetype_synergy_description] synergy_data is not a dict—falling back.")
+            return "{}"
+        if "npc_name" not in synergy_data or "archetype_summary" not in synergy_data:
+            logging.warning("[get_archetype_synergy_description] synergy_data missing required keys—falling back.")
+            return "{}"
+
+        # If we got here, synergy_data should have the right shape
+        return json.dumps(synergy_data, ensure_ascii=False)
+
+    except Exception as e:
+        logging.warning(f"[get_archetype_synergy_description] parse or GPT error: {e}")
+        # Return an empty JSON, or if you prefer a minimal fallback
+        return "{}"
+
 
 def create_npc_partial(sex="female", total_archetypes=3) -> dict:
     """
-    Creates a partial NPC. Leaves 'birthdate' as a simple string. 
-    Adds extra logs so we can see the name immediately after synergy logic.
+    Creates a partial NPC. Leaves 'birthdate' as a simple string.
+    Logs the synergy string prior to parse, logs the partial NPC afterwards.
     """
     if sex.lower() == "male":
         final_stats = {
-            "dominance": random.randint(0, 30),
-            "cruelty": random.randint(0, 30),
-            "closeness": random.randint(0, 30),
-            "trust": random.randint(-30, 30),
-            "respect": random.randint(-30, 30),
-            "intensity": random.randint(0, 30)
+            "dominance":  random.randint(0, 30),
+            "cruelty":    random.randint(0, 30),
+            "closeness":  random.randint(0, 30),
+            "trust":      random.randint(-30, 30),
+            "respect":    random.randint(-30, 30),
+            "intensity":  random.randint(0, 30)
         }
         chosen_arcs = []
     else:
         chosen_arcs = pick_with_reroll_replacement(total_archetypes)
         final_stats = combine_archetype_stats(chosen_arcs)
 
-    synergy_str = get_archetype_synergy_description(chosen_arcs, None)
+    synergy_str = get_archetype_synergy_description(chosen_arcs, None)  # returns valid JSON or "{}"
+    logging.info(f"[create_npc_partial] synergy_str (raw) => {synergy_str!r}")
+
+    # Attempt to parse synergy JSON:
     try:
         synergy_data = json.loads(synergy_str)
-        synergy_name = synergy_data.get("npc_name", f"NPC_{random.randint(1000,9999)}")
-        synergy_text = synergy_data.get("archetype_summary", "")
-    except Exception as e:
-        logging.warning(f"[create_npc_partial] synergy parse error: {e}")
+        synergy_name = synergy_data.get("npc_name") or f"NPC_{random.randint(1000,9999)}"
+        synergy_text = synergy_data.get("archetype_summary") or "No synergy text"
+    except json.JSONDecodeError as e:
+        logging.warning(f"[create_npc_partial] synergy parse error => {e}")
         synergy_name = f"NPC_{random.randint(1000,9999)}"
         synergy_text = "No synergy text"
 
+    # Build extras
     extras_text = get_archetype_extras_summary(chosen_arcs, synergy_name)
     arcs_for_json = [{"name": arc["name"]} for arc in chosen_arcs]
 
+    # Random flavor
     hpool = DATA["hobbies_pool"]
     ppool = DATA["personality_pool"]
     lpool = DATA["likes_pool"]
     dpool = DATA["dislikes_pool"]
 
+    # Random birthdate in some approximate medieval range
     year  = random.randint(990, 1040)
     month = random.randint(1, 12)
     day   = random.randint(1, 28)
     birth_str = f"{year:04d}-{month:02d}-{day:02d}"
 
     npc_dict = {
-        "npc_name": synergy_name,
-        "introduced": False,
-        "sex": sex.lower(),
-        "dominance": final_stats["dominance"],
-        "cruelty": final_stats["cruelty"],
-        "closeness": final_stats["closeness"],
-        "trust": final_stats["trust"],
-        "respect": final_stats["respect"],
-        "intensity": final_stats["intensity"],
-        "archetypes": arcs_for_json,
+        "npc_name":    synergy_name,
+        "introduced":  False,
+        "sex":         sex.lower(),
+        "dominance":   final_stats["dominance"],
+        "cruelty":     final_stats["cruelty"],
+        "closeness":   final_stats["closeness"],
+        "trust":       final_stats["trust"],
+        "respect":     final_stats["respect"],
+        "intensity":   final_stats["intensity"],
+        "archetypes":  arcs_for_json,
         "archetype_summary": synergy_text,
         "archetype_extras_summary": extras_text,
-        "hobbies": random.sample(hpool, min(3, len(hpool))),
+        "hobbies":     random.sample(hpool, min(3, len(hpool))),
         "personality_traits": random.sample(ppool, min(3, len(ppool))),
-        "likes": random.sample(lpool, min(3, len(lpool))),
-        "dislikes": random.sample(dpool, min(3, len(dpool))),
-        "age": random.randint(20, 45),
-        "birthdate": birth_str
+        "likes":       random.sample(lpool, min(3, len(lpool))),
+        "dislikes":    random.sample(dpool, min(3, len(dpool))),
+        "age":         random.randint(20, 45),
+        "birthdate":   birth_str
     }
 
     logging.info(
-        f"[create_npc_partial] Created partial NPC => name='{npc_dict['npc_name']}', "
-        f"archetypes={[arc['name'] for arc in chosen_arcs]}, "
-        f"birthdate={npc_dict['birthdate']}"
+        "[create_npc_partial] Created partial NPC => "
+        f"name='{npc_dict['npc_name']}', arcs={[arc['name'] for arc in chosen_arcs]}, "
+        f"archetype_summary='{npc_dict['archetype_summary']}', birthdate={npc_dict['birthdate']}"
     )
     return npc_dict
+
 
 
 ###################
