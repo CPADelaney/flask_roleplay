@@ -134,6 +134,33 @@ Enhanced features: {enhanced_features}
 Stat modifiers: {stat_modifiers}
 """
 
+NPC_PROMPT = """
+You are finalizing schedules for multiple NPCs in this environment:
+{environment_desc}
+
+Here is each NPC’s **fully refined** data (but schedule is missing):
+{refined_npc_data}
+
+We also need a schedule for the player "Chase."
+
+Ensure NPC and player schedules are immersive and make sense within the current setting, as well as with the character's role.
+
+Return exactly one JSON with keys:
+  "npc_creations": [ { ... }, ... ],
+  "ChaseSchedule": {...}
+
+Where each NPC in "npc_creations" has:
+  - "npc_name" (same as in refined_npc_data)
+  - "likes", "dislikes", "hobbies", "affiliations"
+  - "schedule": with day-based subkeys (Morning, Afternoon, Evening, Night) 
+     for these days: {day_names}
+
+Constraints:
+- The schedules must reflect each NPC’s existing archetypes/likes/dislikes/hobbies/etc.
+- Example: an NPC with a 'student' archetype is likely to have class most of the week.
+- Output only JSON, no extra commentary.
+"""
+
 # -------------------------------------------------------------------------
 # GPT call wrappers (single-block approach)
 # -------------------------------------------------------------------------
