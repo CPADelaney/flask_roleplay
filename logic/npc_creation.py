@@ -44,29 +44,23 @@ DATA = {
 
 def init_data():
     """Load all local JSON data into the DATA dictionary for reuse."""
-    # Hobbies
     hobbies_json = load_json_file(DATA_FILES["hobbies"])
     DATA["hobbies_pool"] = hobbies_json.get("hobbies_pool", [])
 
-    # Likes
     likes_json = load_json_file(DATA_FILES["likes"])
     DATA["likes_pool"] = likes_json.get("npc_likes", [])
 
-    # Dislikes
     dislikes_json = load_json_file(DATA_FILES["dislikes"])
     DATA["dislikes_pool"] = dislikes_json.get("dislikes_pool", [])
 
-    # Personalities
     personalities_json = load_json_file(DATA_FILES["personalities"])
     DATA["personality_pool"] = personalities_json.get("personality_pool", [])
 
-    # Archetypes
     arcs_json = load_json_file(DATA_FILES["archetypes"])
     table = arcs_json.get("archetypes", [])
 
     arcs_list = []
     for item in table:
-        # Minimal fields needed
         arcs_list.append({
             "name": item["name"],
             "baseline_stats": item.get("baseline_stats", {}),
@@ -96,10 +90,8 @@ def pick_with_reroll_replacement(n=3):
     final_list = []
     for arc in chosen:
         if arc in placeholders:
-            # Replace the placeholder with a real pick
             real_pick = random.choice(reals)
             final_list.append(real_pick)
-            # plus an extra real archetype
             extra_pick = random.choice(reals)
             final_list.append(extra_pick)
         else:
@@ -116,8 +108,7 @@ def clamp(value, min_val, max_val):
 
 def combine_archetype_stats(archetype_list):
     """
-    For each archetype in archetype_list, we pick random stats from
-    baseline_stats ranges + modifiers, sum them, then average + clamp.
+    Combine baseline stats from each archetype, then average + clamp.
     """
     sums = {
         "dominance": 0,
@@ -148,7 +139,6 @@ def combine_archetype_stats(archetype_list):
 
     for sk in sums:
         sums[sk] = sums[sk] / count
-        # clamp
         if sk in ["trust", "respect"]:
             sums[sk] = clamp(int(sums[sk]), -100, 100)
         else:
@@ -204,8 +194,7 @@ def get_archetype_extras_summary(archetypes_list, npc_name):
     lines = []
     for arc in archetypes_list:
         lines.append(f"{arc['name']}: synergy or extra traits.")
-    joined = "\n".join(lines)
-    return f"Additional synergy details for {npc_name}:\n{joined}"
+    return f"Additional synergy details for {npc_name}:\n" + "\n".join(lines)
 
 ###################
 # 5) Create partial NPC
@@ -213,12 +202,10 @@ def get_archetype_extras_summary(archetypes_list, npc_name):
 
 def create_npc_partial(sex="female", total_archetypes=3) -> dict:
     """
-    If female => pick `total_archetypes` with pick_with_reroll_replacement,
-    combine stats => synergy => final partial NPC.
-    If male => skip archetypes and random stats.
+    Creates a partial NPC with either random stats (if male) or combined archetype stats (if female).
+    Always keeps 'birthdate' as a string so GPT can see it as plain text.
     """
     if sex.lower() == "male":
-        # random stats only
         final_stats = {
             "dominance": random.randint(0, 30),
             "cruelty": random.randint(0, 30),
@@ -242,8 +229,6 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
         synergy_text = "No synergy text"
 
     extras_text = get_archetype_extras_summary(chosen_arcs, synergy_name)
-
-    # minimal JSON representation
     arcs_for_json = [{"name": arc["name"]} for arc in chosen_arcs]
 
     # random flavor
@@ -257,7 +242,6 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
     likes = random.sample(lpool, min(3, len(lpool)))
     dislikes = random.sample(dpool, min(3, len(dpool)))
 
-    # build partial NPC
     npc_dict = {
         "npc_name": synergy_name,
         "introduced": False,
@@ -276,12 +260,9 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
         "likes": likes,
         "dislikes": dislikes,
         "age": random.randint(20, 45),
-        "birthdate": "1000-02-10"  # originally just a string
+        # Keep birthdate a simple string for GPT
+        "birthdate": "1000-02-10"
     }
-
-    # --- FIX: Convert birthdate string to a real date ---
-    birth_str = npc_dict["birthdate"]  # e.g. "1000-02-10"
-    npc_dict["birthdate"] = datetime.strptime(birth_str, "%Y-%m-%d").date()
 
     return npc_dict
 
@@ -296,15 +277,13 @@ async def refine_npc_with_gpt(
     conversation_id: int
 ) -> dict:
     """
-    Asks GPT to fill in or adapt:
-      - npc_name,
-      - physical_description,
-      - schedule (with day_names),
-      - affiliations,
-      - memory (past events),
-      - current_location
-    Returns that as a JSON object.
+    Asks GPT to fill/adapt: npc_name, physical_description, schedule, affiliations, memory, current_location.
+    Returns a JSON object with these keys only:
+      "npc_name", "physical_description", "schedule", "affiliations", "memory", "current_location"
     """
+    # Make sure everything is JSON-serializable (no date objects).
+    # If birthdate was a date, convert it to a string. But we kept it as a string, so we should be fine.
+    
     prompt = f"""
 We have a partially created NPC in a femdom environment. Partial data:
 {json.dumps(npc_partial, indent=2)}
@@ -315,10 +294,10 @@ Environment description:
 We want to fill or adapt these fields:
   - npc_name (confirm or revise),
   - physical_description (a paragraph),
-  - schedule: use these day names => {day_names} (Morning,Afternoon,Evening,Night),
+  - schedule (using day names => {day_names}),
   - affiliations,
   - memory (short array of meaningful past events),
-  - current_location (one from the schedule)
+  - current_location
 
 Return only JSON with keys:
   "npc_name", "physical_description", "schedule", "affiliations", "memory", "current_location"
@@ -326,7 +305,6 @@ Return only JSON with keys:
 No extra text or function calls.
 """
 
-    # For demonstration, we just do a direct GPT call
     await asyncio.sleep(1.0)
     raw_gpt = await asyncio.to_thread(
         get_chatgpt_response, conversation_id, environment_desc, prompt
@@ -350,6 +328,7 @@ No extra text or function calls.
         except Exception as e:
             logging.warning(f"[refine_npc_with_gpt] parse error: {e}")
             return {}
+
 
 ###################
 # 7) Relationship + Archetype expansions
@@ -443,8 +422,7 @@ RELATIONSHIP_ARCHETYPE_MAP = {
 
 def recalc_npc_stats_with_new_archetypes(user_id, conversation_id, npc_id):
     """
-    Re-fetch the NPC's archetypes from the DB and re-run combine_archetype_stats
-    to update the final stats.
+    Re-fetch the NPC's archetypes from the DB and re-run combine_archetype_stats to update final stats.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -495,8 +473,8 @@ def recalc_npc_stats_with_new_archetypes(user_id, conversation_id, npc_id):
     ))
     conn.commit()
     conn.close()
-
     logging.info(f"[recalc_npc_stats_with_new_archetypes] updated => {final_stats} for npc_id={npc_id}.")
+
 
 async def await_prompted_synergy_after_add_archetype(arcs_list, user_id, conversation_id, npc_id):
     """
@@ -657,23 +635,18 @@ async def refine_multiple_npcs_individually(
     conversation_id: int
 ) -> list:
     """
-    1) Creates `count` partial NPCs (female by default).
-    2) For each partial, calls refine_npc_with_gpt(...) => environment-appropriate.
-    3) Calls adjust_npc_complete(...) to fill missing keys if GPT didn't provide them.
-    4) Returns a list of fully refined NPC dictionaries (still missing schedule).
+    1) Creates partial NPCs => keeps birthdate as string.
+    2) refine_npc_with_gpt => remove anachronisms
+    3) adjust_npc_complete => fill missing fields
     """
-    from logic.gpt_helpers import adjust_npc_complete  # assuming your code structure
+    from logic.gpt_helpers import adjust_npc_complete
 
     refined_npcs = []
 
     for _ in range(count):
         partial_npc = create_npc_partial(sex="female")
-        birth_val = partial_npc.get("birthdate", None)
 
-        if isinstance(birth_val, str):
-            partial_npc["birthdate"] = datetime.strptime(birth_val, "%Y-%m-%d").date()
-
-        # Step B: refine with GPT to remove anachronisms, etc.
+        # Step B: refine with GPT
         refined_result = await refine_npc_with_gpt(
             npc_partial=partial_npc,
             environment_desc=environment_desc,
@@ -686,16 +659,13 @@ async def refine_multiple_npcs_individually(
             partial_npc[k] = v
 
         # Step C: ensure all required keys are present
-        # e.g. "likes","dislikes","hobbies","affiliations","schedule" 
-        # (We do a final check, even though we haven't done the big schedule pass yet.)
         adjusted_npc = await adjust_npc_complete(
             npc_data=partial_npc,
             environment_desc=environment_desc,
             conversation_id=conversation_id,
-            immersive_days=day_names,  # pass dayNames if you want schedule placeholders
-            max_retries=2  # or however many times you want
+            immersive_days=day_names,
+            max_retries=2
         )
-
         refined_npcs.append(adjusted_npc)
 
     return refined_npcs
@@ -703,7 +673,6 @@ async def refine_multiple_npcs_individually(
 ###################
 # 9) spawn_and_refine_npcs_with_relationships
 ###################
-
 async def spawn_and_refine_npcs_with_relationships(
     user_id: int,
     conversation_id: int,
@@ -713,12 +682,11 @@ async def spawn_and_refine_npcs_with_relationships(
     count=3
 ):
     """
-    1) create partial NPCs => refine individually => fill missing keys
-    2) single GPT call => final schedules for all NPCs + chase
-    3) store in DB => assign relationships
+    1) Create partial NPCs => refine individually => no date objects
+    2) Single GPT call => final schedules for NPCs + "Chase"
+    3) store => relationships
     """
-
-    # A) Create & refine each NPC
+    # 1) refine individually
     refined_npcs_no_schedules = await refine_multiple_npcs_individually(
         count=count,
         environment_desc=environment_desc,
@@ -726,46 +694,41 @@ async def spawn_and_refine_npcs_with_relationships(
         conversation_id=conversation_id
     )
 
-    # B) Single GPT call => final schedules for them + "Chase"
-    from logic.npc_creation import call_gpt_for_final_schedules  # or wherever you define it
+    # 2) final schedules
+    from logic.npc_creation import call_gpt_for_final_schedules
     schedule_data = await call_gpt_for_final_schedules(
         conversation_id=conversation_id,
         refined_npcs=refined_npcs_no_schedules,
         environment_desc=environment_desc,
         day_names=day_names
     )
-    # schedule_data might be: { "npc_creations": [...], "ChaseSchedule": {...} }
-
     if not schedule_data:
         logging.warning("No schedule data returned by GPT.")
         return {"error": "No final schedules generated."}
 
-    # C) Merge final schedules into each refined NPC
-    # GPT might have adjusted the same NPC_name, or kept them identical.
+    # 3) Merge schedules
     name_map = {}
     for npc_obj in schedule_data.get("npc_creations", []):
-        key_nm = npc_obj.get("npc_name", "").lower()
-        name_map[key_nm] = npc_obj
+        nm = npc_obj.get("npc_name","").lower()
+        name_map[nm] = npc_obj
 
     final_npcs = []
     for npc_ref in refined_npcs_no_schedules:
-        nm = npc_ref["npc_name"].lower()
-        matched_sched_npc = name_map.get(nm)
+        nm_lower = npc_ref["npc_name"].lower()
+        matched_sched_npc = name_map.get(nm_lower)
         if matched_sched_npc:
-            # Overwrite schedule and maybe affiliations, likes, etc. 
-            # (since GPT might have updated them in the final pass)
             npc_ref["schedule"]     = matched_sched_npc.get("schedule", {})
             npc_ref["affiliations"] = matched_sched_npc.get("affiliations", npc_ref["affiliations"])
             npc_ref["likes"]        = matched_sched_npc.get("likes", npc_ref["likes"])
             npc_ref["dislikes"]     = matched_sched_npc.get("dislikes", npc_ref["dislikes"])
             npc_ref["hobbies"]      = matched_sched_npc.get("hobbies", npc_ref["hobbies"])
         else:
-            logging.warning(f"No schedule found for NPC '{npc_ref['npc_name']}'")
+            logging.warning(f"No schedule for NPC '{npc_ref['npc_name']}'")
         final_npcs.append(npc_ref)
 
-    chase_schedule = schedule_data.get("ChaseSchedule", {})
+    chase_schedule = schedule_data.get("ChaseSchedule",{})
 
-    # D) Insert them using universal_updater
+    # 4) Insert in DB
     payload = {
         "user_id": user_id,
         "conversation_id": conversation_id,
@@ -775,7 +738,7 @@ async def spawn_and_refine_npcs_with_relationships(
     res = await apply_universal_updates_async(user_id, conversation_id, payload, conn)
     logging.info(f"[spawn_and_refine_npcs_with_relationships] universal update => {res}")
 
-    # E) Assign relationships
+    # 5) assign relationships
     for npc_data in final_npcs:
         npc_name = npc_data["npc_name"]
         row = await conn.fetchrow("""
@@ -789,7 +752,6 @@ async def spawn_and_refine_npcs_with_relationships(
             new_npc_id = row["npc_id"]
             assign_random_relationships(user_id, conversation_id, new_npc_id, npc_name)
         else:
-            logging.warning(f"[spawn_and_refine_npcs_with_relationships] No DB row found for newly created NPC '{npc_name}'")
+            logging.warning(f"No DB row found for newly created NPC '{npc_name}'")
 
-    logging.info(f"[spawn_and_refine_npcs_with_relationships] assigned relationships for {count} new NPCs.")
     return {"message": f"Spawned {count} NPCs and assigned relationships."}
