@@ -458,7 +458,7 @@ async def async_process_new_game(user_id, conversation_data):
         # ---------------------------------------------------------------------
         # OLD Single GPT call => NPCs + Chase schedule (optional)
         # ---------------------------------------------------------------------
-
+"""
         # 15.1) Optionally do a final "complete" pass
         npc_rows = await conn.fetch("""
             SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes
@@ -502,6 +502,8 @@ async def async_process_new_game(user_id, conversation_data):
                 user_id,
                 conversation_id
             )
+"""
+            
         # 16) Build aggregator context & produce final narrative
         aggregator_data = await asyncio.to_thread(
             get_aggregated_roleplay_context,
