@@ -662,30 +662,69 @@ async def spawn_and_refine_npcs_with_relationships(
     count=3
 ):
     """
-    1) create partial NPCs (with female archetypes) -> refine via GPT
-    2) store with universal_updater
-    3) assign relationships
+    1) create partial NPCs => refine individually => fill missing keys
+    2) single GPT call => final schedules for all NPCs + chase
+    3) store in DB => assign relationships
     """
+
+    # A) Create & refine each NPC
+    refined_npcs_no_schedules = await refine_multiple_npcs_individually(
+        count=count,
+        environment_desc=environment_desc,
+        day_names=day_names,
+        conversation_id=conversation_id
+    )
+
+    # B) Single GPT call => final schedules for them + "Chase"
+    from logic.npc_creation import call_gpt_for_final_schedules  # or wherever you define it
+    schedule_data = await call_gpt_for_final_schedules(
+        conversation_id=conversation_id,
+        refined_npcs=refined_npcs_no_schedules,
+        environment_desc=environment_desc,
+        day_names=day_names
+    )
+    # schedule_data might be: { "npc_creations": [...], "ChaseSchedule": {...} }
+
+    if not schedule_data:
+        logging.warning("No schedule data returned by GPT.")
+        return {"error": "No final schedules generated."}
+
+    # C) Merge final schedules into each refined NPC
+    # GPT might have adjusted the same NPC_name, or kept them identical.
+    name_map = {}
+    for npc_obj in schedule_data.get("npc_creations", []):
+        key_nm = npc_obj.get("npc_name", "").lower()
+        name_map[key_nm] = npc_obj
+
     final_npcs = []
+    for npc_ref in refined_npcs_no_schedules:
+        nm = npc_ref["npc_name"].lower()
+        matched_sched_npc = name_map.get(nm)
+        if matched_sched_npc:
+            # Overwrite schedule and maybe affiliations, likes, etc. 
+            # (since GPT might have updated them in the final pass)
+            npc_ref["schedule"]     = matched_sched_npc.get("schedule", {})
+            npc_ref["affiliations"] = matched_sched_npc.get("affiliations", npc_ref["affiliations"])
+            npc_ref["likes"]        = matched_sched_npc.get("likes", npc_ref["likes"])
+            npc_ref["dislikes"]     = matched_sched_npc.get("dislikes", npc_ref["dislikes"])
+            npc_ref["hobbies"]      = matched_sched_npc.get("hobbies", npc_ref["hobbies"])
+        else:
+            logging.warning(f"No schedule found for NPC '{npc_ref['npc_name']}'")
+        final_npcs.append(npc_ref)
 
-    # A) partial creation + GPT refine
-    for _ in range(count):
-        partial_npc = create_npc_partial(sex="female", total_archetypes=3)
-        refined = await refine_npc_with_gpt(partial_npc, environment_desc, day_names, conversation_id)
-        for k,v in refined.items():
-            partial_npc[k] = v
-        final_npcs.append(partial_npc)
+    chase_schedule = schedule_data.get("ChaseSchedule", {})
 
-    # B) Insert them
+    # D) Insert them using universal_updater
     payload = {
         "user_id": user_id,
         "conversation_id": conversation_id,
-        "npc_creations": final_npcs
+        "npc_creations": final_npcs,
+        "ChaseSchedule": chase_schedule
     }
     res = await apply_universal_updates_async(user_id, conversation_id, payload, conn)
     logging.info(f"[spawn_and_refine_npcs_with_relationships] universal update => {res}")
 
-    # C) assign relationships
+    # E) Assign relationships
     for npc_data in final_npcs:
         npc_name = npc_data["npc_name"]
         row = await conn.fetchrow("""
