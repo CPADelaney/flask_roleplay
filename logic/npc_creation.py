@@ -3,7 +3,7 @@ import os
 import json
 import random
 import logging
-
+ 
 from logic.chatgpt_integration import get_openai_client
 from logic.gpt_utils import spaced_gpt_call
 from db.connection import get_db_connection
