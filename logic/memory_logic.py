@@ -180,6 +180,47 @@ async def get_stored_setting(conn, user_id, conversation_id):
     result.setdefault("EnvironmentDesc", "Default environment description.")
     return result
 
+def propagate_shared_memories(user_id, conversation_id, source_npc_id, source_npc_name, memories):
+    """
+    For each memory in 'memories':
+      1) Check if it references the name of any *other* NPC in this conversation.
+      2) If so, call record_npc_event(...) to add that memory to that NPC's memory as well.
+    """
+    if not memories:
+        return  # no new memories => nothing to do
+
+    # 1) Build a map of { npc_name_lower: npc_id }
+    #    for all NPCs in this conversation.
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT npc_id, LOWER(npc_name)
+        FROM NPCStats
+        WHERE user_id=%s AND conversation_id=%s
+    """, (user_id, conversation_id))
+    rows = cursor.fetchall()
+    conn.close()
+
+    name_to_id_map = {}
+    for (other_id, other_name_lower) in rows:
+        name_to_id_map[other_name_lower] = other_id
+
+    # 2) For each memory text, see if it references another npc's name
+    for mem_text in memories:
+        # Let's do naive substring matching:
+        mem_text_lower = mem_text.lower()
+
+        for (other_npc_name_lower, other_npc_id) in name_to_id_map.items():
+            if other_npc_id == source_npc_id:
+                continue  # don't replicate to self if you don't want that
+
+            # If the memory references that NPC's name
+            # (maybe it also references the source NPC, but that's expected)
+            if other_npc_name_lower in mem_text_lower:
+                # We found a reference => replicate memory
+                # Use your existing record_npc_event
+                record_npc_event(user_id, conversation_id, other_npc_id, mem_text)
+
 
 def get_shared_memory(user_id, conversation_id, relationship, npc_name, archetype_summary="", archetype_extras_summary=""):
     """
