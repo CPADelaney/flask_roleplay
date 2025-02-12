@@ -8,7 +8,8 @@ import asyncio
 import os
 import asyncpg
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
-from logic.npc_creation import spawn_and_refine_npcs_with_relationships
+from datetime import datetime
+from logic.npc_creation import spawn_and_refine_npcs_with_relationships, create_npc_partial, refine_npc_with_gpt
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.aggregator import get_aggregated_roleplay_context
 from logic.gpt_helpers import adjust_npc_complete
