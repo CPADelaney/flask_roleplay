@@ -1,5 +1,5 @@
 # data/npc_occupations.json
-
+{
 occupations = occupations = [
     "Paramedic (Modern: emergency medic; Historical/Fantasy: traveling chirurgeon; Sci-Fi: biotech paramedic; Post-Apoc: scavenger healer)",
     "Librarian (Modern: info specialist; Historical/Fantasy: monastic scribe; Sci-Fi: archivist of digital knowledge; Post-Apoc: keeper of old books)",
@@ -353,3 +353,4 @@ occupations = occupations = [
     "Drone Graffiti Artist (Modern: painting high walls via drone; Fantasy: illusions-based “flying paint brush”??; Sci-Fi: advanced sky painting or LED drone tagging; Post-Apoc: ephemeral art in broken cityscapes from above)",
     "Artisanal Ice Cube Carver (Modern: bars & fancy events; Fantasy: carving mini sculptures for banquets; Sci-Fi: specialized shape-lasers for cosmic cocktails; Post-Apoc: might be a silly luxury if cold resources are scarce but could amuse folks at a victory party!)"
 ]
+}
