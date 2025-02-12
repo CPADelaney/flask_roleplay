@@ -138,7 +138,7 @@ NPC_PROMPT = """
 You are finalizing schedules for multiple NPCs in this environment:
 {environment_desc}
 
-Here is each NPC’s **fully refined** data (but schedule is missing):
+Here is each NPC’s fully refined data (but schedule is missing):
 {refined_npc_data}
 
 We also need a schedule for the player "Chase."
@@ -160,6 +160,9 @@ Constraints:
 - Example: an NPC with a 'student' archetype is likely to have class most of the week.
 - Output only JSON, no extra commentary.
 """
+
+print("DEBUG NPC_PROMPT ->", repr(NPC_PROMPT))
+
 
 # -------------------------------------------------------------------------
 # GPT call wrappers (single-block approach)
@@ -458,7 +461,7 @@ async def async_process_new_game(user_id, conversation_data):
         # ---------------------------------------------------------------------
         # OLD Single GPT call => NPCs + Chase schedule (optional)
         # ---------------------------------------------------------------------
-"""
+'''
         # 15.1) Optionally do a final "complete" pass
         npc_rows = await conn.fetch("""
             SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes
@@ -502,7 +505,7 @@ async def async_process_new_game(user_id, conversation_data):
                 user_id,
                 conversation_id
             )
-"""
+'''
             
         # 16) Build aggregator context & produce final narrative
         aggregator_data = await asyncio.to_thread(
