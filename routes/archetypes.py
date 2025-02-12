@@ -9,34 +9,25 @@ logging.basicConfig(level=logging.DEBUG)
 archetypes_bp = Blueprint('archetypes', __name__)
 
 def insert_missing_archetypes():
-    """
-    Inserts or updates Archetypes with final "range + modifier" style baseline_stats.
-    Loads the data from an external "archetypes_data.json" file.
-    """
-    # Optionally locate the file relative to this script's directory,
-    # so you don't rely on the working directory:
     current_dir = os.path.dirname(os.path.abspath(__file__))
     archetypes_json_path = os.path.join(current_dir, "..", "data", "archetypes_data.json")
     archetypes_json_path = os.path.normpath(archetypes_json_path)
 
-    try:
-        with open(archetypes_json_path, "r", encoding="utf-8") as f:
-            archetypes_data = json.load(f)
-    except FileNotFoundError:
-        logging.error(f"archetypes_data.json not found at path: {archetypes_json_path}")
-        return
-    except json.JSONDecodeError as e:
-        logging.error(f"Could not decode archetypes_data.json: {e}")
-        return
+    with open(archetypes_json_path, "r", encoding="utf-8") as f:
+        loaded = json.load(f)
+        # loaded is {"archetypes": [ {...}, {...} ] }
+
+    # Use .get("archetypes", []) so we actually get the list
+    table = loaded.get("archetypes", [])
 
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Check existing archetype names
+    # set() of existing names
     cursor.execute("SELECT name FROM Archetypes")
     existing = {row[0] for row in cursor.fetchall()}
 
-    for arc in archetypes_data:
+    for arc in table:  # arc is now a dict with keys: name, baseline_stats, ...
         name = arc["name"]
 
         bs_json = json.dumps(arc["baseline_stats"])
@@ -44,21 +35,21 @@ def insert_missing_archetypes():
         setting_ex_json = json.dumps(arc.get("setting_examples", []))
         unique_traits_json = json.dumps(arc.get("unique_traits", []))
 
+        # Insert or update, etc.
         if name not in existing:
             cursor.execute("""
-                INSERT INTO Archetypes 
-                    (name, baseline_stats, progression_rules, setting_examples, unique_traits)
+                INSERT INTO Archetypes (name, baseline_stats, progression_rules, setting_examples, unique_traits)
                 VALUES (%s, %s, %s, %s, %s)
             """, (name, bs_json, prog_rules_json, setting_ex_json, unique_traits_json))
             logging.info(f"Inserted archetype: {name}")
         else:
             cursor.execute("""
                 UPDATE Archetypes
-                SET baseline_stats = %s,
-                    progression_rules = %s,
-                    setting_examples = %s,
-                    unique_traits = %s
-                WHERE name = %s
+                SET baseline_stats=%s,
+                    progression_rules=%s,
+                    setting_examples=%s,
+                    unique_traits=%s
+                WHERE name=%s
             """, (bs_json, prog_rules_json, setting_ex_json, unique_traits_json, name))
             logging.info(f"Updated existing archetype: {name}")
 
