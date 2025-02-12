@@ -607,6 +607,49 @@ RELATIONSHIP_ARCHETYPE_MAP = {
     # etc. (You can continue expanding)
 }
 
+def dynamic_reciprocal_relationship(rel_type: str, archetype_summary: str = "") -> str:
+    """
+    Given a relationship label (e.g., "thrall", "underling", "friend"),
+    return a reciprocal label. For very fixed family relations we use a fixed mapping.
+    For others, we choose from a list and even tweak the output based on the NPC's archetype_summary.
+    """
+    # Fixed family relationships:
+    fixed = {
+        "mother": "child",
+        "sister": "younger sibling",
+        "aunt": "nephew/niece"
+    }
+    rel_lower = rel_type.lower()
+    if rel_lower in fixed:
+        return fixed[rel_lower]
+    # For friend relationships, we want them to be mutual:
+    if rel_lower in ["friend", "best friend"]:
+        return rel_type  # reciprocal is the same
+
+    # For other relationships, use a dynamic approach.
+    # For example, if the relationship is "thrall" or "underling", maybe the reciprocal is "master" or "boss".
+    dynamic_options = {
+        "underling": ["boss", "leader", "overseer"],
+        "thrall": ["master", "controller", "dominator"],
+        "enemy": ["rival", "adversary"],
+        "lover": ["lover", "beloved"],
+        "colleague": ["colleague"],
+        "neighbor": ["neighbor"],
+        "classmate": ["classmate"],
+        "teammate": ["teammate"],
+        "rival": ["rival", "competitor"],
+    }
+    if rel_lower in dynamic_options:
+        # As a simple context-sensitive tweak, if the archetype summary contains keywords like "dominant" (case insensitive),
+        # we might lean toward a more authoritative reciprocal.
+        if "dominant" in archetype_summary.lower() or "domina" in archetype_summary.lower():
+            # For example, if the relationship is "underling", force "boss"
+            if rel_lower in ["underling", "thrall"]:
+                return "boss"
+        return random.choice(dynamic_options[rel_lower])
+    # Fallback default:
+    return "associate"
+
 ###################
 # 7) Relationship Archetype Map (legacy example)
 ###################
@@ -617,57 +660,46 @@ We'll keep it, but you can combine it with EXTENDED_RECIPROCAL_ARCHETYPES
 or keep them separate if you want multi-step logic.
 """
 
-async def append_relationship_to_npc(
-    user_id: int,
-    conversation_id: int,
-    npc_id: int,
-    rel_label: str,
-    target_npc_id: int
-):
+def append_relationship_to_npc(user_id: int, conversation_id: int, npc_id: int, rel_label: str, target_npc_id: int):
     """
-    Appends a new relationship object into the 'relationships' column
-    for the given NPC.
-    e.g. { "relationship_label":"Thrall", "with_npc_id":123 }
+    Appends a new relationship record into the 'relationships' column in NPCStats for the given npc_id.
+    The record is stored as a JSON array of objects.
+    Example record: { "relationship_label": "thrall", "with_npc_id": 1234 }
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    # 1) Fetch existing relationships
     cursor.execute(
         "SELECT relationships FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id=%s",
         (user_id, conversation_id, npc_id)
     )
     row = cursor.fetchone()
-    if not row:
-        logging.warning(f"[append_relationship_to_npc] NPC {npc_id} not found. Cannot store relationship.")
+    if row:
+        try:
+            rel_data = row[0] or "[]"
+            if isinstance(rel_data, str):
+                rel_list = json.loads(rel_data)
+            else:
+                rel_list = rel_data
+        except Exception as e:
+            logging.warning(f"[append_relationship_to_npc] JSON parse error: {e}")
+            rel_list = []
+    else:
+        logging.warning(f"[append_relationship_to_npc] NPC {npc_id} not found.")
         conn.close()
         return
 
-    relationships_data = row[0] or []
-    try:
-        if isinstance(relationships_data, str):
-            relationships_data = json.loads(relationships_data)
-    except:
-        relationships_data = []
-
-    # 2) Append
-    new_rel_obj = {
-        "relationship_label": rel_label,
-        "with_npc_id": target_npc_id
-    }
-    relationships_data.append(new_rel_obj)
-
-    # 3) Update
+    new_record = {"relationship_label": rel_label, "with_npc_id": target_npc_id}
+    rel_list.append(new_record)
+    updated = json.dumps(rel_list)
     cursor.execute(
-        """
-        UPDATE NPCStats
-        SET relationships = %s
-        WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-        """,
-        (json.dumps(relationships_data), npc_id, user_id, conversation_id)
+        "UPDATE NPCStats SET relationships = %s WHERE npc_id=%s AND user_id=%s AND conversation_id=%s",
+        (updated, npc_id, user_id, conversation_id)
     )
     conn.commit()
     conn.close()
-    logging.info(f"[append_relationship_to_npc] Added relationship '{rel_label}' -> npc_id={target_npc_id} for npc_id={npc_id}.")
+    logging.info(f"[append_relationship_to_npc] Added relationship '{rel_label}' -> {target_npc_id} for NPC {npc_id}.")
+
+
 
 def recalc_npc_stats_with_new_archetypes(user_id, conversation_id, npc_id):
     """
@@ -814,42 +846,36 @@ async def add_archetype_to_npc(user_id, conversation_id, npc_id, new_arc):
 
 async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_name):
     """
-    Potentially create a relationship with the player, or existing NPCs.
-    Then record memory, create social link, optionally add an archetype.
+    Create relationships between the new NPC and other entities (player or NPCs)
+    and store them in the new 'relationships' column in NPCStats.
+    This function now uses dynamic reciprocal relationship generation and appends
+    relationship records rather than modifying the archetypes.
     """
     familial = ["mother", "sister", "aunt"]
-    non_familial = ["enemy", "friend", "lover", "neighbor",
-                    "colleague", "classmate", "teammate",
-                    "underling", "CEO", "rival"]
+    non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
+                    "colleague", "classmate", "teammate", "underling", "thrall", "rival"]
 
     relationships = []
 
-    # 50% chance to link with the player
+    # 50% chance to create a relationship with the player
     if random.random() < 0.5:
-        if random.random() < 0.2:
-            rel_type = random.choice(familial)
-        else:
-            rel_type = random.choice(non_familial)
+        rel_type = random.choice(familial) if random.random() < 0.2 else random.choice(non_familial)
         relationships.append({"target": "player", "target_name": "the player", "type": rel_type})
 
-    # gather existing NPCs
+    # Get existing NPCs (excluding self)
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT npc_id, npc_name FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id!=%s",
+        "SELECT npc_id, npc_name, archetype_summary FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id!=%s",
         (user_id, conversation_id, new_npc_id)
     )
     rows = cursor.fetchall()
     conn.close()
 
-    for (candidate_id, candidate_name) in rows:
-        # 30% chance
+    for candidate_id, candidate_name, candidate_arche_summary in rows:
         if random.random() < 0.3:
-            if random.random() < 0.2:
-                rel_type = random.choice(familial)
-            else:
-                rel_type = random.choice(non_familial)
-            # avoid duplicates
+            rel_type = random.choice(familial) if random.random() < 0.2 else random.choice(non_familial)
+            # Avoid duplicates:
             if not any(r.get("target") == candidate_id for r in relationships):
                 relationships.append({
                     "target": candidate_id,
@@ -857,25 +883,31 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
                     "type": rel_type
                 })
 
-    # process
+    # Process each relationship:
     for rel in relationships:
+        from logic.memory_logic import get_shared_memory, record_npc_event
+        from logic.social_links import create_social_link
+
         memory_text = get_shared_memory(user_id, conversation_id, rel, new_npc_name)
         record_npc_event(user_id, conversation_id, new_npc_id, memory_text)
 
-        # create the link
+        # Create a social link as before
         if rel["target"] == "player":
             create_social_link(user_id, conversation_id, "player", 0, "npc", new_npc_id, link_type=rel["type"], link_level=0)
+            # Append relationship record for the NPC toward the player (using 0 as a special ID)
+            await append_relationship_to_npc(user_id, conversation_id, new_npc_id, rel["type"], 0)
         else:
             create_social_link(user_id, conversation_id, "npc", rel["target"], "npc", new_npc_id, link_type=rel["type"], link_level=0)
+            # Get the current NPC's archetype summary to help determine context
+            current_arche_summary = ""  # You might fetch this from your NPC data; for now, we leave it empty.
+            # Generate reciprocal relationship dynamically:
+            reciprocal = dynamic_reciprocal_relationship(rel["type"], current_arche_summary)
+            # Append relationship record for new NPC
+            await append_relationship_to_npc(user_id, conversation_id, new_npc_id, rel["type"], rel["target"])
+            # And for the other NPC (the target), store the reciprocal relationship:
+            await append_relationship_to_npc(user_id, conversation_id, rel["target"], reciprocal, new_npc_id)
 
-        # if there's a special archetype for this relationship, we do:
-        special_arc = RELATIONSHIP_ARCHETYPE_MAP.get(rel["type"])
-        if special_arc:
-            logging.info(f"[assign_random_relationships] Relationship '{rel['type']}' => add {special_arc}")
-            # *** FIX: We await the add_archetype_to_npc(...) call ***
-            await add_archetype_to_npc(user_id, conversation_id, new_npc_id, special_arc)
-
-    logging.info(f"[assign_random_relationships] done for NPC '{new_npc_name}' (id={new_npc_id}).")
+    logging.info(f"[assign_random_relationships] Done for NPC '{new_npc_name}' (id={new_npc_id}).")
 
 async def refine_multiple_npcs_individually(
     count: int,
