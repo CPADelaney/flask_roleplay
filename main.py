@@ -1,3 +1,4 @@
+# main.py
 import os
 import logging
 from flask import Flask, render_template, request, session, jsonify, redirect
@@ -14,12 +15,11 @@ from logic.memory_logic import memory_bp
 from logic.rule_enforcement import rule_enforcement_bp
 from db.admin import admin_bp
 from routes.debug import debug_bp
-from routes.universal_update import universal_bp 
+from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
 
 # DB connection helper
 from db.connection import get_db_connection
-
 
 def create_celery_app():
     """
@@ -158,11 +158,12 @@ def create_flask_app():
 
     return app
 
+
 # Instantiate both Celery and Flask
 celery_app = create_celery_app()
 app = create_flask_app()
 
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    # Start the Flask app
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
