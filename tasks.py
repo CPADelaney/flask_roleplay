@@ -6,7 +6,7 @@ import asyncio
 # We do NOT create a new Celery() here; we import the existing one from main.py
 from main import celery_app
 
-from logic.npc_creation import create_npc
+from logic.npc_creation import spawn_and_refine_npcs_with_relationships
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from game_processing import async_process_new_game
 
@@ -33,13 +33,42 @@ def process_new_game_task(user_id, conversation_data):
 
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
-    """Create a given number of NPCs asynchronously."""
-    npc_ids = []
-    for i in range(count):
-        new_id = create_npc(user_id=user_id, conversation_id=conversation_id, introduced=False)
-        logging.info(f"Created NPC {i+1}/{count} with ID: {new_id}")
-        npc_ids.append(new_id)
-    return npc_ids
+    import asyncio
+
+    # We'll provide placeholder environment info & day names,
+    # or load them from DB if needed:
+    environment_desc = "A fallback environment description"
+    day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+
+    # We call the async function using `asyncio.run(...)` inside the Celery task.
+    from logic.npc_creation import spawn_and_refine_npcs_with_relationships
+    from db.connection import get_async_db_connection  # or whichever async connection you use
+
+    async def main():
+        # 1) Open an async DB connection
+        conn = await get_async_db_connection()
+
+        # 2) Spawn the requested # of NPCs
+        result = await spawn_and_refine_npcs_with_relationships(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            environment_desc=environment_desc,
+            day_names=day_names,
+            conn=conn,
+            count=count
+        )
+
+        # 3) Clean up
+        await conn.close()
+        return result
+
+    # Actually run the async logic
+    final_info = asyncio.run(main())
+
+    # `final_info` is whatever spawn_and_refine_npcs_with_relationships returns,
+    # e.g. {"message": "Spawned 10 NPCs and assigned relationships."}
+    return final_info
+
 
 
 @celery_app.task
