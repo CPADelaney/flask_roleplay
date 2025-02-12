@@ -1,3 +1,5 @@
+# logic/npc_creation.py
+
 import os
 import json
 import random
@@ -68,6 +70,8 @@ Constraints:
 - Example: an NPC with a 'student' archetype is likely to have class most of the week.
 - Output only JSON, no extra commentary.
 """
+
+print("DEBUG NPC_PROMPT ->", repr(NPC_PROMPT))
 
 def init_data():
     """Load all local JSON data into the DATA dictionary for reuse."""
