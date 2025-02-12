@@ -77,15 +77,17 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                         dominance, cruelty, closeness, trust, respect, intensity,
                         archetypes, archetype_summary, archetype_extras_summary,
                         physical_description, memory, monica_level,
-                        age, birthdate
+                        age, birthdate,
+                        likes, dislikes, hobbies, personality_traits, affiliations, schedule, current_location
                     ) VALUES (
                         $1, $2, $3, $4, $5,
                         $6, $7, $8, $9, $10, $11,
                         $12, $13, $14, $15,
                         '[]'::jsonb, 0,
-                        $16, $17
+                        $16, $17, 
+                        $18, $19, $20, $21, $22, $23, $24
                     )
-                """, 
+                """,
                     user_id, conversation_id,
                     name, introduced, npc_data.get("sex","female").lower(),
                     npc_data.get("dominance",0), npc_data.get("cruelty",0), npc_data.get("closeness",0),
@@ -95,7 +97,14 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                     npc_data.get("archetype_extras_summary",""),
                     npc_data.get("physical_description",""),
                     npc_data.get("age"),
-                    birth_date_obj
+                    birth_date_obj,
+                    json.dumps(npc_data.get("likes", [])),
+                    json.dumps(npc_data.get("dislikes", [])),
+                    json.dumps(npc_data.get("hobbies", [])),
+                    json.dumps(npc_data.get("personality_traits", [])),
+                    json.dumps(npc_data.get("affiliations", [])),
+                    json.dumps(npc_data.get("schedule", {})),
+                    npc_data.get("current_location", "")
                 )
 
             # 3) Process npc_updates
