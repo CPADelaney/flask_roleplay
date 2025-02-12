@@ -9,7 +9,7 @@ import os
 import asyncpg
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
 from datetime import datetime
-from logic.npc_creation import spawn_and_refine_npcs_with_relationships, create_npc_partial, refine_npc_with_gpt
+from logic.npc_creation import spawn_and_refine_npcs_with_relationships, create_npc_partial, refine_npc_with_gpt, npc_prompt
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.aggregator import get_aggregated_roleplay_context
 from logic.gpt_helpers import adjust_npc_complete
@@ -134,33 +134,6 @@ Enhanced features: {enhanced_features}
 Stat modifiers: {stat_modifiers}
 """
 
-NPC_PROMPT = """
-You are finalizing schedules for multiple NPCs in this environment:
-{environment_desc}
-
-Here is each NPC’s **fully refined** data (but schedule is missing):
-{refined_npc_data}
-
-We also need a schedule for the player "Chase."
-
-Ensure NPC and player schedules are immersive and make sense within the current setting, as well as with the character's role.
-
-Return exactly one JSON with keys:
-  "npc_creations": [ { ... }, ... ],
-  "ChaseSchedule": {...}
-
-Where each NPC in "npc_creations" has:
-  - "npc_name" (same as in refined_npc_data)
-  - "likes", "dislikes", "hobbies", "affiliations"
-  - "schedule": with day-based subkeys (Morning, Afternoon, Evening, Night) 
-     for these days: {day_names}
-
-Constraints:
-- The schedules must reflect each NPC’s existing archetypes/likes/dislikes/hobbies/etc.
-- Example: an NPC with a 'student' archetype is likely to have class most of the week.
-- Output only JSON, no extra commentary.
-"""
-
 # -------------------------------------------------------------------------
 # GPT call wrappers (single-block approach)
 # -------------------------------------------------------------------------
@@ -218,92 +191,41 @@ async def call_gpt_for_environment_data(
             logging.error("Error parsing environment JSON: %s", e, exc_info=True)
             return {}
 
-async def call_gpt_for_npcs_and_chase(conversation_id, environment_desc, day_names):
-    """
-    Single GPT call for multiple NPCs plus ChaseSchedule in one pass.
-    Returns dict:
-    {
-      "npc_creations":[ {...}, {...}],
-      "ChaseSchedule": {...}
-    }
-    """
-    prompt = NPC_PROMPT.format(
-        environment_desc=environment_desc,
-        day_names=", ".join(day_names)
-    )
-
-    result = await spaced_gpt_call_with_retry(conversation_id, environment_desc, prompt, delay=1.0)
-
-    if result.get("type") == "function_call":
-        return result.get("function_args", {})
-    else:
-        raw_text = result.get("response", "").strip()
-        if raw_text.startswith("```"):
-            lines = raw_text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            raw_text = "\n".join(lines).strip()
-
-        try:
-            data = json.loads(raw_text)
-            return data
-        except Exception as e:
-            logging.error("Error parsing NPC+Chase JSON: %s", e, exc_info=True)
-            return {}
-
-async def call_gpt_for_final_schedules(
-    conversation_id: int,
-    refined_npcs: list,
-    environment_desc: str,
-    day_names: list
-) -> dict:
-    """
-    Single GPT call that assigns a final schedule to each NPC, plus "ChaseSchedule."
-    Returns:
-      {
-        "npc_creations": [ { "npc_name":..., "likes":..., "schedule":...}, ...],
-        "ChaseSchedule": { ... } 
-      }
-    """
-    # We'll pass the refined NPC data as JSON so GPT can see their final traits
-    refined_json_str = json.dumps(refined_npcs, indent=2)
-
-    prompt = NPC_PROMPT.format(
-        environment_desc=environment_desc,
-        refined_npc_data=refined_json_str,
-        day_names=", ".join(day_names)
-    )
-
-    result = await spaced_gpt_call_with_retry(
-        conversation_id,  # or pass environment_desc as "system" context if you prefer
-        environment_desc, 
-        prompt,
-        delay=1.0
-    )
-
-    if result.get("type") == "function_call":
-        return result.get("function_args", {})
-    else:
-        raw_text = result.get("response", "").strip()
-        # remove triple backticks if present
-        if raw_text.startswith("```"):
-            lines = raw_text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            raw_text = "\n".join(lines).strip()
-
-        try:
-            data = json.loads(raw_text)
-            return data
-        except Exception as e:
-            logging.error(f"[call_gpt_for_final_schedules] parse error: {e}", exc_info=True)
-            return {}
-
-
+#async def call_gpt_for_npcs_and_chase(conversation_id, environment_desc, day_names):
+#    """
+#    Single GPT call for multiple NPCs plus ChaseSchedule in one pass.
+#    Returns dict:
+#    {
+#      "npc_creations":[ {...}, {...}],
+#      "ChaseSchedule": {...}
+#    }
+#    """
+#    prompt = NPC_PROMPT.format(
+#        environment_desc=environment_desc,
+#        day_names=", ".join(day_names)
+#    )
+#
+#    result = await spaced_gpt_call_with_retry(conversation_id, environment_desc, prompt, delay=1.0)
+#
+#    if result.get("type") == "function_call":
+#        return result.get("function_args", {})
+#    else:
+#        raw_text = result.get("response", "").strip()
+#        if raw_text.startswith("```"):
+#            lines = raw_text.splitlines()
+#            if lines and lines[0].startswith("```"):
+#                lines = lines[1:]
+#            if lines and lines[-1].startswith("```"):
+#                lines = lines[:-1]
+#            raw_text = "\n".join(lines).strip()
+#
+#        try:
+#            data = json.loads(raw_text)
+#            return data
+#        except Exception as e:
+#            logging.error("Error parsing NPC+Chase JSON: %s", e, exc_info=True)
+#            return {}
+#
 # -------------------------------------------------------------------------
 # MAIN NEW GAME FLOW with single-block GPT calls + advanced features
 # -------------------------------------------------------------------------
