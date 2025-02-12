@@ -96,24 +96,63 @@ def _sync_gpt_request(conversation_id, context, prompt):
 # -------------------------------------------------------------------------
 # SINGLE-PASS PROMPTS
 # -------------------------------------------------------------------------
+
+
+mega_desc = mega_data.get("mega_description", "A fallback description if none found.")
+mega_name = mega_data.get("mega_name", "Untitled Mega Setting")
+
+prompt = ENV_PROMPT.format(
+    mega_name=mega_name,
+    mega_desc=mega_desc,
+    env_components="\n".join(env_comps),
+    enhanced_features=", ".join(enh_feats),
+    stat_modifiers=", ".join(f"{k}: {v}" for k, v in stat_mods.items())
+)
+
 ENV_PROMPT = """
 You are setting up a new femdom daily-life sim environment.
-Return one JSON with these keys:
-  "setting_name": a short creative name,
-  "environment_desc": a 1-3 paragraph environment description,
-  "environment_history": a short, evocative history,
-  "events": array of { name, description, start_time, end_time, location, year, month, day, time_of_day },
-  "locations": array of { location_name, description, open_hours },
-  "scenario_name": conversation scenario name,
-  "quest_data": { quest_name, quest_description }
 
-No extra text, only the JSON.
+Below is a merged environment concept that combines multiple settings:
+Mega Setting Name: {mega_name}
+Mega Description:
+{mega_desc}
+
+Using this merged concept as inspiration, produce a strictly valid JSON object with the **exact** keys shown below (nothing else!). Each key’s purpose is described in parentheses:
+
+1. "setting_name" (string; a short, creative name referencing the merged environment)
+2. "environment_desc" (string; 1–3 paragraphs describing the overall environment’s look, feel, day-to-day atmosphere, culture, and any interesting details)
+3. "environment_history" (string; a short paragraph detailing any relevant historical background or pivotal events)
+4. "events" (array; each entry is an object with these fields):
+      - "name"
+      - "description"
+      - "start_time"
+      - "end_time"
+      - "location"
+      - "year"
+      - "month"
+      - "day"
+      - "time_of_day"
+5. "locations" (array; each entry is an object with):
+      - "location_name"
+      - "description"
+      - "open_hours"  (could be a string or array describing hours)
+6. "scenario_name" (string; the title or name of this overall scenario)
+7. "quest_data" (object with exactly these keys):
+      - "quest_name"
+      - "quest_description"
+
+No additional keys or text outside of the JSON. Do not wrap the JSON in code fences. Produce only the JSON object.
+
+For reference, here are additional environment details you can incorporate:
 
 Environment components:
 {env_components}
+
 Enhanced features: {enhanced_features}
+
 Stat modifiers: {stat_modifiers}
 """
+
 
 NPC_PROMPT = """
 We now need to create the NPCs and the player's schedule in one pass.
