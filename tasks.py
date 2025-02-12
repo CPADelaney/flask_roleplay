@@ -1,42 +1,25 @@
-# tasks.py
-
 import os
 import json
 import logging
-import asyncio  # Required for asyncio.run()
-from celery import Celery
+import asyncio
+# We no longer create Celery here. Instead we import the existing one:
+from main import celery_app
+
 from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
-from game_processing import async_process_new_game  # Ensure this file is "clean" (no Flask blueprint code)
+from game_processing import async_process_new_game
 
-# Read RabbitMQ URL from environment variables; Railway will set this for you.
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
-
-celery_app = Celery(
-    'tasks',
-    broker=RABBITMQ_URL,
-    backend='rpc://'
-)
-
-celery_app.conf.update(
-    task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
-    timezone='UTC',
-    enable_utc=True,
-    worker_log_format="%(levelname)s:%(name)s:%(message)s",
-    worker_redirect_stdouts_level='INFO',  # Set to INFO to reduce debug noise
-)
 
 @celery_app.task
 def test_task():
     return "Hello from dummy task!"
 
+
 @celery_app.task
 def process_new_game_task(user_id, conversation_data):
     """
     Celery task to run the heavy game startup processing.
-    This function runs the asynchronous helper using asyncio.run.
+    This function runs the asynchronous helper using asyncio.run().
     """
     try:
         result = asyncio.run(async_process_new_game(user_id, conversation_data))
@@ -45,6 +28,7 @@ def process_new_game_task(user_id, conversation_data):
     except Exception as e:
         logging.exception("Error in process_new_game_task for user_id=%s", user_id)
         return {"status": "failed", "error": str(e)}
+
 
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
@@ -56,11 +40,12 @@ def create_npcs_task(user_id, conversation_id, count=10):
         npc_ids.append(new_id)
     return npc_ids
 
+
 @celery_app.task
 def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_prompt):
     """
     Generate the GPT opening line.
-    This task calls the GPT API (or its fallback) and returns a JSON-encoded reply.
+    This task calls the GPT API (or fallback) and returns a JSON-encoded reply.
     """
     logging.info("Async GPT task: Calling GPT for opening line.")
     
@@ -77,9 +62,7 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
         client = get_openai_client()
         forced_messages = [
             {"role": "system", "content": aggregator_text},
-            {"role": "user", "content": (
-                "No function calls for the introduction. Produce only a text narrative.\n\n" +
-                opening_user_prompt)}
+            {"role": "user", "content": "No function calls. Produce only a text narrative.\n\n" + opening_user_prompt}
         ]
         fallback_response = client.chat.completions.create(
             model="gpt-4o",
@@ -88,7 +71,6 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
         )
         fallback_text = fallback_response.choices[0].message.content.strip()
         nyx_text = fallback_text if fallback_text else "[No text returned from GPT]"
-        # Update the reply dictionary to indicate fallback was used.
         gpt_reply_dict["response"] = nyx_text
         gpt_reply_dict["type"] = "fallback"
         
