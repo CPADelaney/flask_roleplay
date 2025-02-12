@@ -457,55 +457,6 @@ async def async_process_new_game(user_id, conversation_data):
             count=5
         )
         logging.info("Spawn and refine result: %s", spawn_result)
-
-        # ---------------------------------------------------------------------
-        # OLD Single GPT call => NPCs + Chase schedule (optional)
-        # ---------------------------------------------------------------------
-'''
-        # 15.1) Optionally do a final "complete" pass
-        npc_rows = await conn.fetch("""
-            SELECT npc_id, npc_name, hobbies, likes, dislikes, affiliations, schedule, archetypes
-            FROM NPCStats
-            WHERE user_id=$1 AND conversation_id=$2
-        """, user_id, conversation_id)
-        
-        for row in npc_rows:
-            npc_data = {
-                "npc_name": row["npc_name"],
-                "hobbies": json.loads(row["hobbies"]) if row["hobbies"] else [],
-                "likes": json.loads(row["likes"]) if row["likes"] else [],
-                "dislikes": json.loads(row["dislikes"]) if row["dislikes"] else [],
-                "affiliations": json.loads(row["affiliations"]) if row["affiliations"] else [],
-                "schedule": json.loads(row["schedule"]) if row["schedule"] else {},
-                "archetypes": json.loads(row["archetypes"]) if row["archetypes"] else [],
-            }
-        
-            try:
-                refined_npc = await adjust_npc_complete(
-                    npc_data=npc_data,
-                    environment_desc=combined_env,
-                    conversation_id=conversation_id,
-                    immersive_days=day_names
-                )
-            except Exception as e:
-                logging.error("Error in adjust_npc_complete for NPC '%s': %s", npc_data["npc_name"], e)
-                refined_npc = npc_data  # fallback
-        
-            await conn.execute("""
-                UPDATE NPCStats
-                SET likes=$1, dislikes=$2, hobbies=$3, affiliations=$4, schedule=$5
-                WHERE npc_id=$6 AND user_id=$7 AND conversation_id=$8
-            """,
-                json.dumps(refined_npc.get("likes", [])),
-                json.dumps(refined_npc.get("dislikes", [])),
-                json.dumps(refined_npc.get("hobbies", [])),
-                json.dumps(refined_npc.get("affiliations", [])),
-                json.dumps(refined_npc.get("schedule", {})),
-                row["npc_id"],
-                user_id,
-                conversation_id
-            )
-'''
             
         # 16) Build aggregator context & produce final narrative
         aggregator_data = await asyncio.to_thread(
