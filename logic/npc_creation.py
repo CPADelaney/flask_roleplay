@@ -264,6 +264,11 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
     lpool = DATA["likes_pool"]
     dpool = DATA["dislikes_pool"]
 
+    year  = random.randint(990, 1040)    # tweak range as you like
+    month = random.randint(1, 12)
+    day   = random.randint(1, 28)       # just keep it valid for any month
+    birth_str = f"{year:04d}-{month:02d}-{day:02d}"
+
     npc_dict = {
         "npc_name": synergy_name,
         "introduced": False,
@@ -283,7 +288,7 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
         "dislikes": random.sample(dpool, min(3, len(dpool))),
         "age": random.randint(20, 45),
         # Keep as string so GPT won't crash with 'date not serializable'
-        "birthdate": "1000-02-10"
+        "birthdate": birth_str
     }
     return npc_dict
 
