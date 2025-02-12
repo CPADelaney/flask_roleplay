@@ -297,7 +297,7 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
     birth_str = npc_data["birthdate"]  # e.g. "1000-02-10"
     if isinstance(birth_str, str):
         npc_data["birthdate"] = datetime.strptime(birth_str, "%Y-%m-%d").date()
-return npc_dict
+        return npc_dict
 
 ###################
 # 6) refine_npc_with_gpt
