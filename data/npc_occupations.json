@@ -1,6 +1,6 @@
 # data/npc_occupations.json
 {
-occupations = occupations = [
+  "occupations": [ 
     "Paramedic (Modern: emergency medic; Historical/Fantasy: traveling chirurgeon; Sci-Fi: biotech paramedic; Post-Apoc: scavenger healer)",
     "Librarian (Modern: info specialist; Historical/Fantasy: monastic scribe; Sci-Fi: archivist of digital knowledge; Post-Apoc: keeper of old books)",
     "Truck Driver (Modern: long-haul transport; Historical/Fantasy: caravan leader; Sci-Fi: space freighter pilot; Post-Apoc: wasteland hauler)",
