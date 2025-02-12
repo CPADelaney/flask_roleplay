@@ -8,12 +8,10 @@ import asyncpg
 import openai
 
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
-from logic.npc_creation import create_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.aggregator import get_aggregated_roleplay_context
 from routes.story_routes import build_aggregator_text
 from db.connection import get_db_connection  # Not used anymore if using asyncpg
-from tasks import process_new_game_task, create_npcs_task
 
 # Use your Railway DSN (public URL for local development)
 DB_DSN = "postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@monorail.proxy.rlwy.net:24727/railway"
