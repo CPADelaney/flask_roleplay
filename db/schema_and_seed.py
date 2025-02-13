@@ -185,7 +185,7 @@ def create_all_tables():
             schedule JSONB,
             current_location TEXT,
             age INT,
-            birthdate DATE,
+            birthdate TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
