@@ -1064,6 +1064,43 @@
     ]
   },
   {
+    "name": "Giantess",
+    "baseline_stats": {
+      "dominance_range": [85, 100],
+      "dominance_modifier": 0,
+      "cruelty_range": [80, 100],
+      "cruelty_modifier": 0,
+      "closeness_range": [30, 50],
+      "closeness_modifier": 0,
+      "trust_range": [10, 30],
+      "trust_modifier": 0,
+      "respect_range": [10, 40],
+      "respect_modifier": 0,
+      "intensity_range": [90, 100],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Dominance and cruelty spike each time she entraps her subjects, reinforcing the massive power gap.",
+      "Her appetite for vore and entrapment intensifies as you become more ensnared in her web of control.",
+      "Every act of devouring or confining deepens your submission and erodes your will."
+    ],
+    "setting_examples": [
+      "Colossal Arena: An ancient ruin transformed into her macabre stage, where entrapped subjects are paraded before being devoured.",
+      "Urban Megalopolis: Amid towering skyscrapers, she lures the unwary into inescapable alleys, where her voracious hunger is unleashed."
+    ],
+    "unique_traits": [
+      "At an astounding 400 feet tall, her shadow alone ensnares and terrifies, leaving you feeling insignificant and trapped.",
+      "She employs both physical entrapment—using her immense limbs to immobilize you—and the looming threat of being consumed whole.",
+      "Her acts of vore are deliberate, ritualistic demonstrations of her absolute dominance and power."
+    ],
+    "preferred_kinks": [
+      "Vore: Revels in the fantasy of devouring her subjects whole, reducing you to a mere morsel beneath her colossal form.",
+      "Entrapment: Takes immense pleasure in physically confining you using her body (toes, cleavage, crevices, etc.), ensuring escape is impossible.",
+      "Extreme Size Play: Exploits the vast difference in scale to diminish you to a helpless plaything.",
+      "Public Humiliation: Showcases your entrapment and potential consumption as a spectacle, cementing your total submission."
+    ]
+  },
+  {
     "name": "Cuckoldress/Hotwife",
     "baseline_stats": {
       "dominance_range": [60, 90],
