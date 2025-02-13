@@ -534,14 +534,6 @@ def create_npc_partial(
 # 6) DB Insert Stub
 ###################
 async def insert_npc_stub_into_db(partial_npc: dict, user_id: int, conversation_id: int) -> int:
-    """
-    Insert into NPCStats with minimal fields, returning npc_id.
-    relationships = [],
-    memory = [],
-    schedule = {},
-    physical_description = '' 
-    are placeholders for now.
-    """
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -552,15 +544,16 @@ async def insert_npc_stub_into_db(partial_npc: dict, user_id: int, conversation_
           dominance, cruelty, closeness, trust, respect, intensity,
           archetypes, archetype_summary, archetype_extras_summary,
           likes, dislikes, hobbies, personality_traits,
-          age, birthdate,
+          age, birthdate,          -- 'birthdate' now TEXT in DB
           relationships, memory, schedule,
           physical_description
         )
-        VALUES (%s, %s, %s, %s, %s,
+        VALUES (%s, %s,
+                %s, %s, %s,
                 %s, %s, %s, %s, %s, %s,
                 %s, %s, %s,
                 %s, %s, %s, %s,
-                %s, %s,
+                %s, %s,   -- pass partial_npc["birthdate"] as text
                 '[]'::jsonb, '[]'::jsonb, '{}'::jsonb,
                 ''
         )
@@ -588,15 +581,14 @@ async def insert_npc_stub_into_db(partial_npc: dict, user_id: int, conversation_
             json.dumps(partial_npc.get("hobbies", [])),
             json.dumps(partial_npc.get("personality_traits", [])),
 
-        partial_npc.get("age", 25),
-        partial_npc.get("birthdate", "1000-01-01")
-    ))
+            partial_npc.get("age", 25),
+            partial_npc.get("birthdate", ""),  # TEXT field now
+        )
+    )
     row = cur.fetchone()
     npc_id = row[0]
     conn.commit()
     conn.close()
-
-    logging.info(f"[insert_npc_stub_into_db] Inserted NPC '{partial_npc['npc_name']}' => npc_id={npc_id}")
     return npc_id
 
 ###################
