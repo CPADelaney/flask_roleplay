@@ -34,25 +34,37 @@ def process_new_game_task(user_id, conversation_data):
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
     import asyncio
-
-    # We'll provide placeholder environment info & day names,
-    # or load them from DB if needed:
-    environment_desc = "A fallback environment description"
-    day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-
-    # --- Use the new approach ---
-    from logic.npc_creation import spawn_multiple_npcs
-    # If you need an async DB connection, import that too:
     from db.connection import get_async_db_connection
+    from logic.npc_creation import spawn_multiple_npcs
 
     async def main():
-        # 1) You might or might not need a DB connection
-        #    If spawn_multiple_npcs uses DB calls with get_db_connection internally,
-        #    you don't necessarily need an async connection here.
-        #    But if you do, you can open it:
+        # 1) Get an async connection (if you need one)
         conn = await get_async_db_connection()
 
-        # 2) Spawn the requested # of NPCs with the new approach
+        # 2) Fetch environment_desc from DB
+        row_env = await conn.fetchrow("""
+            SELECT value
+            FROM CurrentRoleplay
+            WHERE user_id=$1 AND conversation_id=$2 AND key='EnvironmentDesc'
+        """, user_id, conversation_id)
+        if row_env:
+            environment_desc = row_env["value"]
+        else:
+            environment_desc = "A fallback environment description"
+
+        # 3) Fetch 'CalendarNames' from DB, which might have { "days": [...], ... }
+        row_cal = await conn.fetchrow("""
+            SELECT value
+            FROM CurrentRoleplay
+            WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
+        """, user_id, conversation_id)
+        if row_cal:
+            cal_data = json.loads(row_cal["value"] or "{}")
+            day_names = cal_data.get("days", ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
+        else:
+            day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+
+        # 4) Spawn NPCs with new approach
         npc_ids = await spawn_multiple_npcs(
             user_id=user_id,
             conversation_id=conversation_id,
@@ -63,12 +75,14 @@ def create_npcs_task(user_id, conversation_id, count=10):
 
         await conn.close()
 
-        # 3) Return info
+        # 5) Return info
         return {
             "message": f"Successfully created {len(npc_ids)} NPCs",
-            "npc_ids": npc_ids
+            "npc_ids": npc_ids,
+            "day_names": day_names
         }
 
+    # Actually run the async logic
     final_info = asyncio.run(main())
     return final_info
 
