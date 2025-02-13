@@ -910,12 +910,13 @@ We want to fill or adapt these fields:
 - Over-the-top curvaceous (inspired by M-size games). Almost comical level of boobs/ass, but keep it in-lore.
 
 Return only JSON with keys:
+  "physical_description"
   "schedule"
   "memory"
 
 No extra text or function calls.
 """
-    # 3) Call GPT
+
     raw_gpt = await asyncio.to_thread(
         get_chatgpt_response,
         conversation_id,
@@ -923,11 +924,11 @@ No extra text or function calls.
         prompt
     )
 
+    # parse GPT response
     if raw_gpt.get("type") == "function_call":
         result_dict = raw_gpt.get("function_args", {})
     else:
         text = raw_gpt.get("response", "").strip()
-        # strip code fences
         if text.startswith("```"):
             lines = text.splitlines()
             if lines and lines[0].startswith("```"):
@@ -946,7 +947,7 @@ No extra text or function calls.
     schedule = result_dict.get("schedule", {})
     memories = result_dict.get("memory", [])
 
-    # 4) Update DB
+    # Update DB
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -964,16 +965,15 @@ No extra text or function calls.
     conn.commit()
     conn.close()
 
-
+    # Now replicate shared memories
     npc_name = fetch_npc_name(user_id, conversation_id, npc_id) or "Unknown"
-    
-    # 3) Now call propagate_shared_memories with the new memories
+    # <-- pass 'memories' instead of 'new_memories'
     propagate_shared_memories(
         user_id=user_id,
         conversation_id=conversation_id,
         source_npc_id=npc_id,
         source_npc_name=npc_name,
-        memories=new_memories  # from GPT
+        memories=memories
     )
 
     logging.info(f"[refine_npc_final_data] Updated NPC {npc_id} => physical_desc + schedule + memory.")
