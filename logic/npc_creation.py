@@ -1182,3 +1182,123 @@ async def spawn_multiple_npcs(
         )
         npc_ids.append(new_id)
     return npc_ids
+
+async def generate_chase_schedule(
+    user_id: int,
+    conversation_id: int,
+    environment_desc: str,
+    day_names: list
+) -> dict:
+    """
+    1) Gather 'Chase' stats from PlayerStats (for flavor).
+    2) GPT call to produce Chase's schedule as a dict keyed by each day => subkeys (morning,afternoon, etc.)
+    3) Store the schedule in CurrentRoleplay or wherever you want.
+    4) Return the schedule.
+    """
+    import json
+    import asyncio
+    from logic.gpt_utils import spaced_gpt_call
+    from db.connection import get_db_connection
+
+    # Step A: load 'Chase' stats from PlayerStats
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT corruption, confidence, willpower, obedience, dependency, lust,
+               mental_resilience, physical_endurance
+        FROM PlayerStats
+        WHERE user_id=%s AND conversation_id=%s AND player_name='Chase'
+        LIMIT 1
+    """, (user_id, conversation_id))
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        logging.warning("[generate_chase_schedule] Player 'Chase' not found in PlayerStats.")
+        return {}
+
+    (corrupt, confid, willp, obed, dep, lust, ment_res, phys_end) = row
+
+    # Build a short "Chase partial data" to feed GPT
+    chase_data = {
+        "player_name": "Chase",
+        "corruption": corrupt,
+        "confidence": confid,
+        "willpower": willp,
+        "obedience": obed,
+        "dependency": dep,
+        "lust": lust,
+        "mental_resilience": ment_res,
+        "physical_endurance": phys_end
+    }
+
+    # Step B: Build the prompt
+    # We'll re-use the idea from your old NPC_PROMPT.
+    chase_prompt = f"""
+We have a player character 'Chase' in this femdom environment.
+Environment:
+{environment_desc}
+
+Chase partial data:
+{json.dumps(chase_data, indent=2)}
+
+We want a realistic daily schedule for "Chase" over these days:
+{day_names}
+
+Return exactly one JSON with key "ChaseSchedule", an object whose keys are each day
+(e.g. 'Nebuladay', 'Shadowday'...) and values are an object with sub-keys: "Morning","Afternoon","Evening","Night".
+
+No extra commentary, no additional keys, no code fences.
+"""
+
+    # Step C: Do the GPT call
+    response_dict = await spaced_gpt_call(conversation_id, environment_desc, chase_prompt, delay=1.0)
+    if response_dict.get("type") == "function_call":
+        # If GPT returned function_call, parse result
+        chase_sched_data = response_dict.get("function_args", {})
+    else:
+        raw_text = response_dict.get("response", "").strip()
+        # remove triple-backticks if needed
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines.pop(0)
+            if lines and lines[-1].startswith("```"):
+                lines.pop()
+            raw_text = "\n".join(lines).strip()
+
+        try:
+            chase_sched_data = json.loads(raw_text)
+        except Exception as e:
+            logging.error("[generate_chase_schedule] parse error: %s", e)
+            chase_sched_data = {}
+
+    chase_schedule = chase_sched_data.get("ChaseSchedule", {})
+    # If GPT doesn't include 'ChaseSchedule', fallback empty
+    if not chase_schedule:
+        logging.warning("[generate_chase_schedule] GPT gave no 'ChaseSchedule'.")
+        chase_schedule = {}
+
+    # Step D: Optionally store in DB (CurrentRoleplay or PlayerStats).
+    # For example, store in CurrentRoleplay as 'ChaseSchedule':
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+        VALUES (%s, %s, 'ChaseSchedule', %s)
+        ON CONFLICT (user_id, conversation_id, key)
+        DO UPDATE SET value=EXCLUDED.value
+    """, (user_id, conversation_id, json.dumps(chase_schedule)))
+    conn.commit()
+    conn.close()
+
+    logging.info("[generate_chase_schedule] Stored chase schedule => %s", chase_schedule)
+    return chase_schedule
+
+# 2) Now do a separate GPT call for Chase
+chase_sched = await generate_chase_schedule(
+    user_id=user_id,
+    conversation_id=conversation_id,
+    environment_desc=combined_env,
+    day_names=day_names
+)
