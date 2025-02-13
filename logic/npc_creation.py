@@ -525,8 +525,8 @@ async def insert_npc_stub_into_db(partial_npc: dict, user_id: int, conversation_
     are placeholders for now.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
+    cur = conn.cur()
+    cur.execute(
         """
         INSERT INTO NPCStats (
           user_id, conversation_id,
@@ -728,12 +728,12 @@ def append_relationship_to_npc(user_id: int, conversation_id: int, npc_id: int, 
     Example record: {"relationship_label": "thrall", "with_npc_id": 1234}
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
+    cur = conn.cur()
+    cur.execute(
         "SELECT relationships FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id=%s",
         (user_id, conversation_id, npc_id)
     )
-    row = cursor.fetchone()
+    row = cur.fetchone()
     if row:
         try:
             rel_data = row[0] or "[]"
@@ -751,7 +751,7 @@ def append_relationship_to_npc(user_id: int, conversation_id: int, npc_id: int, 
     new_record = {"relationship_label": rel_label, "with_npc_id": target_npc_id}
     rel_list.append(new_record)
     updated = json.dumps(rel_list)
-    cursor.execute(
+    cur.execute(
         "UPDATE NPCStats SET relationships = %s WHERE npc_id=%s AND user_id=%s AND conversation_id=%s",
         (updated, npc_id, user_id, conversation_id)
     )
@@ -766,12 +766,12 @@ def recalc_npc_stats_with_new_archetypes(user_id, conversation_id, npc_id):
     Re-fetch the NPC's archetypes from the DB and re-run combine_archetype_stats to update final stats.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
+    cur = conn.cur()
+    cur.execute(
         "SELECT archetypes FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id=%s",
         (user_id, conversation_id, npc_id)
     )
-    row = cursor.fetchone()
+    row = cur.fetchone()
     if not row:
         logging.warning(f"No NPC found for npc_id={npc_id}, cannot recalc stats.")
         conn.close()
@@ -799,7 +799,7 @@ def recalc_npc_stats_with_new_archetypes(user_id, conversation_id, npc_id):
 
     final_stats = combine_archetype_stats(chosen_arcs)
 
-    cursor.execute("""
+    cur.execute("""
         UPDATE NPCStats
         SET dominance=%s, cruelty=%s, closeness=%s, trust=%s, respect=%s, intensity=%s
         WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
@@ -857,12 +857,12 @@ async def add_archetype_to_npc(user_id, conversation_id, npc_id, new_arc):
     We'll store only 'name' in the DB, ignoring 'id' for consistency.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
+    cur = conn.cur()
+    cur.execute(
         "SELECT archetypes FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id=%s LIMIT 1",
         (user_id, conversation_id, npc_id)
     )
-    row = cursor.fetchone()
+    row = cur.fetchone()
     if not row:
         logging.warning(f"No NPCStats found for npc_id={npc_id}, can't add archetype.")
         conn.close()
@@ -887,7 +887,7 @@ async def add_archetype_to_npc(user_id, conversation_id, npc_id, new_arc):
     if not updated_synergy:
         updated_synergy = "No updated synergy"
 
-    cursor.execute("""
+    cur.execute("""
         UPDATE NPCStats
         SET archetypes=%s,
             archetype_summary=%s
@@ -912,7 +912,7 @@ async def refine_npc_final_data(user_id: int, conversation_id: int, npc_id: int,
 
     # 1) Fetch current NPC record
     conn = get_db_connection()
-    cur = conn.cursor()
+    cur = conn.cur()
     cur.execute("""
        SELECT npc_name, introduced, sex,
               dominance, cruelty, closeness, trust, respect, intensity,
@@ -1015,7 +1015,7 @@ No extra text or function calls.
 
     # Update DB
     conn = get_db_connection()
-    cur = conn.cursor()
+    cur = conn.cur()
     cur.execute("""
        UPDATE NPCStats
        SET physical_description=%s,
