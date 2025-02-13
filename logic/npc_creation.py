@@ -750,11 +750,11 @@ def append_relationship_to_npc(
         except Exception as e:
             logging.warning(f"[append_relationship_to_npc] JSON parse error: {e}")
             rel_list = []
-    else:
+    if not row:
         logging.warning(f"[append_relationship_to_npc] NPC {npc_id} not found.")
         conn.close()
         return
-        new_record = {
+    new_record = {
         "relationship_label": rel_label,
         "entity_type": target_entity_type,
         "entity_id": target_entity_id
@@ -1057,13 +1057,13 @@ async def refine_npc_final_data(user_id: int, conversation_id: int, npc_id: int,
         "npc_name","introduced","sex","dominance","cruelty","closeness","trust","respect","intensity",
         "archetypes","archetype_summary","archetype_extras_summary",
         "likes","dislikes","hobbies","personality_traits",
-        "age","birthdate","relationships","memory","schedule",
+        "age","birthdate","relationships","memory","schedule","affiliations",
         "physical_description"
     ]
     npc_data = dict(zip(columns, row))
 
     # parse JSON fields
-    json_fields = ["archetypes","likes","dislikes","hobbies","personality_traits","relationships","memory","schedule"]
+    json_fields = ["archetypes","likes","dislikes","hobbies","personality_traits","relationships","affiliations","memory","schedule"]
     for fld in json_fields:
         val = npc_data.get(fld)
         if isinstance(val, str):
@@ -1078,9 +1078,11 @@ Environment description:
 {environment_desc}
 
 We want to fill or adapt these fields:
-  - physical_description
-  - schedule (using day names => {day_names})
-  - memory (past events)
+  - physical_description,
+  - schedule (using day names => {day_names}),
+  - affiliations (e.g. clubs, secret societies, workplaces, or other groups the NPC is a member of),
+  - memory (past events),
+  - current_location
 
 **SCHEDULE REQUIREMENTS**:
 1. Use EXACTLY these day names in this order: {', '.join(day_names)}.
@@ -1098,9 +1100,11 @@ We want to fill or adapt these fields:
 - Over-the-top curvaceous (inspired by M-size games). Almost comical level of boobs/ass, but keep it in-lore.
 
 Return only JSON with keys:
-  "physical_description"
-  "schedule"
-  "memory"
+  "physical_description",
+  "schedule",
+  "memory",
+  "affiliations",
+  "current_location"
 
 No extra text or function calls.
 """
@@ -1134,6 +1138,8 @@ No extra text or function calls.
     physical_desc = result_dict.get("physical_description", "")
     schedule = result_dict.get("schedule", {})
     memories = result_dict.get("memory", [])
+    affiliations = result_dict.get("affiliations", [])
+    current_location = result_dict.get("current_location", "")
 
     # Update DB
     conn = get_db_connection()
@@ -1142,13 +1148,17 @@ No extra text or function calls.
        UPDATE NPCStats
        SET physical_description=%s,
            schedule=%s,
-           memory=%s
+           memory=%s,
+           affiliations=%s,
+           current_location=%s
        WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
     """, (
-        physical_desc,
-        json.dumps(schedule),
-        json.dumps(memories),
-        user_id, conversation_id, npc_id
+       physical_desc,
+       json.dumps(schedule),
+       json.dumps(memories),
+       json.dumps(affiliations),
+       current_location,
+       user_id, conversation_id, npc_id
     ))
     conn.commit()
     conn.close()
@@ -1342,9 +1352,17 @@ No extra commentary, no additional keys, no code fences.
     return chase_schedule
 
 # 2) Now do a separate GPT call for Chase
-chase_sched = await generate_chase_schedule(
-    user_id=user_id,
-    conversation_id=conversation_id,
-    environment_desc=combined_env,
-    day_names=day_names
-)
+async def init_chase_schedule():
+    chase_sched = await generate_chase_schedule(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        environment_desc=combined_env,
+        day_names=day_names
+    )
+    return chase_sched
+
+# And then call it from an async context:
+if __name__ == '__main__':
+    import asyncio
+    chase_schedule = asyncio.run(init_chase_schedule())
+    print("Chase Schedule:", chase_schedule)
