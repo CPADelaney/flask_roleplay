@@ -3,7 +3,7 @@
 import json
 import logging
 import copy
-
+from db.connection import get_db_connection
 from logic.gpt_utils import spaced_gpt_call  # or spaced_gpt_call_with_retry
 
 # The keys we consider "required" for a complete NPC
