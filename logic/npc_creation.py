@@ -171,7 +171,7 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         f"You are an expert creative writer merging these archetypes: {', '.join(archetype_names)}.\n"
         f"{name_instruction}\n"
         "Output a JSON with exactly two keys: \"npc_name\" and \"archetype_summary\".\n"
-        "NPC name should be unique, creative, and fitting. Avoid overused names like 'Seraphina.'"
+        "NPC name should be a unique, creative, and fitting feminine name. Avoid overused names like 'Seraphina.'"
         "No extra text, no markdown."
     )
 
