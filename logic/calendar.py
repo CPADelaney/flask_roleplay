@@ -88,3 +88,38 @@ async def update_calendar_names(user_id, conversation_id, environment_desc) -> d
     calendar_names = generate_calendar_names(environment_desc, conversation_id)
     store_calendar_names(user_id, conversation_id, calendar_names)
     return calendar_names
+
+def load_calendar_names(user_id, conversation_id):
+    """
+    Retrieves the calendar names (year_name, months, days) 
+    from CurrentRoleplay where key='CalendarNames'.
+    Returns a dict with keys 'year_name', 'months', and 'days'.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT value 
+        FROM CurrentRoleplay
+        WHERE user_id=%s AND conversation_id=%s AND key='CalendarNames'
+        LIMIT 1
+    """, (user_id, conversation_id))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    
+    if row:
+        try:
+            return json.loads(row[0])
+        except json.JSONDecodeError as e:
+            logging.warning("Calendar JSON invalid, returning fallback.")
+    
+    # Fallback if not found or invalid
+    return {
+        "year_name": "The Eternal Cycle",
+        "months": [
+            "Aurora", "Blaze", "Crimson", "Dusk",
+            "Ember", "Frost", "Gleam", "Haze",
+            "Iris", "Jade", "Knell", "Lumen"
+        ],
+        "days": ["Sol", "Luna", "Terra", "Vesta", "Mercury", "Venus", "Mars"]
+    }
