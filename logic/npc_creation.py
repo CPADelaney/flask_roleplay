@@ -427,27 +427,33 @@ Output strictly valid JSON: a single array of strings, with no extra commentary 
 ###################
 
 def create_npc_partial(
+    user_id: int,
+    conversation_id: int,
     sex: str = "female",
     total_archetypes: int = 3,
-    environment_desc: str = "A default environment",
-    month_names: list = None
+    environment_desc: str = "A default environment"
 ) -> dict:
     """
     Creates a partial NPC dictionary that includes:
       - name, stats, archetypes, likes/dislikes, etc.
-      - Also assigns an 'age' and a 'birthdate' that only has month + day.
+      - Also assigns an 'age' and a 'birthdate' (month + day) 
+        using the custom months loaded from the DB.
     """
     import random
 
-    if month_names is None:
-        # Fallback list if no custom months are provided
-        month_names = [
+    # 1) Load your custom calendar from DB => "months", "days", etc.
+    calendar_data = load_calendar_names(user_id, conversation_id)
+    months_list = calendar_data.get("months", [])
+
+    # Fallback if no months returned (or if GPT gave fewer than 12)
+    if len(months_list) < 12:
+        months_list = [
             "Frostmoon", "Windspeak", "Bloomrise", "Dawnsveil",
             "Emberlight", "Goldencrest", "Shadowleaf", "Harvesttide",
             "Stormcall", "Nightwhisper", "Snowbound", "Yearsend"
         ]
 
-    # 1) Archetypes + Stats
+    # 2) Archetypes + Stats
     if sex.lower() == "male":
         final_stats = {
             "dominance":  random.randint(0, 30),
@@ -462,7 +468,7 @@ def create_npc_partial(
         chosen_arcs = pick_with_reroll_replacement(total_archetypes)
         final_stats = combine_archetype_stats(chosen_arcs)
 
-    # 2) synergy
+    # 3) synergy
     synergy_str = get_archetype_synergy_description(chosen_arcs, None)
     logging.info(f"[create_npc_partial] synergy_str (raw) => {synergy_str!r}")
 
@@ -475,55 +481,57 @@ def create_npc_partial(
         synergy_name = f"NPC_{random.randint(1000,9999)}"
         synergy_text = "No synergy text"
 
-    # 3) extras
+    # 4) extras
     extras_text = get_archetype_extras_summary_gpt(chosen_arcs, synergy_name)
     arcs_for_json = [{"name": arc["name"]} for arc in chosen_arcs]
 
-    # 4) random picks
+    # 5) random picks
     hpool = DATA["hobbies_pool"]
     lpool = DATA["likes_pool"]
     dpool = DATA["dislikes_pool"]
 
-    tmp_hobbies = random.sample(hpool, min(3, len(hpool)))
-    tmp_likes = random.sample(lpool, min(3, len(lpool)))
+    tmp_hobbies  = random.sample(hpool, min(3, len(hpool)))
+    tmp_likes    = random.sample(lpool, min(3, len(lpool)))
     tmp_dislikes = random.sample(dpool, min(3, len(dpool)))
 
-    # 5) adapt them using environment + synergy_text
-    adapted_hobbies = adapt_list_for_environment(environment_desc, synergy_text, tmp_hobbies, "hobbies")
-    adapted_likes = adapt_list_for_environment(environment_desc, synergy_text, tmp_likes, "likes")
+    # 6) adapt them
+    adapted_hobbies  = adapt_list_for_environment(environment_desc, synergy_text, tmp_hobbies, "hobbies")
+    adapted_likes    = adapt_list_for_environment(environment_desc, synergy_text, tmp_likes, "likes")
     adapted_dislikes = adapt_list_for_environment(environment_desc, synergy_text, tmp_dislikes, "dislikes")
 
-    # 6) Age & birthdate without numeric year
+    # 7) Age + birthdate
     npc_age = random.randint(20, 45)
-    birth_month = random.choice(month_names)
-    birth_day = random.randint(1, 28)  # or up to 30 if you want
-    birth_str = f"{birth_month} {birth_day}"  # e.g. "Emberlight 14"
+
+    birth_month = random.choice(months_list)
+    birth_day   = random.randint(1, 28)   # up to 28 or 30, your choice
+    birth_str   = f"{birth_month} {birth_day}"  # e.g. "Shadowleaf 17"
 
     npc_dict = {
-        "npc_name":    synergy_name,
-        "introduced":  False,
-        "sex":         sex.lower(),
-        "dominance":   final_stats["dominance"],
-        "cruelty":     final_stats["cruelty"],
-        "closeness":   final_stats["closeness"],
-        "trust":       final_stats["trust"],
-        "respect":     final_stats["respect"],
-        "intensity":   final_stats["intensity"],
-        "archetypes":  arcs_for_json,
-        "archetype_summary": synergy_text,
+        "npc_name":                synergy_name,
+        "introduced":             False,
+        "sex":                     sex.lower(),
+        "dominance":              final_stats["dominance"],
+        "cruelty":                final_stats["cruelty"],
+        "closeness":              final_stats["closeness"],
+        "trust":                  final_stats["trust"],
+        "respect":                final_stats["respect"],
+        "intensity":              final_stats["intensity"],
+        "archetypes":             arcs_for_json,
+        "archetype_summary":      synergy_text,
         "archetype_extras_summary": extras_text,
-        "hobbies": adapted_hobbies,
-        "personality_traits": random.sample(DATA["personality_pool"], min(3, len(DATA["personality_pool"]))),
-        "likes": adapted_likes,
-        "dislikes": adapted_dislikes,
-        "age":        npc_age,
-        "birthdate":  birth_str
+        "hobbies":                adapted_hobbies,
+        "personality_traits":     random.sample(DATA["personality_pool"], min(3, len(DATA["personality_pool"]))),
+        "likes":                  adapted_likes,
+        "dislikes":               adapted_dislikes,
+        "age":                    npc_age,
+        "birthdate":              birth_str
     }
 
     logging.info(
         "[create_npc_partial] Created partial NPC => "
         f"name='{npc_dict['npc_name']}', arcs={[arc['name'] for arc in chosen_arcs]}, "
-        f"archetype_summary='{npc_dict['archetype_summary']}', birthdate={npc_dict['birthdate']}, age={npc_age}"
+        f"archetype_summary='{npc_dict['archetype_summary']}', "
+        f"birthdate={npc_dict['birthdate']}, age={npc_age}"
     )
 
     return npc_dict
