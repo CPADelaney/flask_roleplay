@@ -430,20 +430,17 @@ def create_npc_partial(
     sex: str = "female",
     total_archetypes: int = 3,
     environment_desc: str = "A default environment",
-    current_year: int = 1040,
     month_names: list = None
 ) -> dict:
     """
     Creates a partial NPC dictionary that includes:
       - name, stats, archetypes, likes/dislikes, etc.
-      - Also ensures the age and birthdate match the in-world 'current_year'.
+      - Also assigns an 'age' and a 'birthdate' that only has month + day.
     """
     import random
-    
+
     if month_names is None:
-        # Fallback month names if you have a custom fantasy list, use it here.
-        # E.g. ["Darkmoon", "Bloodsun", "Shadefall", ...] 
-        # We'll just do a placeholder 12-month list for demonstration.
+        # Fallback list if no custom months are provided
         month_names = [
             "Frostmoon", "Windspeak", "Bloomrise", "Dawnsveil",
             "Emberlight", "Goldencrest", "Shadowleaf", "Harvesttide",
@@ -466,7 +463,7 @@ def create_npc_partial(
         final_stats = combine_archetype_stats(chosen_arcs)
 
     # 2) synergy
-    synergy_str = get_archetype_synergy_description(chosen_arcs, None)  # returns JSON or "{}"
+    synergy_str = get_archetype_synergy_description(chosen_arcs, None)
     logging.info(f"[create_npc_partial] synergy_str (raw) => {synergy_str!r}")
 
     try:
@@ -487,26 +484,20 @@ def create_npc_partial(
     lpool = DATA["likes_pool"]
     dpool = DATA["dislikes_pool"]
 
-    tmp_hobbies  = random.sample(hpool, min(3,len(hpool)))
-    tmp_likes    = random.sample(lpool, min(3,len(lpool)))
-    tmp_dislikes = random.sample(dpool, min(3,len(dpool)))
+    tmp_hobbies = random.sample(hpool, min(3, len(hpool)))
+    tmp_likes = random.sample(lpool, min(3, len(lpool)))
+    tmp_dislikes = random.sample(dpool, min(3, len(dpool)))
 
     # 5) adapt them using environment + synergy_text
-    adapted_hobbies  = adapt_list_for_environment(environment_desc, synergy_text, tmp_hobbies, "hobbies")
-    adapted_likes    = adapt_list_for_environment(environment_desc, synergy_text, tmp_likes, "likes")
+    adapted_hobbies = adapt_list_for_environment(environment_desc, synergy_text, tmp_hobbies, "hobbies")
+    adapted_likes = adapt_list_for_environment(environment_desc, synergy_text, tmp_likes, "likes")
     adapted_dislikes = adapt_list_for_environment(environment_desc, synergy_text, tmp_dislikes, "dislikes")
 
-    # 6) Determine age & birthdate so they match current_year
-    #    e.g. If current_year=1040 and we pick age=30, birth_year = 1010.
+    # 6) Age & birthdate without numeric year
     npc_age = random.randint(20, 45)
-    birth_year = current_year - npc_age
-    
-    # Random month/day
     birth_month = random.choice(month_names)
-    birth_day = random.randint(1, 28)  # or up to 30, depending on your custom months.
-    
-    # Construct a birthdate string in your custom style
-    birth_str = f"{birth_month} {birth_day}, {birth_year}"
+    birth_day = random.randint(1, 28)  # or up to 30 if you want
+    birth_str = f"{birth_month} {birth_day}"  # e.g. "Emberlight 14"
 
     npc_dict = {
         "npc_name":    synergy_name,
@@ -525,8 +516,6 @@ def create_npc_partial(
         "personality_traits": random.sample(DATA["personality_pool"], min(3, len(DATA["personality_pool"]))),
         "likes": adapted_likes,
         "dislikes": adapted_dislikes,
-
-        # Age & birthdate that actually match up
         "age":        npc_age,
         "birthdate":  birth_str
     }
@@ -536,7 +525,9 @@ def create_npc_partial(
         f"name='{npc_dict['npc_name']}', arcs={[arc['name'] for arc in chosen_arcs]}, "
         f"archetype_summary='{npc_dict['archetype_summary']}', birthdate={npc_dict['birthdate']}, age={npc_age}"
     )
+
     return npc_dict
+
 
 
 ###################
