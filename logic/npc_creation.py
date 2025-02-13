@@ -1216,6 +1216,8 @@ async def spawn_single_npc(
     """
     # IMPORTANT: pass environment_desc to create_npc_partial!
     partial_npc = create_npc_partial(
+        user_id=user_id,
+        conversation_id=conversation_id,
         sex="female",
         total_archetypes=3,
         environment_desc=environment_desc
