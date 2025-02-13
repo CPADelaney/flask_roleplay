@@ -722,7 +722,13 @@ We'll keep it, but you can combine it with EXTENDED_RECIPROCAL_ARCHETYPES
 or keep them separate if you want multi-step logic.
 """
 
-def append_relationship_to_npc(user_id: int, conversation_id: int, npc_id: int, rel_label: str, target_npc_id: int):
+def append_relationship_to_npc(
+    user_id, conversation_id,
+    npc_id,                     # Which NPC in NPCStats is being updated
+    rel_label,                  # "thrall", "lover", etc.
+    target_entity_type,         # "npc" or "player"
+    target_entity_id            # The actual ID for the other side
+):
     """
     Synchronously appends a relationship record (as JSON) into the 'relationships' column in NPCStats.
     Example record: {"relationship_label": "thrall", "with_npc_id": 1234}
@@ -748,7 +754,11 @@ def append_relationship_to_npc(user_id: int, conversation_id: int, npc_id: int, 
         logging.warning(f"[append_relationship_to_npc] NPC {npc_id} not found.")
         conn.close()
         return
-    new_record = {"relationship_label": rel_label, "with_npc_id": target_npc_id}
+        new_record = {
+        "relationship_label": rel_label,
+        "entity_type": target_entity_type,
+        "entity_id": target_entity_id
+    }
     rel_list.append(new_record)
     updated = json.dumps(rel_list)
     cur.execute(
@@ -904,77 +914,113 @@ async def add_archetype_to_npc(user_id, conversation_id, npc_id, new_arc):
 # 8) assign_random_relationships (RE-ADDED)
 ###################
 async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_name):
-    """
-    Create relationships between the new NPC and other entities (player or other NPCs)
-    and store them in the 'relationships' column of NPCStats. Instead of overwriting archetypes,
-    we now append relationship records.
+    import random
 
-    For relationships with other NPCs, we generate a reciprocal relationship label dynamically
-    (e.g. if new_npc is "thrall" to someone, that NPC might get "boss" toward new_npc).
-    """
+    # Possibly some relationship labels...
     familial = ["mother", "sister", "aunt"]
-    non_familial = [
-        "enemy", "friend", "best friend", "lover", "neighbor",
-        "colleague", "classmate", "teammate", "underling", "thrall", "rival"
-    ]
+    non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
+                    "colleague", "classmate", "teammate", "underling", "thrall", "rival"]
 
     relationships = []
 
-    # 50% chance to create a relationship with the player.
+    # 1) Maybe 50% chance to relate with the player
     if random.random() < 0.5:
         rel_type = random.choice(familial) if random.random() < 0.2 else random.choice(non_familial)
-        relationships.append({"target": "player", "target_name": "the player", "type": rel_type})
+        relationships.append({
+            "target_entity_type": "player",
+            "target_entity_id": user_id,  # store your user_id 
+            "relationship_label": rel_type
+        })
 
-    # Gather existing NPCs (excluding self), including their archetype summaries if available.
+    # 2) Gather other NPCs
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT npc_id, npc_name, archetype_summary "
-        "FROM NPCStats "
-        "WHERE user_id=%s AND conversation_id=%s AND npc_id!=%s",
-        (user_id, conversation_id, new_npc_id)
-    )
+    cursor.execute("""
+        SELECT npc_id, npc_name, archetype_summary
+        FROM NPCStats
+        WHERE user_id=%s AND conversation_id=%s
+          AND npc_id!=%s
+    """, (user_id, conversation_id, new_npc_id))
     rows = cursor.fetchall()
     conn.close()
 
-    for candidate_id, candidate_name, candidate_arche_summary in rows:
+    # 3) For each other NPC, 30% chance
+    for (old_npc_id, old_npc_name, old_arche_summary) in rows:
         if random.random() < 0.3:
-            rel_type = random.choice(familial) if random.random() < 0.2 else random.choice(non_familial)
-            # Avoid duplicates
-            if not any(r.get("target") == candidate_id for r in relationships):
-                relationships.append({
-                    "target": candidate_id,
-                    "target_name": candidate_name,
-                    "type": rel_type,
-                    "target_archetype_summary": candidate_arche_summary or ""
-                })
+            rel_type = (random.choice(familial)
+                        if random.random() < 0.2 else
+                        random.choice(non_familial))
+            relationships.append({
+                "target_entity_type": "npc",
+                "target_entity_id": old_npc_id,
+                "relationship_label": rel_type,
+                "target_archetype_summary": old_arche_summary or ""
+            })
 
-    # Process each relationship
+    # 4) Actually create them
     for rel in relationships:
+        # Possibly build some memory text:
         memory_text = get_shared_memory(user_id, conversation_id, rel, new_npc_name)
         record_npc_event(user_id, conversation_id, new_npc_id, memory_text)
 
-        # Create the social link
-        if rel["target"] == "player":
-            create_social_link(user_id, conversation_id, "player", 0, "npc", new_npc_id, link_type=rel["type"], link_level=0)
-            # NPC -> player
-            await asyncio.to_thread(
-                append_relationship_to_npc, user_id, conversation_id, new_npc_id, rel["type"], 0
+        from logic.social_links import create_social_link
+        from logic.npc_creation import dynamic_reciprocal_relationship
+
+        # If the target is a player:
+        if rel["target_entity_type"] == "player":
+            create_social_link(
+                user_id, conversation_id,
+                entity1_type="npc",  entity1_id=new_npc_id,
+                entity2_type="player", entity2_id=rel["target_entity_id"],
+                link_type=rel["relationship_label"]
             )
-        else:
-            create_social_link(user_id, conversation_id, "npc", rel["target"], "npc", new_npc_id, link_type=rel["type"], link_level=0)
-            # new npc -> existing npc
-            target_summary = rel.get("target_archetype_summary", "")
-            reciprocal = dynamic_reciprocal_relationship(rel["type"], target_summary)
+            # Save it to NPCStats relationships JSON
             await asyncio.to_thread(
-                append_relationship_to_npc, user_id, conversation_id, new_npc_id, rel["type"], rel["target"]
-            )
-            # existing npc -> new npc
-            await asyncio.to_thread(
-                append_relationship_to_npc, user_id, conversation_id, rel["target"], reciprocal, new_npc_id
+                append_relationship_to_npc,
+                user_id, conversation_id,
+                new_npc_id, 
+                rel["relationship_label"],
+                "player", rel["target_entity_id"]
             )
 
-    logging.info(f"[assign_random_relationships] Done for NPC '{new_npc_name}' (id={new_npc_id}).")
+        else:
+            # It's another NPC
+            old_npc_id = rel["target_entity_id"]
+            # new npc -> old npc
+            create_social_link(
+                user_id, conversation_id,
+                entity1_type="npc", entity1_id=new_npc_id,
+                entity2_type="npc", entity2_id=old_npc_id,
+                link_type=rel["relationship_label"]
+            )
+            await asyncio.to_thread(
+                append_relationship_to_npc,
+                user_id, conversation_id,
+                new_npc_id,
+                rel["relationship_label"],
+                "npc", old_npc_id
+            )
+
+            # reciprocal
+            rec_type = dynamic_reciprocal_relationship(
+                rel["relationship_label"],
+                rel.get("target_archetype_summary","")
+            )
+            create_social_link(
+                user_id, conversation_id,
+                entity1_type="npc", entity1_id=old_npc_id,
+                entity2_type="npc", entity2_id=new_npc_id,
+                link_type=rec_type
+            )
+            await asyncio.to_thread(
+                append_relationship_to_npc,
+                user_id, conversation_id,
+                old_npc_id,
+                rec_type,
+                "npc", new_npc_id
+            )
+
+    logging.info(f"[assign_random_relationships] Done building relationships for NPC {new_npc_id}.")
 
 async def refine_npc_final_data(user_id: int, conversation_id: int, npc_id: int, day_names: list, environment_desc: str):
     """
