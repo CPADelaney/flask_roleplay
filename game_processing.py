@@ -120,7 +120,7 @@ Using this merged concept as inspiration, produce a strictly valid JSON object w
       - "location_name"
       - "description"
       - "open_hours"
-   (Generate at least 10 distinct locations.)
+   (Generate at least 10 distinct locations. Locations are unique places - eg., cities, towns, or buildings/stores/schools/office buildings/etc. within those cities/towns.)
 6. "scenario_name" (string; the title or name of this overall scenario)
 7. "quest_data" (object with exactly these keys):
       - "quest_name" (make the main quest interesting, engaging, and unique)
