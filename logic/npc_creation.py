@@ -767,7 +767,7 @@ def append_relationship_to_npc(
     )
     conn.commit()
     conn.close()
-    logging.info(f"[append_relationship_to_npc] Added relationship '{rel_label}' -> {target_npc_id} for NPC {npc_id}.")
+    logging.info(f"[append_relationship_to_npc] Added relationship '{rel_label}' -> {target_entity_id} for NPC {npc_id}.")
 
 
 
