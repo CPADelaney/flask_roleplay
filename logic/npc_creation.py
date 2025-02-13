@@ -1026,7 +1026,7 @@ async def refine_npc_final_data(user_id: int, conversation_id: int, npc_id: int,
     # 2) GPT prompt
     prompt = f"""
 We have an NPC in a femdom environment. Current data:
-{json.dumps(npc_data, indent=2)}
+{json.dumps(npc_data, indent=2, default=str)}
 
 Environment description:
 {environment_desc}
