@@ -525,7 +525,7 @@ async def insert_npc_stub_into_db(partial_npc: dict, user_id: int, conversation_
     are placeholders for now.
     """
     conn = get_db_connection()
-    cur = conn.cur()
+    cur = conn.cursor()
     cur.execute(
         """
         INSERT INTO NPCStats (
@@ -728,7 +728,7 @@ def append_relationship_to_npc(user_id: int, conversation_id: int, npc_id: int, 
     Example record: {"relationship_label": "thrall", "with_npc_id": 1234}
     """
     conn = get_db_connection()
-    cur = conn.cur()
+    cur = conn.cursor()
     cur.execute(
         "SELECT relationships FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id=%s",
         (user_id, conversation_id, npc_id)
@@ -766,7 +766,7 @@ def recalc_npc_stats_with_new_archetypes(user_id, conversation_id, npc_id):
     Re-fetch the NPC's archetypes from the DB and re-run combine_archetype_stats to update final stats.
     """
     conn = get_db_connection()
-    cur = conn.cur()
+    cur = conn.cursor()
     cur.execute(
         "SELECT archetypes FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id=%s",
         (user_id, conversation_id, npc_id)
@@ -857,7 +857,7 @@ async def add_archetype_to_npc(user_id, conversation_id, npc_id, new_arc):
     We'll store only 'name' in the DB, ignoring 'id' for consistency.
     """
     conn = get_db_connection()
-    cur = conn.cur()
+    cur = conn.cursor()
     cur.execute(
         "SELECT archetypes FROM NPCStats WHERE user_id=%s AND conversation_id=%s AND npc_id=%s LIMIT 1",
         (user_id, conversation_id, npc_id)
@@ -912,7 +912,7 @@ async def refine_npc_final_data(user_id: int, conversation_id: int, npc_id: int,
 
     # 1) Fetch current NPC record
     conn = get_db_connection()
-    cur = conn.cur()
+    cur = conn.cursor()
     cur.execute("""
        SELECT npc_name, introduced, sex,
               dominance, cruelty, closeness, trust, respect, intensity,
@@ -1015,7 +1015,7 @@ No extra text or function calls.
 
     # Update DB
     conn = get_db_connection()
-    cur = conn.cur()
+    cur = conn.cursor()
     cur.execute("""
        UPDATE NPCStats
        SET physical_description=%s,
