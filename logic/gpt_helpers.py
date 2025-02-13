@@ -113,3 +113,24 @@ Return strictly JSON, no extra text or function calls.
 
     # refined_npc now has all required keys
     return refined_npc
+
+def fetch_npc_name(user_id, conversation_id, npc_id) -> str:
+    """
+    Returns the 'npc_name' from NPCStats for the given npc_id/user_id/conversation_id,
+    or None if not found.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT npc_name
+        FROM NPCStats
+        WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+        LIMIT 1
+    """, (user_id, conversation_id, npc_id))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        return row[0]  # the npc_name
+    return None
+
