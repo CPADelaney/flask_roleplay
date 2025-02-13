@@ -9,7 +9,7 @@ from logic.prompts import SYSTEM_PROMPT
 from flask import Blueprint, request, jsonify, session
 from db.connection import get_db_connection
 from logic.universal_updater import apply_universal_updates
-from logic.npc_creation import spawn_and_refine_npcs_with_relationships
+from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 from logic.aggregator import get_aggregated_roleplay_context
 from logic.time_cycle import advance_time_and_update
 from logic.activities_logic import filter_activities_for_npc, build_short_summary
