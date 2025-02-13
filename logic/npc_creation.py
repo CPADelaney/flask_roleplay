@@ -360,17 +360,79 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         logging.warning(f"[get_archetype_synergy_description] parse or GPT error: {e}")
         # Return an empty JSON, or if you prefer a minimal fallback
         return "{}"
-        
+
+###################
+# 4.5) Adaptation
+###################
+
+def adapt_list_for_environment(environment_desc, archetype_summary, original_list, list_type="likes"):
+    """
+    Calls GPT to adapt each item in 'original_list' so it fits better with the environment
+    and the NPC's archetype_summary. 'list_type' can be "likes", "dislikes", or "hobbies"
+    to let GPT know how to adapt them.
+
+    Returns a *new* list (strings).
+    """
+    import json
+    if not original_list:
+        return original_list
+
+    system_prompt = f"""
+Environment:
+{environment_desc}
+
+NPC's archetype summary:
+{archetype_summary}
+
+Original {list_type} list:
+{original_list}
+
+Please transform each item so it fits more cohesively with the environment's theme and the NPC's archetype,
+retaining a similar 'topic' or 'concept' but making it more in-universe.
+
+Output strictly valid JSON: a single array of strings, with no extra commentary or keys.
+"""
+
+    try:
+        client = get_openai_client()
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": system_prompt}],
+            temperature=0.7,
+            max_tokens=300
+        )
+        raw_text = resp.choices[0].message.content.strip()
+
+        # remove triple-backticks if present
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw_text = "\n".join(lines).strip()
+
+        new_list = json.loads(raw_text)
+        if isinstance(new_list, list) and all(isinstance(x, str) for x in new_list):
+            return new_list
+        else:
+            logging.warning(f"[adapt_list_for_environment] GPT returned something not a list of strings, fallback to original.")
+            return original_list
+    except Exception as e:
+        logging.warning(f"[adapt_list_for_environment] GPT error => {e}")
+        return original_list
+
 ###################
 # 5) create_npc_partial
 ###################
 
-def create_npc_partial(sex="female", total_archetypes=3) -> dict:
+def create_npc_partial(sex="female", total_archetypes=3, environment_desc="A default environment") -> dict:
     """
     Creates a partial NPC dictionary that includes:
       - name, stats, archetypes, likes/dislikes, etc.
       - BUT does NOT include schedule or memory.
     """
+    # 1) Archetypes + Stats
     if sex.lower() == "male":
         final_stats = {
             "dominance":  random.randint(0, 30),
@@ -385,10 +447,10 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
         chosen_arcs = pick_with_reroll_replacement(total_archetypes)
         final_stats = combine_archetype_stats(chosen_arcs)
 
-    synergy_str = get_archetype_synergy_description(chosen_arcs, None)  # returns valid JSON or "{}"
+    # 2) synergy
+    synergy_str = get_archetype_synergy_description(chosen_arcs, None)  # returns JSON or "{}"
     logging.info(f"[create_npc_partial] synergy_str (raw) => {synergy_str!r}")
 
-    # Attempt to parse synergy JSON:
     try:
         synergy_data = json.loads(synergy_str)
         synergy_name = synergy_data.get("npc_name") or f"NPC_{random.randint(1000,9999)}"
@@ -398,17 +460,25 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
         synergy_name = f"NPC_{random.randint(1000,9999)}"
         synergy_text = "No synergy text"
 
-    # 2) extras approach (call GPT):
+    # 3) extras
     extras_text = get_archetype_extras_summary_gpt(chosen_arcs, synergy_name)
     arcs_for_json = [{"name": arc["name"]} for arc in chosen_arcs]
 
-    # Random flavor
+    # 4) random picks
     hpool = DATA["hobbies_pool"]
-    ppool = DATA["personality_pool"]
     lpool = DATA["likes_pool"]
     dpool = DATA["dislikes_pool"]
 
-    # Random birthdate in some approximate medieval range
+    tmp_hobbies  = random.sample(hpool, min(3,len(hpool)))
+    tmp_likes    = random.sample(lpool, min(3,len(lpool)))
+    tmp_dislikes = random.sample(dpool, min(3,len(dpool)))
+    
+    # 5) adapt them using environment + synergy_text
+    adapted_hobbies  = adapt_list_for_environment(environment_desc, synergy_text, tmp_hobbies, "hobbies")
+    adapted_likes    = adapt_list_for_environment(environment_desc, synergy_text, tmp_likes, "likes")
+    adapted_dislikes = adapt_list_for_environment(environment_desc, synergy_text, tmp_dislikes, "dislikes")
+
+    # 6) random birthdate
     year  = random.randint(990, 1040)
     month = random.randint(1, 12)
     day   = random.randint(1, 28)
@@ -427,10 +497,10 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
         "archetypes":  arcs_for_json,
         "archetype_summary": synergy_text,
         "archetype_extras_summary": extras_text,
-        "hobbies":     random.sample(hpool, min(3, len(hpool))),
-        "personality_traits": random.sample(ppool, min(3, len(ppool))),
-        "likes":       random.sample(lpool, min(3, len(lpool))),
-        "dislikes":    random.sample(dpool, min(3, len(dpool))),
+        "hobbies": adapted_hobbies,
+        "personality_traits": random.sample(DATA["personality_pool"], min(3, len(DATA["personality_pool"]))),
+        "likes": adapted_likes,
+        "dislikes": adapted_dislikes,
         "age":         random.randint(20, 45),
         "birthdate":   birth_str
     }
@@ -441,8 +511,6 @@ def create_npc_partial(sex="female", total_archetypes=3) -> dict:
         f"archetype_summary='{npc_dict['archetype_summary']}', birthdate={npc_dict['birthdate']}"
     )
     return npc_dict
-
-
 
 ###################
 # 6) DB Insert Stub
@@ -512,8 +580,6 @@ async def insert_npc_stub_into_db(partial_npc: dict, user_id: int, conversation_
 
     logging.info(f"[insert_npc_stub_into_db] Inserted NPC '{partial_npc['npc_name']}' => npc_id={npc_id}")
     return npc_id
-
-
 
 ###################
 # 7) Relationship + Archetype expansions
@@ -983,10 +1049,6 @@ No extra text or function calls.
         "memory": memories
     }
 
-###################
-# 10) Single NPC workflow
-###################
-
 async def spawn_single_npc(
     user_id: int,
     conversation_id: int,
@@ -1000,8 +1062,12 @@ async def spawn_single_npc(
     4) Final GPT call => produce physical_description, schedule, memory referencing relationships.
     5) Return npc_id
     """
-    # 1) partial NPC
-    partial_npc = create_npc_partial(sex="female")
+    # IMPORTANT: pass environment_desc to create_npc_partial!
+    partial_npc = create_npc_partial(
+        sex="female",
+        total_archetypes=3,
+        environment_desc=environment_desc
+    )
 
     # 2) Insert => npc_id
     npc_id = await insert_npc_stub_into_db(partial_npc, user_id, conversation_id)
@@ -1032,6 +1098,11 @@ async def spawn_multiple_npcs(
     """
     npc_ids = []
     for i in range(count):
-        new_id = await spawn_single_npc(user_id, conversation_id, environment_desc, day_names)
+        new_id = await spawn_single_npc(
+            user_id,
+            conversation_id,
+            environment_desc,
+            day_names
+        )
         npc_ids.append(new_id)
     return npc_ids
