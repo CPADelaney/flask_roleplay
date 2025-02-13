@@ -437,8 +437,13 @@ async def async_process_new_game(user_id, conversation_data):
                 VALUES($1,$2,'Chase',10,60,50,20,10,15,55,40)
             """, user_id, conversation_id)
 
-        # 13) Generate immersive calendar names & store them
-        calendar_data = await update_calendar_names(user_id, conversation_id, combined_env)
+        # 13) Retrieve existing immersive calendar names or generate them if not present.
+        calendar_data = load_calendar_names(user_id, conversation_id)
+        # Check if the calendar data is just our fallback. You might adjust this condition based on your logic.
+        if calendar_data.get("year_name") == "The Eternal Cycle":
+            # No immersive calendar names found; generate new ones.
+            calendar_data = await update_calendar_names(user_id, conversation_id, combined_env)
+        # Optionally, you can re-store the calendar data to be sure:
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
             VALUES($1,$2,'CalendarNames',$3)
@@ -448,6 +453,10 @@ async def async_process_new_game(user_id, conversation_data):
 
         day_names = calendar_data.get("days", ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
 
+ 
+        # NEW STEP: Generate and store Chase schedule.
+        await generate_chase_schedule(user_id, conversation_id, combined_env, day_names)
+        
         # ---------------------------------------------------------------------
         # NEW STEP: spawn multiple NPCs (instead of old spawn_and_refine_npcs_with_relationships).
         # ---------------------------------------------------------------------
