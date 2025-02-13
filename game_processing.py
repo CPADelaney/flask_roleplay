@@ -92,18 +92,18 @@ def _sync_gpt_request(conversation_id, context, prompt):
 # SINGLE-PASS PROMPTS
 # -------------------------------------------------------------------------
 
-ENV_PROMPT = """
+ENV_PROMPT = f"""
 You are setting up a new femdom daily-life sim environment.
 
 Below is a merged environment concept that combines multiple settings:
-Mega Setting Name: {mega_name}
+Mega Setting Name: {{mega_name}}
 Mega Description:
-{mega_desc}
+{{mega_desc}}
 
 Using this merged concept as inspiration, produce a strictly valid JSON object with the **exact** keys shown below (nothing else!). Each key’s purpose is described in parentheses:
 
 1. "setting_name" (string; a short, creative name referencing the merged environment)
-2. "environment_desc" (string; 1–3 paragraphs describing the overall environment’s look, feel, day-to-day atmosphere, culture, and any interesting details)
+2. "environment_desc" (string; 1–3 paragraphs describing the overall environment’s look, feel, day-to-day atmosphere, culture, and any interesting details. Be sure to elaborate on the society's general culture, since this is a daily-life sim.)
 3. "environment_history" (string; a short paragraph detailing any relevant historical background or pivotal events)
 4. "events" (array; each entry is an object with these fields):
       - "name"
@@ -115,13 +115,15 @@ Using this merged concept as inspiration, produce a strictly valid JSON object w
       - "month"
       - "day"
       - "time_of_day"
+   (Include enough interesting and creative festivals or holidays to fill a single calendar year.)
 5. "locations" (array; each entry is an object with):
       - "location_name"
       - "description"
-      - "open_hours"  (could be a string or array describing hours)
+      - "open_hours"
+   (Generate at least 10 distinct locations.)
 6. "scenario_name" (string; the title or name of this overall scenario)
 7. "quest_data" (object with exactly these keys):
-      - "quest_name"
+      - "quest_name" (make the main quest interesting, engaging, and unique)
       - "quest_description"
 
 No additional keys or text outside of the JSON. Do not wrap the JSON in code fences. Produce only the JSON object.
@@ -129,12 +131,13 @@ No additional keys or text outside of the JSON. Do not wrap the JSON in code fen
 For reference, here are additional environment details you can incorporate:
 
 Environment components:
-{env_components}
+{{env_components}}
 
-Enhanced features: {enhanced_features}
+Enhanced features: {{enhanced_features}}
 
-Stat modifiers: {stat_modifiers}
+Stat modifiers: {{stat_modifiers}}
 """
+
 
 NPC_PROMPT = """
 You are finalizing schedules for multiple NPCs in this environment:
