@@ -9,6 +9,7 @@ from datetime import datetime
 
 from logic.chatgpt_integration import get_openai_client, get_chatgpt_response
 from logic.gpt_utils import spaced_gpt_call
+from logic.gpt_helpers import fetch_npc_name
 from db.connection import get_db_connection
 from logic.memory_logic import get_shared_memory, record_npc_event
 from logic.social_links import create_social_link
@@ -962,6 +963,18 @@ No extra text or function calls.
     ))
     conn.commit()
     conn.close()
+
+
+    npc_name = fetch_npc_name(user_id, conversation_id, npc_id) or "Unknown"
+    
+    # 3) Now call propagate_shared_memories with the new memories
+    propagate_shared_memories(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        source_npc_id=npc_id,
+        source_npc_name=npc_name,
+        memories=new_memories  # from GPT
+    )
 
     logging.info(f"[refine_npc_final_data] Updated NPC {npc_id} => physical_desc + schedule + memory.")
     return {
