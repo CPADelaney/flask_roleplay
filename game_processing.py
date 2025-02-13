@@ -9,7 +9,6 @@ import os
 import asyncpg
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
 from datetime import datetime
-from logic.npc_creation import spawn_and_refine_npcs_with_relationships, create_npc_partial, refine_npc_with_gpt
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.aggregator import get_aggregated_roleplay_context
 from logic.gpt_helpers import adjust_npc_complete
@@ -17,6 +16,7 @@ from routes.story_routes import build_aggregator_text
 from logic.gpt_utils import spaced_gpt_call, safe_int
 from logic.universal_updater import apply_universal_updates_async
 from logic.calendar import update_calendar_names
+from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 
 DB_DSN = os.getenv("DB_DSN") 
 
@@ -85,6 +85,7 @@ def _sync_gpt_request(conversation_id, context, prompt):
         result["response"] = content
 
     return result
+
 
 # -------------------------------------------------------------------------
 # SINGLE-PASS PROMPTS
@@ -188,7 +189,6 @@ async def call_gpt_for_environment_data(
       "quest_data": {...}
     }
     """
-    # Build the final prompt from the global ENV_PROMPT
     prompt = ENV_PROMPT.format(
         mega_name=mega_name,
         mega_desc=mega_desc,
@@ -197,7 +197,6 @@ async def call_gpt_for_environment_data(
         stat_modifiers=", ".join(f"{k}: {v}" for k,v in stat_mods.items())
     )
 
-    # IMPORTANT: Now there's only one call that passes 6 args
     result = await spaced_gpt_call_with_retry(conversation_id, "", prompt, delay=1.0)
 
     if result.get("type") == "function_call":
@@ -207,7 +206,6 @@ async def call_gpt_for_environment_data(
         raw_text = result.get("response", "").strip()
         if raw_text.startswith("```"):
             lines = raw_text.splitlines()
-            # remove triple backticks
             if lines and lines[0].startswith("```"):
                 lines = lines[1:]
             if lines and lines[-1].startswith("```"):
@@ -220,6 +218,7 @@ async def call_gpt_for_environment_data(
         except Exception as e:
             logging.error("Error parsing environment JSON: %s", e, exc_info=True)
             return {}
+
 
 #async def call_gpt_for_npcs_and_chase(conversation_id, environment_desc, day_names):
 #    """
@@ -306,7 +305,7 @@ async def async_process_new_game(user_id, conversation_data):
         mega_name = mega_data.get("mega_name", "Untitled Mega Setting")
         mega_desc = mega_data.get("mega_description", "No environment generated")
 
-        # 4) Single GPT call => environment data (Important: pass all 6 args)
+        # 4) Single GPT call => environment data
         env_data = await call_gpt_for_environment_data(
             conversation_id,
             env_comps,
@@ -446,19 +445,19 @@ async def async_process_new_game(user_id, conversation_data):
         day_names = calendar_data.get("days", ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
 
         # ---------------------------------------------------------------------
-        # NEW STEP: Use spawn_and_refine_npcs_with_relationships to create + refine + do relationships
+        # NEW STEP: spawn multiple NPCs (instead of old spawn_and_refine_npcs_with_relationships).
         # ---------------------------------------------------------------------
-        spawn_result = await spawn_and_refine_npcs_with_relationships(
+        logging.info("[async_process_new_game] Spawning multiple NPCs (count=5) via new approach.")
+        new_npc_ids = await spawn_multiple_npcs(
             user_id=user_id,
             conversation_id=conversation_id,
             environment_desc=combined_env,
             day_names=day_names,
-            conn=conn,
             count=5
         )
-        logging.info("Spawn and refine result: %s", spawn_result)
-            
-        # 16) Build aggregator context & produce final narrative
+        logging.info("spawn_multiple_npcs => Created NPC IDs: %s", new_npc_ids)
+
+        # 14) Build aggregator context & produce final narrative
         aggregator_data = await asyncio.to_thread(
             get_aggregated_roleplay_context,
             user_id,
@@ -478,13 +477,13 @@ async def async_process_new_game(user_id, conversation_data):
         final_reply = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, opening_prompt)
         nyx_text = final_reply.get("response", "[No text returned]")
 
-        # 17) Insert final opening message
+        # 15) Insert final opening message
         await conn.execute("""
             INSERT INTO messages (conversation_id, sender, content)
             VALUES($1,$2,$3)
         """, conversation_id, "Nyx", nyx_text)
 
-        # 18) Mark conversation ready
+        # 16) Mark conversation ready
         await conn.execute("""
             UPDATE conversations
             SET conversation_name=$1, status='ready'
