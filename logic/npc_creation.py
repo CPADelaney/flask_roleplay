@@ -11,7 +11,7 @@ from logic.chatgpt_integration import get_openai_client, get_chatgpt_response
 from logic.gpt_utils import spaced_gpt_call
 from logic.gpt_helpers import fetch_npc_name
 from db.connection import get_db_connection
-from logic.memory_logic import get_shared_memory, record_npc_event, propogate_shared_memories
+from logic.memory_logic import get_shared_memory, record_npc_event, propagate_shared_memories
 from logic.social_links import create_social_link
 from logic.universal_updater import apply_universal_updates_async
 
