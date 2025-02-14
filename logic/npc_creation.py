@@ -1629,7 +1629,7 @@ def adjust_family_ages(user_id, conversation_id):
             WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
         """, (info["age"], user_id, conversation_id, npc_id))
     conn.commit()
-    conn.close(
+    conn.close()
 
 # 2) Now do a separate GPT call for Chase
 async def init_chase_schedule():
