@@ -1556,9 +1556,9 @@ def adjust_family_ages(user_id, conversation_id):
     """
     # Define minimum age differences for roles (all keys in lowercase)
     min_age_diff = {
-        "mother": 20,
-        "stepmother": 20,
-        "aunt": 15,
+        "mother": 16,
+        "stepmother": 16,
+        "aunt": 6,
         "older sister": 1,
         "stepsister": 1,
         "babysitter": 2,
@@ -1567,7 +1567,7 @@ def adjust_family_ages(user_id, conversation_id):
         "milf": 10,
         "dowager": 20,
         "domestic authority": 5,
-        "foreign royalty": 10,
+        "foreign royalty": 0,
         "cousin": 0  # could be same age or slight difference
     }
     
