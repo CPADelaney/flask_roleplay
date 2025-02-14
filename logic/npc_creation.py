@@ -154,6 +154,23 @@ def combine_archetype_stats(archetype_list):
 # 4) GPT synergy calls
 ###################
 
+existing_npc_names = set()
+
+def get_unique_npc_name(proposed_name: str) -> str:
+    # If the name is "Seraphina" or already exists, choose an alternative from a predefined list.
+    unwanted_names = {"seraphina"}
+    if proposed_name.strip().lower() in unwanted_names or proposed_name in existing_npc_names:
+        alternatives = ["Aurora", "Celeste", "Luna", "Nova", "Ivy", "Evelyn", "Isolde", "Marina"]
+        # Filter out any alternatives already in use
+        available = [name for name in alternatives if name not in existing_npc_names and name.lower() not in unwanted_names]
+        if available:
+            new_name = random.choice(available)
+        else:
+            # If none available, simply append a random number
+            new_name = f"{proposed_name}{random.randint(2, 99)}"
+        return new_name
+    return proposed_name
+
 def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
     if not archetypes_list:
         default_name = provided_npc_name or f"NPC_{random.randint(1000,9999)}"
@@ -171,11 +188,11 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         name_instruction = (
             "Generate a creative, unique, and fitting feminine name for the NPC. "
             "The name must be unmistakably feminine—do not include any masculine honorifics or traditionally male names (e.g. 'Prince', 'Lord', 'Sir', 'Eduard'). "
-            "If using a title, use feminine ones such as 'Princess', 'Lady', or 'Madame', or simply output a feminine first name without any honorific."
+            "Do not use 'Seraphina', and ensure the name is not the same as any previously generated name."
         )
 
     system_prompt = (
-        "You are an expert at merging multiple archetypes into a single cohesive persona. "
+        "You are an expert at merging multiple archetypes into a single cohesive persona for a female NPC. "
         "Output strictly valid JSON with exactly these two keys:\n"
         '  "npc_name" (string)\n'
         '  "archetype_summary" (string)\n'
@@ -220,10 +237,17 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         npc_name = synergy_data["npc_name"]
         masculine_markers = ["Prince", "Lord", "Sir", "Eduard", "William", "John"]
         if any(marker in npc_name for marker in masculine_markers):
-            # Fallback name in case of masculine markers
             logging.info("Masculine markers detected in NPC name; replacing with fallback feminine name.")
             synergy_data["npc_name"] = "Lady Celestine"
-        
+
+        # Post-processing: Ensure the name is unique and not overused.
+        original_name = synergy_data["npc_name"].strip()
+        unique_name = get_unique_npc_name(original_name)
+        if unique_name != original_name:
+            logging.info(f"Name '{original_name}' replaced with unique name '{unique_name}'.")
+        synergy_data["npc_name"] = unique_name
+        existing_npc_names.add(unique_name)
+
         return json.dumps(synergy_data, ensure_ascii=False)
 
     except Exception as e:
