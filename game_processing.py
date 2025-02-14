@@ -469,6 +469,12 @@ async def async_process_new_game(user_id, conversation_data):
             count=5
         )
         logging.info("spawn_multiple_npcs => Created NPC IDs: %s", new_npc_ids)
+        
+        # NEW STEP: Propagate family relationships (e.g. add missing 'mother' links among siblings)
+        propagate_family_relationships(user_id, conversation_id)
+        
+        # NEW STEP: Adjust family ages based on familial relationships
+        adjust_family_ages(user_id, conversation_id)
 
         # 14) Build aggregator context & produce final narrative
         aggregator_data = await asyncio.to_thread(
