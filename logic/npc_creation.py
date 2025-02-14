@@ -163,42 +163,72 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
             "archetype_summary": "No special archetype synergy."
         })
 
-    name_instruction = (
-        "Generate a creative, unique, and fitting feminine name for the NPC. "
-        "The name must be unmistakably feminine—do not include any masculine honorifics or terms such as 'Prince', 'Lord', 'Sir', or any traditionally male names. "
-        "If a title is used, it must be feminine (e.g., 'Princess', 'Lady', 'Madame'), or simply provide a feminine first name with no honorific."
-    )
+    archetype_names = [a["name"] for a in archetypes_list]
 
-    system_msg = (
-        f"You are an expert creative writer merging these archetypes: {', '.join(archetype_names)}.\n"
+    if provided_npc_name:
+        name_instruction = f'Use the provided NPC name: "{provided_npc_name}".'
+    else:
+        name_instruction = (
+            "Generate a creative, unique, and fitting feminine name for the NPC. "
+            "The name must be unmistakably feminine—do not include any masculine honorifics or traditionally male names (e.g. 'Prince', 'Lord', 'Sir', 'Eduard'). "
+            "If using a title, use feminine ones such as 'Princess', 'Lady', or 'Madame', or simply output a feminine first name without any honorific."
+        )
+
+    system_prompt = (
+        "You are an expert at merging multiple archetypes into a single cohesive persona. "
+        "Output strictly valid JSON with exactly these two keys:\n"
+        '  "npc_name" (string)\n'
+        '  "archetype_summary" (string)\n'
+        "No additional keys, no extra commentary, no markdown fences.\n\n"
+        "If you cannot comply, output an empty JSON object {}.\n\n"
+        f"Archetypes to merge: {', '.join(archetype_names)}\n"
         f"{name_instruction}\n"
-        "Output a JSON with exactly two keys: \"npc_name\" and \"archetype_summary\".\n"
-        "Female NPC name should be a unique, creative, and fitting feminine name. Avoid overused names like 'Seraphina.'"
-        "No extra text, no markdown."
     )
-
-    logging.info(f"[get_archetype_synergy_description] GPT prompt => {system_msg}")
 
     try:
         client = get_openai_client()
         resp = client.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role": "system", "content": system_msg}],
+            messages=[{"role": "system", "content": system_prompt}],
             temperature=0.7,
             max_tokens=300
         )
-        synergy_str = resp.choices[0].message.content.strip()
+        synergy_raw = resp.choices[0].message.content.strip()
+        logging.info(f"[get_archetype_synergy_description] Raw synergy GPT output => {synergy_raw!r}")
 
-        logging.info(f"[get_archetype_synergy_description] Raw synergy GPT output => {synergy_str}")
+        # Strip code fences if present
+        if synergy_raw.startswith("```"):
+            lines = synergy_raw.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines.pop(0)
+            if lines and lines[-1].startswith("```"):
+                lines.pop()
+            synergy_raw = "\n".join(lines).strip()
 
-        return synergy_str
+        # Attempt to parse JSON
+        synergy_data = json.loads(synergy_raw)
+
+        # Validate the essential keys are present
+        if not isinstance(synergy_data, dict):
+            logging.warning("[get_archetype_synergy_description] synergy_data is not a dict—falling back.")
+            return "{}"
+        if "npc_name" not in synergy_data or "archetype_summary" not in synergy_data:
+            logging.warning("[get_archetype_synergy_description] synergy_data missing required keys—falling back.")
+            return "{}"
+
+        # Post-processing: Check for masculine markers in the name.
+        npc_name = synergy_data["npc_name"]
+        masculine_markers = ["Prince", "Lord", "Sir", "Eduard", "William", "John"]
+        if any(marker in npc_name for marker in masculine_markers):
+            # Fallback name in case of masculine markers
+            logging.info("Masculine markers detected in NPC name; replacing with fallback feminine name.")
+            synergy_data["npc_name"] = "Lady Celestine"
+        
+        return json.dumps(synergy_data, ensure_ascii=False)
+
     except Exception as e:
-        logging.error(f"[get_archetype_synergy_description] error: {e}")
-        fallback_name = provided_npc_name or f"NPC_{random.randint(1000,9999)}"
-        return json.dumps({
-            "npc_name": fallback_name,
-            "archetype_summary": "GPT call failed or synergy unavailable."
-        })
+        logging.warning(f"[get_archetype_synergy_description] parse or GPT error: {e}")
+        return "{}"
 
 def get_archetype_extras_summary_gpt(archetypes_list, npc_name):
     """
