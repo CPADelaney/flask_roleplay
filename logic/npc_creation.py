@@ -511,7 +511,7 @@ def create_npc_partial(user_id: int, conversation_id: int, sex: str = "female",
     # Define age adjustments (role: (modifier_min, modifier_max))
     role_base_age_ranges = {
         "mother": (30, 55),
-        "stepmother": (30, 55),
+        "stepmother": (18, 55),
         "aunt": (25, 60),
         "older sister": (19, 40),
         "stepsister": (18, 45),
@@ -1569,7 +1569,7 @@ def adjust_family_ages(user_id, conversation_id):
     # Define minimum age differences for roles (all keys in lowercase)
     min_age_diff = {
         "mother": 16,
-        "stepmother": 14,
+        "stepmother": 0,
         "aunt": 5,
         "older sister": 1,
         "stepsister": 1,
