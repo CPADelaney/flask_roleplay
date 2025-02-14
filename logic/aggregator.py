@@ -497,30 +497,36 @@ def update_global_summary(old_summary, new_stuff, max_len=3000):
 
 def make_minimal_scene_info(aggregated):
     """
-    Provide a small snippet: immersive date info and a brief list of introduced/unintroduced NPCs.
+    Provide a small snippet: full date info plus a brief list of introduced
+    and unintroduced NPCs for chance encounters.
     """
     lines = []
-    calendar = aggregated.get("calendar", {})
-    year_str = calendar.get("year_name", aggregated.get("year", "Unknown Year"))
-    # If current_month is numeric and calendar has months, map it:
-    months = calendar.get("months", [])
-    month_str = aggregated.get("month", "1")
-    if months and month_str.isdigit():
-        idx = int(month_str) - 1
-        if 0 <= idx < len(months):
-            month_str = months[idx]
-    day_str = aggregated.get("day", "1")
-    time_of_day = aggregated.get("timeOfDay", "Morning")
-    lines.append(f"- It is {year_str}, {month_str} {day_str}, {time_of_day}.\n")
+    # Retrieve calendar information and ensure it's a dictionary.
+    calendar_data = aggregated.get("calendar_names", {})
+    if isinstance(calendar_data, str):
+        try:
+            calendar_data = json.loads(calendar_data)
+        except Exception:
+            calendar_data = {}
+
+    # Now use the dictionary to build the date string.
+    year_str = calendar_data.get("year_name", aggregated.get("year", "Unknown Year"))
+    month_str = calendar_data.get("month_name", aggregated.get("month", "Unknown Month"))
+    day_str = calendar_data.get("day", aggregated.get("day", "Unknown Day"))
+    tod = aggregated.get("timeOfDay", "Unknown Time")
+    
+    lines.append(f"- It is {year_str}, {month_str} {day_str}, {tod}.\n")
+    
     # Introduced NPCs snippet
     lines.append("Introduced NPCs in the area:")
     for npc in aggregated["introducedNPCs"][:4]:
         loc = npc.get("current_location", "Unknown")
-        desc_snippet = npc.get("physical_description", "").split(".")[0]  # first sentence of description
-        lines.append(f"  - {npc['npc_name']} at {loc} ({desc_snippet}...)")
-    # Unintroduced snippet
-    lines.append("Unintroduced NPCs (potential encounters):")
+        lines.append(f"  - {npc['npc_name']} is at {loc}")
+    
+    # Unintroduced NPCs snippet
+    lines.append("Unintroduced NPCs (possible random encounters):")
     for npc in aggregated["unintroducedNPCs"][:2]:
         loc = npc.get("current_location", "Unknown")
-        lines.append(f"  - {npc['npc_name']} lurking around {loc}")
+        lines.append(f"  - ???: '{npc['npc_name']}' lurking around {loc}")
+    
     return "\n".join(lines)
