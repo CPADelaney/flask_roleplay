@@ -165,8 +165,8 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
 
     name_instruction = (
         "Generate a creative, unique, and fitting feminine name for the NPC. "
-        "The name must be unmistakably feminine—avoid any masculine honorifics or traditionally male names (e.g. 'Sir', 'Mr.', 'Eduard', etc.). "
-        "If using a title, use feminine ones such as 'Lady', 'Madame', or simply a feminine first name. "
+        "The name must be unmistakably feminine—do not include any masculine honorifics or terms such as 'Prince', 'Lord', 'Sir', or any traditionally male names. "
+        "If a title is used, it must be feminine (e.g., 'Princess', 'Lady', 'Madame'), or simply provide a feminine first name with no honorific."
     )
 
     system_msg = (
