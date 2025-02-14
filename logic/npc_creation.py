@@ -1416,13 +1416,72 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
     logging.info("[generate_chase_schedule] Stored chase schedule => %s", chase_schedule)
     return chase_schedule
 
-def propagate_family_relationships(user_id, conversation_id):
+# --- NEW: Define relationship groups for propagation ---
+RELATIONSHIP_GROUPS = {
+    # Family relationships:
+    "family": {
+        "mother": {
+            "related": ["sister", "stepsister", "cousin"],  # Cousins can be related too
+            "base": "mother",
+            "reciprocal": "child"
+        },
+        "stepmother": {
+            "related": ["sister", "stepsister", "cousin"],
+            "base": "stepmother",
+            "reciprocal": "child"
+        },
+        "aunt": {
+            "related": ["cousin"],  # Optionally, cousins of an aunt could also be linked
+            "base": "aunt",
+            "reciprocal": "niece/nephew"
+        },
+        "cousin": {
+            "related": ["cousin"],  # Cousins are symmetric
+            "base": "cousin",
+            "reciprocal": "cousin"
+        }
+    },
+    # Work/Professional relationships:
+    "work": {
+        "boss": {
+            "related": ["colleague"],
+            "base": "boss",
+            "reciprocal": "employee"
+        }
+    },
+    # Team/Group relationships:
+    "team": {
+        "captain": {
+            "related": ["teammate"],
+            "base": "captain",
+            "reciprocal": "team member"
+        },
+        "classmate": {
+            "related": ["classmate"],
+            "base": "classmate",
+            "reciprocal": "classmate"  # symmetric
+        }
+    },
+    # Neighborhood:
+    "neighbors": {
+        "neighbor": {
+            "related": ["neighbor"],
+            "base": "neighbor",
+            "reciprocal": "neighbor"
+        }
+    }
+}
+
+# --- NEW: A general relationship propagation function ---
+def propagate_relationships(user_id, conversation_id):
     """
-    Scan all NPCs for familial relationships and propagate additional ones.
-    For example, if an NPC already has a "mother" relationship with an entity,
-    then any NPC that is marked as a "sister" or "stepsister" with the same target
-    should also have that target as their "mother" (and vice versa for the reciprocal).
-    Extend this logic as needed.
+    Scan all NPCs for relationships and, based on RELATIONSHIP_GROUPS,
+    propagate additional links. For example, if NPC A is a mother to target X,
+    and NPC B is a sister (or stepsister) of someone who also relates to X,
+    then NPC B should also gain the mother relationship to X,
+    and X should gain the reciprocal 'child' link if not already present.
+    
+    This logic is applied for each defined group (family, work, team, neighbors).
     """
     conn = get_db_connection()
     cur = conn.cursor()
@@ -1432,45 +1491,52 @@ def propagate_family_relationships(user_id, conversation_id):
         WHERE user_id=%s AND conversation_id=%s
     """, (user_id, conversation_id))
     rows = cur.fetchall()
+    # Build a dictionary of npc data
     npc_dict = {}
-    for row in rows:
-        npc_id, npc_name, rel_str = row
+    for npc_id, npc_name, rel_str in rows:
         try:
             rels = json.loads(rel_str) if rel_str else []
         except Exception:
             rels = []
         npc_dict[npc_id] = {"npc_name": npc_name, "relationships": rels}
     
-    # For each NPC that is a mother/stepmother, propagate to sisters/stepsisters
-    for npc_id, data in npc_dict.items():
-        for rel in data["relationships"]:
-            label = rel.get("relationship_label", "").lower()
-            target = rel.get("entity_id")
-            if label in ["mother", "stepmother"]:
-                # For every other NPC with a sister/stepsister relationship with same target:
-                for other_id, other_data in npc_dict.items():
-                    if other_id == npc_id:
-                        continue
-                    for other_rel in other_data["relationships"]:
-                        if other_rel.get("relationship_label", "").lower() in ["sister", "stepsister"]:
-                            if other_rel.get("entity_id") == target:
-                                # If the sister does not already have a mother relationship to that target, add it
-                                if not any(r.get("relationship_label", "").lower() in ["mother", "stepmother"] and r.get("entity_id") == target for r in other_data["relationships"]):
-                                    other_data["relationships"].append({
-                                        "relationship_label": "mother",
-                                        "entity_type": "npc",
-                                        "entity_id": target
-                                    })
-                                    # And add the reciprocal "child" relationship to the target NPC (if target is an NPC)
-                                    if target in npc_dict:
-                                        target_rels = npc_dict[target]["relationships"]
-                                        if not any(r.get("relationship_label", "").lower() == "child" and r.get("entity_id") == other_id for r in target_rels):
-                                            target_rels.append({
-                                                "relationship_label": "child",
+    # For each propagation group:
+    for group in RELATIONSHIP_GROUPS.values():
+        for base_label, settings in group.items():
+            # For every NPC that has a base relationship in this group...
+            for npc_id, data in npc_dict.items():
+                for rel in data["relationships"]:
+                    # Compare case-insensitively
+                    if rel.get("relationship_label", "").lower() == base_label.lower():
+                        target = rel.get("entity_id")
+                        # Now, for every other NPC in the same group that has one of the related labels
+                        for other_id, other_data in npc_dict.items():
+                            if other_id == npc_id:
+                                continue
+                            for other_rel in other_data["relationships"]:
+                                if other_rel.get("relationship_label", "").lower() in [r.lower() for r in settings["related"]]:
+                                    if other_rel.get("entity_id") == target:
+                                        # If this other NPC does not already have the base relationship,
+                                        # add it.
+                                        if not any(r.get("relationship_label", "").lower() == base_label.lower() and r.get("entity_id") == target
+                                                   for r in other_data["relationships"]):
+                                            other_data["relationships"].append({
+                                                "relationship_label": base_label,
                                                 "entity_type": "npc",
-                                                "entity_id": other_id
+                                                "entity_id": target
                                             })
-    # Write changes back to the DB
+                                            # Also add the reciprocal relationship to the target NPC,
+                                            # if target exists in our npc_dict.
+                                            if target in npc_dict:
+                                                target_rels = npc_dict[target]["relationships"]
+                                                if not any(r.get("relationship_label", "").lower() == settings["reciprocal"].lower() and r.get("entity_id") == other_id
+                                                           for r in target_rels):
+                                                    target_rels.append({
+                                                        "relationship_label": settings["reciprocal"],
+                                                        "entity_type": "npc",
+                                                        "entity_id": other_id
+                                                    })
+    # Write the updated relationships back to the DB.
     for npc_id, data in npc_dict.items():
         new_rel_str = json.dumps(data["relationships"])
         cur.execute("""
