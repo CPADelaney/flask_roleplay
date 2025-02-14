@@ -9,18 +9,22 @@ on:
 jobs:
   analyze-code:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # ✅ Enables repo access
+
     steps:
       - name: 🛠 Checkout Repository
         uses: actions/checkout@v4
 
-      - name: 🤖 Allow Nyx to Analyze Code
+      - name: 🔍 Fetch Repository Contents for Nyx AI
         run: |
-          curl -X POST "https://api.github.com/repos/CPADelaney/flask_roleplay/contents" \
+          curl -X GET "https://api.github.com/repos/CPADelaney/flask-roleplay/contents" \
           -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
           -H "Accept: application/vnd.github.v3+json"
 
       - name: 🚀 Allow Nyx to Modify Code (Optional)
         run: |
-          curl -X PATCH "https://api.github.com/repos//CPADelaney/flask_roleplay" \
+          curl -X PATCH "https://api.github.com/repos/CPADelaney/flask-roleplay" \
           -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
-          -H "Accept: application/vnd.github.v3+json"
+          -H "Accept: application/vnd.github.v3+json" \
+          -d '{"description": "Updating repository details via Nyx AI."}'
