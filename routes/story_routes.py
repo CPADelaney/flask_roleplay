@@ -453,10 +453,10 @@ def next_storybeat():
         conn.commit()
 
         # 3) Create a dominant NPC (for example, Nyx) using the new spawn_single_npc
-        nyx_npc_id = asyncio.run(spawn_single_npc(user_id, conv_id, env_desc, day_names))
+  #      nyx_npc_id = asyncio.run(spawn_single_npc(user_id, conv_id, env_desc, day_names))
         # Optionally update the NPC's name to "Nyx" in the DB
-        cur.execute("UPDATE NPCStats SET npc_name=%s WHERE npc_id=%s", ("Nyx", nyx_npc_id))
-        conn.commit()
+   #     cur.execute("UPDATE NPCStats SET npc_name=%s WHERE npc_id=%s", ("Nyx", nyx_npc_id))
+  #      conn.commit()
 
         # 4) If universal update data was provided, run the universal update asynchronously.
         universal_data = data.get("universal_update", {})
