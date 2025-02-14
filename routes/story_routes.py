@@ -476,7 +476,7 @@ async def next_storybeat():
                 result = await apply_universal_updates(user_id, conv_id, universal_data, async_conn)
                 await async_conn.close()
                 return result
-            update_result = asyncio.run(run_univ_update())
+            update_result = await run_univ_update()
             if "error" in update_result:
                 cur.close()
                 conn.close()
