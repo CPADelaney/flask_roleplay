@@ -458,34 +458,17 @@ Output strictly valid JSON: a single array of strings, with no extra commentary 
 # 5) create_npc_partial
 ###################
 
-def create_npc_partial(
-    user_id: int,
-    conversation_id: int,
-    sex: str = "female",
-    total_archetypes: int = 3,
-    environment_desc: str = "A default environment"
-) -> dict:
-    """
-    Creates a partial NPC dictionary that includes:
-      - name, stats, archetypes, likes/dislikes, etc.
-      - Also assigns an 'age' and a 'birthdate' (month + day) 
-        using the custom months loaded from the DB.
-    """
+def create_npc_partial(user_id: int, conversation_id: int, sex: str = "female",
+                       total_archetypes: int = 4, environment_desc: str = "A default environment") -> dict:
     import random
-
-    # 1) Load your custom calendar from DB => "months", "days", etc.
     calendar_data = load_calendar_names(user_id, conversation_id)
     months_list = calendar_data.get("months", [])
-
-    # Fallback if no months returned (or if GPT gave fewer than 12)
     if len(months_list) < 12:
         months_list = [
             "Frostmoon", "Windspeak", "Bloomrise", "Dawnsveil",
             "Emberlight", "Goldencrest", "Shadowleaf", "Harvesttide",
             "Stormcall", "Nightwhisper", "Snowbound", "Yearsend"
         ]
-
-    # 2) Archetypes + Stats
     if sex.lower() == "male":
         final_stats = {
             "dominance":  random.randint(0, 30),
@@ -499,11 +482,9 @@ def create_npc_partial(
     else:
         chosen_arcs = pick_with_reroll_replacement(total_archetypes)
         final_stats = combine_archetype_stats(chosen_arcs)
-
-    # 3) synergy
+    
     synergy_str = get_archetype_synergy_description(chosen_arcs, None)
     logging.info(f"[create_npc_partial] synergy_str (raw) => {synergy_str!r}")
-
     try:
         synergy_data = json.loads(synergy_str)
         synergy_name = synergy_data.get("npc_name") or f"NPC_{random.randint(1000,9999)}"
@@ -516,48 +497,76 @@ def create_npc_partial(
     # 4) extras
     extras_text = get_archetype_extras_summary_gpt(chosen_arcs, synergy_name)
     arcs_for_json = [{"name": arc["name"]} for arc in chosen_arcs]
-
-    # 5) random picks
     hpool = DATA["hobbies_pool"]
     lpool = DATA["likes_pool"]
     dpool = DATA["dislikes_pool"]
-
     tmp_hobbies  = random.sample(hpool, min(3, len(hpool)))
     tmp_likes    = random.sample(lpool, min(3, len(lpool)))
     tmp_dislikes = random.sample(dpool, min(3, len(dpool)))
-
-    # 6) adapt them
     adapted_hobbies  = adapt_list_for_environment(environment_desc, synergy_text, tmp_hobbies, "hobbies")
     adapted_likes    = adapt_list_for_environment(environment_desc, synergy_text, tmp_likes, "likes")
     adapted_dislikes = adapt_list_for_environment(environment_desc, synergy_text, tmp_dislikes, "dislikes")
 
     # 7) Age + birthdate
-    npc_age = random.randint(20, 45)
+    # Define age adjustments (role: (modifier_min, modifier_max))
+    base_age = random.randint(20, 50)
+    age_adjustments = {
+        "stepmother": (20, 30),
+        "mother": (20, 30),
+        "aunt": (15, 25),
+        "older sister": (1, 10),
+        "stepsister": (-4, 10),
+        "babysitter": (2, 10),
+        "teacher": (10, 20),
+        "principal": (10, 20),
+        "milf": (10, 20),
+        "dowager": (15, 30),
+        "domestic authority": (5, 20),
+        "foreign royalty": (-5, 20),
+        "college student": (-15, -5),
+        "intern": (-15, -3),
+        "student": (-15, -4),
+        "manic pixie dream girl": (-1, -5)
+    }
+    familial_found = [arc["name"].strip().lower() for arc in chosen_arcs if arc["name"].strip().lower() in age_adjustments]
+    if familial_found:
+        selected_role = random.choice(familial_found)
+        extra_years = random.randint(age_adjustments[selected_role][0], age_adjustments[selected_role][1])
+        npc_age = base_age + extra_years
+    else:
+        npc_age = base_age
 
     birth_month = random.choice(months_list)
-    birth_day   = random.randint(1, 28)   # up to 28 or 30, your choice
-    birth_str   = f"{birth_month} {birth_day}"  # e.g. "Shadowleaf 17"
+    birth_day = random.randint(1, 28)
+    birth_str = f"{birth_month} {birth_day}"
 
     npc_dict = {
-        "npc_name":                synergy_name,
-        "introduced":             False,
-        "sex":                     sex.lower(),
-        "dominance":              final_stats["dominance"],
-        "cruelty":                final_stats["cruelty"],
-        "closeness":              final_stats["closeness"],
-        "trust":                  final_stats["trust"],
-        "respect":                final_stats["respect"],
-        "intensity":              final_stats["intensity"],
-        "archetypes":             arcs_for_json,
-        "archetype_summary":      synergy_text,
+        "npc_name": synergy_name,
+        "introduced": False,
+        "sex": sex.lower(),
+        "dominance": final_stats["dominance"],
+        "cruelty": final_stats["cruelty"],
+        "closeness": final_stats["closeness"],
+        "trust": final_stats["trust"],
+        "respect": final_stats["respect"],
+        "intensity": final_stats["intensity"],
+        "archetypes": arcs_for_json,
+        "archetype_summary": synergy_text,
         "archetype_extras_summary": extras_text,
-        "hobbies":                adapted_hobbies,
-        "personality_traits":     random.sample(DATA["personality_pool"], min(3, len(DATA["personality_pool"]))),
-        "likes":                  adapted_likes,
-        "dislikes":               adapted_dislikes,
-        "age":                    npc_age,
-        "birthdate":              birth_str
+        "hobbies": adapted_hobbies,
+        "personality_traits": random.sample(DATA["personality_pool"], min(3, len(DATA["personality_pool"]))),
+        "likes": adapted_likes,
+        "dislikes": adapted_dislikes,
+        "age": npc_age,
+        "birthdate": birth_str
     }
+    logging.info(
+        "[create_npc_partial] Created partial NPC => "
+        f"name='{npc_dict['npc_name']}', arcs={[arc['name'] for arc in chosen_arcs]}, "
+        f"archetype_summary='{npc_dict['archetype_summary']}', "
+        f"birthdate={npc_dict['birthdate']}, age={npc_age}"
+    )
+    return npc_dict
 
     logging.info(
         "[create_npc_partial] Created partial NPC => "
@@ -1249,7 +1258,7 @@ async def spawn_single_npc(
         user_id=user_id,
         conversation_id=conversation_id,
         sex="female",
-        total_archetypes=3,
+        total_archetypes=4,
         environment_desc=environment_desc
     )
 
@@ -1406,6 +1415,143 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
 
     logging.info("[generate_chase_schedule] Stored chase schedule => %s", chase_schedule)
     return chase_schedule
+
+def propagate_family_relationships(user_id, conversation_id):
+    """
+    Scan all NPCs for familial relationships and propagate additional ones.
+    For example, if an NPC already has a "mother" relationship with an entity,
+    then any NPC that is marked as a "sister" or "stepsister" with the same target
+    should also have that target as their "mother" (and vice versa for the reciprocal).
+    Extend this logic as needed.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT npc_id, npc_name, relationships
+        FROM NPCStats
+        WHERE user_id=%s AND conversation_id=%s
+    """, (user_id, conversation_id))
+    rows = cur.fetchall()
+    npc_dict = {}
+    for row in rows:
+        npc_id, npc_name, rel_str = row
+        try:
+            rels = json.loads(rel_str) if rel_str else []
+        except Exception:
+            rels = []
+        npc_dict[npc_id] = {"npc_name": npc_name, "relationships": rels}
+    
+    # For each NPC that is a mother/stepmother, propagate to sisters/stepsisters
+    for npc_id, data in npc_dict.items():
+        for rel in data["relationships"]:
+            label = rel.get("relationship_label", "").lower()
+            target = rel.get("entity_id")
+            if label in ["mother", "stepmother"]:
+                # For every other NPC with a sister/stepsister relationship with same target:
+                for other_id, other_data in npc_dict.items():
+                    if other_id == npc_id:
+                        continue
+                    for other_rel in other_data["relationships"]:
+                        if other_rel.get("relationship_label", "").lower() in ["sister", "stepsister"]:
+                            if other_rel.get("entity_id") == target:
+                                # If the sister does not already have a mother relationship to that target, add it
+                                if not any(r.get("relationship_label", "").lower() in ["mother", "stepmother"] and r.get("entity_id") == target for r in other_data["relationships"]):
+                                    other_data["relationships"].append({
+                                        "relationship_label": "mother",
+                                        "entity_type": "npc",
+                                        "entity_id": target
+                                    })
+                                    # And add the reciprocal "child" relationship to the target NPC (if target is an NPC)
+                                    if target in npc_dict:
+                                        target_rels = npc_dict[target]["relationships"]
+                                        if not any(r.get("relationship_label", "").lower() == "child" and r.get("entity_id") == other_id for r in target_rels):
+                                            target_rels.append({
+                                                "relationship_label": "child",
+                                                "entity_type": "npc",
+                                                "entity_id": other_id
+                                            })
+    # Write changes back to the DB
+    for npc_id, data in npc_dict.items():
+        new_rel_str = json.dumps(data["relationships"])
+        cur.execute("""
+            UPDATE NPCStats
+            SET relationships=%s
+            WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+        """, (new_rel_str, user_id, conversation_id, npc_id))
+    conn.commit()
+    conn.close()
+
+def adjust_family_ages(user_id, conversation_id):
+    """
+    Adjust NPC ages based on familial relationships.
+    For example, if an NPC has a "mother" relationship with another,
+    ensure that the mother's age is at least a specified number of years greater
+    than the child's.
+    """
+    # Define minimum age differences for roles (all keys in lowercase)
+    min_age_diff = {
+        "mother": 20,
+        "stepmother": 20,
+        "aunt": 15,
+        "older sister": 1,
+        "stepsister": 1,
+        "babysitter": 2,
+        "teacher": 10,
+        "principal": 10,
+        "milf": 10,
+        "dowager": 20,
+        "domestic authority": 5,
+        "foreign royalty": 10,
+        "cousin": 0  # could be same age or slight difference
+    }
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT npc_id, age, relationships
+        FROM NPCStats
+        WHERE user_id=%s AND conversation_id=%s
+    """, (user_id, conversation_id))
+    rows = cur.fetchall()
+    npc_info = {}
+    for row in rows:
+        npc_id, age, rel_str = row
+        try:
+            relationships = json.loads(rel_str) if rel_str else []
+        except Exception:
+            relationships = []
+        npc_info[npc_id] = {"age": age, "relationships": relationships}
+    
+    # For each familial relationship, adjust ages accordingly.
+    # For example, if NPC A has a "mother" relationship to NPC B,
+    # ensure A.age >= B.age + min_age_diff["mother"]
+    for npc_id, info in npc_info.items():
+        for rel in info["relationships"]:
+            label = rel.get("relationship_label", "").lower()
+            target = rel.get("entity_id")
+            if target not in npc_info:
+                continue
+            if label in ["mother", "stepmother", "aunt"]:
+                required = min_age_diff.get(label, 0)
+                target_age = npc_info[target]["age"]
+                if info["age"] < target_age + required:
+                    info["age"] = target_age + required
+            # Similarly, if the relationship indicates that this NPC is the child
+            # (or younger sibling), adjust so they are at least a few years younger.
+            if label in ["child", "younger sibling"]:
+                # For simplicity, require at least 1 year difference
+                if info["age"] >= npc_info[target]["age"]:
+                    info["age"] = max(18, npc_info[target]["age"] - 1)
+    
+    # Write updated ages back to the database.
+    for npc_id, info in npc_info.items():
+        cur.execute("""
+            UPDATE NPCStats
+            SET age=%s
+            WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+        """, (info["age"], user_id, conversation_id, npc_id))
+    conn.commit()
+    conn.close(
 
 # 2) Now do a separate GPT call for Chase
 async def init_chase_schedule():
