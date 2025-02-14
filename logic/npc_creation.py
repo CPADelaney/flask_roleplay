@@ -173,7 +173,7 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         f"You are an expert creative writer merging these archetypes: {', '.join(archetype_names)}.\n"
         f"{name_instruction}\n"
         "Output a JSON with exactly two keys: \"npc_name\" and \"archetype_summary\".\n"
-        "NPC name should be a unique, creative, and fitting feminine name. Avoid overused names like 'Seraphina.'"
+        "Female NPC name should be a unique, creative, and fitting feminine name. Avoid overused names like 'Seraphina.'"
         "No extra text, no markdown."
     )
 
@@ -312,7 +312,7 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         name_instruction = "Invent a creative, unique name for the NPC."
 
     system_prompt = (
-        "You are an expert at merging multiple archetypes into a single cohesive persona. "
+        "You are an expert at merging multiple archetypes into a single cohesive persona for a female NPC. "
         "Output **strictly valid JSON** with exactly these two keys:\n"
         '  "npc_name" (string)\n'
         '  "archetype_summary" (string)\n'
