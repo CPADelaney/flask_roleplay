@@ -1,0 +1,26 @@
+name: Nyx AI Code Review
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  analyze-code:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🛠 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🤖 Allow Nyx to Analyze Code
+        run: |
+          curl -X POST "https://api.github.com/repos/CPADelaney/flask_roleplay/contents" \
+          -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json"
+
+      - name: 🚀 Allow Nyx to Modify Code (Optional)
+        run: |
+          curl -X PATCH "https://api.github.com/repos//CPADelaney/flask_roleplay" \
+          -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json"
