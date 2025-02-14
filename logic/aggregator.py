@@ -412,7 +412,15 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     #----------------------------------------------------------------
     # 16) Build aggregator text for GPT using immersive calendar info
     #----------------------------------------------------------------
-    calendar_info = aggregated.get("calendar", {})
+    calendar_info = load_calendar_names(user_id, conversation_id)
+    # Ensure calendar_info is a dictionary
+    if isinstance(calendar_info, str):
+        try:
+            calendar_info = json.loads(calendar_info)
+        except Exception as e:
+            logging.warning(f"Failed to parse calendar_info: {e}")
+            calendar_info = {}
+    
     immersive_date = f"Year: {calendar_info.get('year_name', current_year)}"
     months = calendar_info.get("months", [])
     if months and current_month.isdigit():
