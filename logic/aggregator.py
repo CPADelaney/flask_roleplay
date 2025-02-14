@@ -2,6 +2,7 @@
 
 import json
 from db.connection import get_db_connection
+import logging
 
 def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     """
@@ -30,56 +31,29 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     existing_summary = row[0] if row else ""
 
     #----------------------------------------------------------------
-    # 1) Retrieve time info (Year, Month, Day, TimeOfDay) from CurrentRoleplay
+    # 1) Retrieve time info from CurrentRoleplay (or fallback to immersive defaults)
     #----------------------------------------------------------------
-    current_year = "1"
-    current_month = "1"
-    current_day = "1"
+    current_year = "1040"   # Default to a more immersive starting year
+    current_month = "6"     # Default to mid-year (e.g., 6th month)
+    current_day = "15"      # Default to mid-month
     time_of_day = "Morning"
 
-    cursor.execute("""
-        SELECT value
-        FROM CurrentRoleplay
-        WHERE user_id=%s
-          AND conversation_id=%s
-          AND key='CurrentYear'
-    """, (user_id, conversation_id))
-    row = cursor.fetchone()
-    if row:
-        current_year = row[0]
-
-    cursor.execute("""
-        SELECT value
-        FROM CurrentRoleplay
-        WHERE user_id=%s
-          AND conversation_id=%s
-          AND key='CurrentMonth'
-    """, (user_id, conversation_id))
-    row = cursor.fetchone()
-    if row:
-        current_month = row[0]
-
-    cursor.execute("""
-        SELECT value
-        FROM CurrentRoleplay
-        WHERE user_id=%s
-          AND conversation_id=%s
-          AND key='CurrentDay'
-    """, (user_id, conversation_id))
-    row = cursor.fetchone()
-    if row:
-        current_day = row[0]
-
-    cursor.execute("""
-        SELECT value
-        FROM CurrentRoleplay
-        WHERE user_id=%s
-          AND conversation_id=%s
-          AND key='TimeOfDay'
-    """, (user_id, conversation_id))
-    row = cursor.fetchone()
-    if row:
-        time_of_day = row[0]
+    for key in ["CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"]:
+        cursor.execute("""
+            SELECT value
+            FROM CurrentRoleplay
+            WHERE user_id=%s AND conversation_id=%s AND key=%s
+        """, (user_id, conversation_id, key))
+        row = cursor.fetchone()
+        if row:
+            if key == "CurrentYear":
+                current_year = row[0]
+            elif key == "CurrentMonth":
+                current_month = row[0]
+            elif key == "CurrentDay":
+                current_day = row[0]
+            elif key == "TimeOfDay":
+                time_of_day = row[0]
 
     #----------------------------------------------------------------
     # 2) Player Stats
@@ -118,7 +92,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
                dominance, cruelty, closeness,
                trust, respect, intensity,
                hobbies, personality_traits, likes, dislikes,
-               schedule, current_location
+               schedule, current_location, physical_description, archetype_extras_summary
         FROM NPCStats
         WHERE user_id=%s
           AND conversation_id=%s
@@ -127,7 +101,7 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     """, (user_id, conversation_id))
     introduced_rows = cursor.fetchall()
     for (nid, nname, dom, cru, clos, tru, resp, inten,
-         hbs, pers, lks, dlks, sched, curr_loc) in introduced_rows:
+         hbs, pers, lks, dlks, sched, curr_loc, phys_desc, extras) in introduced_rows:
         try:
             trimmed_schedule = json.loads(sched) if sched else {}
         except Exception:
@@ -146,7 +120,9 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
             "likes": lks or [],
             "dislikes": dlks or [],
             "schedule": trimmed_schedule,
-            "current_location": curr_loc or "Unknown"
+            "current_location": curr_loc or "Unknown",
+            "physical_description": phys_desc or "",
+            "archetype_extras_summary": extras or ""
         })
 
     #----------------------------------------------------------------
@@ -392,9 +368,14 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     #----------------------------------------------------------------
     aggregated = {
         "playerStats": player_stats,
-        "introducedNPCs": introduced_npcs,   # Full stats for introduced
-        "unintroducedNPCs": unintroduced_npcs,  # Minimal info for unintroduced
+        "introducedNPCs": introduced_npcs,
+        "unintroducedNPCs": unintroduced_npcs,
         "currentRoleplay": currentroleplay_data,
+        "calendar": currentroleplay_data.get("CalendarNames", {
+            "year_name": "Year 1",
+            "months": [],
+            "days": []
+        }),
         "year": current_year,
         "month": current_month,
         "day": current_day,
@@ -429,11 +410,20 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
         existing_summary = updated_summary
 
     #----------------------------------------------------------------
-    # 16) Build the aggregator text for GPT
+    # 16) Build aggregator text for GPT using immersive calendar info
     #----------------------------------------------------------------
+    calendar_info = aggregated.get("calendar", {})
+    immersive_date = f"Year: {calendar_info.get('year_name', current_year)}"
+    months = calendar_info.get("months", [])
+    if months and current_month.isdigit():
+        month_index = int(current_month) - 1
+        if 0 <= month_index < len(months):
+            immersive_date += f", Month: {months[month_index]}"
+    immersive_date += f", Day: {current_day}, {time_of_day}."
+
     aggregator_text = (
         f"{existing_summary}\n\n"
-        f"Year {current_year}, Month {current_month}, Day {current_day}, {time_of_day}.\n"
+        f"{immersive_date}\n"
         "Scene Snapshot:\n"
         f"{make_minimal_scene_info(aggregated)}"
     )
@@ -448,13 +438,11 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     if "ChaseSchedule" in aggregated["currentRoleplay"]:
         aggregator_text += "\n\nChase Schedule:\n" + json.dumps(aggregated["currentRoleplay"]["ChaseSchedule"], indent=2)
     
-    # Append Notable Events (if any)
+    # Optionally append Notable Events and Locations
     if aggregated.get("events"):
         aggregator_text += "\n\nNotable Events:\n"
         for ev in aggregated["events"][:3]:
             aggregator_text += f"- {ev['event_name']}: {ev['description']} (at {ev['location']})\n"
-    
-    # Append Notable Locations (if any)
     if aggregated.get("locations"):
         aggregator_text += "\n\nNotable Locations:\n"
         for loc in aggregated["locations"][:3]:
@@ -489,7 +477,7 @@ def build_changes_summary(aggregated):
     lines.append(f"Introduced NPCs: {introduced_count}, Unintroduced: {unintroduced_count}")
     text = "\n".join(lines)
     if introduced_count == 0 and unintroduced_count == 0:
-        text = ""  # if no real changes
+        text = ""
     return text
 
 def update_global_summary(old_summary, new_stuff, max_len=3000):
@@ -500,23 +488,30 @@ def update_global_summary(old_summary, new_stuff, max_len=3000):
 
 def make_minimal_scene_info(aggregated):
     """
-    Provide a small snippet: full date info plus a brief list of introduced
-    and unintroduced NPCs for chance encounters.
+    Provide a small snippet: immersive date info and a brief list of introduced/unintroduced NPCs.
     """
     lines = []
-    year = aggregated.get("year", "1")
-    month = aggregated.get("month", "1")
-    day = aggregated.get("day", "1")
-    tod = aggregated.get("timeOfDay", "Morning")
-    lines.append(f"- It is Year {year}, Month {month}, Day {day}, {tod}.\n")
+    calendar = aggregated.get("calendar", {})
+    year_str = calendar.get("year_name", aggregated.get("year", "Unknown Year"))
+    # If current_month is numeric and calendar has months, map it:
+    months = calendar.get("months", [])
+    month_str = aggregated.get("month", "1")
+    if months and month_str.isdigit():
+        idx = int(month_str) - 1
+        if 0 <= idx < len(months):
+            month_str = months[idx]
+    day_str = aggregated.get("day", "1")
+    time_of_day = aggregated.get("timeOfDay", "Morning")
+    lines.append(f"- It is {year_str}, {month_str} {day_str}, {time_of_day}.\n")
     # Introduced NPCs snippet
     lines.append("Introduced NPCs in the area:")
     for npc in aggregated["introducedNPCs"][:4]:
         loc = npc.get("current_location", "Unknown")
-        lines.append(f"  - {npc['npc_name']} is at {loc}")
+        desc_snippet = npc.get("physical_description", "").split(".")[0]  # first sentence of description
+        lines.append(f"  - {npc['npc_name']} at {loc} ({desc_snippet}...)")
     # Unintroduced snippet
-    lines.append("Unintroduced NPCs (possible random encounters):")
+    lines.append("Unintroduced NPCs (potential encounters):")
     for npc in aggregated["unintroducedNPCs"][:2]:
         loc = npc.get("current_location", "Unknown")
-        lines.append(f"  - ???: '{npc['npc_name']}' lurking around {loc}")
+        lines.append(f"  - {npc['npc_name']} lurking around {loc}")
     return "\n".join(lines)
