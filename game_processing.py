@@ -484,11 +484,17 @@ async def async_process_new_game(user_id, conversation_data):
 
         first_day_name = day_names[0] if day_names else "the first day"
         opening_prompt = (
-            f"Begin the scenario now, referencing aggregator context. "
-            f"{first_day_name} morning has just begun..."
+            f"Using the following setting context:\n\n{aggregator_text}\n\n"
+            f"Now, describe an immersive opening scene set on {first_day_name} morning. "
+            "The narrative should feel entirely like a typical day in the life of an everyman—mundane and relatable. "
+            "Describe the surroundings in vivid detail: the muted hum of the city, the crisp morning air, the routine of commuting and arriving at a bustling office building. "
+            "Subtly weave in hints of an underlying power dynamic: small, almost unnoticed details (a commanding glance from a superior, an unexpected shift in tone during a meeting) that foreshadow a deeper, controlling influence. "
+            "Although this is a hardcore femdom roleplay, your introduction should gently lure the player into a false sense of security with its everyday normality, while planting seeds of impending deception and gradual descent. Use deception to achieve this if you must."
+            "Focus on setting the scene—where the player is, what they're doing, and who they're with—without directly revealing the full intensity of the roleplay just yet."
         )
         final_reply = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, opening_prompt)
         nyx_text = final_reply.get("response", "[No text returned]")
+
 
         # 15) Insert final opening message
         await conn.execute("""
