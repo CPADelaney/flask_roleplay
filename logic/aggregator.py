@@ -367,16 +367,23 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
     #----------------------------------------------------------------
     # 14) Build a final aggregator dictionary
     #----------------------------------------------------------------
+
+    calendar_raw = currentroleplay_data.get("CalendarNames", None)
+    if isinstance(calendar_raw, str):
+        try:
+            calendar = json.loads(calendar_raw)
+        except Exception as e:
+            logging.warning(f"Failed to parse CalendarNames: {e}")
+            calendar = {"year_name": "Year 1", "months": [], "days": []}
+    else:
+        calendar = calendar_raw or {"year_name": "Year 1", "months": [], "days": []}
+        
     aggregated = {
         "playerStats": player_stats,
         "introducedNPCs": introduced_npcs,
         "unintroducedNPCs": unintroduced_npcs,
         "currentRoleplay": currentroleplay_data,
-        "calendar": currentroleplay_data.get("CalendarNames", {
-            "year_name": "Year 1",
-            "months": [],
-            "days": []
-        }),
+        "calendar": calendar,
         "year": current_year,
         "month": current_month,
         "day": current_day,
