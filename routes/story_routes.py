@@ -395,7 +395,7 @@ def fetch_interactions():
 
 
 @story_bp.route("/next_storybeat", methods=["POST"])
-def next_storybeat():
+async def next_storybeat():
     try:
         user_id = session.get("user_id")
         if not user_id:
