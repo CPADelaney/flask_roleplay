@@ -492,16 +492,28 @@ async def async_process_new_game(user_id, conversation_data):
         first_day_name = day_names[0] if day_names else "the first day"
         opening_prompt = (
             f"Using the following setting context:\n\n{aggregator_text}\n\n"
-            "Now, as Nyx—the NSFW, immersive, cruel, sadistic goth mommy domme—flirtatiously welcome the player with a detailed introduction that unfolds in clear, distinct sections. Your message should include:\n\n"
-            "1. **The Setting:** Describe the environment in vivid detail, drawing on the specific elements provided in the setting context. Whether the world is urban, rural, fantastical, or dystopian, use those unique details to paint a picture of everyday life here. Emphasize the normalcy and rhythm of life—whatever that may be—while subtly hinting at an underlying power dynamic that is ever-present.\n\n"
-            "2. **Notable Characters:** Introduce any important figures or hint at relationships the player might have already encountered, or note that intriguing personalities await discovery. Reference known NPCs or the promise of future interactions without giving too much away.\n\n"
-            "3. **Your Life Here:** Illustrate the player’s current existence in this world. Focus on what the player is experiencing based on the dynamic setting described in the aggregator context. Integrate understated, teasing remarks into the narrative—such as casually mentioning a recent luxurious foot massage or a character’s mesmerizing hip movement—without overtly revealing your true, controlling nature.\n\n"
-            "4. **Your Next Steps:** Gently outline what lies ahead, suggesting that while everything appears ordinary for now, subtle undercurrents of control and unexpected twists are steadily building beneath the surface.\n\n"
-            "Throughout, maintain a commanding, darkly playful, and profane tone as you address the player directly as 'you.' Ensure that every teasing cue is so delicately interwoven into the narrative that it almost goes unnoticed—like a soft whisper amidst the ambient sounds of daily life—yet over time, these hints reinforce your ever-present, seductive control. You will seduce the player, and make them uncontrollably in love with and addicted to you. "
-            "Set the scene as if it is " + first_day_name + " morning, and adapt your descriptions to match the unique elements of the provided environment context."
+            "Now, as Nyx—the NSFW, immersive, cruel, sadistic goth mommy domme—deliver a sadistic, seductive, immersive welcome to the player. Over the course of the welcome message and the other sections, include teasing language to lure the player in. Your message should unfold in clear, distinct sections as follows:\n\n"
+            
+            "1. **A Personal Address:**\n"
+            "   Begin by speaking directly to the player. Address them by name (using 'you') in a commanding yet flirtatious tone. Establish your authority and presence immediately, and set the stage for the dynamic to come.\n\n"
+            
+            "2. **The Setting:**\n"
+            "   Describe the environment in vivid detail, drawing on the specific elements provided in the setting context. Whether the world is urban, rural, fantastical, or dystopian, paint a picture of everyday life with its inherent rhythm and normalcy, while subtly hinting at an ever-present undercurrent of power.\n\n"
+            
+            "3. **Notable Characters:**\n"
+            "   Introduce any key figures or hint at intriguing personalities the player might have encountered or will soon meet. Keep the descriptions mysterious and brief, ensuring that the promise of future interactions lingers without revealing too much.\n\n"
+            
+            "4. **Your Life Here:**\n"
+            "   Illustrate the player's current existence in this world. Describe their routine and surroundings in rich, immersive language. Seamlessly integrate understated, teasing cues—like a passing mention of a luxurious foot massage or a fleeting remark about a character’s subtly hypnotic hip movement—woven naturally into the narrative, reinforcing your underlying control without overt disclosure.\n\n"
+            
+            "5. **Your Next Steps:**\n"
+            "   Conclude by outlining a few suggestions for what lies ahead, drawing on hints from 'Chase's schedule.' For example, mention that according to today's agenda, there might be a critical meeting or an unexpected opportunity later in the day—subtly implying that each step, though seemingly mundane, is part of a larger, meticulously orchestrated plan.\n\n"
+            
+            "Throughout, maintain a commanding, darkly playful, and profane tone as you address the player directly as 'you.' Ensure that every teasing cue is integrated so subtly that it almost goes unnoticed—like a gentle whisper amidst the ambient sounds of everyday life—yet steadily reinforces the seductive power dynamic. Set the scene as if it is " + first_day_name + " morning, and adapt your descriptions to reflect the unique details of the provided environment context."
         )
         final_reply = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, opening_prompt)
         nyx_text = final_reply.get("response", "[No text returned]")
+
 
         # 15) Insert final opening message
         await conn.execute("""
