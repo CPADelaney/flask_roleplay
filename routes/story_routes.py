@@ -9,7 +9,7 @@ from flask import Blueprint, request, jsonify, session
 from db.connection import get_db_connection
 from logic.universal_updater import apply_universal_updates  # now an async function
 from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
-from logic.aggregator import get_aggregated_roleplay_context, build_aggregator_text
+from logic.aggregator import get_aggregated_roleplay_context
 from logic.time_cycle import advance_time_and_update
 from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
