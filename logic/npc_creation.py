@@ -1320,13 +1320,17 @@ Environment:
 Chase partial data:
 {json.dumps(chase_data, indent=2)}
 
-We want a realistic daily schedule for "Chase" over these days:
-{day_names}
+The list of days is: {day_names}
 
-Return exactly one JSON with key "ChaseSchedule", an object whose keys are each day
-(e.g. 'Nebuladay', 'Shadowday'...) and values are an object with sub-keys: "Morning","Afternoon","Evening","Night".
+Please generate a realistic daily schedule for "Chase" for each of the days listed. Your output must be a valid JSON object with exactly one top-level key, "ChaseSchedule". The value of "ChaseSchedule" must be an object whose keys exactly match the days in the list (e.g., if the list is ["Monday", "Tuesday", ...], then these must be the keys). For each day, the value must be an object with exactly the following keys:
+- "Morning"
+- "Afternoon"
+- "Evening"
+- "Night"
 
-No extra commentary, no additional keys, no code fences.
+Each of these keys should map to a short string describing Chase's activity during that time slot.
+
+Do not include any extra keys, text, or commentary. Do not wrap your output in code fences.
 """
 
     # Step C: Do the GPT call
