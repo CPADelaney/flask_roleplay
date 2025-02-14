@@ -2,6 +2,7 @@
 
 import json
 from db.connection import get_db_connection
+from logic.calendar import update_calendar_names, load_calendar_names
 import logging
 
 def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
