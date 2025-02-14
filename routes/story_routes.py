@@ -523,11 +523,12 @@ def next_storybeat():
 
         for attempt in range(3):
             logging.debug("[next_storybeat] GPT attempt #%d with user_input=%r", attempt, user_input)
-            gpt_reply_dict = asyncio.run(get_chatgpt_response(
-                conversation_id=conv_id,
-                aggregator_text=aggregator_text,
-                user_input=user_input
-            ))
+            gpt_reply_dict = await asyncio.to_thread(
+                get_chatgpt_response,
+                conv_id,
+                aggregator_text,
+                user_input
+            )
             logging.debug("[next_storybeat] GPT reply (attempt %d): %s", attempt, gpt_reply_dict)
 
             if gpt_reply_dict.get("type") == "function_call":
