@@ -509,36 +509,48 @@ def create_npc_partial(user_id: int, conversation_id: int, sex: str = "female",
 
     # 7) Age + birthdate
     # Define age adjustments (role: (modifier_min, modifier_max))
-    base_age = random.randint(20, 50)
-    age_adjustments = {
-        "stepmother": (20, 30),
-        "mother": (20, 30),
-        "aunt": (15, 25),
-        "older sister": (1, 10),
-        "stepsister": (-4, 10),
-        "babysitter": (2, 10),
-        "teacher": (10, 20),
-        "principal": (10, 20),
-        "milf": (10, 20),
-        "dowager": (15, 30),
-        "domestic authority": (5, 20),
-        "foreign royalty": (-5, 20),
-        "college student": (-15, -5),
-        "intern": (-15, -3),
-        "student": (-15, -4),
-        "manic pixie dream girl": (-1, -5)
+    role_base_age_ranges = {
+        "mother": (30, 55),
+        "stepmother": (30, 55),
+        "aunt": (25, 60),
+        "older sister": (19, 40),
+        "stepsister": (18, 45),
+        "babysitter": (20, 50),
+        "teacher": (30, 50),
+        "principal": (30, 50),
+        "milf": (30, 60),
+        "dowager": (55, 65),
+        "domestic authority": (30, 50),
+        "foreign royalty": (20, 45),
+        "college student": (18, 24),
+        "intern": (18, 24),
+        "student": (18, 24),
+        "manic pixie dream girl": (18, 30)
     }
-    familial_found = [arc["name"].strip().lower() for arc in chosen_arcs if arc["name"].strip().lower() in age_adjustments]
-    if familial_found:
-        selected_role = random.choice(familial_found)
-        extra_years = random.randint(age_adjustments[selected_role][0], age_adjustments[selected_role][1])
-        npc_age = base_age + extra_years
+    
+    # Check chosen archetypes for any familial roles
+    familial_roles_found = [
+        arc["name"].strip().lower() 
+        for arc in chosen_arcs 
+        if arc["name"].strip().lower() in role_base_age_ranges
+    ]
+    
+    if familial_roles_found:
+        # If more than one family role is found, choose the one with the highest minimum age
+        selected_role = max(familial_roles_found, key=lambda role: role_base_age_ranges[role][0])
+        base_age = random.randint(*role_base_age_ranges[selected_role])
     else:
-        npc_age = base_age
-
+        base_age = random.randint(20, 50)
+    
+    # Optionally, you could add a minor random offset if desired:
+    # extra_years = random.randint(-2, 2)
+    # npc_age = base_age + extra_years
+    
+    npc_age = base_age  # Now, npc_age is drawn from a role-appropriate range
+    
     birth_month = random.choice(months_list)
-    birth_day = random.randint(1, 28)
-    birth_str = f"{birth_month} {birth_day}"
+    birth_day   = random.randint(1, 28)
+    birth_str   = f"{birth_month} {birth_day}"
 
     npc_dict = {
         "npc_name": synergy_name,
@@ -1557,15 +1569,15 @@ def adjust_family_ages(user_id, conversation_id):
     # Define minimum age differences for roles (all keys in lowercase)
     min_age_diff = {
         "mother": 16,
-        "stepmother": 16,
-        "aunt": 6,
+        "stepmother": 14,
+        "aunt": 5,
         "older sister": 1,
         "stepsister": 1,
         "babysitter": 2,
         "teacher": 10,
         "principal": 10,
         "milf": 10,
-        "dowager": 20,
+        "dowager": 15,
         "domestic authority": 5,
         "foreign royalty": 0,
         "cousin": 0  # could be same age or slight difference
