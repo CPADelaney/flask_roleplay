@@ -516,7 +516,6 @@ async def next_storybeat():
         if npc_context_summary:
             aggregator_text += "\nNPC Context:\n" + npc_context_summary
         logging.debug("[next_storybeat] Updated aggregator_text with NPC context:\n%s", aggregator_text)
-
         # 6) Attempt up to 3 ChatGPT function calls
         final_text = None
         structured_json_str = None
@@ -534,6 +533,7 @@ async def next_storybeat():
             if gpt_reply_dict.get("type") == "function_call":
                 fn_name = gpt_reply_dict.get("function_name")
                 fn_args = gpt_reply_dict.get("function_args", {})
+
                 if fn_name == "get_npc_details":
                     data_out = fetch_npc_details(user_id, conv_id, fn_args.get("npc_id"))
                 elif fn_name == "get_quest_details":
@@ -546,27 +546,18 @@ async def next_storybeat():
                     )
                 else:
                     data_out = {"error": f"Function call '{fn_name}' not recognized."}
-                
-                # Send function result back to GPT and re-call ChatGPT
-                function_msg = {
-                    "role": "function",
-                    "name": fn_name,
-                    "content": json.dumps(data_out)
-                }
-                gpt_reply_dict = await asyncio.to_thread(
-                    get_chatgpt_response,
-                    conv_id,
-                    aggregator_text,
-                    user_input
-                )
-              
-                logging.debug("[next_storybeat] GPT reply after function '%s': %s", fn_name, gpt_reply_dict)
-                if gpt_reply_dict.get("type") == "function_call":
-                    continue
-                else:
-                    final_text = gpt_reply_dict.get("response")
-                    structured_json_str = json.dumps(gpt_reply_dict)
-                    break
+
+                # Incorporate the function result into aggregator_text so that the next API call
+                # includes the function response in its context.
+                function_response_text = json.dumps(data_out)
+                aggregator_text += f"\nFunction Response for {fn_name}:\n{function_response_text}"
+                logging.debug("Updated aggregator_text with function response for %s: %s", fn_name, function_response_text)
+
+                # Add a short delay to help avoid hammering the API immediately
+                await asyncio.sleep(1)
+
+                # Continue the loop; the next call will now include the function response in context.
+                continue
             else:
                 final_text = gpt_reply_dict.get("response")
                 structured_json_str = json.dumps(gpt_reply_dict)
