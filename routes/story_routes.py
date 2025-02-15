@@ -553,11 +553,11 @@ async def next_storybeat():
                     "name": fn_name,
                     "content": json.dumps(data_out)
                 }
-                gpt_reply_dict = asyncio.run(get_chatgpt_response(
+                gpt_reply_dict = await get_chatgpt_response(
                     conversation_id=conv_id,
                     aggregator_text=aggregator_text,
                     user_input=user_input,
-                ))
+                )
                 logging.debug("[next_storybeat] GPT reply after function '%s': %s", fn_name, gpt_reply_dict)
                 if gpt_reply_dict.get("type") == "function_call":
                     continue
