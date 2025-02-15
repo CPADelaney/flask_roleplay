@@ -62,7 +62,7 @@ FUNCTION_SCHEMAS = [
             },
             "required": ["event_id"]
         }
-    },
+    }, 
     {
         "name": "get_inventory_item",
         "description": "Lookup a specific item in the player's inventory by item_name.",
