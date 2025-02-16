@@ -469,13 +469,27 @@
         return;
       }
       const data = await res.json();
-      if (replace) {
-        renderChat(data.messages);
+      console.log("Loaded messages data:", data);
+      
+      // Adjust: if the endpoint returns an array directly, use that; otherwise, assume it's under data.messages.
+      let messages;
+      if (Array.isArray(data)) {
+          messages = data;
+      } else if (Array.isArray(data.messages)) {
+          messages = data.messages;
       } else {
-        prependMessages(data.messages);
+          console.error("Unexpected message format:", data);
+          messages = [];
       }
+      
+      if (replace) {
+          renderChat(messages);
+      } else {
+          prependMessages(messages);
+      }
+      
       document.getElementById("loadMore").style.display =
-        data.messages.length < MESSAGES_PER_LOAD ? "none" : "block";
+          messages.length < MESSAGES_PER_LOAD ? "none" : "block";
     } catch (err) {
       console.error("Error loading messages:", err);
     }
