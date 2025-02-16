@@ -1,5 +1,3 @@
-# routes/story_routes.py
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -362,6 +360,7 @@ async def next_storybeat():
         if not user_input:
             return jsonify({"error": "No user_input provided"}), 400
 
+        # Open a synchronous DB connection.
         conn = get_db_connection()
         cur = conn.cursor()
 
@@ -397,14 +396,14 @@ async def next_storybeat():
             logging.info("Only %d unintroduced NPC(s) found; generating 3 more.", count)
             await asyncio.to_thread(spawn_multiple_npcs, user_id, conv_id, env_desc, day_names, count=3)
 
-        # 2) Insert user message.
+        # 2) Insert the user message.
         cur.execute(
             "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
             (conv_id, "user", user_input)
         )
         conn.commit()
 
-        # 3) (Optional) Create a dominant NPC (e.g., Nyx). Code commented out for now.
+        # 3) (Optional) Create a dominant NPC (e.g., Nyx) – commented out.
         # nyx_npc_id = await asyncio.to_thread(spawn_single_npc, user_id, conv_id, env_desc, day_names)
         # cur.execute("UPDATE NPCStats SET npc_name=%s WHERE npc_id=%s", ("Nyx", nyx_npc_id))
         # conn.commit()
@@ -414,6 +413,7 @@ async def next_storybeat():
         if universal_data:
             universal_data["user_id"] = user_id
             universal_data["conversation_id"] = conv_id
+
             async def run_univ_update():
                 import asyncpg
                 dsn = os.getenv("DB_DSN")
@@ -421,6 +421,7 @@ async def next_storybeat():
                 result = await apply_universal_updates(user_id, conv_id, universal_data, async_conn)
                 await async_conn.close()
                 return result
+
             update_result = await run_univ_update()
             if "error" in update_result:
                 cur.close()
@@ -494,18 +495,14 @@ async def next_storybeat():
                 else:
                     data_out = {"error": f"Function call '{fn_name}' not recognized."}
 
-                # Format the function response and update the aggregator text.
                 function_response_text = json.dumps(data_out)
                 logging.debug("Function response for %s: %s", fn_name, function_response_text)
 
-                # Append a clear instruction along with the function response so that ChatGPT
-                # is guided to generate a final narrative response rather than another function call.
                 aggregator_text += (
                     f"\n\n[Function Response Received for {fn_name}: {function_response_text}]\n"
                     "Please use the above function response and the previous context to generate a final narrative response. "
                     "Do not issue further function calls."
                 )
-                # Add a short delay to avoid rapid-fire requests.
                 await asyncio.sleep(1)
                 continue
             else:
@@ -532,41 +529,22 @@ async def next_storybeat():
         return jsonify({
             "response": final_text,
             "aggregator_text": aggregator_text,
-            "conversation_id": conv_id
-        })
-
-    except Exception as e:
-        logging.exception("[next_storybeat] Error")
-        return jsonify({"error": str(e)}), 500
-
-        # 8) Retrieve the entire conversation history for return.
-        cur.execute(
-            "SELECT sender, content, created_at FROM messages WHERE conversation_id=%s ORDER BY id ASC",
-            (conv_id,)
-        )
-        rows = cur.fetchall()
-        conversation_history = [
-            {"sender": r[0], "content": r[1], "created_at": r[2].isoformat()} for r in rows
-        ]
-        cur.close()
-        conn.close()
-
-        return jsonify({
             "conversation_id": conv_id,
-            "story_output": final_text,
-            "messages": conversation_history,
             "updates": {
                 "year": new_year,
                 "month": new_month,
                 "day": new_day,
                 "time_of_day": new_phase
             }
-        }), 200
+        })
 
     except Exception as e:
         logging.exception("[next_storybeat] Error")
         return jsonify({"error": str(e)}), 500
 
+# -------------------------------------------------------------------
+# ADDITIONAL HELPER FUNCTIONS
+# -------------------------------------------------------------------
 
 def gather_rule_knowledge():
     """
@@ -638,7 +616,6 @@ def gather_rule_knowledge():
         "interactions": interactions_list
     }
 
-
 def force_obedience_to_100(user_id, conversation_id, player_name):
     """
     Directly set player's Obedience to 100.
@@ -657,7 +634,6 @@ def force_obedience_to_100(user_id, conversation_id, player_name):
     finally:
         cursor.close()
         conn.close()
-
 
 def build_aggregator_text(aggregator_data, rule_knowledge=None):
     """
@@ -870,4 +846,3 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
             lines.append("No interactions data found.")
 
     return "\n".join(lines)
-
