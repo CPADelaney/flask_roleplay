@@ -586,7 +586,7 @@
       // Append the actual GPT message from the server
       const realGptMsgObj = {
         sender: "Nyx",
-        content: data.story_output || "(No response?)",
+        content: data.response || "(No response?)",
       };
       appendMessage(realGptMsgObj, true);
 
