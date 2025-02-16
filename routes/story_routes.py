@@ -1,13 +1,21 @@
 # routes/story_routes.py
 
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Complete module: routes/story_routes.py
+"""
+
 import logging
 import json
 import os
 import asyncio
+from datetime import datetime, date
 from flask import Blueprint, request, jsonify, session
 
+# Import your DB and logic modules
 from db.connection import get_db_connection
-from logic.universal_updater import apply_universal_updates  # now an async function
+from logic.universal_updater import apply_universal_updates  # async function
 from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 from logic.aggregator import get_aggregated_roleplay_context
 from logic.time_cycle import advance_time_and_update
@@ -18,15 +26,16 @@ from logic.activities_logic import filter_activities_for_npc, build_short_summar
 
 story_bp = Blueprint("story_bp", __name__)
 
+# -------------------------------------------------------------------
+# FUNCTION SCHEMAS (for ChatGPT function calls)
+# -------------------------------------------------------------------
 FUNCTION_SCHEMAS = [
     {
         "name": "get_npc_details",
         "description": "Retrieve full or partial NPC info from NPCStats by npc_id.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "npc_id": {"type": "number"}
-            },
+            "properties": {"npc_id": {"type": "number"}},
             "required": ["npc_id"]
         }
     },
@@ -35,9 +44,7 @@ FUNCTION_SCHEMAS = [
         "description": "Retrieve quest info from the Quests table by quest_id.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "quest_id": {"type": "number"}
-            },
+            "properties": {"quest_id": {"type": "number"}},
             "required": ["quest_id"]
         }
     },
@@ -57,49 +64,39 @@ FUNCTION_SCHEMAS = [
         "description": "Retrieve event info by event_id from the Events table.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "event_id": {"type": "number"}
-            },
+            "properties": {"event_id": {"type": "number"}},
             "required": ["event_id"]
         }
-    }, 
+    },
     {
         "name": "get_inventory_item",
         "description": "Lookup a specific item in the player's inventory by item_name.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "item_name": {"type": "string"}
-            },
+            "properties": {"item_name": {"type": "string"}},
             "required": ["item_name"]
         }
     },
     {
         "name": "get_intensity_tiers",
         "description": "Retrieve the entire IntensityTiers data (key features, etc.).",
-        "parameters": {
-            "type": "object",
-            "properties": {}
-        }
+        "parameters": {"type": "object", "properties": {}}
     },
     {
         "name": "get_plot_triggers",
         "description": "Retrieve the entire list of PlotTriggers (with stage_name, description, etc.).",
-        "parameters": {
-            "type": "object",
-            "properties": {}
-        }
+        "parameters": {"type": "object", "properties": {}}
     },
     {
         "name": "get_interactions",
         "description": "Retrieve all Interactions from the Interactions table (detailed_rules, etc.).",
-        "parameters": {
-            "type": "object",
-            "properties": {}
-        }
+        "parameters": {"type": "object", "properties": {}}
     }
 ]
 
+# -------------------------------------------------------------------
+# HELPER FUNCTIONS
+# -------------------------------------------------------------------
 
 def fetch_npc_details(user_id, conversation_id, npc_id):
     """
@@ -107,27 +104,18 @@ def fetch_npc_details(user_id, conversation_id, npc_id):
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute("""
-        SELECT npc_name,
-               introduced,
-               dominance, cruelty, closeness,
-               trust, respect, intensity,
-               affiliations, schedule,
-               current_location
+        SELECT npc_name, introduced, dominance, cruelty, closeness,
+               trust, respect, intensity, affiliations, schedule, current_location
         FROM NPCStats
-        WHERE user_id=%s
-          AND conversation_id=%s
-          AND npc_id=%s
+        WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
         LIMIT 1
     """, (user_id, conversation_id, npc_id))
     row = cursor.fetchone()
-    
     if not row:
         cursor.close()
         conn.close()
         return {"error": f"No NPC found with npc_id={npc_id}"}
-    
     (nname, intro, dom, cru, clos, tru, resp, inten, affil, sched, cloc) = row
     npc_data = {
         "npc_id": npc_id,
@@ -143,11 +131,9 @@ def fetch_npc_details(user_id, conversation_id, npc_id):
         "schedule": sched if sched is not None else {},
         "current_location": cloc
     }
-    
     cursor.close()
     conn.close()
     return npc_data
-
 
 def fetch_quest_details(user_id, conversation_id, quest_id):
     """
@@ -155,22 +141,17 @@ def fetch_quest_details(user_id, conversation_id, quest_id):
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute("""
         SELECT quest_name, status, progress_detail, quest_giver, reward
         FROM Quests
-        WHERE user_id=%s
-          AND conversation_id=%s
-          AND quest_id=%s
+        WHERE user_id=%s AND conversation_id=%s AND quest_id=%s
         LIMIT 1
     """, (user_id, conversation_id, quest_id))
-    
     row = cursor.fetchone()
     if not row:
         cursor.close()
         conn.close()
         return {"error": f"No quest found with quest_id={quest_id}"}
-    
     (qname, qstatus, qdetail, qgiver, qreward) = row
     quest_data = {
         "quest_id": quest_id,
@@ -180,11 +161,9 @@ def fetch_quest_details(user_id, conversation_id, quest_id):
         "quest_giver": qgiver,
         "reward": qreward
     }
-    
     cursor.close()
     conn.close()
     return quest_data
-
 
 def fetch_location_details(user_id, conversation_id, location_id=None, location_name=None):
     """
@@ -192,45 +171,36 @@ def fetch_location_details(user_id, conversation_id, location_id=None, location_
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     if location_id:
         cursor.execute("""
             SELECT location_name, description, open_hours
             FROM Locations
-            WHERE user_id=%s
-              AND conversation_id=%s
-              AND id=%s
+            WHERE user_id=%s AND conversation_id=%s AND id=%s
             LIMIT 1
         """, (user_id, conversation_id, location_id))
     elif location_name:
         cursor.execute("""
             SELECT location_name, description, open_hours
             FROM Locations
-            WHERE user_id=%s
-              AND conversation_id=%s
-              AND location_name=%s
+            WHERE user_id=%s AND conversation_id=%s AND location_name=%s
             LIMIT 1
         """, (user_id, conversation_id, location_name))
     else:
         return {"error": "No location_id or location_name provided"}
-    
     row = cursor.fetchone()
     if not row:
         cursor.close()
         conn.close()
         return {"error": "No matching location found"}
-    
     (lname, ldesc, lhours) = row
     loc_data = {
         "location_name": lname,
         "description": ldesc,
         "open_hours": lhours if lhours is not None else []
     }
-    
     cursor.close()
     conn.close()
     return loc_data
-
 
 def fetch_event_details(user_id, conversation_id, event_id):
     """
@@ -238,22 +208,17 @@ def fetch_event_details(user_id, conversation_id, event_id):
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute("""
         SELECT event_name, description, start_time, end_time, location, year, month, day, time_of_day
         FROM Events
-        WHERE user_id=%s
-          AND conversation_id=%s
-          AND id=%s
+        WHERE user_id=%s AND conversation_id=%s AND id=%s
         LIMIT 1
     """, (user_id, conversation_id, event_id))
-    
     row = cursor.fetchone()
     if not row:
         cursor.close()
         conn.close()
         return {"error": f"No event found with id={event_id}"}
-    
     (ename, edesc, stime, etime, eloc, eyear, emonth, eday, etod) = row
     event_data = {
         "event_id": event_id,
@@ -267,11 +232,9 @@ def fetch_event_details(user_id, conversation_id, event_id):
         "day": eday,
         "time_of_day": etod
     }
-    
     cursor.close()
     conn.close()
     return event_data
-
 
 def fetch_inventory_item(user_id, conversation_id, item_name):
     """
@@ -279,22 +242,17 @@ def fetch_inventory_item(user_id, conversation_id, item_name):
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute("""
         SELECT player_name, item_description, item_effect, quantity, category
         FROM PlayerInventory
-        WHERE user_id=%s
-          AND conversation_id=%s
-          AND item_name=%s
+        WHERE user_id=%s AND conversation_id=%s AND item_name=%s
         LIMIT 1
     """, (user_id, conversation_id, item_name))
-    
     row = cursor.fetchone()
     if not row:
         cursor.close()
         conn.close()
         return {"error": f"No item named '{item_name}' found in inventory"}
-    
     (pname, idesc, ifx, qty, cat) = row
     item_data = {
         "item_name": item_name,
@@ -304,11 +262,9 @@ def fetch_inventory_item(user_id, conversation_id, item_name):
         "quantity": qty,
         "category": cat
     }
-    
     cursor.close()
     conn.close()
     return item_data
-
 
 def fetch_intensity_tiers():
     """
@@ -322,7 +278,6 @@ def fetch_intensity_tiers():
         ORDER BY id
     """)
     rows = cursor.fetchall()
-    
     all_tiers = []
     for (tname, kfeat, aex, peff) in rows:
         all_tiers.append({
@@ -331,11 +286,9 @@ def fetch_intensity_tiers():
             "activity_examples": aex if aex is not None else [],
             "permanent_effects": peff if peff is not None else {}
         })
-    
     cursor.close()
     conn.close()
     return all_tiers
-
 
 def fetch_plot_triggers():
     """
@@ -350,7 +303,6 @@ def fetch_plot_triggers():
         ORDER BY id
     """)
     rows = cursor.fetchall()
-    
     triggers = []
     for r in rows:
         (tname, stg, desc, kfeat, sdyn, ex, trigz) = r
@@ -363,11 +315,9 @@ def fetch_plot_triggers():
             "examples": ex if ex is not None else [],
             "triggers": trigz if trigz is not None else {}
         })
-    
     cursor.close()
     conn.close()
     return triggers
-
 
 def fetch_interactions():
     """
@@ -393,6 +343,9 @@ def fetch_interactions():
     conn.close()
     return result
 
+# -------------------------------------------------------------------
+# ROUTE DEFINITION
+# -------------------------------------------------------------------
 
 @story_bp.route("/next_storybeat", methods=["POST"])
 async def next_storybeat():
@@ -412,7 +365,7 @@ async def next_storybeat():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # 1) Create (or validate) a conversation
+        # 1) Create (or validate) a conversation.
         if not conv_id:
             cur.execute(
                 "INSERT INTO conversations (user_id, conversation_name) VALUES (%s, %s) RETURNING id",
@@ -436,40 +389,32 @@ async def next_storybeat():
             WHERE user_id=%s AND conversation_id=%s AND introduced=FALSE
         """, (user_id, conv_id))
         count = cur.fetchone()[0]
-        # Get environment description and day names from aggregator (or use defaults)
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
         env_desc = aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", "A default environment description.")
         calendar = aggregator_data.get("calendar", {})
         day_names = calendar.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
         if count < 2:
             logging.info("Only %d unintroduced NPC(s) found; generating 3 more.", count)
-            asyncio.run(spawn_multiple_npcs(user_id, conv_id, env_desc, day_names, count=3))
+            await asyncio.to_thread(spawn_multiple_npcs, user_id, conv_id, env_desc, day_names, count=3)
 
-        # 2) Insert user message
+        # 2) Insert user message.
         cur.execute(
             "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
             (conv_id, "user", user_input)
         )
         conn.commit()
 
-        # 3) Create a dominant NPC (for example, Nyx) using the new spawn_single_npc
-  #      nyx_npc_id = asyncio.run(spawn_single_npc(user_id, conv_id, env_desc, day_names))
-        # Optionally update the NPC's name to "Nyx" in the DB
-   #     cur.execute("UPDATE NPCStats SET npc_name=%s WHERE npc_id=%s", ("Nyx", nyx_npc_id))
-  #      conn.commit()
+        # 3) (Optional) Create a dominant NPC (e.g., Nyx). Code commented out for now.
+        # nyx_npc_id = await asyncio.to_thread(spawn_single_npc, user_id, conv_id, env_desc, day_names)
+        # cur.execute("UPDATE NPCStats SET npc_name=%s WHERE npc_id=%s", ("Nyx", nyx_npc_id))
+        # conn.commit()
 
-        # 4) If universal update data was provided, run the universal update asynchronously.
+        # 4) Run universal updates if provided.
         universal_data = data.get("universal_update", {})
         if universal_data:
-            # Add user and conversation info
             universal_data["user_id"] = user_id
             universal_data["conversation_id"] = conv_id
-            # Create an async connection (adjust as needed; here we use get_db_connection if it supports async)
-            # For example, if you have an asyncpg connection method, use that instead.
-            # Here we assume an async connection is obtained via asyncio.run(some_async_get_db_connection())
-            # and then passed to apply_universal_updates.
             async def run_univ_update():
-                # Replace the following with your async connection method if available.
                 import asyncpg
                 dsn = os.getenv("DB_DSN")
                 async_conn = await asyncpg.connect(dsn=dsn)
@@ -482,7 +427,7 @@ async def next_storybeat():
                 conn.close()
                 return jsonify(update_result), 500
 
-        # 5) Possibly advance time and rebuild aggregator context
+        # 5) Possibly advance time and rebuild aggregator context.
         if data.get("advance_time", False):
             new_year, new_month, new_day, new_phase = advance_time_and_update(user_id, conv_id, increment=1)
             aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
@@ -494,7 +439,7 @@ async def next_storybeat():
 
         aggregator_text = aggregator_data.get("aggregator_text", "No aggregator text available.")
 
-        # Append additional NPC context (memories and archetype extras)
+        # Append additional NPC context (memories and archetype extras).
         cur.execute("""
             SELECT npc_name, memory, archetype_extras_summary
             FROM NPCStats
@@ -516,7 +461,8 @@ async def next_storybeat():
         if npc_context_summary:
             aggregator_text += "\nNPC Context:\n" + npc_context_summary
         logging.debug("[next_storybeat] Updated aggregator_text with NPC context:\n%s", aggregator_text)
-        # 6) Attempt up to 3 ChatGPT function calls
+
+        # 6) Attempt up to 3 ChatGPT function calls.
         final_text = None
         structured_json_str = None
 
@@ -534,6 +480,7 @@ async def next_storybeat():
                 fn_name = gpt_reply_dict.get("function_name")
                 fn_args = gpt_reply_dict.get("function_args", {})
 
+                # Execute the requested function locally.
                 if fn_name == "get_npc_details":
                     data_out = fetch_npc_details(user_id, conv_id, fn_args.get("npc_id"))
                 elif fn_name == "get_quest_details":
@@ -547,16 +494,19 @@ async def next_storybeat():
                 else:
                     data_out = {"error": f"Function call '{fn_name}' not recognized."}
 
-                # Incorporate the function result into aggregator_text so that the next API call
-                # includes the function response in its context.
+                # Format the function response and update the aggregator text.
                 function_response_text = json.dumps(data_out)
-                aggregator_text += f"\nFunction Response for {fn_name}:\n{function_response_text}"
-                logging.debug("Updated aggregator_text with function response for %s: %s", fn_name, function_response_text)
+                logging.debug("Function response for %s: %s", fn_name, function_response_text)
 
-                # Add a short delay to help avoid hammering the API immediately
+                # Append a clear instruction along with the function response so that ChatGPT
+                # is guided to generate a final narrative response rather than another function call.
+                aggregator_text += (
+                    f"\n\n[Function Response Received for {fn_name}: {function_response_text}]\n"
+                    "Please use the above function response and the previous context to generate a final narrative response. "
+                    "Do not issue further function calls."
+                )
+                # Add a short delay to avoid rapid-fire requests.
                 await asyncio.sleep(1)
-
-                # Continue the loop; the next call will now include the function response in context.
                 continue
             else:
                 final_text = gpt_reply_dict.get("response")
@@ -573,9 +523,21 @@ async def next_storybeat():
             INSERT INTO messages (conversation_id, sender, content, structured_content)
             VALUES (%s, %s, %s, %s)
             """,
-            (conv_id, "Nyx", final_text, structured_json_str)
+            (conv_id, "assistant", final_text, structured_json_str)
         )
         conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({
+            "response": final_text,
+            "aggregator_text": aggregator_text,
+            "conversation_id": conv_id
+        })
+
+    except Exception as e:
+        logging.exception("[next_storybeat] Error")
+        return jsonify({"error": str(e)}), 500
 
         # 8) Retrieve the entire conversation history for return.
         cur.execute(
