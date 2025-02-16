@@ -63,14 +63,56 @@
       overflow-y: auto;
       background-color: #fefefe;
       position: relative;
+      scroll-behavior: smooth;
+    }
+    .message-row {
+      display: flex;
+      margin-bottom: 10px;
     }
     .message-bubble {
       max-width: 60%;
-      margin-bottom: 10px;
       padding: 8px 12px;
       border-radius: 8px;
       line-height: 1.4em;
       word-wrap: break-word;
+      position: relative;
+    }
+    .timestamp {
+      font-size: 0.7em;
+      color: #666;
+      margin-top: 4px;
+      text-align: right;
+    }
+    /* User message alignment */
+    .user-row {
+      justify-content: flex-end;
+    }
+    .user-row .message-bubble {
+      background-color: #007bff;
+      color: #ffffff;
+    }
+    /* GPT message alignment */
+    .gpt-row {
+      justify-content: flex-start;
+    }
+    .gpt-row .message-bubble {
+      background-color: #e5e5e5;
+      color: #333333;
+    }
+    /* Spinner for typing indicator */
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(0,0,0,0.3);
+      border-top-color: #000;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+      margin-left: 5px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
     #loadMore {
       display: block;
@@ -117,7 +159,6 @@
     #contextMenu div:hover {
       background-color: #eee;
     }
-    /* In dark mode, override #contextMenu */
     .dark-mode #contextMenu {
       background-color: #333;
       color: #fff;
@@ -125,34 +166,6 @@
     }
     .dark-mode #contextMenu div:hover {
       background-color: #444;
-    }
-    .message-row {
-      display: flex;
-      margin-bottom: 10px;
-      /* This ensures each message is its own horizontal "row" */
-    }
-    .message-bubble {
-      max-width: 60%;
-      padding: 8px 12px;
-      border-radius: 8px;
-      line-height: 1.4em;
-      word-wrap: break-word;
-    }
-    /* Align user messages to the right */
-    .user-row {
-      justify-content: flex-end;
-    }
-    .user-row .message-bubble {
-      background-color: #007bff;
-      color: #ffffff;
-    }
-    /* Align GPT messages to the left */
-    .gpt-row {
-      justify-content: flex-start;
-    }
-    .gpt-row .message-bubble {
-      background-color: #e5e5e5;
-      color: #333333;
     }
   </style>
 
@@ -185,30 +198,30 @@
 
   <!-- MAIN CHAT PANEL -->
   <div id="chatPanel">
-    <div id="chatWindow">
+    <div id="chatWindow" role="log" aria-live="polite">
       <span id="loadMore" onclick="loadPreviousMessages()" style="display:none;">Load older messages...</span>
     </div>
     <div id="inputRow">
-      <input type="text" id="userMsg" placeholder="Type your message"/>
+      <input type="text" id="userMsg" placeholder="Type your message" aria-label="Chat message"/>
       <button id="sendBtn" onclick="sendMessage()">Send</button>
     </div>
   </div>
 </div>
 
-<!-- The custom context menu (hidden by default) -->
+<!-- Custom context menu -->
 <div id="contextMenu"></div>
 
 <script>
-    function sanitizeAndRenderMarkdown(markdownText) {
-      const renderedHTML = marked.parse(markdownText); // For Marked 4+
-      return DOMPurify.sanitize(renderedHTML);
-    }
+  function sanitizeAndRenderMarkdown(markdownText) {
+    const renderedHTML = marked.parse(markdownText);
+    return DOMPurify.sanitize(renderedHTML);
+  }
+
   let currentConvId = null;
   let messagesOffset = 0;
   const MESSAGES_PER_LOAD = 20;
   let isDarkMode = false;
 
-  // "pendingUniversalUpdates"
   let pendingUniversalUpdates = {
     roleplay_updates: {},
     npc_creations: [],
@@ -263,7 +276,7 @@
   };
 
   async function pollConversationStatus(convId) {
-    const POLL_INTERVAL = 5000; // 5 seconds
+    const POLL_INTERVAL = 5000;
     const MAX_POLL_ATTEMPTS = 30;
     let attempts = 0;
   
@@ -284,7 +297,7 @@
           if (data.status === "ready") {
             clearInterval(intervalId);
             console.log("Conversation is ready. Refreshing messages...");
-            await loadMessages(convId, true); // Refresh chat window
+            await loadMessages(convId, true);
           } else {
             attempts++;
             if (attempts >= MAX_POLL_ATTEMPTS) {
@@ -299,7 +312,6 @@
     }, POLL_INTERVAL);
   }
 
-  // Check login
   async function checkLoggedIn() {
     try {
       const res = await fetch("/whoami", {
@@ -369,7 +381,6 @@
     }
   }
 
-  // Load & Create Convos
   async function loadConversations() {
     try {
       const res = await fetch("/multiuser/conversations", {
@@ -405,11 +416,9 @@
       currentConvId = data.conversation_id;
       alert("New game started! conversation_id=" + currentConvId);
   
-      // Refresh the conversation list and open the new conversation immediately
       await loadConversations();
       selectConversation(currentConvId);
   
-      // Start polling the conversation status and update the UI dynamically when ready.
       pollConversationStatus(currentConvId);
       
     } catch (err) {
@@ -431,10 +440,7 @@
       btn.textContent = conv.name || "New Chat";
       btn.style.flex = "1";
 
-      // Left-click
       btn.onclick = () => selectConversation(conv.id);
-
-      // Right-click => custom context menu
       btn.oncontextmenu = (e) => {
         e.preventDefault();
         showContextMenu(e.clientX, e.clientY, conv.id);
@@ -498,61 +504,46 @@
     loadMessages(currentConvId, false);
   }
 
-  function appendMessage(m, autoScroll = true) {
-    const chatWindow = document.getElementById("chatWindow");
-    const bubble = createBubble(m);
-    // Put new message at the bottom
-    chatWindow.appendChild(bubble);
-
-    if (autoScroll) {
-      chatWindow.scrollTop = chatWindow.scrollHeight;
-    }
-    return bubble;
-  }
-
   function createBubble(m) {
-    // Create a row container
     const row = document.createElement("div");
     row.classList.add("message-row");
+    row.classList.add(m.sender === "user" ? "user-row" : "gpt-row");
 
-    if (m.sender === "user") {
-      row.classList.add("user-row");
-    } else {
-      row.classList.add("gpt-row");
-    }
-
-    // Then create the bubble
     const bubble = document.createElement("div");
     bubble.classList.add("message-bubble");
-
-    // Safely render the user's text as Markdown + sanitized HTML
     const safeContent = sanitizeAndRenderMarkdown(m.content);
     bubble.innerHTML = `<strong>${m.sender}:</strong> ${safeContent}`;
+
+    // Add timestamp (if not provided, use current time)
+    const timestamp = document.createElement("div");
+    timestamp.classList.add("timestamp");
+    const time = m.created_at ? new Date(m.created_at) : new Date();
+    timestamp.textContent = time.toLocaleTimeString();
+    bubble.appendChild(timestamp);
 
     row.appendChild(bubble);
     return row;
   }
 
-  // Send a new message
   async function sendMessage() {
     const userInputElem = document.getElementById("userMsg");
     const userText = userInputElem.value.trim();
     userInputElem.value = "";
     if (!userText) return;
 
-    // Append the user's message immediately
-    const userMsgObj = {
-      sender: "user",
-      content: userText,
-    };
-    appendMessage(userMsgObj, true);
+    appendMessage({ sender: "user", content: userText }, true);
 
-    // Show a temporary GPT "typing..." bubble
-    const tempGptMsgObj = {
-      sender: "Nyx",
-      content: "Typing..."
-    };
+    // Disable send button while waiting
+    const sendBtn = document.getElementById("sendBtn");
+    sendBtn.disabled = true;
+
+    // Show an animated spinner for GPT response
+    const tempGptMsgObj = { sender: "Nyx", content: "Typing" };
     const gptTypingBubble = appendMessage(tempGptMsgObj, true);
+    // Append a spinner element into the bubble
+    const spinner = document.createElement("span");
+    spinner.classList.add("spinner");
+    gptTypingBubble.querySelector(".message-bubble").appendChild(spinner);
 
     const payload = {
       user_input: userText,
@@ -574,35 +565,32 @@
         console.error("Server error:", data);
         alert("Message send failed!");
         gptTypingBubble.innerHTML = `<strong>Nyx:</strong> [Error retrieving response]`;
+        sendBtn.disabled = false;
         return;
       }
 
       resetPendingUniversalUpdates();
       currentConvId = data.conversation_id;
 
-      // Remove the placeholder
+      // Remove the temporary typing bubble and spinner
       gptTypingBubble.remove();
 
-      // Append the actual GPT message from the server
       const realGptMsgObj = {
         sender: "Nyx",
         content: data.response || "(No response?)",
       };
       appendMessage(realGptMsgObj, true);
-
-      // Refresh the conversation list (if needed)
       await loadConversations();
     } catch (err) {
       console.error("sendMessage error:", err);
       gptTypingBubble.innerHTML = `<strong>Nyx:</strong> [Error retrieving response]`;
+    } finally {
+      sendBtn.disabled = false;
     }
   }
 
-  // =====================
-  // Context Menu
-  // =====================
+  // Context menu functionality
   const menuDiv = document.getElementById("contextMenu");
-
   function showContextMenu(x, y, convId) {
     menuDiv.innerHTML = `
       <div onclick="renameConversation(${convId})">Rename</div>
@@ -613,11 +601,7 @@
     menuDiv.style.top = y + "px";
     menuDiv.style.display = "block";
   }
-
-  // Hide menu if user clicks anywhere else
-  document.addEventListener("click", () => {
-    menuDiv.style.display = "none";
-  });
+  document.addEventListener("click", () => { menuDiv.style.display = "none"; });
 
   async function renameConversation(convId) {
     const newName = prompt("Enter new conversation name:");
@@ -639,8 +623,6 @@
     }
   }
 
-  // Prompt user for a folder name, then call the route that
-  // auto-creates the folder if needed & moves conversation
   async function moveConversationToFolder(convId) {
     const folderName = prompt("Which folder name? (It will be created if it doesn't exist)");
     if (!folderName) return;
