@@ -14,6 +14,7 @@ from routes.settings_routes import insert_missing_settings, generate_mega_settin
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from logic.aggregator import get_aggregated_roleplay_context
 from db.connection import get_db_connection  # Not used anymore if using asyncpg
+from routes.story_routes import build_aggregator_text
 
 # Use your Railway DSN (public URL for local development)
 DB_DSN = os.getenv("DB_DSN") 
