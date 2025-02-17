@@ -10,34 +10,34 @@ EXTRACTION_PROMPT = """
 Based on the following narrative and context, produce a strictly valid JSON object that summarizes all game state updates according to the following schema. Output ONLY the JSON object with no additional commentary or formatting.
 
 The schema is as follows:
-{
-  "roleplay_updates": {
+{{
+  "roleplay_updates": {{
     "CurrentYear": <number>,
     "CurrentMonth": <number>,
     "CurrentDay": <number>,
     "TimeOfDay": "<string>"
-  },
-  "ChaseSchedule": { /* complete weekly schedule or {} if unchanged */ },
+  }},
+  "ChaseSchedule": {{ /* complete weekly schedule or {{}} if unchanged */ }},
   "MainQuest": "<string>",
   "PlayerRole": "<string>",
   "npc_creations": [ /* array of new NPC objects or [] */ ],
   "npc_updates": [ /* array of NPC update objects or [] */ ],
-  "character_stat_updates": { "player_name": "Chase", "stats": { /* stat changes or {} */ } },
+  "character_stat_updates": {{ "player_name": "Chase", "stats": {{ /* stat changes or {{}} */ }} }},
   "relationship_updates": [ /* array of relationship update objects or [] */ ],
   "npc_introductions": [ /* array of NPC introduction objects or [] */ ],
   "location_creations": [ /* array of location creation objects or [] */ ],
   "event_list_updates": [ /* array of event objects or [] */ ],
-  "inventory_updates": { 
+  "inventory_updates": {{ 
       "player_name": "Chase", 
       "added_items": [ /* list any new items mentioned in the narrative (e.g., "Debugging Amulet") */ ], 
       "removed_items": [] 
-  },
+  }},
   "quest_updates": [ /* array of quest update objects or [] */ ],
   "social_links": [ /* array of social link objects or [] */ ],
   "perk_unlocks": [ /* array of perk unlock objects or [] */ ]
-}
+}}
 
-**Important:** If the narrative or context includes mention of new inventory items (for example, a Debugging Amulet), list them in "added_items". If no new items are mentioned, output an empty array.
+**Important:** If the narrative or context includes mention of new inventory items (for example, a Debugging Amulet), list them in "added_items". If no new items are mentioned, then output an empty array.
 
 Narrative:
 {narrative}
@@ -45,6 +45,7 @@ Narrative:
 Context:
 {context}
 """
+
 
 
 async def generate_narrative(conversation_id, aggregator_text, user_input):
