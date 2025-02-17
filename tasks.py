@@ -9,6 +9,10 @@ from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 #from logic.npc_creation import spawn_and_refine_npcs_with_relationships
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from game_processing import async_process_new_game
+from logic.gpt_parser import generate_narrative_and_updates
+from db.connection import get_db_connection
+from logic.universal_updater import apply_universal_updates
+import asyncpg
 
 
 @celery_app.task
@@ -117,6 +121,37 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
         fallback_text = fallback_response.choices[0].message.content.strip()
         nyx_text = fallback_text if fallback_text else "[No text returned from GPT]"
         gpt_reply_dict["response"] = nyx_text
+
+@celery_app.task
+def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input):
+    async def main():
+        narrative, updates_payload = await generate_narrative_and_updates(conversation_id, aggregator_text, user_input)
+        
+        # If state updates exist, update the database
+        if updates_payload:
+            dsn = os.getenv("DB_DSN")
+            async_conn = await asyncpg.connect(dsn=dsn)
+            result = await apply_universal_updates(user_id, conversation_id, updates_payload, async_conn)
+            await async_conn.close()
+            logging.info("State update result: %s", result)
+        
+        # Insert the narrative into the messages table
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+            (conversation_id, "assistant", narrative)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"status": "success", "narrative": narrative}
+    
+    return asyncio.run(main())
+
+# Example usage:
+# process_storybeat_task.delay(user_id, conv_id, aggregator_text, user_input)
+
         gpt_reply_dict["type"] = "fallback"
         
     return json.dumps(gpt_reply_dict)
