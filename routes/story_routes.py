@@ -366,7 +366,7 @@ async def next_storybeat():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # 1) Create (or validate) a conversation.
+        # Create or validate conversation.
         if not conv_id:
             cur.execute(
                 "INSERT INTO conversations (user_id, conversation_name) VALUES (%s, %s) RETURNING id",
@@ -384,7 +384,7 @@ async def next_storybeat():
                 conn.close()
                 return jsonify({"error": f"Conversation {conv_id} not owned by this user"}), 403
 
-        # 1.5) Check unintroduced NPC count; if fewer than 2, spawn 3 more.
+        # Check unintroduced NPC count; spawn more if needed.
         cur.execute("""
             SELECT COUNT(*) FROM NPCStats
             WHERE user_id=%s AND conversation_id=%s AND introduced=FALSE
@@ -398,19 +398,14 @@ async def next_storybeat():
             logging.info("Only %d unintroduced NPC(s) found; generating 3 more.", count)
             await asyncio.to_thread(spawn_multiple_npcs, user_id, conv_id, env_desc, day_names, count=3)
 
-        # 2) Insert user message.
+        # Insert user message.
         cur.execute(
             "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
             (conv_id, "user", user_input)
         )
         conn.commit()
 
-        # 3) (Optional) Create a dominant NPC (e.g., Nyx) if needed.
-        # nyx_npc_id = await asyncio.to_thread(spawn_single_npc, user_id, conv_id, env_desc, day_names)
-        # cur.execute("UPDATE NPCStats SET npc_name=%s WHERE npc_id=%s", ("Nyx", nyx_npc_id))
-        # conn.commit()
-
-        # 4) Process any universal updates provided by the user.
+        # Process any universal updates provided.
         universal_data = data.get("universal_update", {})
         if universal_data:
             universal_data["user_id"] = user_id
@@ -428,7 +423,7 @@ async def next_storybeat():
                 conn.close()
                 return jsonify(update_result), 500
 
-        # 5) Possibly advance time and rebuild aggregator context.
+        # Possibly advance time.
         if data.get("advance_time", False):
             new_year, new_month, new_day, new_phase = advance_time_and_update(user_id, conv_id, increment=1)
             aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
@@ -440,7 +435,7 @@ async def next_storybeat():
 
         aggregator_text = aggregator_data.get("aggregator_text", "No aggregator text available.")
 
-        # Append additional NPC context (memories and archetype extras).
+        # Append additional NPC context.
         cur.execute("""
             SELECT npc_name, memory, archetype_extras_summary
             FROM NPCStats
@@ -461,47 +456,27 @@ async def next_storybeat():
             npc_context_summary += f"{npc_name}: {mem_text} {extra_text}\n"
         if npc_context_summary:
             aggregator_text += "\nNPC Context:\n" + npc_context_summary
-        logging.debug("[next_storybeat] Updated aggregator_text with NPC context:\n%s", aggregator_text)
+        logging.debug("[next_storybeat] Aggregator text: %s", aggregator_text)
 
-        # 6) Use the GPT parser module to generate the narrative and state update payload.
-        from logic.gpt_parser import generate_narrative_and_updates
-        narrative, updates_payload = await generate_narrative_and_updates(conv_id, aggregator_text, user_input)
+        # Enqueue the heavy GPT task via Celery.
+        from tasks import process_storybeat
+        task_result = process_storybeat.delay(conv_id, aggregator_text, user_input, user_id)
+        logging.info("Celery task enqueued: %s", task_result.id)
 
-        # 7) If updates_payload contains state changes, run the universal updater.
-        if updates_payload:
-            async def run_univ_update_payload():
-                import asyncpg
-                dsn = os.getenv("DB_DSN")
-                async_conn = await asyncpg.connect(dsn=dsn)
-                result = await apply_universal_updates(user_id, conv_id, updates_payload, async_conn)
-                await async_conn.close()
-                return result
-            update_result = await run_univ_update_payload()
-            if "error" in update_result:
-                logging.error("Universal update payload error: %s", update_result)
-                # Optionally, you could decide to continue despite the error.
-
-        # 8) Store the final narrative (from the parser) as a new message.
-        cur.execute(
-            """
-            INSERT INTO messages (conversation_id, sender, content)
-            VALUES (%s, %s, %s)
-            """,
-            (conv_id, "assistant", narrative)
-        )
-        conn.commit()
         cur.close()
         conn.close()
 
+        # Return a quick response; the state updates will be processed in the background.
         return jsonify({
-            "response": narrative,
-            "aggregator_text": aggregator_text,
-            "conversation_id": conv_id
+            "message": "Your action has been queued. Please wait for the next update.",
+            "conversation_id": conv_id,
+            "celery_task_id": task_result.id
         })
 
     except Exception as e:
         logging.exception("[next_storybeat] Error")
         return jsonify({"error": str(e)}), 500
+
 
 def gather_rule_knowledge():
     """
