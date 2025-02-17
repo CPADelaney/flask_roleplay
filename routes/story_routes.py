@@ -366,7 +366,7 @@ async def next_storybeat():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Create or validate conversation.
+        # 1) Create (or validate) a conversation.
         if not conv_id:
             cur.execute(
                 "INSERT INTO conversations (user_id, conversation_name) VALUES (%s, %s) RETURNING id",
@@ -384,7 +384,7 @@ async def next_storybeat():
                 conn.close()
                 return jsonify({"error": f"Conversation {conv_id} not owned by this user"}), 403
 
-        # Check unintroduced NPC count; spawn more if needed.
+        # 1.5) Check unintroduced NPC count; spawn more if needed.
         cur.execute("""
             SELECT COUNT(*) FROM NPCStats
             WHERE user_id=%s AND conversation_id=%s AND introduced=FALSE
@@ -398,14 +398,14 @@ async def next_storybeat():
             logging.info("Only %d unintroduced NPC(s) found; generating 3 more.", count)
             await asyncio.to_thread(spawn_multiple_npcs, user_id, conv_id, env_desc, day_names, count=3)
 
-        # Insert user message.
+        # 2) Insert user message.
         cur.execute(
             "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
             (conv_id, "user", user_input)
         )
         conn.commit()
 
-        # Process any universal updates provided.
+        # 3) Process any universal updates provided.
         universal_data = data.get("universal_update", {})
         if universal_data:
             universal_data["user_id"] = user_id
@@ -423,7 +423,7 @@ async def next_storybeat():
                 conn.close()
                 return jsonify(update_result), 500
 
-        # Possibly advance time.
+        # 4) Possibly advance time.
         if data.get("advance_time", False):
             new_year, new_month, new_day, new_phase = advance_time_and_update(user_id, conv_id, increment=1)
             aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
@@ -435,7 +435,7 @@ async def next_storybeat():
 
         aggregator_text = aggregator_data.get("aggregator_text", "No aggregator text available.")
 
-        # Append additional NPC context.
+        # 5) Append additional NPC context.
         cur.execute("""
             SELECT npc_name, memory, archetype_extras_summary
             FROM NPCStats
@@ -458,15 +458,15 @@ async def next_storybeat():
             aggregator_text += "\nNPC Context:\n" + npc_context_summary
         logging.debug("[next_storybeat] Aggregator text: %s", aggregator_text)
 
-        # Enqueue the heavy GPT task via Celery.
-        from tasks import process_storybeat
-        task_result = process_storybeat.delay(conv_id, aggregator_text, user_input, user_id)
+        # 6) Enqueue the heavy GPT task via Celery.
+        from tasks import process_storybeat_task  # Use the correct task name!
+        task_result = process_storybeat_task.delay(user_id, conv_id, aggregator_text, user_input)
         logging.info("Celery task enqueued: %s", task_result.id)
 
         cur.close()
         conn.close()
 
-        # Return a quick response; the state updates will be processed in the background.
+        # Return a quick response; state updates are processed in the background.
         return jsonify({
             "message": "Your action has been queued. Please wait for the next update.",
             "conversation_id": conv_id,
@@ -476,7 +476,6 @@ async def next_storybeat():
     except Exception as e:
         logging.exception("[next_storybeat] Error")
         return jsonify({"error": str(e)}), 500
-
 
 def gather_rule_knowledge():
     """
