@@ -17,7 +17,8 @@ async def universal_update():
         return jsonify({"error": "Not logged in"}), 401
 
     # 2) Get JSON payload and conversation_id
-    data = await request.get_json()  # async request handling in Flask 2.x
+    # Remove the 'await' since request.get_json() is synchronous in Flask
+    data = request.get_json()
     conversation_id = data.get("conversation_id")
     if not conversation_id:
         return jsonify({"error": "No conversation_id provided"}), 400
@@ -35,4 +36,3 @@ async def universal_update():
         return jsonify({"error": str(e)}), 500
     finally:
         await conn.close()
-        
