@@ -23,6 +23,7 @@ from logic.inventory_logic import add_item_to_inventory, remove_item_from_invent
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
 from routes.settings_routes import generate_mega_setting_logic
 from logic.activities_logic import filter_activities_for_npc, build_short_summary
+from logic.gpt_parser import generate_narrative_and_updates
 
 story_bp = Blueprint("story_bp", __name__)
 
@@ -404,12 +405,12 @@ async def next_storybeat():
         )
         conn.commit()
 
-        # 3) (Optional) Create a dominant NPC (e.g., Nyx). Code commented out for now.
+        # 3) (Optional) Create a dominant NPC (e.g., Nyx) if needed.
         # nyx_npc_id = await asyncio.to_thread(spawn_single_npc, user_id, conv_id, env_desc, day_names)
         # cur.execute("UPDATE NPCStats SET npc_name=%s WHERE npc_id=%s", ("Nyx", nyx_npc_id))
         # conn.commit()
 
-        # 4) Run universal updates if provided.
+        # 4) Process any universal updates provided by the user.
         universal_data = data.get("universal_update", {})
         if universal_data:
             universal_data["user_id"] = user_id
@@ -462,76 +463,38 @@ async def next_storybeat():
             aggregator_text += "\nNPC Context:\n" + npc_context_summary
         logging.debug("[next_storybeat] Updated aggregator_text with NPC context:\n%s", aggregator_text)
 
-        # 6) Attempt up to 3 ChatGPT function calls.
-        final_text = None
-        structured_json_str = None
+        # 6) Use the GPT parser module to generate the narrative and state update payload.
+        from logic.gpt_parser import generate_narrative_and_updates
+        narrative, updates_payload = await generate_narrative_and_updates(conv_id, aggregator_text, user_input)
 
-        for attempt in range(3):
-            logging.debug("[next_storybeat] GPT attempt #%d with user_input=%r", attempt, user_input)
-            gpt_reply_dict = await asyncio.to_thread(
-                get_chatgpt_response,
-                conv_id,
-                aggregator_text,
-                user_input
-            )
-            logging.debug("[next_storybeat] GPT reply (attempt %d): %s", attempt, gpt_reply_dict)
+        # 7) If updates_payload contains state changes, run the universal updater.
+        if updates_payload:
+            async def run_univ_update_payload():
+                import asyncpg
+                dsn = os.getenv("DB_DSN")
+                async_conn = await asyncpg.connect(dsn=dsn)
+                result = await apply_universal_updates(user_id, conv_id, updates_payload, async_conn)
+                await async_conn.close()
+                return result
+            update_result = await run_univ_update_payload()
+            if "error" in update_result:
+                logging.error("Universal update payload error: %s", update_result)
+                # Optionally, you could decide to continue despite the error.
 
-            if gpt_reply_dict.get("type") == "function_call":
-                fn_name = gpt_reply_dict.get("function_name")
-                fn_args = gpt_reply_dict.get("function_args", {})
-
-                # Execute the requested function locally.
-                if fn_name == "get_npc_details":
-                    data_out = fetch_npc_details(user_id, conv_id, fn_args.get("npc_id"))
-                elif fn_name == "get_quest_details":
-                    data_out = fetch_quest_details(user_id, conv_id, fn_args.get("quest_id"))
-                elif fn_name == "get_location_details":
-                    data_out = fetch_location_details(
-                        user_id, conv_id,
-                        fn_args.get("location_id"),
-                        fn_args.get("location_name")
-                    )
-                else:
-                    data_out = {"error": f"Function call '{fn_name}' not recognized."}
-
-                # Format the function response and update the aggregator text.
-                function_response_text = json.dumps(data_out)
-                logging.debug("Function response for %s: %s", fn_name, function_response_text)
-
-                # Append a clear instruction along with the function response so that ChatGPT
-                # is guided to generate a final narrative response rather than another function call.
-                aggregator_text += (
-                    f"\n\n[Function Response Received for {fn_name}: {function_response_text}]\n"
-                    "Please use the above function response and the previous context to generate a final narrative response. "
-                    "Do not issue further function calls."
-                )
-                # Add a short delay to avoid rapid-fire requests.
-                await asyncio.sleep(1)
-                continue
-            else:
-                final_text = gpt_reply_dict.get("response")
-                structured_json_str = json.dumps(gpt_reply_dict)
-                break
-
-        if not final_text:
-            final_text = "[No final text returned after repeated function calls]"
-            structured_json_str = json.dumps({"attempts": "exceeded"})
-
-
-        # 7) Store GPT's final message as a new message in the conversation.
+        # 8) Store the final narrative (from the parser) as a new message.
         cur.execute(
             """
-            INSERT INTO messages (conversation_id, sender, content, structured_content)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO messages (conversation_id, sender, content)
+            VALUES (%s, %s, %s)
             """,
-            (conv_id, "assistant", final_text, structured_json_str)
+            (conv_id, "assistant", narrative)
         )
         conn.commit()
         cur.close()
         conn.close()
 
         return jsonify({
-            "response": final_text,
+            "response": narrative,
             "aggregator_text": aggregator_text,
             "conversation_id": conv_id
         })
@@ -539,35 +502,6 @@ async def next_storybeat():
     except Exception as e:
         logging.exception("[next_storybeat] Error")
         return jsonify({"error": str(e)}), 500
-
-        # 8) Retrieve the entire conversation history for return.
-        cur.execute(
-            "SELECT sender, content, created_at FROM messages WHERE conversation_id=%s ORDER BY id ASC",
-            (conv_id,)
-        )
-        rows = cur.fetchall()
-        conversation_history = [
-            {"sender": r[0], "content": r[1], "created_at": r[2].isoformat()} for r in rows
-        ]
-        cur.close()
-        conn.close()
-
-        return jsonify({
-            "conversation_id": conv_id,
-            "story_output": final_text,
-            "messages": conversation_history,
-            "updates": {
-                "year": new_year,
-                "month": new_month,
-                "day": new_day,
-                "time_of_day": new_phase
-            }
-        }), 200
-
-    except Exception as e:
-        logging.exception("[next_storybeat] Error")
-        return jsonify({"error": str(e)}), 500
-
 
 def gather_rule_knowledge():
     """
