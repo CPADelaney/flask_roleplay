@@ -3,7 +3,7 @@
 import json
 import logging
 import asyncio
-from logic.gpt_utils import spaced_gpt_call_with_retry  # Your helper for GPT calls
+from logic.gpt_utils import spaced_gpt_call  # Your helper for GPT calls
 
 # Define your extraction prompt – this is the part where you “rip” the JSON payload stuff.
 EXTRACTION_PROMPT = """
@@ -43,8 +43,8 @@ async def generate_narrative(conversation_id, aggregator_text, user_input):
     """
     Calls GPT to generate the narrative response.
     """
-    # Using your spaced_gpt_call_with_retry helper
-    narrative_resp = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, user_input)
+    # Using your _with_retry helper
+    narrative_resp = await _with_retry(conversation_id, aggregator_text, user_input)
     narrative = narrative_resp.get("response", "").strip()
     if not narrative:
         narrative = "[No narrative generated]"
@@ -57,7 +57,7 @@ async def extract_state_updates(conversation_id, aggregator_text, narrative):
     # Fill in the extraction prompt with the current narrative and context.
     prompt = EXTRACTION_PROMPT.format(narrative=narrative, context=aggregator_text)
     # Force a function call if desired or simply get the text response.
-    state_resp = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, prompt)
+    state_resp = await spaced_gpt_call(conversation_id, aggregator_text, prompt)
     
     updates_payload = {}
     # If the response is a function call, use its arguments.
