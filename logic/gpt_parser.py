@@ -40,11 +40,13 @@ Context:
 """
 
 async def generate_narrative(conversation_id, aggregator_text, user_input):
-    """
-    Calls GPT to generate the narrative response.
-    """
+    # Using your spaced_gpt_call helper (which implements retry/backoff)
     narrative_resp = await spaced_gpt_call(conversation_id, aggregator_text, user_input)
-    narrative = narrative_resp.get("response", "").strip()
+    # If the response type is a function call, then the narrative field may be missing.
+    narrative = narrative_resp.get("response")
+    if narrative is None:
+        narrative = ""
+    narrative = narrative.strip()
     if not narrative:
         narrative = "[No narrative generated]"
     return narrative
