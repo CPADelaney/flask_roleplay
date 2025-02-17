@@ -420,7 +420,7 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
         max_tokens=4000,
         frequency_penalty=0.0,
         functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
-        function_call="auto"
+        function_call={"name": "apply_universal_update"}
     )
 
     msg = response.choices[0].message
