@@ -4,8 +4,8 @@ import os
 import json
 import hashlib
 import requests
-import random
 from db.connection import get_db_connection
+from flask import Blueprint, request, jsonify, session
 
 # 🔹 API KEYS
 OPENAI_API_KEY = "your_openai_api_key"
@@ -21,119 +21,97 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 
 # ================================
-# 1️⃣ FETCH ROLEPLAY DATA & NPCS
+# 1️⃣ FETCH ROLEPLAY DATA & NPC DETAILS
 # ================================
-def get_npc_and_roleplay_context(user_id, conversation_id):
-    """Fetch up to 5 NPCs and roleplay data for image generation."""
+def get_npc_and_roleplay_context(user_id, conversation_id, npc_names):
+    """Fetch NPCStats details for the NPCs mentioned in the GPT response."""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT npc_name, physical_description, dominance, cruelty, intensity, 
                personality_traits, likes, dislikes, current_location
-        FROM NPCStats WHERE user_id=%s AND conversation_id=%s 
-        ORDER BY intensity DESC LIMIT 5
-    """, (user_id, conversation_id))
-    npc_rows = cursor.fetchall()
+        FROM NPCStats 
+        WHERE user_id=%s AND conversation_id=%s AND npc_name IN %s
+    """, (user_id, conversation_id, tuple(npc_names)))
 
-    npcs = [{
-        "name": row[0],
-        "physical_description": row[1],
-        "dominance": row[2],
-        "cruelty": row[3],
-        "intensity": row[4],
-        "personality_traits": json.loads(row[5] or "[]"),
-        "likes": json.loads(row[6] or "[]"),
-        "dislikes": json.loads(row[7] or "[]"),
-        "current_location": row[8]
-    } for row in npc_rows]
-
-    cursor.execute("""
-        SELECT key, value FROM CurrentRoleplay WHERE user_id=%s AND conversation_id=%s
-    """, (user_id, conversation_id))
-    roleplay_data = {row[0]: row[1] for row in cursor.fetchall()}
+    detailed_npcs = {}
+    for row in cursor.fetchall():
+        detailed_npcs[row[0]] = {
+            "physical_description": row[1],
+            "dominance": row[2],
+            "cruelty": row[3],
+            "intensity": row[4],
+            "personality_traits": json.loads(row[5] or "[]"),
+            "likes": json.loads(row[6] or "[]"),
+            "dislikes": json.loads(row[7] or "[]"),
+            "current_location": row[8]
+        }
 
     cursor.close()
     conn.close()
-    return npcs, roleplay_data
+    return detailed_npcs
 
 
 # ================================
-# 2️⃣ NPC POSITIONING SYSTEM
+# 2️⃣ PROCESS GPT RESPONSE & MERGE WITH NPCStats
 # ================================
-def assign_npc_positions(npcs):
-    """Dynamically assigns positions and interactions for multi-character roleplay scenes."""
-    positions = []
-    dominant_npcs = sorted(npcs, key=lambda x: x['dominance'], reverse=True)
+def process_gpt_scene_data(gpt_response, user_id, conversation_id):
+    """Extracts NPCs, actions, setting from GPT-4o's structured response,
+       then enhances it with deeper character details from NPCStats."""
     
-    for index, npc in enumerate(dominant_npcs):
-        if index == 0:
-            role = "Primary Dominant (center of the scene, direct engagement)"
-            angle = "close-up or low-angle shot for dominance"
-        elif index == 1:
-            role = "Secondary Dominant (flanking, supporting actions)"
-            angle = "side view or over-the-shoulder perspective"
-        elif index == 2:
-            role = "Observer NPC (watching the scene unfold, teasing the protagonist)"
-            angle = "mid-distance perspective"
-        else:
-            role = "Peripheral NPC (reacting to the main action, optional involvement)"
-            angle = "wide-angle shot"
-        
-        positions.append({
-            "npc": npc["name"],
-            "role": role,
-            "suggested_camera_angle": angle
+    if not gpt_response or "scene_data" not in gpt_response:
+        return None
+
+    scene_data = gpt_response["scene_data"]
+    npc_names = scene_data["npc_names"]
+
+    # Fetch character details from NPCStats
+    detailed_npcs = get_npc_and_roleplay_context(user_id, conversation_id, npc_names)
+
+    # Merge GPT context with database details
+    npcs = []
+    for name in npc_names:
+        npcs.append({
+            "name": name,
+            "physical_description": detailed_npcs.get(name, {}).get("physical_description", "unknown"),
+            "dominance": detailed_npcs.get(name, {}).get("dominance", 50),
+            "cruelty": detailed_npcs.get(name, {}).get("cruelty", 50),
+            "intensity": detailed_npcs.get(name, {}).get("intensity", 50),
+            "expression": scene_data["expressions"].get(name, "neutral"),
+            "personality_traits": detailed_npcs.get(name, {}).get("personality_traits", []),
+            "likes": detailed_npcs.get(name, {}).get("likes", []),
+            "dislikes": detailed_npcs.get(name, {}).get("dislikes", [])
         })
-    
-    return positions
 
-
-# ================================
-# 3️⃣ GPT-4o OPTIMIZED PROMPT
-# ================================
-def generate_optimized_prompt(npcs, roleplay_data):
-    """Uses GPT-4o to refine Stability AI prompts for cinematic perspectives, lighting, and NPC reactions."""
-    if not npcs or not roleplay_data:
-        return None
-
-    messages = [
-        {"role": "system", "content": "You are an expert at crafting highly detailed AI image prompts for Stability AI."},
-        {"role": "user", "content": f"""
-        Generate a **highly detailed AI image prompt** for an **NSFW roleplay scene** that includes **dynamic camera angles, realistic lighting, motion blur, and proper NPC positioning.**
-
-        **NPCs in Scene (Up to 5):**
-        {json.dumps(npcs, indent=2)}
-
-        **Roleplay Context:**
-        {json.dumps(roleplay_data, indent=2)}
-
-        📌 **Ensure the prompt includes**:
-        - **Character Details** (appearance, expressions, body language)
-        - **Actions & Poses** (NPCs interacting dynamically)
-        - **Lighting Effects** (Choose dynamically: soft glow, dramatic shadows, neon, candle-lit)
-        - **Motion & Blur Effects** (Subtle movement, depth of field, sharp focus on dominant NPC)
-        - **Camera Angles** (Choose dynamically: POV, Over-the-shoulder, Low-angle, Side, Close-up, Wide)
-        - **NPC Positioning & Reactions** (Ensure proper hierarchy & realistic engagement)
-
-        📌 **Example Output**:
-        '[Character 1] with [Character 2], captured in [Camera Angle] with [Lighting Effect] inside [Setting], engaging in [Action], anime-style, highly detailed, motion blur, NSFW.'
-        """}
-    ]
-
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
+    return {
+        "npcs": npcs,
+        "actions": scene_data["actions"],
+        "setting": scene_data["setting"],
+        "npc_positions": scene_data["npc_positions"],
+        "mood": scene_data["mood"]
     }
-    data = {"model": "gpt-4o", "messages": messages, "temperature": 0.7}
 
-    response = requests.post(GPT4O_API_URL, headers=headers, json=data)
 
-    if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"]
-    else:
-        print("Error:", response.text)
+# ================================
+# 3️⃣ GENERATE GPT-4o AI IMAGE PROMPT
+# ================================
+def generate_prompt_from_gpt_and_db(scene_data):
+    """Generates an AI image prompt based on merged GPT-4o scene data and NPCStats details."""
+    if not scene_data:
         return None
+
+    npc_details = ", ".join([
+        f"{npc['name']} ({npc['expression']}), {npc['physical_description']}, "
+        f"dominance: {npc['dominance']}/100, cruelty: {npc['cruelty']}/100, intensity: {npc['intensity']}/100"
+        for npc in scene_data["npcs"]
+    ])
+
+    actions = ", ".join(scene_data["actions"])
+    setting = scene_data["setting"]
+    mood = scene_data["mood"]
+
+    return f"{npc_details} in {setting}, engaging in {actions}, {mood}, anime-style, highly detailed, NSFW."
 
 
 # ================================
@@ -161,21 +139,19 @@ def save_image_to_cache(image_url, prompt, variation_id):
 
 
 # ================================
-# 5️⃣ FULL ROLEPLAY IMAGE PIPELINE
+# 5️⃣ GENERATE ROLEPLAY IMAGE (GPT + NPCStats)
 # ================================
-def generate_roleplay_image(user_id, conversation_id):
-    """Fetches roleplay data, builds a GPT-4o optimized Stability AI prompt, and generates (or retrieves) multiple AI images."""
-    npcs, roleplay_data = get_npc_and_roleplay_context(user_id, conversation_id)
+def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id):
+    """Fetches roleplay data from GPT's response, enhances it with NPCStats details, and generates (or retrieves) an AI image."""
+    scene_data = process_gpt_scene_data(gpt_response, user_id, conversation_id)
+    if not scene_data:
+        return {"error": "No valid scene data found in GPT response"}
 
-    if not npcs or not roleplay_data:
-        return {"error": "No NPC or roleplay data found"}
-
-    optimized_prompt = generate_optimized_prompt(npcs, roleplay_data)
-    npc_positions = assign_npc_positions(npcs)
+    optimized_prompt = generate_prompt_from_gpt_and_db(scene_data)
 
     cached_images = get_cached_images(optimized_prompt)
     if cached_images:
-        return {"image_urls": cached_images, "npc_positions": npc_positions, "cached": True, "prompt_used": optimized_prompt}
+        return {"image_urls": cached_images, "cached": True, "prompt_used": optimized_prompt}
 
     generated_images = []
     for variation_id in range(5):
@@ -184,4 +160,41 @@ def generate_roleplay_image(user_id, conversation_id):
             cached_path = save_image_to_cache(image_url, optimized_prompt, variation_id)
             generated_images.append(cached_path or image_url)
 
-    return {"image_urls": generated_images, "npc_positions": npc_positions, "cached": False, "prompt_used": optimized_prompt}
+    return {"image_urls": generated_images, "cached": False, "prompt_used": optimized_prompt}
+
+
+# ================================
+# 6️⃣ PROCESS GPT RESPONSE & TRIGGER IMAGE
+# ================================
+def process_gpt_response(gpt_response, user_id, conversation_id):
+    """Processes GPT's response and generates an image if scene data is present."""
+    scene_image_data = generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id)
+
+    return {
+        "response": gpt_response["response"],
+        "scene_image_urls": scene_image_data["image_urls"],
+        "scene_cached": scene_image_data["cached"]
+    }
+
+
+# ================================
+# 7️⃣ API ROUTE: GPT + IMAGE RESPONSE
+# ================================
+image_bp = Blueprint("image_bp", __name__)
+
+@image_bp.route("/generate_gpt_image", methods=["POST"])
+def generate_gpt_image():
+    """API route to process a GPT message and generate an AI image based on scene context & NPCStats."""
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not logged in"}), 401
+
+    data = request.get_json()
+    gpt_response = data.get("gpt_response")
+    conversation_id = data.get("conversation_id")
+
+    if not gpt_response or not conversation_id:
+        return jsonify({"error": "Missing GPT response or conversation_id"}), 400
+
+    result = process_gpt_response(gpt_response, user_id, conversation_id)
+    return jsonify(result)
