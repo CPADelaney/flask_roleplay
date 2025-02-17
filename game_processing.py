@@ -440,20 +440,43 @@ async def async_process_new_game(user_id, conversation_data):
 
         # 13) Retrieve existing immersive calendar names or generate them if not present.
         calendar_data = load_calendar_names(user_id, conversation_id)
-        # Check if the calendar data is just our fallback. You might adjust this condition based on your logic.
         if calendar_data.get("year_name") == "The Eternal Cycle":
-            # No immersive calendar names found; generate new ones.
             calendar_data = await update_calendar_names(user_id, conversation_id, combined_env)
-        # Optionally, you can re-store the calendar data to be sure:
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES($1,$2,'CalendarNames',$3)
+            VALUES($1, $2, 'CalendarNames', $3)
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, json.dumps(calendar_data))
 
-        day_names = calendar_data.get("days", ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
+        # **NEW STEP:** Set the initial in-game time to the first day in "Morning"
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES($1, $2, 'CurrentYear', '1')
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id)
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES($1, $2, 'CurrentMonth', '1')
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id)
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES($1, $2, 'CurrentDay', '1')
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id)
+        await conn.execute("""
+            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+            VALUES($1, $2, 'TimeOfDay', 'Morning')
+            ON CONFLICT (user_id, conversation_id, key)
+            DO UPDATE SET value=EXCLUDED.value
+        """, user_id, conversation_id)
 
+        # Retrieve the dynamic day names from the calendar (e.g., first element) if needed.
+        day_names = calendar_data.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
  
         # NEW STEP: Generate and store Chase schedule.
         await generate_chase_schedule(user_id, conversation_id, combined_env, day_names)
