@@ -2,10 +2,12 @@
 from flask import Blueprint, request, jsonify, session
 import asyncio
 import asyncpg
-from logic.universal_updater import apply_universal_updates_async
 import os
+from logic.universal_updater import apply_universal_updates_async
 
 DB_DSN = os.getenv("DB_DSN")
+
+universal_bp = Blueprint("universal_bp", __name__)
 
 @universal_bp.route("/universal_update", methods=["POST"])
 async def universal_update():
@@ -15,7 +17,7 @@ async def universal_update():
         return jsonify({"error": "Not logged in"}), 401
 
     # 2) Get JSON payload and conversation_id
-    data = await request.get_json()  # note: requires an async request handler
+    data = await request.get_json()  # async request handling in Flask 2.x
     conversation_id = data.get("conversation_id")
     if not conversation_id:
         return jsonify({"error": "No conversation_id provided"}), 400
@@ -33,3 +35,4 @@ async def universal_update():
         return jsonify({"error": str(e)}), 500
     finally:
         await conn.close()
+        
