@@ -9,28 +9,28 @@ from logic.gpt_utils import spaced_gpt_call  # Your helper for GPT calls
 EXTRACTION_PROMPT = """
 Based on the following narrative and context, produce a strictly valid JSON object that summarizes all game state updates according to the following schema. Output ONLY the JSON object with no additional commentary or formatting:
 
-{
-  "roleplay_updates": {
+{{
+  "roleplay_updates": {{
     "CurrentYear": <number>,
     "CurrentMonth": <number>,
     "CurrentDay": <number>,
     "TimeOfDay": "<string>"
-  },
-  "ChaseSchedule": { /* complete weekly schedule or {} if unchanged */ },
+  }},
+  "ChaseSchedule": {{ /* complete weekly schedule or {{}} if unchanged */ }},
   "MainQuest": "<string>",
   "PlayerRole": "<string>",
   "npc_creations": [ /* array of new NPC objects or [] */ ],
   "npc_updates": [ /* array of NPC update objects or [] */ ],
-  "character_stat_updates": { "player_name": "Chase", "stats": { /* stat changes or {} */ } },
+  "character_stat_updates": {{ "player_name": "Chase", "stats": {{ /* stat changes or {{}} */ }} }},
   "relationship_updates": [ /* array of relationship update objects or [] */ ],
   "npc_introductions": [ /* array of NPC introduction objects or [] */ ],
   "location_creations": [ /* array of location creation objects or [] */ ],
   "event_list_updates": [ /* array of event objects or [] */ ],
-  "inventory_updates": { "player_name": "Chase", "added_items": [], "removed_items": [] },
+  "inventory_updates": {{ "player_name": "Chase", "added_items": [], "removed_items": [] }},
   "quest_updates": [ /* array of quest update objects or [] */ ],
   "social_links": [ /* array of social link objects or [] */ ],
   "perk_unlocks": [ /* array of perk unlock objects or [] */ ]
-}
+}}
 
 Narrative:
 {narrative}
