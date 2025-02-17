@@ -1,3 +1,4 @@
+# logic/inventory_logic.py
 from db.connection import get_db_connection
 
 def fetch_inventory_item(user_id, conversation_id, item_name):
