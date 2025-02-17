@@ -13,17 +13,13 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
     logging.info("=== [apply_universal_updates_async] Incoming data ===")
     logging.info(json.dumps(data, indent=2))
 
-    try:
-        # Start a transaction context. If any statement fails,
-        # all changes since the start of the block will be undone.
-        async with conn.transaction():
-            # >>> Everything must be INDENTED so it runs inside the transaction
-
-            data_user_id = data.get("user_id")
-            data_conv_id = data.get("conversation_id")
-            if not data_user_id or not data_conv_id:
-                logging.error("Missing user_id or conversation_id in universal_update data.")
-                return {"error": "Missing user_id or conversation_id in universal_update"}
+    # Use provided parameters if keys are missing in the payload
+    data_user_id = data.get("user_id", user_id)
+    data_conv_id = data.get("conversation_id", conversation_id)
+    # Optionally, if you still want to enforce that these exist:
+    if not data_user_id or not data_conv_id:
+        logging.error("Missing user_id or conversation_id in universal_update data.")
+        return {"error": "Missing user_id or conversation_id in universal_update"}
 
             # 1) Process roleplay_updates
             rp_updates = data.get("roleplay_updates", {})
