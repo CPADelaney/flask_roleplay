@@ -43,8 +43,7 @@ async def generate_narrative(conversation_id, aggregator_text, user_input):
     """
     Calls GPT to generate the narrative response.
     """
-    # Using your _with_retry helper
-    narrative_resp = await _with_retry(conversation_id, aggregator_text, user_input)
+    narrative_resp = await spaced_gpt_call(conversation_id, aggregator_text, user_input)
     narrative = narrative_resp.get("response", "").strip()
     if not narrative:
         narrative = "[No narrative generated]"
