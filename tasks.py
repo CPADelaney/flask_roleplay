@@ -3,16 +3,16 @@ import os
 import json
 import logging
 import asyncio
+import asyncpg
+
 # We do NOT create a new Celery() here; we import the existing one from main.py
 from main import celery_app
 from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
-#from logic.npc_creation import spawn_and_refine_npcs_with_relationships
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from game_processing import async_process_new_game
 from logic.gpt_parser import generate_narrative_and_updates
 from db.connection import get_db_connection
 from logic.universal_updater import apply_universal_updates
-import asyncpg
 
 
 @celery_app.task
@@ -42,7 +42,7 @@ def create_npcs_task(user_id, conversation_id, count=10):
     from logic.npc_creation import spawn_multiple_npcs
 
     async def main():
-        # 1) Get an async connection (if you need one)
+        # 1) Get an async connection (if needed)
         conn = await get_async_db_connection()
 
         # 2) Fetch environment_desc from DB
@@ -51,12 +51,9 @@ def create_npcs_task(user_id, conversation_id, count=10):
             FROM CurrentRoleplay
             WHERE user_id=$1 AND conversation_id=$2 AND key='EnvironmentDesc'
         """, user_id, conversation_id)
-        if row_env:
-            environment_desc = row_env["value"]
-        else:
-            environment_desc = "A fallback environment description"
+        environment_desc = row_env["value"] if row_env else "A fallback environment description"
 
-        # 3) Fetch 'CalendarNames' from DB, which might have { "days": [...], ... }
+        # 3) Fetch CalendarNames for day names
         row_cal = await conn.fetchrow("""
             SELECT value
             FROM CurrentRoleplay
@@ -64,11 +61,11 @@ def create_npcs_task(user_id, conversation_id, count=10):
         """, user_id, conversation_id)
         if row_cal:
             cal_data = json.loads(row_cal["value"] or "{}")
-            day_names = cal_data.get("days", ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
+            day_names = cal_data.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
         else:
-            day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+            day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-        # 4) Spawn NPCs with new approach
+        # 4) Spawn NPCs
         npc_ids = await spawn_multiple_npcs(
             user_id=user_id,
             conversation_id=conversation_id,
@@ -76,19 +73,15 @@ def create_npcs_task(user_id, conversation_id, count=10):
             day_names=day_names,
             count=count
         )
-
         await conn.close()
-
-        # 5) Return info
         return {
             "message": f"Successfully created {len(npc_ids)} NPCs",
             "npc_ids": npc_ids,
             "day_names": day_names
         }
 
-    # Actually run the async logic
-    final_info = asyncio.run(main())
-    return final_info
+    return asyncio.run(main())
+
 
 @celery_app.task
 def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_prompt):
@@ -121,37 +114,44 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
         fallback_text = fallback_response.choices[0].message.content.strip()
         nyx_text = fallback_text if fallback_text else "[No text returned from GPT]"
         gpt_reply_dict["response"] = nyx_text
-
-@celery_app.task
-def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input):
-    async def main():
-        narrative, updates_payload = await generate_narrative_and_updates(conversation_id, aggregator_text, user_input)
-        
-        # If state updates exist, update the database
-        if updates_payload:
-            dsn = os.getenv("DB_DSN")
-            async_conn = await asyncpg.connect(dsn=dsn)
-            result = await apply_universal_updates(user_id, conversation_id, updates_payload, async_conn)
-            await async_conn.close()
-            logging.info("State update result: %s", result)
-        
-        # Insert the narrative into the messages table
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-            (conversation_id, "assistant", narrative)
-        )
-        conn.commit()
-        cur.close()
-        conn.close()
-        return {"status": "success", "narrative": narrative}
-    
-    return asyncio.run(main())
-
-# Example usage:
-# process_storybeat_task.delay(user_id, conv_id, aggregator_text, user_input)
-
         gpt_reply_dict["type"] = "fallback"
         
     return json.dumps(gpt_reply_dict)
+
+
+@celery_app.task
+def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input):
+    """
+    Celery task to generate the narrative and extract state updates.
+    It calls the GPT parser module, applies any universal updates, and stores the narrative.
+    """
+    async def main():
+        try:
+            # Generate narrative and state update payload using the parser module
+            narrative, updates_payload = await generate_narrative_and_updates(conversation_id, aggregator_text, user_input)
+            
+            # If state updates exist, apply them using the universal updater
+            if updates_payload:
+                dsn = os.getenv("DB_DSN")
+                async_conn = await asyncpg.connect(dsn=dsn)
+                result = await apply_universal_updates(user_id, conversation_id, updates_payload, async_conn)
+                await async_conn.close()
+                logging.info("State update result: %s", result)
+            
+            # Insert the narrative into the messages table
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                (conversation_id, "assistant", narrative)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            
+            return {"status": "success", "narrative": narrative}
+        except Exception as e:
+            logging.exception("Error in process_storybeat_task:")
+            return {"status": "failed", "error": str(e)}
+    
+    return asyncio.run(main())
