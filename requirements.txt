@@ -12,3 +12,4 @@ RabbitMQ
 httpx
 flask-socketio
 eventlet
+kombu
