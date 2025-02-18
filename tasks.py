@@ -123,18 +123,29 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
 def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input):
     """
     Celery task to generate the narrative and extract state updates.
-    It calls the GPT parser module, applies any universal updates, and stores the narrative.
+    It calls the GPT parser module, merges updates with any previous update,
+    applies universal updates, and stores the narrative.
     """
     async def main():
         try:
-            # Generate narrative and state update payload using the parser module
-            narrative, updates_payload = await generate_narrative_and_updates(conversation_id, aggregator_text, user_input)
+            # Generate narrative and new state update payload using the parser module
+            narrative, new_update = await generate_narrative_and_updates(conversation_id, aggregator_text, user_input)
             
-            # If state updates exist, apply them using the universal updater
-            if updates_payload:
+            # For demonstration, assume we have a function that retrieves a previous update.
+            # In a real application, this might query a cache or database.
+            old_update = await get_previous_update(user_id, conversation_id)
+            # get_previous_update should return a dict; if none exists, use an empty dict.
+            if old_update is None:
+                old_update = {}
+
+            # Merge old update with the new update.
+            merged_update = merge_state_updates(old_update, new_update)
+            
+            # Apply the merged update if any state updates exist.
+            if merged_update:
                 dsn = os.getenv("DB_DSN")
                 async_conn = await asyncpg.connect(dsn=dsn)
-                result = await apply_universal_updates(user_id, conversation_id, updates_payload, async_conn)
+                result = await apply_universal_updates(user_id, conversation_id, merged_update, async_conn)
                 await async_conn.close()
                 logging.info("State update result: %s", result)
             
