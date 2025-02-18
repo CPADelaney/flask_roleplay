@@ -9,15 +9,14 @@ echo "===== /etc/resolv.conf ====="
 cat /etc/resolv.conf
 echo "============================="
 
-# Debug: Try resolving CloudAMQP's host
-echo "Performing nslookup for duck.lmq.cloudamqp.com:"
-nslookup duck.lmq.cloudamqp.com || echo "nslookup failed"
+# Debug: Use Python to resolve CloudAMQP's host
+echo "Attempting to resolve duck.lmq.cloudamqp.com using Python:"
+python -c "import socket; print(socket.gethostbyname('duck.lmq.cloudamqp.com'))" || echo "Python DNS lookup failed"
 
 if [ "$SERVICE_TYPE" = "worker" ]; then
     echo "Starting Celery Worker with concurrency=1..."
     exec su appuser -c "python celery_worker.py"
 else
     echo "Starting Web Server (Gunicorn + Eventlet)..."
-    # Use the Railway-provided PORT with a fallback to 8080
     exec su appuser -c "gunicorn --bind 0.0.0.0:${PORT:-8080} --timeout 600 -k eventlet main:app"
 fi
