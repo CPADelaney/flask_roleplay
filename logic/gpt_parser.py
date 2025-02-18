@@ -97,3 +97,27 @@ async def generate_narrative_and_updates(conversation_id, aggregator_text, user_
 # Then:
 # 1. Insert the narrative text into your messages table.
 # 2. Call your apply_universal_updates function with the updates_payload.
+
+def merge_state_updates(old_update: dict, new_update: dict) -> dict:
+    """
+    Merges two state update payloads.
+    For the inventory_updates section, if the new update's 'added_items' (or 'removed_items')
+    is empty but the old update has values, preserve the old values.
+    """
+    # Start with a copy of the new update
+    merged = new_update.copy()
+
+    # Merge the inventory updates
+    old_inv = old_update.get("inventory_updates", {})
+    new_inv = new_update.get("inventory_updates", {})
+
+    # Merge 'added_items'
+    if not new_inv.get("added_items") and old_inv.get("added_items"):
+        merged.setdefault("inventory_updates", {})["added_items"] = old_inv["added_items"]
+
+    # Merge 'removed_items'
+    if not new_inv.get("removed_items") and old_inv.get("removed_items"):
+        merged.setdefault("inventory_updates", {})["removed_items"] = old_inv["removed_items"]
+
+    # (You can extend this merge logic for other parts as needed)
+    return merged
