@@ -169,6 +169,7 @@ def on_join(data):
     print(f"Socket client joined room: {convo_id}")
 
 app = flask_app
+print("DEBUG: Environment says RABBITMQ_URL =", os.getenv("RABBITMQ_URL"))
 
 
 if __name__ == "__main__":
