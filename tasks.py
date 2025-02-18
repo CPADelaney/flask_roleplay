@@ -6,7 +6,6 @@ import asyncio
 import asyncpg
 from main import celery_app, socketio  # Import both Celery & the socketio instance
 from flask_socketio import emit
-from socketio import AMQPManager
 from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from game_processing import async_process_new_game
