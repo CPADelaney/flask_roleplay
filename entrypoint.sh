@@ -4,10 +4,16 @@ set -e
 # Override DNS settings using Cloudflare's DNS
 echo "nameserver 1.1.1.1" > /etc/resolv.conf
 
-# Debug: Print /etc/resolv.conf contents
+# Force duck.lmq.cloudamqp.com to resolve to its IP by adding an /etc/hosts entry
+echo "54.193.232.128 duck.lmq.cloudamqp.com" >> /etc/hosts
+
+# Debug: Print /etc/resolv.conf and /etc/hosts
 echo "===== /etc/resolv.conf ====="
 cat /etc/resolv.conf
 echo "============================="
+echo "===== /etc/hosts ====="
+cat /etc/hosts
+echo "======================="
 
 # Debug: Test DNS resolution using Python
 echo "Attempting to resolve duck.lmq.cloudamqp.com using Python:"
