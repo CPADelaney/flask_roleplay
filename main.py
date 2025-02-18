@@ -20,7 +20,7 @@ from db.admin import admin_bp
 from routes.debug import debug_bp
 from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
-from flask_socketio import KombuManager
+from socketio.kombu_manager import KombuManager
 
 # DB connection helper
 from db.connection import get_db_connection
