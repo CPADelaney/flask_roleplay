@@ -88,31 +88,39 @@ async def generate_narrative_and_updates(conversation_id, aggregator_text, user_
     """
     # First GPT call: generate narrative
     initial_resp = await spaced_gpt_call(conversation_id, aggregator_text, user_input)
-    narrative = initial_resp.get("response", "").strip()
-    if not narrative:
+    if initial_resp is None:
+        # If no response was returned, use a default narrative.
         narrative = "[No narrative generated]"
-    # Capture the first update payload (if any)
-    initial_update = {}
-    if initial_resp.get("type") == "function_call":
-        initial_update = initial_resp.get("function_args", {})
+        initial_update = {}
+    else:
+        narrative = (initial_resp.get("response") or "").strip()
+        if not narrative:
+            narrative = "[No narrative generated]"
+        initial_update = {}
+        if initial_resp.get("type") == "function_call":
+            initial_update = initial_resp.get("function_args", {})
 
     # Second GPT call: use extraction prompt to get updates from narrative and context.
     prompt = EXTRACTION_PROMPT.format(narrative=narrative, context=aggregator_text)
     extraction_resp = await spaced_gpt_call(conversation_id, aggregator_text, prompt)
     extracted_update = {}
-    if extraction_resp.get("type") == "function_call":
-        extracted_update = extraction_resp.get("function_args", {})
+    if extraction_resp is not None:
+        if extraction_resp.get("type") == "function_call":
+            extracted_update = extraction_resp.get("function_args", {})
+        else:
+            try:
+                extracted_update = json.loads(extraction_resp.get("response", ""))
+            except Exception as e:
+                logging.error("Error parsing extracted update JSON: %s", e)
     else:
-        try:
-            extracted_update = json.loads(extraction_resp.get("response", ""))
-        except Exception as e:
-            logging.error("Error parsing extracted update JSON: %s", e)
-    
+        logging.error("Extraction GPT call returned None")
+
     # Merge the two updates from the current interaction.
     from logic.state_update_helper import merge_state_updates  # Import our merge helper
     current_update = merge_state_updates(initial_update, extracted_update)
     
     return narrative, current_update
+
 
 def merge_state_updates(old_update: dict, new_update: dict) -> dict:
     """
