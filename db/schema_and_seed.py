@@ -22,6 +22,17 @@ def create_all_tables():
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    cursor.execute('''    
+        CREATE TABLE IF NOT EXISTS StateUpdates (
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            update_payload JSONB,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, conversation_id)
+        );
+    ''')
+
+
     # 1) Settings (Global or not? If truly global, omit user_id/conversation_id here)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Settings (
