@@ -6,7 +6,8 @@ import asyncio
 import openai
 import asyncpg
 from celery_app import celery_app
-from main import socketio  # Import both Celery & the socketio instance
+# Remove the following line to break the circular dependency:
+# from main import socketio
 from flask_socketio import emit
 from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
@@ -27,7 +28,6 @@ def process_new_game_task(user_id, conversation_data):
     except Exception as e:
         logging.exception("Error in process_new_game_task for user_id=%s", user_id)
         return {"status": "failed", "error": str(e)}
-
 
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
@@ -76,7 +76,6 @@ def create_npcs_task(user_id, conversation_id, count=10):
 
     return asyncio.run(main())
 
-
 @celery_app.task
 def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_prompt):
     """
@@ -118,6 +117,9 @@ def stream_openai_tokens_task(user_input, conversation_id):
     Celery task that streams partial tokens from OpenAI and emits them via Socket.IO.
     """
     try:
+        # Do a local import to break the circular dependency
+        from main import socketio
+
         openai.api_key = os.getenv("OPENAI_API_KEY", "YOUR_KEY_HERE")
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
@@ -139,6 +141,8 @@ def stream_openai_tokens_task(user_input, conversation_id):
         logging.info(f"Done streaming tokens for conversation: {conversation_id}")
     except Exception as e:
         logging.exception("Error streaming OpenAI tokens")
+        # Local import here as well in case of exception handling
+        from main import socketio
         socketio.emit("error", {"error": str(e)}, room=conversation_id)
 
 @celery_app.task
