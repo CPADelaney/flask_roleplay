@@ -4,8 +4,6 @@ import json
 import logging
 import asyncio
 import asyncpg
-
-# We do NOT create a new Celery() here; we import the existing one from main.py
 from main import celery_app
 from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
@@ -13,6 +11,10 @@ from game_processing import async_process_new_game
 from logic.gpt_parser import generate_narrative_and_updates
 from db.connection import get_db_connection
 from logic.universal_updater import apply_universal_updates
+
+# Import our new helper functions
+from state_update_helper import get_previous_update, store_state_update, merge_state_updates
+
 
 
 @celery_app.task
@@ -123,25 +125,25 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
 def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input):
     """
     Celery task to generate the narrative and extract state updates.
-    It calls the GPT parser module, merges updates with any previous update,
-    applies universal updates, and stores the narrative.
+    It calls the GPT parser module, merges the new updates with any previous updates,
+    stores the merged update for future merging, applies universal updates,
+    and then stores the narrative.
     """
     async def main():
         try:
-            # Generate narrative and new state update payload using the parser module
+            # 1. Generate narrative and new state update payload from GPT.
             narrative, new_update = await generate_narrative_and_updates(conversation_id, aggregator_text, user_input)
             
-            # For demonstration, assume we have a function that retrieves a previous update.
-            # In a real application, this might query a cache or database.
+            # 2. Retrieve any previous state update from the database.
             old_update = await get_previous_update(user_id, conversation_id)
-            # get_previous_update should return a dict; if none exists, use an empty dict.
-            if old_update is None:
-                old_update = {}
-
-            # Merge old update with the new update.
+            
+            # 3. Merge the previous update with the new update.
             merged_update = merge_state_updates(old_update, new_update)
             
-            # Apply the merged update if any state updates exist.
+            # 4. Store the merged update for future use.
+            await store_state_update(user_id, conversation_id, merged_update)
+            
+            # 5. Apply the merged state update.
             if merged_update:
                 dsn = os.getenv("DB_DSN")
                 async_conn = await asyncpg.connect(dsn=dsn)
@@ -149,7 +151,7 @@ def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input
                 await async_conn.close()
                 logging.info("State update result: %s", result)
             
-            # Insert the narrative into the messages table
+            # 6. Insert the narrative into the messages table.
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute(
@@ -163,6 +165,9 @@ def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input
             return {"status": "success", "narrative": narrative}
         except Exception as e:
             logging.exception("Error in process_storybeat_task:")
+            return {"status": "failed", "error": str(e)}
+    
+    return asyncio.run(main())
             return {"status": "failed", "error": str(e)}
     
     return asyncio.run(main())
