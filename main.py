@@ -165,6 +165,9 @@ def on_join(data):
     join_room(convo_id)
     print(f"Socket client joined room: {convo_id}")
 
+app = flask_app
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     socketio.run(flask_app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
