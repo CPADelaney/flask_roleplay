@@ -21,6 +21,8 @@ from routes.debug import debug_bp
 from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
 from socketio.kombu_manager import KombuManager
+import eventlet
+eventlet.monkey_patch()
 
 # DB connection helper
 from db.connection import get_db_connection
