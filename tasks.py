@@ -8,12 +8,8 @@ from main import celery_app
 from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from game_processing import async_process_new_game
-from logic.gpt_parser import generate_narrative_and_updates
 from db.connection import get_db_connection
 from logic.universal_updater import apply_universal_updates
-
-# Import our new helper functions
-from logic.state_update_helper import get_previous_update, store_state_update, merge_state_updates
 
 @celery_app.task
 def process_new_game_task(user_id, conversation_data):
