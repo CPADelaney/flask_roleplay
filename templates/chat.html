@@ -129,7 +129,6 @@
     .message-row {
       display: flex;
       margin-bottom: 10px;
-      /* This ensures each message is its own horizontal "row" */
     }
     .message-bubble {
       max-width: 60%;
@@ -159,7 +158,8 @@
   <!-- MARKDOWN + DOMPurify Libraries -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@2.4.0/dist/purify.min.js"></script>
-
+  <!-- Socket.IO client script (needed for real-time streaming) -->
+  <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
 <div id="topBar">
@@ -199,16 +199,19 @@
 <div id="contextMenu"></div>
 
 <script>
-    function sanitizeAndRenderMarkdown(markdownText) {
-      const renderedHTML = marked.parse(markdownText); // For Marked 4+
-      return DOMPurify.sanitize(renderedHTML);
-    }
+  // Utility: Markdown + sanitization
+  function sanitizeAndRenderMarkdown(markdownText) {
+    const renderedHTML = marked.parse(markdownText);
+    return DOMPurify.sanitize(renderedHTML);
+  }
+
+  // Global conversation info
   let currentConvId = null;
   let messagesOffset = 0;
   const MESSAGES_PER_LOAD = 20;
   let isDarkMode = false;
 
-  // "pendingUniversalUpdates"
+  // Example universal updates object (if you still need it)
   let pendingUniversalUpdates = {
     roleplay_updates: {},
     npc_creations: [],
@@ -255,51 +258,69 @@
     };
   }
 
+  // Socket.IO reference
+  let socket = null;
+
+  // On page load
   window.onload = async function() {
     await checkLoggedIn();
     attachEnterKey();
     loadDarkModeFromStorage();
     await loadConversations();
+
+    // 1) Connect to Socket.IO
+    //    If your Flask app runs on the same domain, you can do:
+    socket = io.connect(location.origin);
+
+    // 2) Listen for partial tokens from the server
+    socket.on("new_token", (payload) => {
+      handleNewToken(payload.token);
+    });
+
+    // 3) Listen for final "done" event
+    socket.on("done", (payload) => {
+      const fullText = payload.full_text;
+      console.log("Done streaming. Full text:", fullText);
+      finalizeAssistantMessage(fullText);
+    });
+
+    // 4) Handle errors from server
+    socket.on("error", (payload) => {
+      console.error("Server error:", payload.error);
+      // Optionally show in the chat window
+      handleNewToken("[Error: " + payload.error + "]");
+      finalizeAssistantMessage("");
+    });
   };
 
-  async function pollConversationStatus(convId) {
-    const POLL_INTERVAL = 5000; // 5 seconds
-    const MAX_POLL_ATTEMPTS = 30;
-    let attempts = 0;
-  
-    const intervalId = setInterval(() => {
-      (async () => {
-        try {
-          const res = await fetch(`/conversation_status?conversation_id=${convId}`, {
-            method: "GET",
-            credentials: "include"
-          });
-          if (!res.ok) {
-            console.error("Failed to fetch conversation status:", res.status);
-            return;
-          }
-          const data = await res.json();
-          console.log("Polled conversation status:", data);
-  
-          if (data.status === "ready") {
-            clearInterval(intervalId);
-            console.log("Conversation is ready. Refreshing messages...");
-            await loadMessages(convId, true); // Refresh chat window
-          } else {
-            attempts++;
-            if (attempts >= MAX_POLL_ATTEMPTS) {
-              clearInterval(intervalId);
-              console.warn("Polling timed out; conversation is still not ready.");
-            }
-          }
-        } catch (err) {
-          console.error("Error polling conversation status:", err);
-        }
-      })();
-    }, POLL_INTERVAL);
+  // We accumulate the partial streamed content in a single bubble
+  let currentAssistantBubble = null;
+  let partialAssistantText = "";
+
+  function handleNewToken(token) {
+    if (!currentAssistantBubble) {
+      // Create a new message bubble for Nyx
+      const newMsg = { sender: "Nyx", content: "" };
+      currentAssistantBubble = appendMessage(newMsg, true);
+      partialAssistantText = "";
+    }
+    // Append chunk to partial text
+    partialAssistantText += token;
+    // Update the bubble's inner HTML
+    currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(partialAssistantText)}`;
   }
 
-  // Check login
+  function finalizeAssistantMessage(finalText) {
+    // If there's no open bubble, do nothing
+    if (!currentAssistantBubble) return;
+    // Set the final text
+    currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(finalText)}`;
+    // Reset
+    currentAssistantBubble = null;
+    partialAssistantText = "";
+  }
+
+  // Basic login check
   async function checkLoggedIn() {
     try {
       const res = await fetch("/whoami", {
@@ -405,13 +426,9 @@
       currentConvId = data.conversation_id;
       alert("New game started! conversation_id=" + currentConvId);
   
-      // Refresh the conversation list and open the new conversation immediately
       await loadConversations();
       selectConversation(currentConvId);
-  
-      // Start polling the conversation status and update the UI dynamically when ready.
-      pollConversationStatus(currentConvId);
-      
+      // If your back-end sets up some "poll" or "status" route, you can do that here
     } catch (err) {
       console.error("startNewGame error:", err);
       alert("Failed to start new game!");
@@ -448,9 +465,15 @@
   async function selectConversation(convId) {
     currentConvId = convId;
     messagesOffset = 0;
+    // Join the Socket.IO room for real-time updates
+    if (socket) {
+      socket.emit("join", { conversation_id: convId });
+    }
+    // Load older messages from DB
     await loadMessages(convId, true);
   }
 
+  // Load older messages
   async function loadMessages(convId, replace = false) {
     const url = `/multiuser/conversations/${convId}/messages?offset=${messagesOffset}&limit=${MESSAGES_PER_LOAD}`;
     try {
@@ -484,24 +507,6 @@
     chatWindow.scrollTop = chatWindow.scrollHeight;
   }
 
-  function pollForNewMessages(convId) {
-  setInterval(async () => {
-    try {
-      const res = await fetch(`/multiuser/conversations/${convId}/messages?offset=0&limit=20`, {
-        method: "GET",
-        credentials: "include"
-      });
-      if (res.ok) {
-        const data = await res.json();
-        // Update your chat window with new messages:
-        renderChat(data.messages);
-      }
-    } catch (err) {
-      console.error("Error polling messages:", err);
-    }
-  }, 5000); // Poll every 5 seconds
-}
-
   function prependMessages(messages) {
     const chatWindow = document.getElementById("chatWindow");
     const loadMoreElem = document.getElementById("loadMore");
@@ -516,10 +521,10 @@
     loadMessages(currentConvId, false);
   }
 
+  // Appends a single message to the chat
   function appendMessage(m, autoScroll = true) {
     const chatWindow = document.getElementById("chatWindow");
     const bubble = createBubble(m);
-    // Put new message at the bottom
     chatWindow.appendChild(bubble);
 
     if (autoScroll) {
@@ -529,7 +534,6 @@
   }
 
   function createBubble(m) {
-    // Create a row container
     const row = document.createElement("div");
     row.classList.add("message-row");
 
@@ -539,11 +543,9 @@
       row.classList.add("gpt-row");
     }
 
-    // Then create the bubble
     const bubble = document.createElement("div");
     bubble.classList.add("message-bubble");
 
-    // Safely render the user's text as Markdown + sanitized HTML
     const safeContent = sanitizeAndRenderMarkdown(m.content);
     bubble.innerHTML = `<strong>${m.sender}:</strong> ${safeContent}`;
 
@@ -551,68 +553,47 @@
     return row;
   }
 
-  // Send a new message
+  // Send a new message (streaming approach)
   async function sendMessage() {
     const userInputElem = document.getElementById("userMsg");
     const userText = userInputElem.value.trim();
     userInputElem.value = "";
-    if (!userText) return;
+    if (!userText || !currentConvId) return;
 
-    // Append the user's message immediately
-    const userMsgObj = {
-      sender: "user",
-      content: userText,
-    };
+    // Show the user's message right away
+    const userMsgObj = { sender: "user", content: userText };
     appendMessage(userMsgObj, true);
 
-    // Show a temporary GPT "typing..." bubble
-    const tempGptMsgObj = {
-      sender: "Nyx",
-      content: "Typing..."
-    };
-    const gptTypingBubble = appendMessage(tempGptMsgObj, true);
+    // Reset any partial from a previous message
+    currentAssistantBubble = null;
+    partialAssistantText = "";
 
-    const payload = {
-      user_input: userText,
-      conversation_id: currentConvId,
-      player_name: "Chase",
-      universal_update: pendingUniversalUpdates,
-    };
-
+    // POST to /start_chat (Celery streaming route)
     try {
-      const res = await fetch("/story/next_storybeat", {
+      const resp = await fetch("/start_chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          user_input: userText,
+          conversation_id: currentConvId,
+          universal_update: pendingUniversalUpdates
+        })
       });
-      const data = await res.json();
-
-      if (!res.ok) {
+      const data = await resp.json();
+      if (!resp.ok) {
         console.error("Server error:", data);
-        alert("Message send failed!");
-        gptTypingBubble.innerHTML = `<strong>Nyx:</strong> [Error retrieving response]`;
+        handleNewToken("[Error retrieving response]");
+        finalizeAssistantMessage("");
         return;
       }
-
+      console.log("start_chat response:", data);
+      // You can reset pending updates if needed
       resetPendingUniversalUpdates();
-      currentConvId = data.conversation_id;
-
-      // Remove the placeholder
-      gptTypingBubble.remove();
-
-      // Append the actual GPT message from the server
-      const realGptMsgObj = {
-        sender: "Nyx",
-        content: data.response || "(No response?)",
-      };
-      appendMessage(realGptMsgObj, true);
-
-      // Refresh the conversation list (if needed)
-      await loadConversations();
     } catch (err) {
       console.error("sendMessage error:", err);
-      gptTypingBubble.innerHTML = `<strong>Nyx:</strong> [Error retrieving response]`;
+      handleNewToken("[Error: " + err + "]");
+      finalizeAssistantMessage("");
     }
   }
 
@@ -632,7 +613,6 @@
     menuDiv.style.display = "block";
   }
 
-  // Hide menu if user clicks anywhere else
   document.addEventListener("click", () => {
     menuDiv.style.display = "none";
   });
@@ -657,8 +637,6 @@
     }
   }
 
-  // Prompt user for a folder name, then call the route that
-  // auto-creates the folder if needed & moves conversation
   async function moveConversationToFolder(convId) {
     const folderName = prompt("Which folder name? (It will be created if it doesn't exist)");
     if (!folderName) return;
