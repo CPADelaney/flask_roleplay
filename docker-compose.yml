@@ -9,7 +9,7 @@ services:
   app:
     build: .
     ports:
-      - "8080:8080"
+      - "${PORT}"  # Railway will supply this automatically
     environment:
       - SERVICE_TYPE=web
       - DB_DSN=${DB_DSN}
@@ -18,7 +18,7 @@ services:
       - rabbitmq
     dns:
       - 8.8.8.8
-          
+      
   celery_worker:
     build: .
     environment:
