@@ -118,25 +118,16 @@ def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input
     """
     async def main():
         try:
-            # Call GPT once to get a complete update payload and narrative.
+            # Call GPT once to get the complete update payload and narrative.
             response = get_chatgpt_response(conversation_id, aggregator_text, user_input)
-            # Extract the narrative and update payload from the function call response.
             update_payload = response.get("function_args", {})
             narrative = update_payload.get("narrative", "[No narrative generated]")
             
-            # Optionally, you could merge with any previously stored update if desired:
-            old_update = await get_previous_update(user_id, conversation_id)
-            if old_update is None:
-                old_update = {}
-            merged_update = merge_state_updates(old_update, update_payload)
-            logging.info("Merged update payload: %s", json.dumps(merged_update, indent=2))
-            await store_state_update(user_id, conversation_id, merged_update)
-            
-            # Apply the merged update.
-            if merged_update:
+            # Directly apply the update payload.
+            if update_payload:
                 dsn = os.getenv("DB_DSN")
                 async_conn = await asyncpg.connect(dsn=dsn)
-                result = await apply_universal_updates(user_id, conversation_id, merged_update, async_conn)
+                result = await apply_universal_updates(user_id, conversation_id, update_payload, async_conn)
                 await async_conn.close()
                 logging.info("State update result: %s", result)
             
