@@ -1,5 +1,4 @@
 # logic/state_update_helper.py
-# logic/state_update_helper.py
 import os
 import json
 import asyncpg
@@ -20,7 +19,16 @@ async def get_previous_update(user_id: int, conversation_id: int) -> dict:
             WHERE user_id = $1 AND conversation_id = $2
         """, user_id, conversation_id)
         if row and row["update_payload"]:
-            return row["update_payload"]  # asyncpg returns JSONB as a dict
+            payload = row["update_payload"]
+            # If payload is a string, convert it to a dict.
+            if isinstance(payload, str):
+                try:
+                    return json.loads(payload)
+                except Exception as e:
+                    logging.error("Failed to parse stored update_payload: %s", e)
+                    return {}
+            else:
+                return payload  # Already a dict
         else:
             return {}
     finally:
@@ -59,5 +67,4 @@ def merge_state_updates(old_update: dict, new_update: dict) -> dict:
     if not new_inv.get("removed_items") and old_inv.get("removed_items"):
         merged.setdefault("inventory_updates", {})["removed_items"] = old_inv["removed_items"]
 
-    # Extend merge logic for other sections if needed
     return merged
