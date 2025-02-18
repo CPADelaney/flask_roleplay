@@ -1,4 +1,4 @@
-# /entrypoint.sh
+#!/bin/sh
 set -e
 
 if [ "$SERVICE_TYPE" = "worker" ]; then
