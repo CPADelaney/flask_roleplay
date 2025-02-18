@@ -30,9 +30,7 @@ def create_celery_app():
     """
     Create and configure a single Celery app instance.
     """
-    # Retrieve the RabbitMQ URL from environment variables:
     RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
-    
     celery_app = Celery("my_celery_app")
     celery_app.conf.broker_url = RABBITMQ_URL
     celery_app.conf.result_backend = "rpc://"
