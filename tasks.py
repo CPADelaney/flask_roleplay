@@ -121,6 +121,7 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
     return json.dumps(gpt_reply_dict)
 
 
+
 @celery_app.task
 def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input):
     """
@@ -139,6 +140,7 @@ def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input
             
             # 3. Merge the previous update with the new update.
             merged_update = merge_state_updates(old_update, new_update)
+            logging.info("Merged update payload: %s", json.dumps(merged_update, indent=2))
             
             # 4. Store the merged update for future use.
             await store_state_update(user_id, conversation_id, merged_update)
@@ -168,4 +170,5 @@ def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input
             return {"status": "failed", "error": str(e)}
     
     return asyncio.run(main())
+
 
