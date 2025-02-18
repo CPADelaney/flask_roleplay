@@ -168,6 +168,4 @@ def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input
             return {"status": "failed", "error": str(e)}
     
     return asyncio.run(main())
-            return {"status": "failed", "error": str(e)}
-    
-    return asyncio.run(main())
+
