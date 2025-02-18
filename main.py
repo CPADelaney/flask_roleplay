@@ -1,4 +1,5 @@
 # main.py
+
 import os
 import logging
 from flask import Flask, render_template, request, session, jsonify, redirect
@@ -21,9 +22,6 @@ from routes.debug import debug_bp
 from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
 from socketio.kombu_manager import KombuManager
-import eventlet
-eventlet.monkey_patch()
-
 # DB connection helper
 from db.connection import get_db_connection
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
