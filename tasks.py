@@ -112,38 +112,28 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
 @celery_app.task
 def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input):
     """
-    Celery task to generate the narrative and extract state updates.
-    It calls the GPT parser module to obtain a current update (merged from two GPT calls),
-    merges that with any previously stored update from the database, stores the result for future use,
-    applies universal updates, and then stores the narrative.
+    Celery task that generates the narrative and a complete state update in one GPT call,
+    then applies the updates to the database and stores the narrative.
     """
     async def main():
         try:
-            # 1. Generate narrative and current update from GPT.
-            narrative, current_update = await generate_narrative_and_updates(conversation_id, aggregator_text, user_input)
+            # Call GPT once to get the narrative and the complete update payload.
+            response = get_chatgpt_response(conversation_id, aggregator_text, user_input)
+            # We assume GPT returns a function_call response with our update.
+            narrative = response.get("response") or "[No narrative generated]"
+            update_payload = {}
+            if response.get("type") == "function_call":
+                update_payload = response.get("function_args", {})
             
-            # 2. Retrieve any previous state update from the database.
-            from logic.state_update_helper import get_previous_update, store_state_update, merge_state_updates
-            old_update = await get_previous_update(user_id, conversation_id)
-            if old_update is None:
-                old_update = {}
-            
-            # 3. Merge the stored update with the current update.
-            merged_update = merge_state_updates(old_update, current_update)
-            logging.info("Merged update payload: %s", json.dumps(merged_update, indent=2))
-            
-            # 4. Store the merged update for future interactions.
-            await store_state_update(user_id, conversation_id, merged_update)
-            
-            # 5. Apply the merged state update.
-            if merged_update:
+            # Apply the update payload if provided.
+            if update_payload:
                 dsn = os.getenv("DB_DSN")
                 async_conn = await asyncpg.connect(dsn=dsn)
-                result = await apply_universal_updates(user_id, conversation_id, merged_update, async_conn)
+                result = await apply_universal_updates(user_id, conversation_id, update_payload, async_conn)
                 await async_conn.close()
                 logging.info("State update result: %s", result)
             
-            # 6. Insert the narrative into the messages table.
+            # Insert the narrative into the messages table.
             conn = get_db_connection()
             cur = conn.cursor()
             cur.execute(
