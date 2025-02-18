@@ -4,6 +4,7 @@ import json
 import logging
 import asyncpg
 from datetime import datetime, date  # <-- Make sure we have both
+from logic.npc_creation import create_npc_partial, insert_npc_stub_into_db
 from logic.social_links import (
     get_social_link, create_social_link,
     update_link_type_and_level, add_link_event
@@ -42,32 +43,10 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
         npc_creations = data.get("npc_creations", [])
         logging.info(f"[universal_updater] npc_creations => count={len(npc_creations)}")
         for npc_data in npc_creations:
+            # Get the proposed NPC name and other basic overrides
             name = npc_data.get("npc_name", "Unnamed NPC")
             introduced = npc_data.get("introduced", False)
-            archetypes_list = npc_data.get("archetypes", [])
-            logging.info(
-                f"[universal_updater] Checking creation => name='{name}', introduced={introduced}, archetypesCount={len(archetypes_list)}"
-            )
-
-            # Instead of always converting to a Python date, do this:
-            birth_str = npc_data.get("birthdate")
-            if isinstance(birth_str, str):
-                # If the string looks like a standard date (contains dashes), try to parse it;
-                # otherwise, assume it's already in the custom format.
-                if "-" in birth_str:
-                    try:
-                        birth_date_obj = datetime.strptime(birth_str, "%Y-%m-%d").date()
-                        # Convert back to a string if needed (or store the ISO format)
-                        birth_date_value = birth_date_obj.isoformat()
-                    except ValueError:
-                        # Fallback: if parsing fails, just use the raw string
-                        birth_date_value = birth_str
-                else:
-                    birth_date_value = birth_str  # Already in custom format
-            else:
-                birth_date_value = ""
-
-
+            # Check if an NPC with the same (case-insensitive) name already exists:
             row = await conn.fetchrow(
                 """
                 SELECT npc_id FROM NPCStats
@@ -76,51 +55,44 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                 """,
                 user_id, conversation_id, name.lower()
             )
-
             if row:
                 logging.info(
-                    f"[universal_updater] Skipping creation. NPC '{name}' already in DB as npc_id={row['npc_id']}."
+                    f"[universal_updater] Skipping creation. NPC '{name}' already exists (npc_id={row['npc_id']})."
                 )
                 continue
 
-            logging.info(f"[universal_updater] => Inserting new NPC '{name}' with birthdate={birth_date_obj}")
-            await conn.execute(
-                """
-                INSERT INTO NPCStats (
-                    user_id, conversation_id,
-                    npc_name, introduced, sex,
-                    dominance, cruelty, closeness, trust, respect, intensity,
-                    archetypes, archetype_summary, archetype_extras_summary,
-                    physical_description, memory, monica_level,
-                    age, birthdate,
-                    likes, dislikes, hobbies, personality_traits, affiliations, schedule, current_location
-                ) VALUES (
-                    $1, $2, $3, $4, $5,
-                    $6, $7, $8, $9, $10, $11,
-                    $12, $13, $14, $15,
-                    '[]'::jsonb, 0,
-                    $16, $17, 
-                    $18, $19, $20, $21, $22, $23, $24
-                )
-                """,
-                user_id, conversation_id,
-                name, introduced, npc_data.get("sex", "female").lower(),
-                npc_data.get("dominance", 0), npc_data.get("cruelty", 0), npc_data.get("closeness", 0),
-                npc_data.get("trust", 0), npc_data.get("respect", 0), npc_data.get("intensity", 0),
-                json.dumps(archetypes_list),
-                npc_data.get("archetype_summary", ""),
-                npc_data.get("archetype_extras_summary", ""),
-                npc_data.get("physical_description", ""),
-                npc_data.get("age"),
-                birth_date_value,  # now a string
-                json.dumps(npc_data.get("likes", [])),
-                json.dumps(npc_data.get("dislikes", [])),
-                json.dumps(npc_data.get("hobbies", [])),
-                json.dumps(npc_data.get("personality_traits", [])),
-                json.dumps(npc_data.get("affiliations", [])),
-                json.dumps(npc_data.get("schedule", {})),
-                npc_data.get("current_location", "")
+            # Determine environment description; default if not provided:
+            environment_desc = npc_data.get("environment_desc", "A default environment")
+
+            # Use your centralized function to create a full NPC dictionary.
+            # This function builds all required keys (e.g., birthdate, stats, archetypes, etc.)
+            partial_npc = create_npc_partial(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                sex=npc_data.get("sex", "female"),
+                environment_desc=environment_desc
             )
+
+            # Merge any overrides provided in npc_data into the generated NPC.
+            # This ensures that if universal_update payload contains custom fields,
+            # they will override the defaults.
+            override_keys = [
+                "npc_name", "introduced", "sex", "dominance", "cruelty", "closeness",
+                "trust", "respect", "intensity", "archetypes", "archetype_summary",
+                "archetype_extras_summary", "likes", "dislikes", "hobbies",
+                "personality_traits", "age", "birthdate"
+            ]
+            for key in override_keys:
+                if key in npc_data:
+                    partial_npc[key] = npc_data[key]
+
+            logging.info(
+                f"[universal_updater] Inserting new NPC '{partial_npc['npc_name']}' with birthdate={partial_npc.get('birthdate')}"
+            )
+
+            # Use the same DB insert helper as used in npc_creation
+            # (The helper inserts all the standard fields and defaults for relationships, memory, schedule, etc.)
+            await insert_npc_stub_into_db(partial_npc, user_id, conversation_id)
 
         # 3) Process npc_updates
         npc_updates = data.get("npc_updates", [])
