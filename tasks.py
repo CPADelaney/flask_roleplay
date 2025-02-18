@@ -4,7 +4,7 @@ import json
 import logging
 import asyncio
 import asyncpg
-from main import celery_app
+from main import celery_app, socketio  # Import the SocketIO instance
 from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from game_processing import async_process_new_game
@@ -113,17 +113,16 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
 def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input):
     """
     Celery task to generate a narrative and a complete state update via a single GPT call.
-    The GPT function-call response returns a complete JSON object (including a "narrative" field)
-    that is then applied to update the database.
+    After processing, it pushes the narrative to clients via SocketIO.
     """
     async def main():
         try:
-            # Call GPT once to get the complete update payload and narrative.
+            # Call GPT to get the complete update payload and narrative.
             response = get_chatgpt_response(conversation_id, aggregator_text, user_input)
             update_payload = response.get("function_args", {})
             narrative = update_payload.get("narrative", "[No narrative generated]")
             
-            # Directly apply the update payload.
+            # Apply state update if payload exists.
             if update_payload:
                 dsn = os.getenv("DB_DSN")
                 async_conn = await asyncpg.connect(dsn=dsn)
@@ -142,6 +141,15 @@ def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input
             cur.close()
             conn.close()
             
+            # Emit a push notification to the specific conversation room.
+            # Clients should join a room like "conversation_<conversation_id>"
+            socketio.emit(
+                'narrative_ready',
+                {'conversation_id': conversation_id, 'narrative': narrative},
+                room=f"conversation_{conversation_id}"
+            )
+            
+            logging.info("Narrative pushed for conversation %s", conversation_id)
             return {"status": "success", "narrative": narrative}
         except Exception as e:
             logging.exception("Error in process_storybeat_task:")
