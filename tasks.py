@@ -4,7 +4,9 @@ import json
 import logging
 import asyncio
 import asyncpg
-from main import celery_app
+from main import celery_app, socketio  # Import both Celery & the socketio instance
+from flask_socketio import emit
+from socketio import AMQPManager
 from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from game_processing import async_process_new_game
@@ -108,6 +110,45 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
         gpt_reply_dict["type"] = "fallback"
         
     return json.dumps(gpt_reply_dict)
+
+@celery_app.task
+def stream_openai_tokens_task(user_input, conversation_id):
+    """
+    Celery task that streams partial tokens from OpenAI and emits them via Socket.IO (AMQP).
+    """
+    try:
+        openai.api_key = os.getenv("OPENAI_API_KEY", "YOUR_KEY_HERE")
+
+        # Example: streaming call to GPT-3.5 or GPT-4
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": user_input}],
+            stream=True,
+            temperature=0.7
+        )
+
+        partial_accumulator = ""
+
+        for chunk in response:
+            if "choices" in chunk and len(chunk["choices"]) > 0:
+                delta = chunk["choices"][0]["delta"]
+                if "content" in delta:
+                    token_str = delta["content"]
+                    partial_accumulator += token_str
+
+                    # Emit partial chunk to the front end
+                    # "new_token" event, in the "conversation_id" room
+                    socketio.emit("new_token", {"token": token_str}, room=conversation_id)
+
+        # After streaming completes, emit a final "done" event with the full text
+        socketio.emit("done", {"full_text": partial_accumulator}, room=conversation_id)
+
+        logging.info(f"Done streaming tokens for conversation: {conversation_id}")
+
+    except Exception as e:
+        logging.exception("Error streaming OpenAI tokens")
+        # On error, emit an "error" event to the room
+        socketio.emit("error", {"error": str(e)}, room=conversation_id)
 
 @celery_app.task
 def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input):
