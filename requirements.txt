@@ -10,3 +10,5 @@ asyncpg
 uvicorn
 RabbitMQ
 httpx
+flask-socketio
+eventlet
