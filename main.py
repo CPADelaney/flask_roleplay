@@ -43,6 +43,7 @@ def create_celery_app():
         worker_log_format="%(levelname)s:%(name)s:%(message)s",
         worker_redirect_stdouts_level='INFO'
     )
+    celery_app.autodiscover_tasks(['tasks'])
     return celery_app
 
 # Global SocketIO instance (will be created later)
