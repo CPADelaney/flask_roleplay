@@ -15,13 +15,6 @@ from logic.universal_updater import apply_universal_updates
 # Import our new helper functions
 from logic.state_update_helper import get_previous_update, store_state_update, merge_state_updates
 
-
-
-@celery_app.task
-def test_task():
-    return "Hello from dummy task!"
-
-
 @celery_app.task
 def process_new_game_task(user_id, conversation_data):
     """
@@ -120,29 +113,30 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
         
     return json.dumps(gpt_reply_dict)
 
-
-
 @celery_app.task
 def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input):
     """
     Celery task to generate the narrative and extract state updates.
-    It calls the GPT parser module, merges the new updates with any previous updates,
-    stores the merged update for future merging, applies universal updates,
-    and then stores the narrative.
+    It calls the GPT parser module to obtain a current update (merged from two GPT calls),
+    merges that with any previously stored update from the database, stores the result for future use,
+    applies universal updates, and then stores the narrative.
     """
     async def main():
         try:
-            # 1. Generate narrative and new state update payload from GPT.
-            narrative, new_update = await generate_narrative_and_updates(conversation_id, aggregator_text, user_input)
+            # 1. Generate narrative and current update from GPT.
+            narrative, current_update = await generate_narrative_and_updates(conversation_id, aggregator_text, user_input)
             
             # 2. Retrieve any previous state update from the database.
+            from logic.state_update_helper import get_previous_update, store_state_update, merge_state_updates
             old_update = await get_previous_update(user_id, conversation_id)
+            if old_update is None:
+                old_update = {}
             
-            # 3. Merge the previous update with the new update.
-            merged_update = merge_state_updates(old_update, new_update)
+            # 3. Merge the stored update with the current update.
+            merged_update = merge_state_updates(old_update, current_update)
             logging.info("Merged update payload: %s", json.dumps(merged_update, indent=2))
             
-            # 4. Store the merged update for future use.
+            # 4. Store the merged update for future interactions.
             await store_state_update(user_id, conversation_id, merged_update)
             
             # 5. Apply the merged state update.
@@ -170,5 +164,4 @@ def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input
             return {"status": "failed", "error": str(e)}
     
     return asyncio.run(main())
-
 
