@@ -22,8 +22,6 @@ from logic.time_cycle import advance_time_and_update
 from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
 from routes.settings_routes import generate_mega_setting_logic
-from logic.activities_logic import filter_activities_for_npc, build_short_summary
-from logic.gpt_parser import generate_narrative_and_updates
 
 story_bp = Blueprint("story_bp", __name__)
 
