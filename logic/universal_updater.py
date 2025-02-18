@@ -49,17 +49,24 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                 f"[universal_updater] Checking creation => name='{name}', introduced={introduced}, archetypesCount={len(archetypes_list)}"
             )
 
-            # birthdate fix
+            # Instead of always converting to a Python date, do this:
             birth_str = npc_data.get("birthdate")
             if isinstance(birth_str, str):
-                try:
-                    birth_date_obj = datetime.strptime(birth_str, "%Y-%m-%d").date()
-                except ValueError:
-                    birth_date_obj = date(1000, 2, 10)
+                # If the string looks like a standard date (contains dashes), try to parse it;
+                # otherwise, assume it's already in the custom format.
+                if "-" in birth_str:
+                    try:
+                        birth_date_obj = datetime.strptime(birth_str, "%Y-%m-%d").date()
+                        # Convert back to a string if needed (or store the ISO format)
+                        birth_date_value = birth_date_obj.isoformat()
+                    except ValueError:
+                        # Fallback: if parsing fails, just use the raw string
+                        birth_date_value = birth_str
+                else:
+                    birth_date_value = birth_str  # Already in custom format
             else:
-                birth_date_obj = None
-            
-            birth_date_value = birth_date_obj.isoformat() if birth_date_obj else ""
+                birth_date_value = ""
+
 
             row = await conn.fetchrow(
                 """
