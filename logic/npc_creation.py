@@ -13,7 +13,6 @@ from logic.gpt_helpers import fetch_npc_name
 from db.connection import get_db_connection
 from logic.memory_logic import get_shared_memory, record_npc_event, propagate_shared_memories
 from logic.social_links import create_social_link
-from logic.universal_updater import apply_universal_updates_async
 from logic.calendar import load_calendar_names
 
 
