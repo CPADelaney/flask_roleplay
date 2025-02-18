@@ -3,6 +3,7 @@ import os
 import json
 import logging
 import asyncio
+import openai
 import asyncpg
 from main import celery_app, socketio  # Import both Celery & the socketio instance
 from flask_socketio import emit
