@@ -8,7 +8,7 @@ if __name__ == "__main__":
     # The same args you used before:
     cmd = [
         "celery",
-        "-A", "main:celery_app",
+        "-A", "celery_app:celery_app",
         "worker",
         "-P", "eventlet",
         "--loglevel=INFO",
