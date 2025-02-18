@@ -24,10 +24,10 @@ from routes.multiuser_routes import multiuser_bp
 from socketio.kombu_manager import KombuManager
 # DB connection helper
 from db.connection import get_db_connection
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//?heartbeat=30")
+
 
 def create_celery_app():
-    RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
     celery_app = Celery("my_celery_app")
     celery_app.conf.broker_url = RABBITMQ_URL
     celery_app.conf.result_backend = "rpc://"
