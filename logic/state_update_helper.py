@@ -1,4 +1,5 @@
 # logic/state_update_helper.py
+# logic/state_update_helper.py
 import os
 import json
 import asyncpg
@@ -19,8 +20,7 @@ async def get_previous_update(user_id: int, conversation_id: int) -> dict:
             WHERE user_id = $1 AND conversation_id = $2
         """, user_id, conversation_id)
         if row and row["update_payload"]:
-            # asyncpg returns JSONB as a dict already
-            return row["update_payload"]
+            return row["update_payload"]  # asyncpg returns JSONB as a dict
         else:
             return {}
     finally:
@@ -46,11 +46,10 @@ async def store_state_update(user_id: int, conversation_id: int, update_payload:
 def merge_state_updates(old_update: dict, new_update: dict) -> dict:
     """
     Merge two state update payloads.
-    Specifically for inventory updates, if the new update's "added_items" or "removed_items"
-    are empty but the old update had non-empty values, preserve the old values.
+    For the inventory_updates section, if the new update's 'added_items' (or 'removed_items')
+    is empty but the old update has values, preserve the old values.
     """
     merged = new_update.copy()
-
     old_inv = old_update.get("inventory_updates", {})
     new_inv = new_update.get("inventory_updates", {})
 
@@ -60,6 +59,5 @@ def merge_state_updates(old_update: dict, new_update: dict) -> dict:
     if not new_inv.get("removed_items") and old_inv.get("removed_items"):
         merged.setdefault("inventory_updates", {})["removed_items"] = old_inv["removed_items"]
 
-    # (Optionally, add merge logic for other sections here)
-
+    # Extend merge logic for other sections if needed
     return merged
