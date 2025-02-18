@@ -24,6 +24,7 @@ from socketio.kombu_manager import KombuManager
 
 # DB connection helper
 from db.connection import get_db_connection
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
 
 def create_celery_app():
     RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
