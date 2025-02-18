@@ -17,12 +17,12 @@ The schema is as follows:
     "CurrentDay": <number>,
     "TimeOfDay": "<string>"
   }},
-  "ChaseSchedule": {{ /* provide a complete weekly schedule if it has changed, otherwise output an empty object {} */ }},
+  "ChaseSchedule": {{ /* provide a complete weekly schedule if it has changed, otherwise output an empty object {{}} */ }},
   "MainQuest": "<string>",
   "PlayerRole": "<string>",
   "npc_creations": [ /* array of new NPC objects or [] */ ],
   "npc_updates": [ /* array of NPC update objects or [] */ ],
-  "character_stat_updates": {{ "player_name": "Chase", "stats": {{ /* stat changes or {} */ }} }},
+  "character_stat_updates": {{ "player_name": "Chase", "stats": {{ /* stat changes or {{}} */ }} }},
   "relationship_updates": [ /* array of relationship update objects or [] */ ],
   "npc_introductions": [ /* array of NPC introduction objects or [] */ ],
   "location_creations": [ /* array of location creation objects or [] */ ],
@@ -45,7 +45,6 @@ Narrative:
 Context:
 {context}
 """
-
 
 async def generate_narrative(conversation_id, aggregator_text, user_input):
     # Using your spaced_gpt_call helper (which implements retry/backoff)
