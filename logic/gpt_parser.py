@@ -29,7 +29,7 @@ The schema is as follows:
   "event_list_updates": [ /* array of event objects or [] */ ],
   "inventory_updates": {{
       "player_name": "Chase", 
-      "added_items": [ /* if the narrative or context mentions new items (e.g., "Debugging Amulet"), list each as an object with keys: item_name, item_description, item_effect, and category; otherwise, output an empty array */ ],
+      "added_items": [ /* if the narrative or context (or previous responses) mentions new inventory items (e.g., "Debugging Amulet"), list them as objects with keys: item_name, item_description, item_effect, and category; otherwise, output an empty array */ ],
       "removed_items": [ /* similarly, list any items to remove if mentioned; otherwise, output an empty array */ ]
   }},
   "quest_updates": [ /* array of quest update objects or [] */ ],
@@ -37,7 +37,7 @@ The schema is as follows:
   "perk_unlocks": [ /* array of perk unlock objects or [] */ ]
 }}
 
-Important: If the narrative or context explicitly mentions any new inventory items (for example, a Debugging Amulet), include them as objects in the "added_items" array with all required fields. Do not leave "added_items" empty if new items are mentioned.
+Important: If any inventory items (for example, a Debugging Amulet) were mentioned in previous responses or the context, include them as objects in "added_items" with all required fields.
 
 Narrative:
 {narrative}
