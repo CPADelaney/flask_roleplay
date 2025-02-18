@@ -55,10 +55,11 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                 try:
                     birth_date_obj = datetime.strptime(birth_str, "%Y-%m-%d").date()
                 except ValueError:
-                    # fallback if string isn't valid
                     birth_date_obj = date(1000, 2, 10)
             else:
                 birth_date_obj = None
+            
+            birth_date_value = birth_date_obj.isoformat() if birth_date_obj else ""
 
             row = await conn.fetchrow(
                 """
@@ -104,7 +105,7 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                 npc_data.get("archetype_extras_summary", ""),
                 npc_data.get("physical_description", ""),
                 npc_data.get("age"),
-                birth_date_obj,
+                birth_date_value,  # now a string
                 json.dumps(npc_data.get("likes", [])),
                 json.dumps(npc_data.get("dislikes", [])),
                 json.dumps(npc_data.get("hobbies", [])),
