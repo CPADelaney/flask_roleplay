@@ -7,6 +7,7 @@ import logging
 from flask import Flask, render_template, request, session, jsonify, redirect
 from flask_cors import CORS
 from celery import Celery
+import tasks
 
 # Blueprint imports
 from routes.new_game import new_game_bp
@@ -43,7 +44,6 @@ def create_celery_app():
         worker_log_format="%(levelname)s:%(name)s:%(message)s",
         worker_redirect_stdouts_level='INFO'
     )
-    celery_app.autodiscover_tasks(['tasks'])
     return celery_app
 
 # Global SocketIO instance (will be created later)
