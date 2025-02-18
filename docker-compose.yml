@@ -13,6 +13,7 @@ services:
     environment:
       - SERVICE_TYPE=web
       - DB_DSN=...
+      - RABBITMQ_URL=amqps://mromnayo:rk8_5B2utngRpocfxpVkWbSDIUcU6MXH@duck.lmq.cloudamqp.com/mromnayo    
     depends_on:
       - rabbitmq
     dns:
@@ -23,6 +24,7 @@ services:
     environment:
       - SERVICE_TYPE=worker
       - DB_DSN=...
+      - RABBITMQ_URL=amqps://mromnayo:rk8_5B2utngRpocfxpVkWbSDIUcU6MXH@duck.lmq.cloudamqp.com/mromnayo      
     depends_on:
       - rabbitmq
     dns:
