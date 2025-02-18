@@ -1,17 +1,27 @@
 #!/bin/sh
 set -e
 
-# Attempt to override the container's DNS settings using Cloudflare's DNS
+# Override DNS settings using Cloudflare's DNS
 echo "nameserver 1.1.1.1" > /etc/resolv.conf
 
-# Debug: Print current /etc/resolv.conf contents
+# Debug: Print /etc/resolv.conf contents
 echo "===== /etc/resolv.conf ====="
 cat /etc/resolv.conf
 echo "============================="
 
-# Debug: Use Python to resolve CloudAMQP's host
+# Debug: Test DNS resolution using Python
 echo "Attempting to resolve duck.lmq.cloudamqp.com using Python:"
 python -c "import socket; print(socket.gethostbyname('duck.lmq.cloudamqp.com'))" || echo "Python DNS lookup failed"
+
+# Debug: Test TCP connectivity to duck.lmq.cloudamqp.com:5671
+echo "Testing connectivity to duck.lmq.cloudamqp.com:5671:"
+python -c "import socket; \
+try: \
+    sock = socket.create_connection(('duck.lmq.cloudamqp.com', 5671), timeout=10); \
+    print('Connection successful'); \
+    sock.close(); \
+except Exception as e: \
+    print('Connection test failed:', e)" || echo "Connectivity test failed"
 
 if [ "$SERVICE_TYPE" = "worker" ]; then
     echo "Starting Celery Worker with concurrency=1..."
