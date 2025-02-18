@@ -8,4 +8,4 @@ from main import celery_app  # 2) Now import your app, which may import tasks, e
 if __name__ == "__main__":
     w = worker.worker()
     # Start Celery with eventlet concurrency:
-    w.run_from_argv(["celery", "-A", "main.celery_app", "worker", "-P", "eventlet", "--loglevel=INFO"])
+    w.run_from_argv(["celery", "-A", "main:celery_app", "worker", "-P", "eventlet", "--loglevel=INFO"])
