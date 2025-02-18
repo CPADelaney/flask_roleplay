@@ -13,3 +13,5 @@ httpx
 flask-socketio
 eventlet
 kombu
+pandas
+numpy
