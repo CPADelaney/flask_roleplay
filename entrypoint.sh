@@ -6,6 +6,5 @@ if [ "$SERVICE_TYPE" = "worker" ]; then
     exec celery -A tasks.celery_app worker --loglevel=INFO --concurrency=1
 else
     echo "Starting Web Server..."
-    exec gunicorn --bind 0.0.0.0:8080 --timeout 1200 --worker-class eventlet -w 1 wsgi:app
-
+    exec gunicorn --bind 0.0.0.0:8080 --timeout 600 --worker-class uvicorn.workers.UvicornWorker main:app
 fi
