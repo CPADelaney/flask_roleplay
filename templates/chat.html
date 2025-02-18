@@ -129,7 +129,7 @@
     .message-row {
       display: flex;
       margin-bottom: 10px;
-      /* Each message is its own horizontal "row" */
+      /* This ensures each message is its own horizontal "row" */
     }
     .message-bubble {
       max-width: 60%;
@@ -159,8 +159,7 @@
   <!-- MARKDOWN + DOMPurify Libraries -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@2.4.0/dist/purify.min.js"></script>
-  <!-- Include Socket.IO client library -->
-  <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+
 </head>
 <body>
 <div id="topBar">
@@ -200,27 +199,10 @@
 <div id="contextMenu"></div>
 
 <script>
-  // Initialize Socket.IO connection
-  const socket = io();
-
-  // Listen for pushed narrative updates from the server
-  socket.on('narrative_ready', (data) => {
-    if (data.conversation_id === currentConvId) {
-      removeTypingPlaceholder();
-      appendMessage({ sender: "Nyx", content: data.narrative });
+    function sanitizeAndRenderMarkdown(markdownText) {
+      const renderedHTML = marked.parse(markdownText); // For Marked 4+
+      return DOMPurify.sanitize(renderedHTML);
     }
-  });
-
-  // Join a conversation room for push notifications
-  function joinConversationRoom(convId) {
-    socket.emit('join', { room: `conversation_${convId}` });
-  }
-
-  function sanitizeAndRenderMarkdown(markdownText) {
-    const renderedHTML = marked.parse(markdownText);
-    return DOMPurify.sanitize(renderedHTML);
-  }
-
   let currentConvId = null;
   let messagesOffset = 0;
   const MESSAGES_PER_LOAD = 20;
@@ -279,6 +261,43 @@
     loadDarkModeFromStorage();
     await loadConversations();
   };
+
+  async function pollConversationStatus(convId) {
+    const POLL_INTERVAL = 5000; // 5 seconds
+    const MAX_POLL_ATTEMPTS = 30;
+    let attempts = 0;
+  
+    const intervalId = setInterval(() => {
+      (async () => {
+        try {
+          const res = await fetch(`/conversation_status?conversation_id=${convId}`, {
+            method: "GET",
+            credentials: "include"
+          });
+          if (!res.ok) {
+            console.error("Failed to fetch conversation status:", res.status);
+            return;
+          }
+          const data = await res.json();
+          console.log("Polled conversation status:", data);
+  
+          if (data.status === "ready") {
+            clearInterval(intervalId);
+            console.log("Conversation is ready. Refreshing messages...");
+            await loadMessages(convId, true); // Refresh chat window
+          } else {
+            attempts++;
+            if (attempts >= MAX_POLL_ATTEMPTS) {
+              clearInterval(intervalId);
+              console.warn("Polling timed out; conversation is still not ready.");
+            }
+          }
+        } catch (err) {
+          console.error("Error polling conversation status:", err);
+        }
+      })();
+    }, POLL_INTERVAL);
+  }
 
   // Check login
   async function checkLoggedIn() {
@@ -350,7 +369,7 @@
     }
   }
 
-  // Load & Create Conversations
+  // Load & Create Convos
   async function loadConversations() {
     try {
       const res = await fetch("/multiuser/conversations", {
@@ -377,18 +396,22 @@
         body: JSON.stringify({})
       });
       const data = await res.json();
-
+  
       if (!res.ok) {
         alert("Error starting new game: " + (data.error || res.status));
         return;
       }
-
+  
       currentConvId = data.conversation_id;
       alert("New game started! conversation_id=" + currentConvId);
-
+  
       // Refresh the conversation list and open the new conversation immediately
       await loadConversations();
       selectConversation(currentConvId);
+  
+      // Start polling the conversation status and update the UI dynamically when ready.
+      pollConversationStatus(currentConvId);
+      
     } catch (err) {
       console.error("startNewGame error:", err);
       alert("Failed to start new game!");
@@ -424,7 +447,6 @@
 
   async function selectConversation(convId) {
     currentConvId = convId;
-    joinConversationRoom(convId);
     messagesOffset = 0;
     await loadMessages(convId, true);
   }
@@ -462,6 +484,24 @@
     chatWindow.scrollTop = chatWindow.scrollHeight;
   }
 
+  function pollForNewMessages(convId) {
+  setInterval(async () => {
+    try {
+      const res = await fetch(`/multiuser/conversations/${convId}/messages?offset=0&limit=20`, {
+        method: "GET",
+        credentials: "include"
+      });
+      if (res.ok) {
+        const data = await res.json();
+        // Update your chat window with new messages:
+        renderChat(data.messages);
+      }
+    } catch (err) {
+      console.error("Error polling messages:", err);
+    }
+  }, 5000); // Poll every 5 seconds
+}
+
   function prependMessages(messages) {
     const chatWindow = document.getElementById("chatWindow");
     const loadMoreElem = document.getElementById("loadMore");
@@ -479,8 +519,9 @@
   function appendMessage(m, autoScroll = true) {
     const chatWindow = document.getElementById("chatWindow");
     const bubble = createBubble(m);
-    // Append new message at the bottom
+    // Put new message at the bottom
     chatWindow.appendChild(bubble);
+
     if (autoScroll) {
       chatWindow.scrollTop = chatWindow.scrollHeight;
     }
@@ -488,12 +529,21 @@
   }
 
   function createBubble(m) {
+    // Create a row container
     const row = document.createElement("div");
     row.classList.add("message-row");
-    row.classList.add(m.sender === "user" ? "user-row" : "gpt-row");
 
+    if (m.sender === "user") {
+      row.classList.add("user-row");
+    } else {
+      row.classList.add("gpt-row");
+    }
+
+    // Then create the bubble
     const bubble = document.createElement("div");
     bubble.classList.add("message-bubble");
+
+    // Safely render the user's text as Markdown + sanitized HTML
     const safeContent = sanitizeAndRenderMarkdown(m.content);
     bubble.innerHTML = `<strong>${m.sender}:</strong> ${safeContent}`;
 
@@ -501,18 +551,7 @@
     return row;
   }
 
-  // Remove any "Typing..." placeholder message from the chat window.
-  function removeTypingPlaceholder() {
-    const chatWindow = document.getElementById("chatWindow");
-    const bubbles = chatWindow.getElementsByClassName("message-bubble");
-    for (let bubble of Array.from(bubbles)) {
-      if (bubble.textContent.includes("Typing...")) {
-        bubble.parentNode.remove();
-      }
-    }
-  }
-
-  // Send a new message (using push notifications for the narrative response)
+  // Send a new message
   async function sendMessage() {
     const userInputElem = document.getElementById("userMsg");
     const userText = userInputElem.value.trim();
@@ -520,11 +559,17 @@
     if (!userText) return;
 
     // Append the user's message immediately
-    const userMsgObj = { sender: "user", content: userText };
+    const userMsgObj = {
+      sender: "user",
+      content: userText,
+    };
     appendMessage(userMsgObj, true);
 
-    // Show a temporary "Typing..." bubble from Nyx
-    const tempGptMsgObj = { sender: "Nyx", content: "Typing..." };
+    // Show a temporary GPT "typing..." bubble
+    const tempGptMsgObj = {
+      sender: "Nyx",
+      content: "Typing..."
+    };
     const gptTypingBubble = appendMessage(tempGptMsgObj, true);
 
     const payload = {
@@ -553,10 +598,17 @@
       resetPendingUniversalUpdates();
       currentConvId = data.conversation_id;
 
-      // Remove the "Typing..." placeholder.
+      // Remove the placeholder
       gptTypingBubble.remove();
 
-      // The narrative will now be pushed via Socket.IO.
+      // Append the actual GPT message from the server
+      const realGptMsgObj = {
+        sender: "Nyx",
+        content: data.response || "(No response?)",
+      };
+      appendMessage(realGptMsgObj, true);
+
+      // Refresh the conversation list (if needed)
       await loadConversations();
     } catch (err) {
       console.error("sendMessage error:", err);
@@ -580,6 +632,7 @@
     menuDiv.style.display = "block";
   }
 
+  // Hide menu if user clicks anywhere else
   document.addEventListener("click", () => {
     menuDiv.style.display = "none";
   });
@@ -604,6 +657,8 @@
     }
   }
 
+  // Prompt user for a folder name, then call the route that
+  // auto-creates the folder if needed & moves conversation
   async function moveConversationToFolder(convId) {
     const folderName = prompt("Which folder name? (It will be created if it doesn't exist)");
     if (!folderName) return;
