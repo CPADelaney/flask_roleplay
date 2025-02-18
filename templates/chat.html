@@ -484,6 +484,24 @@
     chatWindow.scrollTop = chatWindow.scrollHeight;
   }
 
+  function pollForNewMessages(convId) {
+  setInterval(async () => {
+    try {
+      const res = await fetch(`/multiuser/conversations/${convId}/messages?offset=0&limit=20`, {
+        method: "GET",
+        credentials: "include"
+      });
+      if (res.ok) {
+        const data = await res.json();
+        // Update your chat window with new messages:
+        renderChat(data.messages);
+      }
+    } catch (err) {
+      console.error("Error polling messages:", err);
+    }
+  }, 5000); // Poll every 5 seconds
+}
+
   function prependMessages(messages) {
     const chatWindow = document.getElementById("chatWindow");
     const loadMoreElem = document.getElementById("loadMore");
