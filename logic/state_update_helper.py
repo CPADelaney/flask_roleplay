@@ -54,17 +54,26 @@ async def store_state_update(user_id: int, conversation_id: int, update_payload:
 def merge_state_updates(old_update: dict, new_update: dict) -> dict:
     """
     Merge two state update payloads.
-    For the inventory_updates section, if the new update's 'added_items' (or 'removed_items')
-    is empty but the old update has values, preserve the old values.
+    
+    For the inventory_updates section:
+      - If new_update explicitly includes a key (even if its value is an empty list),
+        then use that value.
+      - Otherwise, fallback to the value from old_update.
     """
     merged = new_update.copy()
     old_inv = old_update.get("inventory_updates", {})
     new_inv = new_update.get("inventory_updates", {})
 
-    if not new_inv.get("added_items") and old_inv.get("added_items"):
-        merged.setdefault("inventory_updates", {})["added_items"] = old_inv["added_items"]
-
-    if not new_inv.get("removed_items") and old_inv.get("removed_items"):
-        merged.setdefault("inventory_updates", {})["removed_items"] = old_inv["removed_items"]
-
+    merged_inv = {}
+    for key in ["added_items", "removed_items"]:
+        if key in new_inv:
+            merged_inv[key] = new_inv[key]
+        elif key in old_inv:
+            merged_inv[key] = old_inv[key]
+    if merged_inv:
+        # Also ensure that the player_name is set correctly.
+        merged["inventory_updates"] = {
+            "player_name": new_inv.get("player_name", old_inv.get("player_name", "Chase")),
+            **merged_inv
+        }
     return merged
