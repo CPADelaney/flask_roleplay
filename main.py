@@ -136,8 +136,6 @@ def create_flask_app():
     return app
 
 # Instantiate Celery and Flask
-celery_app = create_celery_app()
-print("DEBUG: main.py -> celery_app is", celery_app)
 flask_app = create_flask_app()
 
 # Create a KombuManager for Socket.IO using RabbitMQ
