@@ -1,13 +1,9 @@
 # main.py
-
 import os
 import logging
 from flask import Flask, render_template, request, session, jsonify, redirect
 from flask_cors import CORS
 from celery import Celery
-
-# Import SocketIO and related functions
-from flask_socketio import SocketIO, join_room, leave_room
 
 # Blueprint imports
 from routes.new_game import new_game_bp
@@ -21,16 +17,25 @@ from db.admin import admin_bp
 from routes.debug import debug_bp
 from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
-from socketio.kombu_manager import KombuManager
+
 # DB connection helper
 from db.connection import get_db_connection
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//?heartbeat=30")
-
 
 def create_celery_app():
+    """
+    Create and configure a single Celery app instance.
+
+    This is where you read environment variables for your broker, backend, etc.
+    That way, tasks.py can just import 'celery_app' instead of creating its own.
+    """
+    # Retrieve the RabbitMQ (or Redis) URL from environment variables:
+    RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
+    
     celery_app = Celery("my_celery_app")
     celery_app.conf.broker_url = RABBITMQ_URL
-    celery_app.conf.result_backend = "rpc://"
+    celery_app.conf.result_backend = "rpc://"  # or "redis://localhost:6379/1"
+
+    # Additional config (if needed)
     celery_app.conf.update(
         task_serializer='json',
         accept_content=['json'],
@@ -40,11 +45,17 @@ def create_celery_app():
         worker_log_format="%(levelname)s:%(name)s:%(message)s",
         worker_redirect_stdouts_level='INFO'
     )
+
     return celery_app
 
 def create_flask_app():
+    """
+    Create and configure the Flask application.
+    """
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_dev_key")
+    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_dev_key")  # fallback for local dev
+
+    # Enable CORS for all routes
     CORS(app)
 
     # Register blueprint modules
@@ -59,6 +70,10 @@ def create_flask_app():
     app.register_blueprint(debug_bp, url_prefix='/debug')
     app.register_blueprint(universal_bp, url_prefix="/universal")
     app.register_blueprint(multiuser_bp, url_prefix="/multiuser")
+
+    # -----------------
+    # Example Routes
+    # -----------------
 
     @app.route("/chat")
     def chat_page():
@@ -75,17 +90,23 @@ def create_flask_app():
         data = request.get_json()
         username = data.get("username")
         password = data.get("password")
+
         if not username or not password:
             return jsonify({"error": "Username and password required"}), 400
+
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT id, password_hash FROM users WHERE username = %s", (username,))
         row = cur.fetchone()
         cur.close()
         conn.close()
+
         if not row:
             return jsonify({"error": "Invalid username"}), 401
+
         user_id, password_hash = row
+        # NOTE: For real production, use a proper password hashing library.
+
         session["user_id"] = user_id
         return jsonify({"message": "Logged in", "user_id": user_id})
 
@@ -107,16 +128,21 @@ def create_flask_app():
         data = request.get_json()
         username = data.get("username")
         password = data.get("password")
+
         if not username or not password:
             return jsonify({"error": "Username and password required"}), 400
+
         conn = get_db_connection()
         cur = conn.cursor()
+
+        # Check if username already exists
         cur.execute("SELECT id FROM users WHERE username = %s", (username,))
         existing = cur.fetchone()
         if existing:
             cur.close()
             conn.close()
             return jsonify({"error": "Username already taken"}), 400
+
         cur.execute("""
             INSERT INTO users (username, password_hash)
             VALUES (%s, %s)
@@ -126,29 +152,18 @@ def create_flask_app():
         conn.commit()
         cur.close()
         conn.close()
+
         session["user_id"] = new_user_id
         return jsonify({"message": "User registered successfully", "user_id": new_user_id})
 
     return app
 
+
 # Instantiate both Celery and Flask
 celery_app = create_celery_app()
 app = create_flask_app()
 
-# Initialize SocketIO using a message queue (optional but useful for multi-worker setups)
-# Here, we use Redis as the message queue if provided by the environment.
-socketio = SocketIO(app, cors_allowed_origins="*", message_queue=RABBITMQ_URL, manager_class=KombuManager)
-
-# Example SocketIO event: handle clients joining a room for their conversation.
-@socketio.on('join')
-def on_join(data):
-    room = data.get('room')
-    if room:
-        join_room(room)
-        # Optionally, emit a confirmation back to the client.
-        socketio.emit('joined', {'room': room})
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # Run with SocketIO (this uses Eventlet by default if installed)
-    socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
+    # Start the Flask app
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
