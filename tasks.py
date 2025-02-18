@@ -13,7 +13,7 @@ from db.connection import get_db_connection
 from logic.universal_updater import apply_universal_updates
 
 # Import our new helper functions
-from state_update_helper import get_previous_update, store_state_update, merge_state_updates
+from logic.state_update_helper import get_previous_update, store_state_update, merge_state_updates
 
 
 
