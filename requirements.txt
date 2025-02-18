@@ -9,7 +9,7 @@ python-dotenv==1.0.0
 flask-cors==4.0.0
 flask-socketio[amqp]==5.5.1
 
-python-socketio==5.7.2
+python-socketio
 python-engineio==4.5.1
 eventlet==0.33.3
 kombu==5.2.4
