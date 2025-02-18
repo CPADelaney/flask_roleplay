@@ -20,6 +20,7 @@ from db.admin import admin_bp
 from routes.debug import debug_bp
 from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
+from flask_socketio import KombuManager
 
 # DB connection helper
 from db.connection import get_db_connection
@@ -135,7 +136,7 @@ app = create_flask_app()
 
 # Initialize SocketIO using a message queue (optional but useful for multi-worker setups)
 # Here, we use Redis as the message queue if provided by the environment.
-socketio = SocketIO(app, cors_allowed_origins="*", message_queue=os.getenv("REDIS_URL", "redis://"))
+socketio = SocketIO(app, cors_allowed_origins="*", message_queue=RABBITMQ_URL, manager_class=KombuManager)
 
 # Example SocketIO event: handle clients joining a room for their conversation.
 @socketio.on('join')
