@@ -32,11 +32,15 @@ COPY . .
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# Now create a non-root user and switch to it
+# Create a non-root user
 RUN useradd -m appuser
-USER appuser
 
+# Remove the USER directive so that the entrypoint runs as root,
+# and we'll drop privileges in the entrypoint script.
+# USER appuser  <-- Remove or comment out this line.
+
+# Expose the Railway-provided port
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["/app/entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]
