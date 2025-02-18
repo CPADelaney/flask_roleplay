@@ -9,12 +9,29 @@ from db.connection import get_db_connection
 from logic.prompts import SYSTEM_PROMPT
 from logic.json_helpers import safe_json_loads
 
+# logic/chatgpt_integration.py
+
+import os
+import json
+import logging
+import functools
+import time
+import openai
+from db.connection import get_db_connection
+from logic.prompts import SYSTEM_PROMPT
+from logic.json_helpers import safe_json_loads
+
+# Use your full schema, but add a "narrative" field at the top.
 UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
     "name": "apply_universal_update",
-    "description": "Insert or update various roleplay elements in the database (NPCs, locations, events, etc.).",
+    "description": "Insert or update various roleplay elements in the database (NPCs, locations, events, etc.), and return a narrative.",
     "parameters": {
         "type": "object",
         "properties": {
+            "narrative": {
+                "type": "string",
+                "description": "The narrative text to be displayed to the player."
+            },
             "roleplay_updates": {
                 "type": "object",
                 "description": (
@@ -30,20 +47,20 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                 "additionalProperties": True
             },
             "ChaseSchedule": {
-                          "type": "object",
-                          "patternProperties": {
-                            "^[A-Z][a-zA-Z]*$": {
-                              "type": "object",
-                              "properties": {
-                                "Morning":   { "type": "string" },
-                                "Afternoon": { "type": "string" },
-                                "Evening":   { "type": "string" },
-                                "Night":     { "type": "string" }
-                              },
-                              "required": ["Morning","Afternoon","Evening","Night"],
-                              "additionalProperties": False
-                            }
-                          },
+                "type": "object",
+                "patternProperties": {
+                    "^[A-Z][a-zA-Z]*$": {
+                        "type": "object",
+                        "properties": {
+                            "Morning": {"type": "string"},
+                            "Afternoon": {"type": "string"},
+                            "Evening": {"type": "string"},
+                            "Night": {"type": "string"}
+                        },
+                        "required": ["Morning", "Afternoon", "Evening", "Night"],
+                        "additionalProperties": False
+                    }
+                },
                 "additionalProperties": False,
                 "description": "The detailed weekly schedule for Chase, with keys for each day of the week and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
             },
@@ -95,17 +112,17 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                             "^[A-Z][a-zA-Z]*$": {
                               "type": "object",
                               "properties": {
-                                "Morning":   { "type": "string" },
-                                "Afternoon": { "type": "string" },
-                                "Evening":   { "type": "string" },
-                                "Night":     { "type": "string" }
+                                "Morning": {"type": "string"},
+                                "Afternoon": {"type": "string"},
+                                "Evening": {"type": "string"},
+                                "Night": {"type": "string"}
                               },
-                              "required": ["Morning","Afternoon","Evening","Night"],
+                              "required": ["Morning", "Afternoon", "Evening", "Night"],
                               "additionalProperties": False
                             }
                           },
-                            "additionalProperties": False,
-                            "description": "The detailed weekly schedule for this NPC, formatted as a JSON object with keys for each day and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
+                          "additionalProperties": False,
+                          "description": "The detailed weekly schedule for this NPC, formatted as a JSON object with keys for each day and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
                         },
                         "memory": {
                             "description": "NPC memory can be a string or an array of strings.",
@@ -160,17 +177,17 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                             "^[A-Z][a-zA-Z]*$": {
                               "type": "object",
                               "properties": {
-                                "Morning":   { "type": "string" },
-                                "Afternoon": { "type": "string" },
-                                "Evening":   { "type": "string" },
-                                "Night":     { "type": "string" }
+                                "Morning": {"type": "string"},
+                                "Afternoon": {"type": "string"},
+                                "Evening": {"type": "string"},
+                                "Night": {"type": "string"}
                               },
-                              "required": ["Morning","Afternoon","Evening","Night"],
+                              "required": ["Morning", "Afternoon", "Evening", "Night"],
                               "additionalProperties": False
                             }
                           },
-                            "additionalProperties": False,
-                            "description": "The detailed weekly schedule for this NPC."
+                          "additionalProperties": False,
+                          "description": "The detailed weekly schedule for this NPC."
                         },
                         "schedule_updates": {"type": "object"},
                         "affiliations": {"type": "array", "items": {"type": "string"}},
@@ -337,9 +354,27 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                 }
             }
         },
-        "required": []
+        "required": [
+            "narrative",
+            "roleplay_updates",
+            "ChaseSchedule",
+            "MainQuest",
+            "PlayerRole",
+            "npc_creations",
+            "npc_updates",
+            "character_stat_updates",
+            "relationship_updates",
+            "npc_introductions",
+            "location_creations",
+            "event_list_updates",
+            "inventory_updates",
+            "quest_updates",
+            "social_links",
+            "perk_unlocks"
+        ]
     }
 }
+
 
 
 
@@ -348,9 +383,8 @@ def get_openai_client():
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY not found in environment")
-    # You might just use openai, but if you want to keep a custom "OpenAI" usage, do so:
     openai.api_key = api_key
-    return openai  # the standard openai module
+    return openai
 
 def build_message_history(conversation_id: int, aggregator_text: str, user_input: str, limit: int = 15):
     conn = get_db_connection()
@@ -365,32 +399,20 @@ def build_message_history(conversation_id: int, aggregator_text: str, user_input
     rows = cur.fetchall()
     conn.close()
 
-    # Oldest first
-    rows.reverse()
-
+    rows.reverse()  # Oldest first
     chat_history = []
     for sender, content in rows:
         role = "user" if sender.lower() == "user" else "assistant"
         chat_history.append({"role": role, "content": content})
 
-    # Start building final messages
     messages = []
-    # system instructions
     messages.append({"role": "system", "content": SYSTEM_PROMPT})
-    # aggregator text as developer or system
     messages.append({"role": "system", "content": aggregator_text})
-
-    # existing conversation
     messages.extend(chat_history)
-
-    # user message
     messages.append({"role": "user", "content": user_input})
     return messages
 
 def retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,)):
-    """
-    Decorator that retries a function call with exponential backoff when one of the specified exceptions is raised.
-    """
     def decorator_retry(func):
         @functools.wraps(func)
         def wrapper_retry(*args, **kwargs):
@@ -409,10 +431,7 @@ def retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, excepti
 @retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,))
 def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input: str) -> dict:
     client = get_openai_client()
-
-    # Build the conversation history as a list of message dicts
     messages = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
-
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=messages,
@@ -422,17 +441,13 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
         functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
         function_call={"name": "apply_universal_update"}
     )
-
     msg = response.choices[0].message
     tokens_used = response.usage.total_tokens
 
     if msg.function_call is not None:
         fn_name = msg.function_call.name
         fn_args_str = msg.function_call.arguments or "{}"
-
         logging.debug("Raw function call arguments: %s", fn_args_str)
-
-        # Strip markdown code fences if present.
         if fn_args_str.startswith("```"):
             lines = fn_args_str.splitlines()
             if lines and lines[0].startswith("```"):
@@ -441,29 +456,22 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
                 lines = lines[:-1]
             fn_args_str = "\n".join(lines).strip()
             logging.debug("Arguments after stripping markdown: %s", fn_args_str)
-
         if not fn_args_str.strip():
             fn_args_str = "{}"
-
-        # If the string does not end with a closing brace, attempt to fix it.
         if not fn_args_str.endswith("}"):
             last_brace_index = fn_args_str.rfind("}")
             if last_brace_index != -1:
                 logging.warning("Function call arguments appear truncated. Truncating string at index %s", last_brace_index)
                 fn_args_str = fn_args_str[:last_brace_index+1]
-
-        # Instead of directly calling json.loads, use our safe_json_loads helper.
         try:
             parsed_args = safe_json_loads(fn_args_str)
         except Exception:
             logging.exception("Error parsing function call arguments")
             parsed_args = {}
-        
         return {
             "type": "function_call",
             "function_name": fn_name,
             "function_args": parsed_args,
-            "response": None,
             "tokens_used": tokens_used
         }
     else:
