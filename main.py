@@ -8,6 +8,7 @@ from flask import Flask, render_template, request, session, jsonify, redirect
 from flask_cors import CORS
 from celery import Celery
 import tasks
+from celery_app import celery_app
 
 # Blueprint imports
 from routes.new_game import new_game_bp
@@ -26,25 +27,6 @@ from db.connection import get_db_connection
 # --- Updated Import for RabbitMQ-based Manager ---
 from flask_socketio import SocketIO, join_room
 from socketio import KombuManager  # Use KombuManager instead of AMQPManager
-
-def create_celery_app():
-    """
-    Create and configure a single Celery app instance.
-    """
-    RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
-    celery_app = Celery("my_celery_app")
-    celery_app.conf.broker_url = RABBITMQ_URL
-    celery_app.conf.result_backend = "rpc://"
-    celery_app.conf.update(
-        task_serializer='json',
-        accept_content=['json'],
-        result_serializer='json',
-        timezone='UTC',
-        enable_utc=True,
-        worker_log_format="%(levelname)s:%(name)s:%(message)s",
-        worker_redirect_stdouts_level='INFO'
-    )
-    return celery_app
 
 # Global SocketIO instance (will be created later)
 socketio = None
