@@ -1,11 +1,10 @@
-# main.py
 import os
 import logging
 from flask import Flask, render_template, request, session, jsonify, redirect
 from flask_cors import CORS
 from celery import Celery
 
-# Blueprint imports
+# Blueprint imports (unchanged from your code)
 from routes.new_game import new_game_bp
 from routes.player_input import player_input_bp
 from routes.settings_routes import settings_bp
@@ -17,25 +16,24 @@ from db.admin import admin_bp
 from routes.debug import debug_bp
 from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
-
-# DB connection helper
 from db.connection import get_db_connection
+
+# --- NEW IMPORTS FOR SOCKET.IO WITH RABBITMQ ---
+from flask_socketio import SocketIO, join_room
+from socketio import AMQPManager
 
 def create_celery_app():
     """
     Create and configure a single Celery app instance.
-
-    This is where you read environment variables for your broker, backend, etc.
-    That way, tasks.py can just import 'celery_app' instead of creating its own.
     """
-    # Retrieve the RabbitMQ (or Redis) URL from environment variables:
+    # Connect Celery to RabbitMQ
     RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
-    
+
     celery_app = Celery("my_celery_app")
     celery_app.conf.broker_url = RABBITMQ_URL
-    celery_app.conf.result_backend = "rpc://"  # or "redis://localhost:6379/1"
+    celery_app.conf.result_backend = "rpc://"  # or "amqp://", etc.
 
-    # Additional config (if needed)
+    # Additional config
     celery_app.conf.update(
         task_serializer='json',
         accept_content=['json'],
@@ -48,17 +46,18 @@ def create_celery_app():
 
     return celery_app
 
+# We'll make our SocketIO instance at the global level so we can import it in tasks.py if needed.
+socketio = None
+
 def create_flask_app():
     """
     Create and configure the Flask application.
     """
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_dev_key")  # fallback for local dev
-
-    # Enable CORS for all routes
+    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_dev_key")
     CORS(app)
 
-    # Register blueprint modules
+    # Register your existing Blueprints
     app.register_blueprint(new_game_bp)
     app.register_blueprint(player_input_bp, url_prefix="/player")
     app.register_blueprint(settings_bp, url_prefix="/settings")
@@ -71,14 +70,12 @@ def create_flask_app():
     app.register_blueprint(universal_bp, url_prefix="/universal")
     app.register_blueprint(multiuser_bp, url_prefix="/multiuser")
 
-    # -----------------
     # Example Routes
-    # -----------------
-
     @app.route("/chat")
     def chat_page():
         if "user_id" not in session:
             return redirect("/login_page")
+        # Renders an updated "chat.html" (shown below)
         return render_template("chat.html")
 
     @app.route("/login_page", methods=["GET"])
@@ -156,14 +153,55 @@ def create_flask_app():
         session["user_id"] = new_user_id
         return jsonify({"message": "User registered successfully", "user_id": new_user_id})
 
+    # ------------------------------
+    # NEW ROUTE: start_chat
+    # ------------------------------
+    @app.route("/start_chat", methods=["POST"])
+    def start_chat():
+        """
+        Called by the front-end when the user sends a new message.
+        This enqueues a Celery task to stream from OpenAI.
+        """
+        if "user_id" not in session:
+            return jsonify({"error": "Not logged in"}), 401
+
+        data = request.get_json(force=True)
+        user_input = data.get("user_input", "")
+        conversation_id = data.get("conversation_id", "default_convo")
+
+        # Enqueue the Celery streaming task
+        from tasks import stream_openai_tokens_task
+        stream_openai_tokens_task.delay(user_input, conversation_id)
+
+        return jsonify({
+            "status": "queued",
+            "conversation_id": conversation_id
+        })
+
     return app
 
 
-# Instantiate both Celery and Flask
+# Instantiate Celery
 celery_app = create_celery_app()
-app = create_flask_app()
+
+# Create the Flask app
+flask_app = create_flask_app()
+
+# Now create a SocketIO instance that uses RabbitMQ for pub/sub:
+RABBIT_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
+amqp_manager = AMQPManager(url=RABBIT_URL, write_only=False)
+socketio = SocketIO(flask_app, cors_allowed_origins="*", client_manager=amqp_manager)
+
+# Listen for "join" events so clients can enter a conversation "room"
+@socketio.on("join")
+def on_join(data):
+    convo_id = data.get("conversation_id")
+    join_room(convo_id)
+    print(f"Socket client joined room: {convo_id}")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # Start the Flask app
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
+    # Run with socketio.run so we can handle WebSockets.
+    # For production, use eventlet or gevent worker in Gunicorn, e.g.:
+    #   gunicorn -k gevent main:socketio --bind 0.0.0.0:5000
+    socketio.run(flask_app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
