@@ -5,7 +5,8 @@ import logging
 import asyncio
 import openai
 import asyncpg
-from main import celery_app, socketio  # Import both Celery & the socketio instance
+from celery_app import celery_app
+from main import socketio  # Import both Celery & the socketio instance
 from flask_socketio import emit
 from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
