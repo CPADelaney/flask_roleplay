@@ -1,12 +1,18 @@
 # celery_worker.py
 import eventlet
-eventlet.monkey_patch()  # 1) Done early!
+eventlet.monkey_patch()
 
-from celery.bin import worker
-from main import celery_app  # 2) Now import your app, which may import tasks, etc.
+import subprocess
 
 if __name__ == "__main__":
-    print("DEBUG: About to run Celery with argv for 'main:celery_app'")
-    w = worker.worker()
-    # Start Celery with eventlet concurrency:
-    w.run_from_argv(["celery", "-A", "main:celery_app", "worker", "-P", "eventlet", "--loglevel=INFO"])
+    # The same args you used before:
+    cmd = [
+        "celery",
+        "-A", "main:celery_app",
+        "worker",
+        "-P", "eventlet",
+        "--loglevel=INFO",
+    ]
+    print("DEBUG: Running subprocess:", " ".join(cmd))
+    result = subprocess.run(cmd, check=False)
+    print("Celery CLI exited with code:", result.returncode)
