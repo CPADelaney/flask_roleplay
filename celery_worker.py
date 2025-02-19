@@ -19,10 +19,8 @@ def start_dummy_server():
     eventlet.wsgi.server(eventlet.listen(('0.0.0.0', 9000)), dummy_app)
 
 if __name__ == "__main__":
-    # Start the dummy server in a background daemon thread
-    t = threading.Thread(target=start_dummy_server, daemon=True)
-    t.start()
+    import eventlet
+    eventlet.spawn(start_dummy_server)
     
     logging.info("Starting Celery worker")
-    # Start the Celery worker directly in the same process
     celery_app.worker_main(["worker", "--loglevel=INFO", "-P", "eventlet"])
