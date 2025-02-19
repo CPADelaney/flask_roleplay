@@ -43,7 +43,7 @@ ENTRYPOINT []
 CMD []
 
 # **Add the hosts entry for CloudAMQP**
-RUN echo "54.193.232.128 duck.lmq.cloudamqp.com" >> /etc/hosts
+#RUN echo "54.193.232.128 duck.lmq.cloudamqp.com" >> /etc/hosts
 
 ENV PORT=8080
 EXPOSE 8080
