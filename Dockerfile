@@ -48,6 +48,3 @@ RUN useradd -m appuser
 # Expose the port
 ENV PORT=8080
 EXPOSE 8080
-EXPOSE 8080
-
-ENTRYPOINT ["/app/entrypoint.sh"]
