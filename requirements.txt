@@ -2,7 +2,7 @@ uvicorn
 RabbitMQ
 
 Flask-SocketIO==5.5.1
-python-socketio==5.6.0
+python-socketio==5.12.1
 python-engineio==4.3.2
 
 Flask[async]==2.3.2
