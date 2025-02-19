@@ -35,19 +35,15 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY . .
 
-# Copy the entrypoint script into the container and make it executable (as root)
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
-
 # Create a non-root user
 RUN useradd -m appuser
 
-# Remove the USER directive so that the entrypoint runs as root,
-# and we'll drop privileges in the entrypoint script.
-# USER appuser  <-- Remove or comment out this line.
+# Override any inherited ENTRYPOINT/CMD so Fly.io can use its process definitions
+ENTRYPOINT []
+CMD []
 
-# Expose the Railway-provided port
+# **Add the hosts entry for CloudAMQP**
+#RUN echo "54.193.232.128 duck.lmq.cloudamqp.com" >> /etc/hosts
+
 ENV PORT=8080
 EXPOSE 8080
-
-ENTRYPOINT ["/app/entrypoint.sh"]
