@@ -1,9 +1,9 @@
 uvicorn
 RabbitMQ
 
-Flask-SocketIO: 5.5.1
-python‑socketio: 5.6.0
-python‑engineio: 4.3.2
+Flask-SocketIO==5.5.1
+python‑socketio==5.6.0
+python‑engineio==4.3.2
 
 Flask[async]==2.3.2
 psycopg2-binary==2.9.6
