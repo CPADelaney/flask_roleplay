@@ -14,9 +14,10 @@ jobs:
       - name: Install flyctl
         run: |
           curl -L https://fly.io/install.sh | sh
-          # Add flyctl to PATH
           echo "$HOME/.fly/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.fly/bin:$PATH"
           flyctl version
+
 
       - name: Scale web process
         run: flyctl scale count --process=web 1
