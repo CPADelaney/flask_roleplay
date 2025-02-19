@@ -21,6 +21,7 @@ def start_dummy_server():
 if __name__ == "__main__":
     import eventlet
     eventlet.spawn(start_dummy_server)
+    eventlet.sleep(1)  # Wait a moment for the dummy server to start
     
     logging.info("Starting Celery worker")
     celery_app.worker_main(["worker", "--loglevel=INFO", "-P", "eventlet"])
