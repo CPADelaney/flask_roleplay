@@ -36,5 +36,5 @@ primary_region = "sea"
   protocol = "tcp"
   processes = ["worker"]
   [[services.ports]]
-    handlers = ["tcp"]
+    handlers = ["http"]
     port = 9000              # Dummy external port (unused)
