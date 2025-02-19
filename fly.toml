@@ -22,6 +22,7 @@ primary_region = "sea"
   memory_mb = 1024
   
 [[services]]
+  # Web service: handles HTTP traffic
   internal_port = 8080
   protocol = "tcp"
   processes = ["web"]
@@ -30,5 +31,10 @@ primary_region = "sea"
     port = 80
 
 [[services]]
+  # Worker service: doesn't serve HTTP but needs a port mapping
+  internal_port = 9000         # Dummy internal port (unused)
+  protocol = "tcp"
   processes = ["worker"]
-  # Workers typically don't need to expose ports.
+  [[services.ports]]
+    handlers = ["tcp"]
+    port = 9000              # Dummy external port (unused)
