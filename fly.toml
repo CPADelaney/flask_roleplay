@@ -34,7 +34,6 @@ primary_region = "sea"
   # Worker service: doesn't serve HTTP but needs a port mapping
   internal_port = 9000         # Dummy internal port (unused)
   protocol = "tcp"
-  processes = ["worker"]
   [[services.ports]]
     handlers = ["http"]
     port = 9000              # Dummy external port (unused)
