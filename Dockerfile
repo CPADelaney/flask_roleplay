@@ -35,19 +35,19 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY . .
 
-# Copy the entrypoint script into the container and make it executable (as root)
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+# Commented out the entrypoint copy and permission lines:
+# COPY entrypoint.sh /app/entrypoint.sh
+# RUN chmod +x /app/entrypoint.sh
 
 # Create a non-root user
 RUN useradd -m appuser
 
-# Remove the USER directive so that the entrypoint runs as root,
-# and we'll drop privileges in the entrypoint script.
-# USER appuser  <-- Remove or comment out this line.
+# Remove or comment out the ENTRYPOINT so Fly.io can override it:
+# ENTRYPOINT ["/app/entrypoint.sh"]
 
-# Expose the Railway-provided port
+# Expose the port
 ENV PORT=8080
+EXPOSE 8080
 EXPOSE 8080
 
 ENTRYPOINT ["/app/entrypoint.sh"]
