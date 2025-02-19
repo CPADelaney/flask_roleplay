@@ -35,16 +35,18 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY . .
 
-# Commented out the entrypoint copy and permission lines:
+# Commented out any previous ENTRYPOINT lines:
 # COPY entrypoint.sh /app/entrypoint.sh
 # RUN chmod +x /app/entrypoint.sh
 
 # Create a non-root user
 RUN useradd -m appuser
 
-# Remove or comment out the ENTRYPOINT so Fly.io can override it:
-# ENTRYPOINT ["/app/entrypoint.sh"]
+# **Override any inherited ENTRYPOINT and CMD:**
+ENTRYPOINT []
+CMD []
 
 # Expose the port
 ENV PORT=8080
 EXPOSE 8080
+
