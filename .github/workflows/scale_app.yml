@@ -19,12 +19,12 @@ jobs:
           flyctl version
 
       - name: Scale web process
-        run: flyctl scale count 1 --process-group web
+        run: flyctl scale count 1 --process-group web --yes
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       
       - name: Scale worker process
-        run: flyctl scale count 1 --process-group worker
+        run: flyctl scale count 1 --process-group worker --yes
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
