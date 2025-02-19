@@ -1,6 +1,7 @@
 # celery_app.py
 import os
 from celery import Celery
+import tasks
 
 def create_celery_app():
     RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
