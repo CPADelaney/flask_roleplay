@@ -1,4 +1,4 @@
-name: Deploy
+name: CI/CD Pipeline
 
 on:
   push:
@@ -6,7 +6,30 @@ on:
   workflow_dispatch:
 
 jobs:
+  init-db:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Database Initialization Script
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python init_db_script.py
+
   deploy-web:
+    needs: init-db
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -15,7 +38,7 @@ jobs:
       - name: Set up Flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
-      # Copy the web config to fly.toml
+      # Copy the web config to fly.toml so Fly.io finds it
       - name: Set up configuration for Web App
         run: cp fly.web.toml fly.toml
 
@@ -25,6 +48,7 @@ jobs:
         run: flyctl deploy -a flask-roleplay
 
   deploy-worker:
+    needs: init-db
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -33,7 +57,13 @@ jobs:
       - name: Set up Flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
-      # Copy the worker config to fly.toml
+      # Create the worker app if it doesn't already exist
+      - name: Create Fly App for Worker if needed
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl apps create flask-roleplay-worker || echo "App already exists"
+
+      # Copy the worker config to fly.toml so Fly.io finds it
       - name: Set up configuration for Worker App
         run: cp fly.worker.toml fly.toml
 
