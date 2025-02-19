@@ -13,14 +13,16 @@ def dummy():
     return "Worker dummy endpoint", 200
 
 def start_dummy_server():
-    logging.info("Starting dummy server on port 9000")
-    eventlet.wsgi.server(eventlet.listen(("0.0.0.0", 9000)), dummy_app)
+    try:
+        logging.info("Starting dummy server on port 9000")
+        eventlet.wsgi.server(eventlet.listen(("0.0.0.0", 9000)), dummy_app)
+    except Exception as e:
+        logging.exception("Dummy server failed to start: %s", e)
+
 
 if __name__ == "__main__":
-    # Start dummy server in an eventlet green thread
+    import eventlet
+    eventlet.monkey_patch()
     eventlet.spawn(start_dummy_server)
-    # Give it a bit more time to bind (try increasing if needed)
-    eventlet.sleep(3)
-    
-    logging.info("Starting Celery worker")
-    celery_app.worker_main(["worker", "--loglevel=INFO", "-P", "eventlet"])
+    eventlet.sleep(10)  # Keep the process alive for testing
+    # Remove the Celery worker startup temporarily.
