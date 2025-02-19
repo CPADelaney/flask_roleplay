@@ -35,18 +35,15 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY . .
 
-# Commented out any previous ENTRYPOINT lines:
-# COPY entrypoint.sh /app/entrypoint.sh
-# RUN chmod +x /app/entrypoint.sh
-
 # Create a non-root user
 RUN useradd -m appuser
 
-# **Override any inherited ENTRYPOINT and CMD:**
+# Override any inherited ENTRYPOINT/CMD so Fly.io can use its process definitions
 ENTRYPOINT []
 CMD []
 
-# Expose the port
+# **Add the hosts entry for CloudAMQP**
+RUN echo "54.193.232.128 duck.lmq.cloudamqp.com" >> /etc/hosts
+
 ENV PORT=8080
 EXPOSE 8080
-
