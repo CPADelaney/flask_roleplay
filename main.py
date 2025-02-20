@@ -24,22 +24,17 @@ from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
 from db.connection import get_db_connection
 
-# --- Updated Import for RabbitMQ-based Manager ---
+# --- Updated Import for Redis-based Manager ---
 from flask_socketio import SocketIO, join_room
-from socketio import KombuManager  # Use KombuManager instead of AMQPManager
+from socketio import RedisManager
 
-# Global SocketIO instance (will be created later)
-socketio = None
-
+# Create the Flask app
 def create_flask_app():
-    """
-    Create and configure the Flask application.
-    """
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_dev_key")
     CORS(app)
 
-    # Register blueprint modules
+    # Register blueprints
     app.register_blueprint(new_game_bp)
     app.register_blueprint(player_input_bp, url_prefix="/player")
     app.register_blueprint(settings_bp, url_prefix="/settings")
@@ -52,7 +47,7 @@ def create_flask_app():
     app.register_blueprint(universal_bp, url_prefix="/universal")
     app.register_blueprint(multiuser_bp, url_prefix="/multiuser")
 
-    # Example Routes
+    # Example routes
     @app.route("/chat")
     def chat_page():
         if "user_id" not in session:
@@ -118,7 +113,6 @@ def create_flask_app():
         session["user_id"] = new_user_id
         return jsonify({"message": "User registered successfully", "user_id": new_user_id})
 
-    # New route: /start_chat for enqueuing the streaming task
     @app.route("/start_chat", methods=["POST"])
     def start_chat():
         if "user_id" not in session:
@@ -135,13 +129,12 @@ def create_flask_app():
 
     return app
 
-# Instantiate Celery and Flask
 flask_app = create_flask_app()
 
-# Create a KombuManager for Socket.IO using RabbitMQ
-RABBIT_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
-kombu_manager = KombuManager(RABBIT_URL)
-socketio = SocketIO(flask_app, cors_allowed_origins="*", client_manager=kombu_manager)
+# --- Updated Socket.IO Initialization with RedisManager ---
+redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+redis_manager = RedisManager(redis_url)
+socketio = SocketIO(flask_app, cors_allowed_origins="*", client_manager=redis_manager)
 
 @socketio.on("join")
 def on_join(data):
@@ -152,7 +145,7 @@ def on_join(data):
 app = flask_app
 print("DEBUG: Environment says RABBITMQ_URL =", os.getenv("RABBITMQ_URL"))
 
-
 if __name__ == "__main__":
+    import logging
     logging.basicConfig(level=logging.INFO)
     socketio.run(flask_app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
