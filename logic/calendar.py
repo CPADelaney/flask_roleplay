@@ -21,8 +21,8 @@ def generate_calendar_names(environment_desc, conversation_id):
     """
     prompt = (
         "Based on the following environment description, generate an immersive and thematic naming scheme for the in-game calendar. "
-        "Keep in mind the context is 'femdom daily-life sim roleplaying game' and the names should reflect this."
-        "Ensure names are creative and unique, and are rooted in the universe and history of the setting."
+        "Keep in mind the context is 'femdom daily-life sim roleplaying game' and the names should reflect this. "
+        "Ensure names are creative and unique, and are rooted in the universe and history of the setting. "
         "Your response should be in JSON format with exactly the following keys:\n"
         "  - \"year_name\": a creative name for the overall year (e.g., 'The Age of Ember', 'The Silver Cycle'),\n"
         "  - \"months\": an array of 12 creative and unique month names,\n"
@@ -35,17 +35,26 @@ def generate_calendar_names(environment_desc, conversation_id):
     gpt_response = get_chatgpt_response(conversation_id, environment_desc, prompt)
     logging.info("GPT calendar naming response: %s", gpt_response)
     
+    calendar_names = {}
     try:
-        response_text = gpt_response.get("response", "").strip()
-        # If GPT wraps the response in markdown code fences, remove them.
-        if response_text.startswith("```"):
-            lines = response_text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            response_text = "\n".join(lines).strip()
-        calendar_names = json.loads(response_text)
+        if gpt_response.get("type") == "function_call":
+            fc_args = gpt_response.get("function_args", {})
+            # Extract only the expected keys if present
+            if all(key in fc_args for key in ("year_name", "months", "days")):
+                calendar_names = {key: fc_args[key] for key in ("year_name", "months", "days")}
+            else:
+                raise ValueError("Function call response missing expected calendar keys.")
+        else:
+            response_text = gpt_response.get("response", "").strip()
+            # Remove markdown code fences if present.
+            if response_text.startswith("```"):
+                lines = response_text.splitlines()
+                if lines and lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                response_text = "\n".join(lines).strip()
+            calendar_names = json.loads(response_text)
     except Exception as e:
         logging.error("Failed to parse calendar names JSON: %s", e, exc_info=True)
         # Fallback to a default naming scheme if GPT fails.
@@ -56,6 +65,7 @@ def generate_calendar_names(environment_desc, conversation_id):
         }
     
     return calendar_names
+
 
 def store_calendar_names(user_id, conversation_id, calendar_names):
     """
