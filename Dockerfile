@@ -24,4 +24,5 @@ USER appuser
 ENV PORT=8080
 EXPOSE 8080
 # Start the web service; adjust main:app if your WSGI app is elsewhere.
-CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "--timeout", "600", "-k", "eventlet", "main:app"]
+CMD sh -c "gunicorn --bind 0.0.0.0:$PORT --timeout 600 -k eventlet main:app"
+
