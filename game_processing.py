@@ -474,12 +474,22 @@ async def async_process_new_game(user_id, conversation_data):
         )
 
         first_day_name = day_names[0] if day_names else "the first day"
-        opening_prompt = (
-            f"Begin the scenario now, referencing aggregator context. "
-            f"{first_day_name} morning has just begun..."
+opening_prompt = (
+            "Nyx, your darkly seductive narrator, speaks with a tone that is inviting, seductive, and laced with innuendo and subtle hints of control. "
+            "Below is the current state of your world, which includes a vivid description of the environment, "
+            "your detailed daily schedule, and the profiles and relationships of key NPCs:\n\n"
+            f"{aggregator_text}\n\n"
+            f"As {first_day_name} morning dawns, welcome Chase into this world—a realm that appears ordinary at first glance but hides layers of power and secret seductions. "
+            "Describe the environment in lush, evocative detail, revealing the everyday beauty and routine while hinting at deeper, hidden dynamics of dominance. "
+            "Introduce familiar NPCs with whom Chase shares pre-existing relationships, suggesting bonds forged through past encounters, "
+            "and outline his schedule for the day in a way that feels natural and immersive. "
+            "Let the narrative gradually build intrigue, gently teasing the subtle femdom themes that will unfold as the day progresses."
+            "Conclude your narrative naturally by depicting Chase either setting out on his journey or arriving at his scheduled location for the morning, "
+            "capturing the anticipation and quiet resolve as he steps into the unfolding day. "
+            "Make sure he understands his motivation for going to his destination."
+            "Keep the tone natural, immersive, and slightly teasing, avoiding explicit gameplay mechanics."
         )
-        final_reply = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, opening_prompt)
-        nyx_text = final_reply.get("response", "[No text returned]")
+        final_reply = await spaced_gpt_call_with_retry(conversation_id, 
 
         # 15) Insert final opening message
         await conn.execute("""
