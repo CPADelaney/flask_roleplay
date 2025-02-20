@@ -13,7 +13,12 @@ def create_celery_app():
         timezone='UTC',
         enable_utc=True,
         worker_log_format="%(levelname)s:%(name)s:%(message)s",
-        worker_redirect_stdouts_level='INFO'
+        worker_redirect_stdouts_level='INFO',
+        broker_transport_options={
+            'heartbeat': 60,           # Send a heartbeat every 60 seconds
+            'connection_attempts': 3,  # Try to reconnect up to 3 times
+            'retry_delay': 5,          # Wait 5 seconds between attempts
+        },
     )
     return celery_app
 
