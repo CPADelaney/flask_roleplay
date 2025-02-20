@@ -10,3 +10,4 @@ asyncpg
 uvicorn
 RabbitMQ
 httpx
+asgiref
