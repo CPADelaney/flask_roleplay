@@ -3,6 +3,7 @@ import logging
 from flask import Flask, render_template, request, session, jsonify, redirect
 from flask_cors import CORS
 from celery import Celery
+from asgiref.wsgi import WsgiToAsgi
 
 # Blueprint imports
 from routes.new_game import new_game_bp
@@ -154,8 +155,9 @@ def create_flask_app():
 # Instantiate both Celery and Flask
 celery_app = create_celery_app()
 app = create_flask_app()
+asgi_app = WsgiToAsgi(app)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # Start the Flask app
+    # For local development, you might run:
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
