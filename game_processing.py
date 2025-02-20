@@ -15,10 +15,9 @@ from logic.gpt_helpers import adjust_npc_complete
 from routes.story_routes import build_aggregator_text
 from logic.gpt_utils import spaced_gpt_call, safe_int
 from logic.universal_updater import apply_universal_updates_async
-from logic.calendar import update_calendar_names, load_calendar_names
+from logic.calendar import update_calendar_names
 from db.connection import get_db_connection
-from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc, generate_chase_schedule, propagate_relationships, adjust_family_ages
-
+from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 
 DB_DSN = os.getenv("DB_DSN") 
 
@@ -121,7 +120,7 @@ Using this merged concept as inspiration, produce a strictly valid JSON object w
       - "location_name"
       - "description"
       - "open_hours"
-   (Generate at least 10 distinct locations. Locations are unique places - eg., cities, towns, or bars/buildings/stores/schools/office buildings/etc. within those cities/towns.)
+   (Generate at least 10 distinct locations.)
 6. "scenario_name" (string; the title or name of this overall scenario)
 7. "quest_data" (object with exactly these keys):
       - "quest_name" (make the main quest interesting, engaging, and unique)
@@ -438,49 +437,17 @@ async def async_process_new_game(user_id, conversation_data):
                 VALUES($1,$2,'Chase',10,60,50,20,10,15,55,40)
             """, user_id, conversation_id)
 
-        # 13) Retrieve existing immersive calendar names or generate them if not present.
-        calendar_data = load_calendar_names(user_id, conversation_id)
-        if calendar_data.get("year_name") == "The Eternal Cycle":
-            calendar_data = await update_calendar_names(user_id, conversation_id, combined_env)
+        # 13) Generate immersive calendar names & store them
+        calendar_data = await update_calendar_names(user_id, conversation_id, combined_env)
         await conn.execute("""
             INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES($1, $2, 'CalendarNames', $3)
+            VALUES($1,$2,'CalendarNames',$3)
             ON CONFLICT (user_id, conversation_id, key)
             DO UPDATE SET value=EXCLUDED.value
         """, user_id, conversation_id, json.dumps(calendar_data))
 
-        # **NEW STEP:** Set the initial in-game time to the first day in "Morning"
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES($1, $2, 'CurrentYear', '1')
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id)
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES($1, $2, 'CurrentMonth', '1')
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id)
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES($1, $2, 'CurrentDay', '1')
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id)
-        await conn.execute("""
-            INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
-            VALUES($1, $2, 'TimeOfDay', 'Morning')
-            ON CONFLICT (user_id, conversation_id, key)
-            DO UPDATE SET value=EXCLUDED.value
-        """, user_id, conversation_id)
+        day_names = calendar_data.get("days", ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
 
-        # Retrieve the dynamic day names from the calendar (e.g., first element) if needed.
-        day_names = calendar_data.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
- 
-        # NEW STEP: Generate and store Chase schedule.
-        await generate_chase_schedule(user_id, conversation_id, combined_env, day_names)
-        
         # ---------------------------------------------------------------------
         # NEW STEP: spawn multiple NPCs (instead of old spawn_and_refine_npcs_with_relationships).
         # ---------------------------------------------------------------------
@@ -493,12 +460,6 @@ async def async_process_new_game(user_id, conversation_data):
             count=5
         )
         logging.info("spawn_multiple_npcs => Created NPC IDs: %s", new_npc_ids)
-        
-        # NEW STEP: Propagate family relationships (e.g. add missing 'mother' links among siblings)
-        propagate_relationships(user_id, conversation_id)
-        
-        # NEW STEP: Adjust family ages based on familial relationships
-        adjust_family_ages(user_id, conversation_id)
 
         # 14) Build aggregator context & produce final narrative
         aggregator_data = await asyncio.to_thread(
@@ -514,27 +475,11 @@ async def async_process_new_game(user_id, conversation_data):
 
         first_day_name = day_names[0] if day_names else "the first day"
         opening_prompt = (
-            f"Using the following setting context:\n\n{aggregator_text}\n\n"
-            "Now, as Nyx—the NSFW, immersive, cruel, sadistic goth mommy domme—deliver a sadistic, seductive, immersive welcome to the player. Over the course of the welcome message and the other sections, include teasing language to lure the player in. Your message should unfold in clear, distinct sections as follows:\n\n"
-            "   Begin by speaking directly to the player. Address them by name (using 'you') in a commanding yet flirtatious tone. Establish your authority and presence immediately, and set the stage for the dynamic to come.\n\n"
-            
-            "**The Setting:**\n"
-            "   Describe the environment in vivid detail, drawing on the specific elements provided in the setting context. Whether the world is urban, rural, fantastical, or dystopian, paint a picture of everyday life with its inherent rhythm and normalcy, while subtly hinting at an ever-present undercurrent of power.\n\n"
-            
-            "**Notable Characters:**\n"
-            "   Introduce any key figures or hint at intriguing personalities the player might have encountered or will soon meet. Keep the descriptions mysterious and brief, ensuring that the promise of future interactions lingers without revealing too much.\n\n"
-            
-            "**Your Life Here:**\n"
-            "   Illustrate the player's current existence in this world. Describe their routine and surroundings in rich, immersive language. Seamlessly integrate understated, teasing cues—like a passing mention of a luxurious foot massage or a fleeting remark about a character’s subtly hypnotic hip movement—woven naturally into the narrative, reinforcing your underlying control without overt disclosure.\n\n"
-            
-            "**Your Next Steps:**\n"
-            "   Conclude by outlining a few suggestions for what lies ahead, drawing on hints from 'Chase's schedule.' For example, mention that according to today's agenda, there might be a critical meeting or an unexpected opportunity later in the day—subtly implying that each step, though seemingly mundane, is part of a larger, meticulously orchestrated plan.\n\n"
-            
-            "Throughout, maintain a commanding, darkly playful, and profane tone as you address the player directly as 'you.' Ensure that every teasing cue is integrated so subtly that it almost goes unnoticed—like a gentle whisper amidst the ambient sounds of everyday life—yet steadily reinforces the seductive power dynamic. Set the scene as if it is " + first_day_name + " morning, and adapt your descriptions to reflect the unique details of the provided environment context."
+            f"Begin the scenario now, referencing aggregator context. "
+            f"{first_day_name} morning has just begun..."
         )
         final_reply = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, opening_prompt)
         nyx_text = final_reply.get("response", "[No text returned]")
-
 
         # 15) Insert final opening message
         await conn.execute("""
