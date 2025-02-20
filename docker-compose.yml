@@ -1,31 +1,22 @@
 version: '3'
 services:
+  app:
+    environment:
+      - DB_DSN=postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@monorail.proxy.rlwy.net:24727/railway
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      - rabbitmq
   rabbitmq:
     image: rabbitmq:3-management
     ports:
       - "5672:5672"
       - "15672:15672"
-
-  app:
-    build: .
-    ports:
-      - "${PORT}"  # Railway will supply this automatically
-    environment:
-      - SERVICE_TYPE=web
-      - DB_DSN=${DB_DSN}
-      - RABBITMQ_URL=${RABBITMQ_URL}
-    depends_on:
-      - rabbitmq
-    dns:
-      - 8.8.8.8
-      
   celery_worker:
-    build: .
     environment:
-      - SERVICE_TYPE=worker
-      - DB_DSN=${DB_DSN}
-      - RABBITMQ_URL=${RABBITMQ_URL}
+      - DB_DSN=postgresql://postgres:gUAfzAPnULbYOAvZeaOiwuKLLebutXEY@monorail.proxy.rlwy.net:24727/railway
+    build: .
+    command: celery -A tasks.celery_app worker --loglevel=info
     depends_on:
       - rabbitmq
-    dns:
-      - 8.8.8.8
