@@ -1,26 +1,12 @@
-uvicorn
-RabbitMQ
-
-Flask-SocketIO==5.5.1
-flask-socketio[amqp]==5.5.1
-python-engineio==4.11.0
-python-socketio==5.12.1
-
 Flask[async]==2.3.2
-psycopg2-binary==2.9.6
-gunicorn
-python-dotenv==1.0.0
-flask-cors==4.0.0
-
-eventlet>=0.33.0
-kombu>=5.2.4
-
-celery
+psycopg2-binary==2.9.6  # Pre-compiled PostgreSQL adapter
+gunicorn==20.1.0
+python-dotenv==1.0.0    # For local .env file support (optional)
+flask-cors==4.0.0  # Add this line
 openai
+celery
 requests
 asyncpg
+uvicorn
+RabbitMQ
 httpx
-
-pandas
-numpy
-redis>=4.0.0
