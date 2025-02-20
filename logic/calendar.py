@@ -2,11 +2,35 @@
 
 import json
 import logging
+import openai
 from db.connection import get_db_connection
-from logic.chatgpt_integration import get_chatgpt_response
+from logic.chatgpt_integration import get_openai_client, build_message_history, safe_json_loads
 
 # Configure logging as needed.
 logging.basicConfig(level=logging.INFO)
+
+def get_chatgpt_response_no_function(conversation_id: int, aggregator_text: str, user_input: str) -> dict:
+    """
+    A local version of the GPT call that does not enforce a function call.
+    Returns a plain text response.
+    """
+    client = get_openai_client()
+    messages = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
+    response = client.chat.completions.create(
+         model="gpt-4o",
+         messages=messages,
+         temperature=0.2,
+         max_tokens=4000,
+         frequency_penalty=0.0
+    )
+    msg = response.choices[0].message
+    tokens_used = response.usage.total_tokens
+
+    return {
+         "type": "text",
+         "response": msg.content,
+         "tokens_used": tokens_used
+    }
 
 def generate_calendar_names(environment_desc, conversation_id):
     """
@@ -32,29 +56,22 @@ def generate_calendar_names(environment_desc, conversation_id):
     )
     
     logging.info("Calling GPT for calendar names with prompt:\n%s", prompt)
-    gpt_response = get_chatgpt_response(conversation_id, environment_desc, prompt)
+    # Use the no-function variant for calendar names.
+    gpt_response = get_chatgpt_response_no_function(conversation_id, environment_desc, prompt)
     logging.info("GPT calendar naming response: %s", gpt_response)
     
     calendar_names = {}
     try:
-        if gpt_response.get("type") == "function_call":
-            fc_args = gpt_response.get("function_args", {})
-            # Extract only the expected keys if present
-            if all(key in fc_args for key in ("year_name", "months", "days")):
-                calendar_names = {key: fc_args[key] for key in ("year_name", "months", "days")}
-            else:
-                raise ValueError("Function call response missing expected calendar keys.")
-        else:
-            response_text = gpt_response.get("response", "").strip()
-            # Remove markdown code fences if present.
-            if response_text.startswith("```"):
-                lines = response_text.splitlines()
-                if lines and lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                response_text = "\n".join(lines).strip()
-            calendar_names = json.loads(response_text)
+        response_text = gpt_response.get("response", "").strip()
+        # Remove markdown code fences if present.
+        if response_text.startswith("```"):
+            lines = response_text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            response_text = "\n".join(lines).strip()
+        calendar_names = json.loads(response_text)
     except Exception as e:
         logging.error("Failed to parse calendar names JSON: %s", e, exc_info=True)
         # Fallback to a default naming scheme if GPT fails.
@@ -65,7 +82,6 @@ def generate_calendar_names(environment_desc, conversation_id):
         }
     
     return calendar_names
-
 
 def store_calendar_names(user_id, conversation_id, calendar_names):
     """
