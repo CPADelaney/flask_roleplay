@@ -12,7 +12,7 @@ python-dotenv==1.0.0
 flask-cors==4.0.0
 flask-socketio[amqp]==5.5.1
 
-eventlet==0.32.0
+eventlet
 kombu==5.2.4
 
 celery
