@@ -1123,9 +1123,10 @@ async def refine_npc_final_data(user_id: int, conversation_id: int, npc_id: int,
        - physical_description
        - schedule
        - memory
+       - affiliations
+       - current_location
     3) Update DB with them.
     """
-
     # 1) Fetch current NPC record
     conn = get_db_connection()
     cur = conn.cursor()
@@ -1148,22 +1149,28 @@ async def refine_npc_final_data(user_id: int, conversation_id: int, npc_id: int,
         return
 
     columns = [
-        "npc_name","introduced","sex","dominance","cruelty","closeness","trust","respect","intensity",
-        "archetypes","archetype_summary","archetype_extras_summary",
-        "likes","dislikes","hobbies","personality_traits",
-        "age","birthdate","relationships","memory","schedule","affiliations",
+        "npc_name", "introduced", "sex", "dominance", "cruelty", "closeness", "trust", "respect", "intensity",
+        "archetypes", "archetype_summary", "archetype_extras_summary",
+        "likes", "dislikes", "hobbies", "personality_traits",
+        "age", "birthdate", "relationships", "memory", "schedule", "affiliations",
         "physical_description"
     ]
     npc_data = dict(zip(columns, row))
 
-    # parse JSON fields
-    json_fields = ["archetypes","likes","dislikes","hobbies","personality_traits","relationships","affiliations","memory","schedule"]
+    # Parse JSON fields
+    json_fields = ["archetypes", "likes", "dislikes", "hobbies", "personality_traits", "relationships", "affiliations", "memory", "schedule"]
     for fld in json_fields:
         val = npc_data.get(fld)
         if isinstance(val, str):
-            npc_data[fld] = json.loads(val or "[]") if fld != "schedule" else json.loads(val or "{}")
+            try:
+                npc_data[fld] = json.loads(val or "[]" if fld != "schedule" else val or "{}")
+            except Exception as ex:
+                logging.warning(f"[refine_npc_final_data] Failed to parse JSON field '{fld}': {ex}")
+                npc_data[fld] = [] if fld != "schedule" else {}
 
-    # 2) GPT prompt
+    logging.info(f"[refine_npc_final_data] Fetched NPC {npc_id} data: {npc_data.get('npc_name', 'Unknown')}")
+
+    # 2) Build GPT prompt
     prompt = f"""
 We have an NPC in a femdom environment. Current data:
 {json.dumps(npc_data, indent=2, default=str)}
@@ -1202,17 +1209,20 @@ Return only JSON with keys:
 
 No extra text or function calls.
 """
+    logging.info(f"[refine_npc_final_data] GPT Prompt for NPC {npc_id}: {prompt}")
 
+    # 3) Call GPT and process response
     raw_gpt = await asyncio.to_thread(
         get_chatgpt_response,
         conversation_id,
         environment_desc,
         prompt
     )
+    logging.info(f"[refine_npc_final_data] Raw GPT response for NPC {npc_id}: {raw_gpt}")
 
-    # parse GPT response
     if raw_gpt.get("type") == "function_call":
         result_dict = raw_gpt.get("function_args", {})
+        logging.info(f"[refine_npc_final_data] Function call result for NPC {npc_id}: {result_dict}")
     else:
         text = raw_gpt.get("response", "").strip()
         if text.startswith("```"):
@@ -1222,11 +1232,11 @@ No extra text or function calls.
             if lines and lines[-1].startswith("```"):
                 lines = lines[:-1]
             text = "\n".join(lines).strip()
-
         try:
             result_dict = json.loads(text)
+            logging.info(f"[refine_npc_final_data] Parsed GPT JSON for NPC {npc_id}: {result_dict}")
         except Exception as e:
-            logging.warning(f"[refine_npc_final_data] parse error: {e}")
+            logging.warning(f"[refine_npc_final_data] JSON parse error for NPC {npc_id}: {e}. Raw text: {text}")
             result_dict = {}
 
     physical_desc = result_dict.get("physical_description", "")
@@ -1235,7 +1245,9 @@ No extra text or function calls.
     affiliations = result_dict.get("affiliations", [])
     current_location = result_dict.get("current_location", "")
 
-    # Update DB
+    logging.info(f"[refine_npc_final_data] GPT parsed data for NPC {npc_id}: physical_desc: {physical_desc}, schedule: {schedule}, memory: {memories}, affiliations: {affiliations}, current_location: {current_location}")
+
+    # 4) Update DB with refined data
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -1254,12 +1266,14 @@ No extra text or function calls.
        current_location,
        user_id, conversation_id, npc_id
     ))
+    rows_updated = cur.rowcount
     conn.commit()
     conn.close()
+    logging.info(f"[refine_npc_final_data] DB update for NPC {npc_id} completed. Rows updated: {rows_updated}")
 
-    # Now replicate shared memories
+    # 5) Propagate shared memories
     npc_name = fetch_npc_name(user_id, conversation_id, npc_id) or "Unknown"
-    # <-- pass 'memories' instead of 'new_memories'
+    logging.info(f"[refine_npc_final_data] Propagating memories for NPC {npc_id} ({npc_name}). Memories: {memories}")
     propagate_shared_memories(
         user_id=user_id,
         conversation_id=conversation_id,
@@ -1268,13 +1282,12 @@ No extra text or function calls.
         memories=memories
     )
 
-    logging.info(f"[refine_npc_final_data] Updated NPC {npc_id} => physical_desc + schedule + memory.")
+    logging.info(f"[refine_npc_final_data] Updated NPC {npc_id} => physical_desc, schedule, memory, affiliations, and current_location.")
     return {
         "physical_description": physical_desc,
         "schedule": schedule,
         "memory": memories
     }
-
 async def spawn_single_npc(
     user_id: int,
     conversation_id: int,
