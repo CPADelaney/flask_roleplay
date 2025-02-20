@@ -1,4 +1,3 @@
-# main.py
 import os
 import logging
 from flask import Flask, render_template, request, session, jsonify, redirect
@@ -24,11 +23,8 @@ from db.connection import get_db_connection
 def create_celery_app():
     """
     Create and configure a single Celery app instance.
-
-    This is where you read environment variables for your broker, backend, etc.
-    That way, tasks.py can just import 'celery_app' instead of creating its own.
     """
-    # Retrieve the RabbitMQ (or Redis) URL from environment variables:
+    # Retrieve the RabbitMQ URL from environment variables
     RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
     
     celery_app = Celery("my_celery_app")
@@ -53,7 +49,7 @@ def create_flask_app():
     Create and configure the Flask application.
     """
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_dev_key")  # fallback for local dev
+    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_dev_key")
 
     # Enable CORS for all routes
     CORS(app)
@@ -74,7 +70,6 @@ def create_flask_app():
     # -----------------
     # Example Routes
     # -----------------
-
     @app.route("/chat")
     def chat_page():
         if "user_id" not in session:
@@ -105,8 +100,6 @@ def create_flask_app():
             return jsonify({"error": "Invalid username"}), 401
 
         user_id, password_hash = row
-        # NOTE: For real production, use a proper password hashing library.
-
         session["user_id"] = user_id
         return jsonify({"message": "Logged in", "user_id": user_id})
 
@@ -157,7 +150,6 @@ def create_flask_app():
         return jsonify({"message": "User registered successfully", "user_id": new_user_id})
 
     return app
-
 
 # Instantiate both Celery and Flask
 celery_app = create_celery_app()
