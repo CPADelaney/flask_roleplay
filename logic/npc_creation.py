@@ -1193,7 +1193,7 @@ We want to fill or adapt these fields:
 5. Keep it realistic or fitting to the setting.
 
 **MEMORY REQUIREMENTS**:
-- Provide at least three distinct memory entries referencing the relationships in 'npc_data["relationships"]' if relevant.
+- For each relationship, provide at least three distinct memory entries referencing the relationships in 'npc_data["relationships"]' if relevant.
 - Each memory is either: a short reference to a past event that reveals how these relationships formed, any relevant backstory, or a major/impactful event involving both parties.
 - Memories can be shared between 3 or more characters ONLY if they all have a relationship, and they must all have the memory.
 
@@ -1223,6 +1223,20 @@ No extra text or function calls.
     if raw_gpt.get("type") == "function_call":
         result_dict = raw_gpt.get("function_args", {})
         logging.info(f"[refine_npc_final_data] Function call result for NPC {npc_id}: {result_dict}")
+        # Check if the response includes npc_updates and extract from the first update.
+        if "npc_updates" in result_dict and isinstance(result_dict["npc_updates"], list) and result_dict["npc_updates"]:
+            npc_update = result_dict["npc_updates"][0]
+            physical_desc = npc_update.get("physical_description", "")
+            schedule = npc_update.get("schedule", {})
+            memories = npc_update.get("memory", [])
+            affiliations = npc_update.get("affiliations", [])
+            current_location = npc_update.get("current_location", "")
+        else:
+            physical_desc = result_dict.get("physical_description", "")
+            schedule = result_dict.get("schedule", {})
+            memories = result_dict.get("memory", [])
+            affiliations = result_dict.get("affiliations", [])
+            current_location = result_dict.get("current_location", "")
     else:
         text = raw_gpt.get("response", "").strip()
         if text.startswith("```"):
@@ -1238,14 +1252,17 @@ No extra text or function calls.
         except Exception as e:
             logging.warning(f"[refine_npc_final_data] JSON parse error for NPC {npc_id}: {e}. Raw text: {text}")
             result_dict = {}
+        physical_desc = result_dict.get("physical_description", "")
+        schedule = result_dict.get("schedule", {})
+        memories = result_dict.get("memory", [])
+        affiliations = result_dict.get("affiliations", [])
+        current_location = result_dict.get("current_location", "")
 
-    physical_desc = result_dict.get("physical_description", "")
-    schedule = result_dict.get("schedule", {})
-    memories = result_dict.get("memory", [])
-    affiliations = result_dict.get("affiliations", [])
-    current_location = result_dict.get("current_location", "")
+    logging.info(
+        f"[refine_npc_final_data] GPT parsed data for NPC {npc_id}: physical_desc: {physical_desc}, "
+        f"schedule: {schedule}, memory: {memories}, affiliations: {affiliations}, current_location: {current_location}"
+    )
 
-    logging.info(f"[refine_npc_final_data] GPT parsed data for NPC {npc_id}: physical_desc: {physical_desc}, schedule: {schedule}, memory: {memories}, affiliations: {affiliations}, current_location: {current_location}")
 
     # 4) Update DB with refined data
     conn = get_db_connection()
