@@ -2,20 +2,24 @@ version: '3'
 services:
   app:
     environment:
-      - DB_DSN=os.getenv("DB_DSN")
+      - DB_DSN=${DB_DSN}
+      - RABBITMQ_URL=${RABBITMQ_URL}
     build: .
     ports:
       - "8080:8080"
     depends_on:
       - rabbitmq
+
   rabbitmq:
     image: rabbitmq:3-management
     ports:
       - "5672:5672"
       - "15672:15672"
+
   celery_worker:
     environment:
-      - DB_DSN=os.getenv("DB_DSN")
+      - DB_DSN=${DB_DSN}
+      - RABBITMQ_URL=${RABBITMQ_URL}
     build: .
     command: celery -A tasks.celery_app worker --loglevel=info
     depends_on:
