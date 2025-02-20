@@ -134,16 +134,15 @@ def stream_openai_tokens_task(user_input, conversation_id):
                 if "content" in delta:
                     token_str = delta["content"]
                     partial_accumulator += token_str
-                    # Emit partial token to the specified conversation room
-                    socketio.emit("new_token", {"token": token_str}, room=conversation_id)
-        # After streaming, emit the final full text
-        socketio.emit("done", {"full_text": partial_accumulator}, room=conversation_id)
-        logging.info(f"Done streaming tokens for conversation: {conversation_id}")
-    except Exception as e:
-        logging.exception("Error streaming OpenAI tokens")
-        # Local import here as well in case of exception handling
-        from main import socketio
-        socketio.emit("error", {"error": str(e)}, room=conversation_id)
+                    try:
+                        socketio.emit("new_token", {"token": token_str}, room=conversation_id)
+                    except Exception as emit_err:
+                        logging.exception("Emit error (new_token): %s", emit_err)
+        try:
+            socketio.emit("done", {"full_text": partial_accumulator}, room=conversation_id)
+        except Exception as emit_err:
+            logging.exception("Emit error (done): %s", emit_err)
+
 
 @celery_app.task
 def process_storybeat_task(user_id, conversation_id, aggregator_text, user_input):
