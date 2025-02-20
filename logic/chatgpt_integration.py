@@ -9,18 +9,6 @@ from db.connection import get_db_connection
 from logic.prompts import SYSTEM_PROMPT
 from logic.json_helpers import safe_json_loads
 
-# logic/chatgpt_integration.py
-
-import os
-import json
-import logging
-import functools
-import time
-import openai
-from db.connection import get_db_connection
-from logic.prompts import SYSTEM_PROMPT
-from logic.json_helpers import safe_json_loads
-
 # Use your full schema, but add a "narrative" field at the top.
 UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
     "name": "apply_universal_update",
