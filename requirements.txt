@@ -2,15 +2,15 @@ uvicorn
 RabbitMQ
 
 Flask-SocketIO==5.5.1
-python-socketio==5.12.1
+flask-socketio[amqp]==5.5.1
 python-engineio==4.11.0
+python-socketio==5.12.1
 
 Flask[async]==2.3.2
 psycopg2-binary==2.9.6
 gunicorn
 python-dotenv==1.0.0
 flask-cors==4.0.0
-flask-socketio[amqp]==5.5.1
 
 eventlet
 kombu==5.2.4
