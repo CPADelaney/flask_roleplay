@@ -6,5 +6,7 @@ if [ "$SERVICE_TYPE" = "worker" ]; then
     exec celery -A tasks.celery_app worker --loglevel=INFO --concurrency=1
 else
     echo "Starting Web Server..."
-    exec gunicorn --bind 0.0.0.0:8080 --timeout 600 --worker-class uvicorn.workers.UvicornWorker main:app
+    # Use the Render provided PORT environment variable, fallback to 8080 if not set.
+    PORT=${PORT:-8080}
+    exec gunicorn --bind 0.0.0.0:$PORT --timeout 600 --worker-class uvicorn.workers.UvicornWorker main:app
 fi
