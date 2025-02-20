@@ -266,7 +266,7 @@ async def async_process_new_game(user_id, conversation_data):
     logging.info("=== Starting async_process_new_game for user_id=%s ===", user_id)
     provided_convo_id = conversation_data.get("conversation_id")
 
-    conn = await asyncpg.connect(dsn=DB_DSN)
+    conn = await asyncpg.connect(dsn=DB_DSN, statement_cache_size=0)
     try:
         # 1) Create or validate conversation
         if not provided_convo_id:
