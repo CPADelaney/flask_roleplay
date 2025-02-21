@@ -185,9 +185,13 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         name_instruction = f'Use the provided NPC name: "{provided_npc_name}".'
     else:
         name_instruction = (
-            "Generate a creative, unique, and fitting feminine name for the NPC. "
-            "The name must be unmistakably feminine—do not include any masculine honorifics or traditionally male names (e.g. 'Prince', 'Lord', 'Sir', 'Eduard'). "
-            "Do not use 'Seraphina', and ensure the name is not the same as any previously generated name."
+                "Generate a creative, extremely unique, and varied feminine name for the NPC. "
+                "The name must be unmistakably feminine and should not be a common or overused name. "
+                "Do not use any names that are frequently repeated in this game (for example, do not use 'Seraphina', 'Veronica', or similar names). "
+                "Instead, invent a name that is entirely original, unexpected, and richly evocative of a fantastical, mythological, or diverse cultural background that makes sense for the setting and the character (Eg., Isis, Artemis, Megan, Thoth, Cassandra, Mizuki, etc.). "
+                "Ensure that the name is unlike any generated previously in this playthrough. "
+                "Output strictly valid JSON with exactly one key: 'npc_name', whose value is the generated name as a string. "
+                "Do not include any extra commentary, formatting, or additional keys."
         )
 
     system_prompt = (
@@ -1007,22 +1011,37 @@ async def add_archetype_to_npc(user_id, conversation_id, npc_id, new_arc):
 ###################
 # 8) assign_random_relationships (RE-ADDED)
 ###################
-async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_name):
+async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_npc_name, npc_archetypes=None):
+    logging.info(f"[assign_random_relationships] Assigning relationships for NPC {new_npc_id} ({new_npc_name})")
     import random
 
-    # Possibly some relationship labels...
+    relationships = []
+
+    # Automatically add familial relationships based on NPC archetypes
+    familial_set = {"mother", "stepmother", "aunt", "older sister", "stepsister", "babysitter"}
+    if npc_archetypes:
+        for arc in npc_archetypes:
+            arc_name = arc.get("name", "").strip().lower()
+            if arc_name in familial_set:
+                # Automatically add a relationship from this NPC to the player
+                relationships.append({
+                    "target_entity_type": "player",
+                    "target_entity_id": user_id,  # player ID
+                    "relationship_label": arc_name  # e.g., "aunt"
+                })
+                logging.info(f"[assign_random_relationships] Automatically added familial relationship '{arc_name}' for NPC {new_npc_id} to player.")
+
+    # Existing random relationship assignment:
     familial = ["mother", "sister", "aunt"]
     non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
                     "colleague", "classmate", "teammate", "underling", "thrall", "rival"]
 
-    relationships = []
-
-    # 1) Maybe 50% chance to relate with the player
+    # 1) Maybe 50% chance to relate with the player (in addition to familial)
     if random.random() < 0.5:
         rel_type = random.choice(familial) if random.random() < 0.2 else random.choice(non_familial)
         relationships.append({
             "target_entity_type": "player",
-            "target_entity_id": user_id,  # store your user_id 
+            "target_entity_id": user_id,
             "relationship_label": rel_type
         })
 
@@ -1032,8 +1051,7 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
     cursor.execute("""
         SELECT npc_id, npc_name, archetype_summary
         FROM NPCStats
-        WHERE user_id=%s AND conversation_id=%s
-          AND npc_id!=%s
+        WHERE user_id=%s AND conversation_id=%s AND npc_id!=%s
     """, (user_id, conversation_id, new_npc_id))
     rows = cursor.fetchall()
     conn.close()
@@ -1051,16 +1069,14 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
                 "target_archetype_summary": old_arche_summary or ""
             })
 
-    # 4) Actually create them
+    # 4) Actually create them (existing logic remains unchanged)
     for rel in relationships:
-        # Possibly build some memory text:
         memory_text = get_shared_memory(user_id, conversation_id, rel, new_npc_name)
         record_npc_event(user_id, conversation_id, new_npc_id, memory_text)
 
         from logic.social_links import create_social_link
         from logic.npc_creation import dynamic_reciprocal_relationship
 
-        # If the target is a player:
         if rel["target_entity_type"] == "player":
             create_social_link(
                 user_id, conversation_id,
@@ -1068,7 +1084,6 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
                 entity2_type="player", entity2_id=rel["target_entity_id"],
                 link_type=rel["relationship_label"]
             )
-            # Save it to NPCStats relationships JSON
             await asyncio.to_thread(
                 append_relationship_to_npc,
                 user_id, conversation_id,
@@ -1076,11 +1091,8 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
                 rel["relationship_label"],
                 "player", rel["target_entity_id"]
             )
-
         else:
-            # It's another NPC
             old_npc_id = rel["target_entity_id"]
-            # new npc -> old npc
             create_social_link(
                 user_id, conversation_id,
                 entity1_type="npc", entity1_id=new_npc_id,
@@ -1094,11 +1106,9 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
                 rel["relationship_label"],
                 "npc", old_npc_id
             )
-
-            # reciprocal
             rec_type = dynamic_reciprocal_relationship(
                 rel["relationship_label"],
-                rel.get("target_archetype_summary","")
+                rel.get("target_archetype_summary", "")
             )
             create_social_link(
                 user_id, conversation_id,
@@ -1114,7 +1124,7 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
                 "npc", new_npc_id
             )
 
-    logging.info(f"[assign_random_relationships] Done building relationships for NPC {new_npc_id}.")
+    logging.info(f"[assign_random_relationships] Finished relationships for NPC {new_npc_id}.")
 
 import re
 
@@ -1479,40 +1489,19 @@ If you absolutely cannot comply, return an empty JSON object {{}}.
         "current_location": current_loc
     }
 
-async def spawn_single_npc(
-    user_id: int,
-    conversation_id: int,
-    environment_desc: str,
-    day_names: list
-) -> int:
-    """
-    1) Create partial NPC (archetypes, stats, likes).
-    2) Insert stub in DB => get npc_id.
-    3) Assign random relationships => references npc_id.
-    4) Final GPT call => produce physical_description, schedule, memory referencing relationships.
-    5) Return npc_id
-    """
-    # IMPORTANT: pass environment_desc to create_npc_partial!
-    partial_npc = create_npc_partial(
-        user_id=user_id,
-        conversation_id=conversation_id,
-        sex="female",
-        total_archetypes=4,
-        environment_desc=environment_desc
-    )
-
-    # 2) Insert => npc_id
+async def spawn_single_npc(user_id: int, conversation_id: int, environment_desc: str, day_names: list) -> int:
+    logging.info("[spawn_single_npc] Starting spawn for a new NPC.")
+    partial_npc = create_npc_partial(user_id, conversation_id, sex="female", total_archetypes=4, environment_desc=environment_desc)
+    logging.info(f"[spawn_single_npc] Partial NPC created: {partial_npc}")
     npc_id = await insert_npc_stub_into_db(partial_npc, user_id, conversation_id)
-
-    # 3) Assign relationships
-    await assign_random_relationships(user_id, conversation_id, npc_id, partial_npc["npc_name"])
-
-    # 4) Final call => physical_description, schedule, memory
+    logging.info(f"[spawn_single_npc] NPC stub inserted with ID: {npc_id}")
+    # Pass partial_npc["archetypes"] to assign_random_relationships
+    await assign_random_relationships(user_id, conversation_id, npc_id, partial_npc["npc_name"], partial_npc.get("archetypes", []))
+    logging.info(f"[spawn_single_npc] Relationships assigned for NPC ID: {npc_id}")
     await refine_npc_final_data(user_id, conversation_id, npc_id, day_names, environment_desc)
-
-    logging.info(f"[spawn_single_npc] NPC {partial_npc['npc_name']} (ID={npc_id}) done.")
+    logging.info(f"[spawn_single_npc] Final refinement completed for NPC ID: {npc_id}")
     return npc_id
-
+    
 ###################
 # 11) Spawn multiple NPCs
 ###################
