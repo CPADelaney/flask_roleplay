@@ -1328,7 +1328,7 @@ No extra text or function calls. If you can't comply, return "{{}}".
         get_chatgpt_response,
         conversation_id,
         environment_desc,
-        prompt
+        system_prompt
     )
     logging.info(f"[refine_npc_final_data] Raw GPT => {raw_gpt}")
 
