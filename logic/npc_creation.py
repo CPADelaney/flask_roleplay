@@ -1219,7 +1219,7 @@ No extra text or function calls.
         prompt
     )
     logging.info(f"[refine_npc_final_data] Raw GPT response for NPC {npc_id}: {raw_gpt}")
-
+    
     if raw_gpt.get("type") == "function_call":
         result_dict = raw_gpt.get("function_args", {})
         logging.info(f"[refine_npc_final_data] Function call result for NPC {npc_id}: {result_dict}")
@@ -1255,7 +1255,6 @@ No extra text or function calls.
         memories = result_dict.get("memory", [])
         affiliations = result_dict.get("affiliations", [])
         current_location = result_dict.get("current_location", "")
-
 
     logging.info(
         f"[refine_npc_final_data] GPT parsed data for NPC {npc_id}: physical_desc: {physical_desc}, "
