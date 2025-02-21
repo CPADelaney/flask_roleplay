@@ -1219,22 +1219,32 @@ No extra text or function calls.
         prompt
     )
     logging.info(f"[refine_npc_final_data] Raw GPT response for NPC {npc_id}: {raw_gpt}")
-    
+        
     if raw_gpt.get("type") == "function_call":
         result_dict = raw_gpt.get("function_args", {})
         logging.info(f"[refine_npc_final_data] Function call result for NPC {npc_id}: {result_dict}")
-        # Check for npc_updates first; if empty, check npc_creations.
+        
+        npc_creation = {}
+        npc_update = {}
+        if "npc_creations" in result_dict and isinstance(result_dict["npc_creations"], list) and result_dict["npc_creations"]:
+            npc_creation = result_dict["npc_creations"][0]
         if "npc_updates" in result_dict and isinstance(result_dict["npc_updates"], list) and result_dict["npc_updates"]:
             npc_update = result_dict["npc_updates"][0]
-        elif "npc_creations" in result_dict and isinstance(result_dict["npc_creations"], list) and result_dict["npc_creations"]:
-            npc_update = result_dict["npc_creations"][0]
-        else:
-            npc_update = {}
-        physical_desc = npc_update.get("physical_description", "")
-        schedule = npc_update.get("schedule", {})
-        memories = npc_update.get("memory", [])
-        affiliations = npc_update.get("affiliations", [])
-        current_location = npc_update.get("current_location", "")
+        
+        # Merge fields: if npc_update has a non-empty value, use it; otherwise, fall back to npc_creation.
+        def merge_field(field, default):
+            update_val = npc_update.get(field)
+            creation_val = npc_creation.get(field)
+            # Check for empty values (you might adjust this check as needed)
+            if update_val not in [None, "", {}, []]:
+                return update_val
+            return creation_val if creation_val is not None else default
+    
+        physical_desc   = merge_field("physical_description", "")
+        schedule        = merge_field("schedule", {})
+        memories        = merge_field("memory", [])
+        affiliations    = merge_field("affiliations", [])
+        current_location = merge_field("current_location", "")
     else:
         text = raw_gpt.get("response", "").strip()
         if text.startswith("```"):
@@ -1250,11 +1260,12 @@ No extra text or function calls.
         except Exception as e:
             logging.warning(f"[refine_npc_final_data] JSON parse error for NPC {npc_id}: {e}. Raw text: {text}")
             result_dict = {}
-        physical_desc = result_dict.get("physical_description", "")
-        schedule = result_dict.get("schedule", {})
-        memories = result_dict.get("memory", [])
-        affiliations = result_dict.get("affiliations", [])
+        physical_desc   = result_dict.get("physical_description", "")
+        schedule        = result_dict.get("schedule", {})
+        memories        = result_dict.get("memory", [])
+        affiliations    = result_dict.get("affiliations", [])
         current_location = result_dict.get("current_location", "")
+
 
     logging.info(
         f"[refine_npc_final_data] GPT parsed data for NPC {npc_id}: physical_desc: {physical_desc}, "
