@@ -1116,18 +1116,143 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
 
     logging.info(f"[assign_random_relationships] Done building relationships for NPC {new_npc_id}.")
 
+import re
+
+def parse_bullet_schedule_from_narrative(text: str, day_names: list) -> dict:
+    """
+    1) Finds bullet-list schedule blocks in 'text' that look like:
+         - **SOMEDAY**:
+           - Morning: ...
+           - Afternoon: ...
+           - Evening: ...
+           - Night: ...
+    2) Maps each block (in order of appearance) onto the given day_names array.
+    3) If fewer blocks than day_names, fill leftover days with "Free time".
+    4) Returns a dict:
+       {
+         "Commandday": {"morning": "...", "afternoon": "...", ...},
+         "Bindday": {...},
+         ...
+       }
+    """
+
+    # Regex for a day heading:   - **SOMEDAY**:
+    day_heading_pattern = re.compile(r"^- \*\*(.+?)\*\*:\s*$")
+    # Regex for timeslots:      - Morning: some text
+    timeslot_pattern = re.compile(r"^- (Morning|Afternoon|Evening|Night):\s*(.*)$", re.IGNORECASE)
+
+    lines = text.splitlines()
+    blocks = []
+    current_block = None
+
+    for line in lines:
+        line = line.strip()
+
+        # 1) Check if this starts a new day block
+        day_match = day_heading_pattern.match(line)
+        if day_match:
+            # If we were building a block, store it
+            if current_block is not None:
+                blocks.append(current_block)
+            # Start a new block
+            current_block = {
+                "title": day_match.group(1),  # e.g. "Obedience" or "Deference"
+                "slots": {}
+            }
+            continue
+
+        # 2) Timeslot lines inside a block
+        if current_block is not None:
+            slot_match = timeslot_pattern.match(line)
+            if slot_match:
+                slot_time = slot_match.group(1).lower()  # morning, afternoon, etc.
+                slot_desc = slot_match.group(2).strip()
+                current_block["slots"][slot_time] = slot_desc
+
+    # End of file: store the last block if it exists
+    if current_block is not None:
+        blocks.append(current_block)
+
+    schedule = {}
+    # Map discovered blocks to our day_names in order
+    for i, block in enumerate(blocks):
+        if i >= len(day_names):
+            break
+        day_label = day_names[i]
+        sub_dict = {}
+        for t in ["morning", "afternoon", "evening", "night"]:
+            sub_dict[t] = block["slots"].get(t, "Free time")
+        schedule[day_label] = sub_dict
+
+    # If GPT gave fewer blocks, fill the rest with “Free time”
+    if len(blocks) < len(day_names):
+        for i in range(len(blocks), len(day_names)):
+            day_label = day_names[i]
+            schedule[day_label] = {
+                "morning": "Free time",
+                "afternoon": "Free time",
+                "evening": "Free time",
+                "night": "Free time",
+            }
+
+    return schedule
+
+
+def parse_bullet_relationships_from_narrative(text: str) -> list:
+    """
+    A quick example that finds lines like:
+        - Relationship with (ID 123): Rival
+        - Relationship with (ID 999): Friend
+      Then returns an array of relationship objects:
+        [
+          {
+            "entity_id": 123,
+            "entity_type": "npc",   # or "player" if you want to detect that
+            "relationship_label": "Rival"
+          },
+          ...
+        ]
+    You can adapt the regex to match your exact bullet style.
+    """
+
+    # e.g.:  - Relationship with (ID 42): Rival
+    rel_pattern = re.compile(r"^- Relationship with \(ID\s+(\d+)\):\s*(.+)$", re.IGNORECASE)
+    relationships = []
+
+    lines = text.splitlines()
+    for line in lines:
+        line = line.strip()
+        match = rel_pattern.match(line)
+        if match:
+            # The ID number
+            ent_id_str = match.group(1)
+            relationship_label = match.group(2).strip()
+            try:
+                ent_id = int(ent_id_str)
+            except ValueError:
+                ent_id = 0  # fallback if can't parse
+
+            # For simplicity, assume entity_type = "npc"
+            # You can parse the line if you want to detect "player"
+            relationships.append({
+                "entity_id": ent_id,
+                "entity_type": "npc",
+                "relationship_label": relationship_label
+            })
+
+    return relationships
+
+
 async def refine_npc_final_data(user_id: int, conversation_id: int, npc_id: int, day_names: list, environment_desc: str):
     """
-    1) Fetch the now-updated NPC from DB (with relationships).
-    2) GPT to generate:
-       - physical_description
-       - schedule
-       - memory
-       - affiliations
-       - current_location
-    3) Update DB with them.
+    1) Fetch the existing NPC data from DB (including relationships).
+    2) Prompt GPT for physical_description, schedule, memory, affiliations, current_location.
+    3) If GPT's "schedule" is empty, parse from bullet-lists in the raw text (fallback).
+    4) If GPT's "relationships" is missing, also parse from bullet-lists (fallback).
+    5) Store the final data in the DB, propagate memories, done.
     """
-    # 1) Fetch current NPC record
+
+    # 1) Load from DB
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -1136,7 +1261,7 @@ async def refine_npc_final_data(user_id: int, conversation_id: int, npc_id: int,
               archetypes, archetype_summary, archetype_extras_summary,
               likes, dislikes, hobbies, personality_traits,
               age, birthdate, relationships, memory, schedule,
-              physical_description
+              affiliations, physical_description
        FROM NPCStats
        WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
        LIMIT 1
@@ -1148,172 +1273,189 @@ async def refine_npc_final_data(user_id: int, conversation_id: int, npc_id: int,
         logging.warning(f"[refine_npc_final_data] NPC {npc_id} not found.")
         return
 
+    # Build a dictionary from columns
     columns = [
         "npc_name", "introduced", "sex", "dominance", "cruelty", "closeness", "trust", "respect", "intensity",
         "archetypes", "archetype_summary", "archetype_extras_summary",
         "likes", "dislikes", "hobbies", "personality_traits",
-        "age", "birthdate", "relationships", "memory", "schedule", "affiliations",
-        "physical_description"
+        "age", "birthdate", "relationships", "memory", "schedule",
+        "affiliations", "physical_description"
     ]
     npc_data = dict(zip(columns, row))
 
-    # Parse JSON fields
-    json_fields = ["archetypes", "likes", "dislikes", "hobbies", "personality_traits", "relationships", "affiliations", "memory", "schedule"]
+    # Convert DB JSON strings => Python objects
+    json_fields = ["archetypes", "likes", "dislikes", "hobbies", "personality_traits", 
+                   "relationships", "affiliations", "memory", "schedule"]
     for fld in json_fields:
         val = npc_data.get(fld)
         if isinstance(val, str):
             try:
-                npc_data[fld] = json.loads(val or "[]" if fld != "schedule" else val or "{}")
+                if fld == "schedule":
+                    npc_data[fld] = json.loads(val or "{}")
+                else:
+                    npc_data[fld] = json.loads(val or "[]")
             except Exception as ex:
-                logging.warning(f"[refine_npc_final_data] Failed to parse JSON field '{fld}': {ex}")
-                npc_data[fld] = [] if fld != "schedule" else {}
+                logging.warning(f"[refine_npc_final_data] Could not parse JSON {fld}: {ex}")
+                npc_data[fld] = {} if fld == "schedule" else []
 
-    logging.info(f"[refine_npc_final_data] Fetched NPC {npc_id} data: {npc_data.get('npc_name', 'Unknown')}")
+    logging.info(f"[refine_npc_final_data] Fetched NPC {npc_id} => {npc_data.get('npc_name')}")
 
-    # 2) Build GPT prompt
-    prompt = f"""
+    # 2) Build the GPT prompt
+    system_prompt = f"""
 We have an NPC in a femdom environment. Current data:
-{json.dumps(npc_data, indent=2, default=str)}
+{json.dumps(npc_data, indent=2)}
 
-Environment description:
+Environment:
 {environment_desc}
 
-We want to fill or adapt these fields:
-  - physical_description,
-  - schedule (using day names => {day_names}),
-  - affiliations (e.g. clubs, secret societies, workplaces, or other groups the NPC is a member of),
-  - memory (past events),
-  - current_location
-
-**SCHEDULE REQUIREMENTS**:
-1. Use EXACTLY these day names in this order: {', '.join(day_names)}.
-2. For each day, provide "morning", "afternoon", "evening", and "night".
-3. Avoid giving the same location/activity in all four time-slots.
-4. Reflect the NPC’s likes, dislikes, hobbies, archetypes, and relationships.
-5. Keep it realistic or fitting to the setting.
-
-**MEMORY REQUIREMENTS**:
-- For each relationship, provide at least three distinct memory entries referencing the relationships in 'npc_data["relationships"]' if relevant.
-- Each memory is either: a short reference to a past event that reveals how these relationships formed, any relevant backstory, or a major/impactful event involving both parties.
-- Memories can be shared between 3 or more characters ONLY if they all have a relationship, and they must all have the memory.
-
-**PHYSICAL DESCRIPTION**:
-- Over-the-top curvaceous (inspired by M-size games). Almost comical level of boobs/ass, but keep it in-lore.
-
-Return only JSON with keys:
+We want strictly valid JSON with keys:
   "physical_description",
   "schedule",
   "memory",
   "affiliations",
   "current_location"
 
-No extra text or function calls.
+**SCHEDULE** => must use day_names: {day_names}, each day has "morning"/"afternoon"/"evening"/"night".
+**RELATIONSHIPS** => if you mention them, put them in the final JSON's "relationships" key if possible.
+**MEMORY** => short references to past events, at least 3 per relationship if relevant.
+No extra text or function calls. If you can't comply, return "{{}}".
 """
-    logging.info(f"[refine_npc_final_data] GPT Prompt for NPC {npc_id}: {prompt}")
 
-    # 3) Call GPT and process response
+    # 3) Call GPT
+    # 'get_chatgpt_response' is your internal logic that returns something like:
+    #   {"type": "function_call", "function_args": {...}} or {"response": "..."}
     raw_gpt = await asyncio.to_thread(
         get_chatgpt_response,
         conversation_id,
         environment_desc,
         prompt
     )
-    logging.info(f"[refine_npc_final_data] Raw GPT response for NPC {npc_id}: {raw_gpt}")
-        
+    logging.info(f"[refine_npc_final_data] Raw GPT => {raw_gpt}")
+
+    # We'll read the raw text for fallback parse
+    text_response = raw_gpt.get("response", "")
+
+    # Step A: If GPT used function_call, we parse from function_args
     if raw_gpt.get("type") == "function_call":
-        result_dict = raw_gpt.get("function_args", {})
-        logging.info(f"[refine_npc_final_data] Function call result for NPC {npc_id}: {result_dict}")
-        
+        function_args = raw_gpt.get("function_args", {})
+        # Possibly store the 'narrative' in text_response, for fallback
+        if "narrative" in function_args:
+            text_response = function_args["narrative"]
+
+        # Try to gather final data from "npc_creations" or "npc_updates"
         npc_creation = {}
         npc_update = {}
-        if "npc_creations" in result_dict and isinstance(result_dict["npc_creations"], list) and result_dict["npc_creations"]:
-            npc_creation = result_dict["npc_creations"][0]
-        if "npc_updates" in result_dict and isinstance(result_dict["npc_updates"], list) and result_dict["npc_updates"]:
-            npc_update = result_dict["npc_updates"][0]
-        
-        # Merge fields: if npc_update has a non-empty value, use it; otherwise, fall back to npc_creation.
-        def merge_field(field, default):
-            update_val = npc_update.get(field)
-            creation_val = npc_creation.get(field)
-            # Check for empty values (you might adjust this check as needed)
-            if update_val not in [None, "", {}, []]:
-                return update_val
-            return creation_val if creation_val is not None else default
-    
-        physical_desc   = merge_field("physical_description", "")
-        schedule        = merge_field("schedule", {})
-        memories        = merge_field("memory", [])
-        affiliations    = merge_field("affiliations", [])
-        current_location = merge_field("current_location", "")
+        if "npc_creations" in function_args and isinstance(function_args["npc_creations"], list):
+            if function_args["npc_creations"]:
+                npc_creation = function_args["npc_creations"][0]
+        if "npc_updates" in function_args and isinstance(function_args["npc_updates"], list):
+            if function_args["npc_updates"]:
+                npc_update = function_args["npc_updates"][0]
+
+        def merge_field(field, fallback):
+            # use npc_update if present, else npc_creation, else fallback
+            val_u = npc_update.get(field)
+            val_c = npc_creation.get(field)
+            if val_u not in [None, "", {}, []]:
+                return val_u
+            if val_c not in [None, "", {}, []]:
+                return val_c
+            return fallback
+
+        physical_desc = merge_field("physical_description", "")
+        schedule_obj  = merge_field("schedule", {})
+        memories      = merge_field("memory", [])
+        affiliations  = merge_field("affiliations", [])
+        current_loc   = merge_field("current_location", "")
+        # relationships = merge_field("relationships", [])  # If GPT used that key
+        # but "relationships" might not be present at all
+
+        # If "relationships" is missing, parse from the text fallback
+        relationships = npc_update.get("relationships", npc_creation.get("relationships", []))
+        if not relationships:  # fallback parse from text
+            relationships = parse_bullet_relationships_from_narrative(text_response)
+
     else:
-        text = raw_gpt.get("response", "").strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
+        # Step B: If normal chat, parse 'response' as JSON
+        raw_text = text_response.strip()
+        if raw_text.startswith("```"):
+            # remove triple fences
+            lines = raw_text.splitlines()
             if lines and lines[0].startswith("```"):
                 lines = lines[1:]
             if lines and lines[-1].startswith("```"):
                 lines = lines[:-1]
-            text = "\n".join(lines).strip()
+            raw_text = "\n".join(lines).strip()
+
         try:
-            result_dict = json.loads(text)
-            logging.info(f"[refine_npc_final_data] Parsed GPT JSON for NPC {npc_id}: {result_dict}")
+            result_dict = json.loads(raw_text)
         except Exception as e:
-            logging.warning(f"[refine_npc_final_data] JSON parse error for NPC {npc_id}: {e}. Raw text: {text}")
+            logging.warning(f"[refine_npc_final_data] JSON parse error => {e}. Raw: {raw_text}")
             result_dict = {}
-        physical_desc   = result_dict.get("physical_description", "")
-        schedule        = result_dict.get("schedule", {})
-        memories        = result_dict.get("memory", [])
-        affiliations    = result_dict.get("affiliations", [])
-        current_location = result_dict.get("current_location", "")
 
+        physical_desc = result_dict.get("physical_description", "")
+        schedule_obj  = result_dict.get("schedule", {})
+        memories      = result_dict.get("memory", [])
+        affiliations  = result_dict.get("affiliations", [])
+        current_loc   = result_dict.get("current_location", "")
+        relationships = result_dict.get("relationships", [])
 
-    logging.info(
-        f"[refine_npc_final_data] GPT parsed data for NPC {npc_id}: physical_desc: {physical_desc}, "
-        f"schedule: {schedule}, memory: {memories}, affiliations: {affiliations}, current_location: {current_location}"
-    )
+        if not relationships:
+            # fallback parse from bullet lines
+            relationships = parse_bullet_relationships_from_narrative(text_response)
 
+    # 4) Fallback parse for schedule if empty
+    if not schedule_obj:
+        fallback_schedule = parse_bullet_schedule_from_narrative(text_response, day_names)
+        if fallback_schedule:
+            schedule_obj = fallback_schedule
 
-    # 4) Update DB with refined data
+    # Now we have final physical_desc, schedule_obj, memories, affiliations, current_loc, relationships
+    logging.info(f"[refine_npc_final_data] final => schedule: {list(schedule_obj.keys())}, rel count={len(relationships)}")
+
+    # 5) Update DB
     conn = get_db_connection()
     cur = conn.cursor()
+    # Convert your 'relationships' to JSON
+    # if your DB has a 'relationships' column, store them
+    rel_json = json.dumps(relationships)
     cur.execute("""
        UPDATE NPCStats
        SET physical_description=%s,
            schedule=%s,
            memory=%s,
            affiliations=%s,
-           current_location=%s
+           current_location=%s,
+           relationships=%s
        WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
     """, (
        physical_desc,
-       json.dumps(schedule),
+       json.dumps(schedule_obj),
        json.dumps(memories),
        json.dumps(affiliations),
-       current_location,
+       current_loc,
+       rel_json,
        user_id, conversation_id, npc_id
     ))
     rows_updated = cur.rowcount
     conn.commit()
     conn.close()
-    logging.info(f"[refine_npc_final_data] DB update for NPC {npc_id} completed. Rows updated: {rows_updated}")
 
-    # 5) Propagate shared memories
+    # 6) Propagate shared memories
     npc_name = fetch_npc_name(user_id, conversation_id, npc_id) or "Unknown"
-    logging.info(f"[refine_npc_final_data] Propagating memories for NPC {npc_id} ({npc_name}). Memories: {memories}")
-    propagate_shared_memories(
-        user_id=user_id,
-        conversation_id=conversation_id,
-        source_npc_id=npc_id,
-        source_npc_name=npc_name,
-        memories=memories
-    )
+    logging.info(f"[refine_npc_final_data] Propagating memories for {npc_name}. mem={len(memories)}")
+    propagate_shared_memories(user_id, conversation_id, npc_id, npc_name, memories)
 
-    logging.info(f"[refine_npc_final_data] Updated NPC {npc_id} => physical_desc, schedule, memory, affiliations, and current_location.")
+    logging.info(f"[refine_npc_final_data] NPC {npc_id} updated => schedule, memory, relationships, location, desc.")
     return {
         "physical_description": physical_desc,
-        "schedule": schedule,
-        "memory": memories
+        "schedule": schedule_obj,
+        "memory": memories,
+        "affiliations": affiliations,
+        "relationships": relationships,
+        "current_location": current_loc
     }
+
 async def spawn_single_npc(
     user_id: int,
     conversation_id: int,
