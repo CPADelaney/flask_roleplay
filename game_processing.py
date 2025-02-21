@@ -476,7 +476,8 @@ async def async_process_new_game(user_id, conversation_data):
         first_day_name = day_names[0] if day_names else "the first day"
         opening_prompt = (
             "Nyx, your darkly seductive narrator, speaks with a tone that is inviting, seductive, and laced with innuendo and subtle hints of control. "
-            "Nyx is going to introduce the player to this roleplay, breaking down her response into easily digestible sections."
+            "Nyx is going to introduce the player to this roleplay, breaking down her response into easily digestible sections. "
+            "The sections should be clear and labeled, with intuitive formatting. "
             "Below is the current state of your world, which includes a vivid description of the environment, "
             "your detailed daily schedule, and the profiles and relationships of key NPCs:\n\n"
             f"{aggregator_text}\n\n"
@@ -484,10 +485,10 @@ async def async_process_new_game(user_id, conversation_data):
             "Describe the environment in lush, evocative detail, revealing the everyday beauty and routine while hinting at deeper, hidden dynamics of dominance. "
             "Introduce familiar NPCs with whom Chase shares pre-existing relationships, suggesting bonds forged through past encounters, "
             "and outline his schedule for the day in a way that feels natural and immersive. "
-            "Let the narrative gradually build intrigue, gently teasing the subtle femdom themes that will unfold as the day progresses."
+            "Let the narrative gradually build intrigue, gently teasing the subtle femdom themes that will unfold as the day progresses. "
             "Conclude your narrative naturally by depicting Chase either setting out on his journey or arriving at his scheduled location for the morning, "
             "capturing the anticipation and quiet resolve as he steps into the unfolding day. "
-            "Make sure he understands his motivation for going to his destination."
+            "Make sure he understands his motivation for going to his destination. "
             "Keep the tone natural, immersive, and slightly teasing, avoiding explicit gameplay mechanics."
         )
         final_reply = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, opening_prompt)
