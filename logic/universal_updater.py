@@ -1,27 +1,72 @@
-# logic/universal_updater.py
-
 import json
 import logging
 import asyncpg
-from datetime import datetime, date  # <-- Make sure we have both
-from logic.npc_creation import create_npc_partial, insert_npc_stub_into_db
+from datetime import datetime, date
+
+from logic.npc_creation import (
+    create_npc_partial,
+    insert_npc_stub_into_db,
+    recalc_npc_stats_with_new_archetypes,
+    refine_npc_final_data
+)
 from logic.social_links import (
     get_social_link, create_social_link,
     update_link_type_and_level, add_link_event
 )
 
+#############################
+# 1) Helper to normalize smart quotes
+#############################
+def normalize_smart_quotes_inplace(obj):
+    """
+    Recursively replaces curly quotes/apostrophes with straight ASCII quotes
+    in all strings within a nested dict/list structure.
+    """
+    if isinstance(obj, dict):
+        for k in list(obj.keys()):
+            obj[k] = normalize_smart_quotes_inplace(obj[k])
+        return obj
+    elif isinstance(obj, list):
+        return [normalize_smart_quotes_inplace(x) for x in obj]
+    elif isinstance(obj, str):
+        return (
+            obj.replace("’", "'")
+               .replace("‘", "'")
+               .replace("“", '"')
+               .replace("”", '"')
+        )
+    else:
+        return obj
+
+
 async def apply_universal_updates_async(user_id, conversation_id, data, conn) -> dict:
+    """
+    Applies universal data updates from a GPT or user-provided payload, 
+    with partial affiliation merges, curly-quote cleanup, and an optional
+    "refine NPC data" pass at the end.
+    """
     try:
-        logging.info("=== [apply_universal_updates_async] Incoming data ===")
+        # -----------------------------------------------------------
+        # (5) Normalize curly quotes in the entire incoming data dict
+        # -----------------------------------------------------------
+        data = normalize_smart_quotes_inplace(data)
+
+        logging.info("=== [apply_universal_updates_async] Incoming data (after normalization) ===")
         logging.info(json.dumps(data, indent=2))
 
-        # Use provided parameters if keys are missing in the payload
         data_user_id = data.get("user_id", user_id)
         data_conv_id = data.get("conversation_id", conversation_id)
-        # Optionally, if you still want to enforce that these exist:
         if not data_user_id or not data_conv_id:
             logging.error("Missing user_id or conversation_id in universal_update data.")
             return {"error": "Missing user_id or conversation_id in universal_update"}
+
+        # Pull out day_names & environment_desc if you need them for refining
+        # (some flows store them in roleplay_updates; adjust as needed)
+        day_names = data.get("day_names", ["Commandday","Bindday","Chastiseday","Overlorday","Submissday","Whipday","Obeyday"])
+        environment_desc = data.get("environment_desc", "A corporate gothic environment")
+
+        # Keep track of NPCs we might re-refine after updates
+        npcs_to_refine = set()
 
         # 1) Process roleplay_updates
         rp_updates = data.get("roleplay_updates", {})
@@ -43,10 +88,9 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
         npc_creations = data.get("npc_creations", [])
         logging.info(f"[universal_updater] npc_creations => count={len(npc_creations)}")
         for npc_data in npc_creations:
-            # Get the proposed NPC name and other basic overrides
             name = npc_data.get("npc_name", "Unnamed NPC")
             introduced = npc_data.get("introduced", False)
-            # Check if an NPC with the same (case-insensitive) name already exists:
+
             row = await conn.fetchrow(
                 """
                 SELECT npc_id FROM NPCStats
@@ -61,21 +105,14 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                 )
                 continue
 
-            # Determine environment description; default if not provided:
-            environment_desc = npc_data.get("environment_desc", "A default environment")
-
-            # Use your centralized function to create a full NPC dictionary.
-            # This function builds all required keys (e.g., birthdate, stats, archetypes, etc.)
+            environment_override = npc_data.get("environment_desc", environment_desc)
             partial_npc = create_npc_partial(
                 user_id=user_id,
                 conversation_id=conversation_id,
                 sex=npc_data.get("sex", "female"),
-                environment_desc=environment_desc
+                environment_desc=environment_override
             )
 
-            # Merge any overrides provided in npc_data into the generated NPC.
-            # This ensures that if universal_update payload contains custom fields,
-            # they will override the defaults.
             override_keys = [
                 "npc_name", "introduced", "sex", "dominance", "cruelty", "closeness",
                 "trust", "respect", "intensity", "archetypes", "archetype_summary",
@@ -89,10 +126,10 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
             logging.info(
                 f"[universal_updater] Inserting new NPC '{partial_npc['npc_name']}' with birthdate={partial_npc.get('birthdate')}"
             )
-
-            # Use the same DB insert helper as used in npc_creation
-            # (The helper inserts all the standard fields and defaults for relationships, memory, schedule, etc.)
-            await insert_npc_stub_into_db(partial_npc, user_id, conversation_id)
+            new_npc_id = await insert_npc_stub_into_db(partial_npc, user_id, conversation_id)
+            # Mark for refining if the user wants
+            # (You could auto-refine newly created NPCs if desired)
+            npcs_to_refine.add(new_npc_id)
 
         # 3) Process npc_updates
         npc_updates = data.get("npc_updates", [])
@@ -123,6 +160,7 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                     set_clauses.append(f"{db_col} = ${len(set_vals) + 1}")
                     set_vals.append(up[field_key])
 
+            # If user changes stats or name, we update them
             if set_clauses:
                 set_str = ", ".join(set_clauses)
                 set_vals += [npc_id, user_id, conversation_id]
@@ -136,7 +174,24 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                 logging.info(f"  Updating NPC {npc_id}: {set_clauses}")
                 await conn.execute(query, *set_vals)
 
-            # Memory
+            # (2) If "archetypes" changed, store it & recalc stats
+            if "archetypes" in up:
+                new_arcs = up["archetypes"]
+                logging.info(f"  Overwriting archetypes for NPC {npc_id} => {new_arcs}")
+                await conn.execute(
+                    """
+                    UPDATE NPCStats
+                    SET archetypes=$1
+                    WHERE npc_id=$2 AND user_id=$3 AND conversation_id=$4
+                    """,
+                    json.dumps(new_arcs), npc_id, user_id, conversation_id
+                )
+                # Recalculate NPC stats based on new archetypes
+                await recalc_npc_stats_with_new_archetypes(user_id, conversation_id, npc_id)
+                # Mark for refining if we want updated schedule/description
+                npcs_to_refine.add(npc_id)
+
+            # Memory (append)
             if "memory" in up:
                 new_mem_entries = up["memory"]
                 if isinstance(new_mem_entries, str):
@@ -150,6 +205,8 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                     """,
                     json.dumps(new_mem_entries), npc_id, user_id, conversation_id
                 )
+                # Possibly refine if memory changes should appear in the GPT narrative
+                npcs_to_refine.add(npc_id)
 
             # Full schedule overwrite
             if "schedule" in up:
@@ -163,6 +220,7 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                     """,
                     json.dumps(new_schedule), npc_id, user_id, conversation_id
                 )
+                npcs_to_refine.add(npc_id)
 
             # Partial schedule update
             if "schedule_updates" in up:
@@ -190,6 +248,7 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                         """,
                         json.dumps(existing_schedule), npc_id, user_id, conversation_id
                     )
+                npcs_to_refine.add(npc_id)
 
         # 3.5) Player schedule updates
         chase_sched = data.get("ChaseSchedule")
@@ -248,17 +307,21 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
             if not npc_id:
                 logging.warning("Skipping relationship update: no npc_id.")
                 continue
+
+            # (2) Instead of overwriting affiliations, we MERGE them
+            # so we treat r["affiliations"] as items to add/append
             aff_list = r.get("affiliations", None)
             if aff_list is not None:
-                logging.info(f"  Updating affiliations for NPC {npc_id}: {aff_list}")
+                logging.info(f"  Appending affiliations for NPC {npc_id}: {aff_list}")
                 await conn.execute(
                     """
                     UPDATE NPCStats
-                    SET affiliations=$1
+                    SET affiliations = COALESCE(affiliations, '[]'::jsonb) || to_jsonb($1::json)
                     WHERE npc_id=$2 AND user_id=$3 AND conversation_id=$4
                     """,
                     json.dumps(aff_list), npc_id, user_id, conversation_id
                 )
+                npcs_to_refine.add(npc_id)
 
         # 5.5) Process shared_memory_updates
         shared_memory_updates = data.get("shared_memory_updates", [])
@@ -280,6 +343,7 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                 logging.warning(f"Shared memory update: NPC with id {npc_id} not found.")
                 continue
             npc_name = row["npc_name"]
+
             from logic.memory import get_shared_memory
             shared_memory_text = get_shared_memory(user_id, conversation_id, relationship, npc_name)
             logging.info(f"Generated shared memory for NPC {npc_id}: {shared_memory_text}")
@@ -291,6 +355,7 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                 """,
                 shared_memory_text, npc_id, user_id, conversation_id
             )
+            npcs_to_refine.add(npc_id)
 
         # 6) Process npc_introductions
         npc_intros = data.get("npc_introductions", [])
@@ -369,9 +434,6 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                     """,
                     user_id, conversation_id, npc_id, year, month, day, tod, ov_loc
                 )
-            else:
-                # process global events similarly if needed
-                pass
 
         # 9) Process inventory_updates
         inv_updates = data.get("inventory_updates", {})
@@ -532,7 +594,15 @@ async def apply_universal_updates_async(user_id, conversation_id, data, conn) ->
                     user_id, conversation_id, player_name, perk_name, perk_desc, perk_fx
                 )
 
-        # If we get here with no exceptions, the transaction is COMMITTED automatically.
+        # ------------------------------------------------
+        # (7) After collecting all updated NPC IDs,
+        #     optionally refine them in one pass.
+        # ------------------------------------------------
+        logging.info(f"NPCs to refine: {npcs_to_refine}")
+        for nid in npcs_to_refine:
+            logging.info(f"[universal_updater] Running refine_npc_final_data on NPC {nid}")
+            await refine_npc_final_data(user_id, conversation_id, nid, day_names, environment_desc)
+
         logging.info("=== [apply_universal_updates_async] Success (transaction committed) ===")
         return {"message": "Universal update successful"}
 
