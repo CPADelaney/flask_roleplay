@@ -474,7 +474,7 @@ async def async_process_new_game(user_id, conversation_data):
         )
 
         first_day_name = day_names[0] if day_names else "the first day"
-opening_prompt = (
+        opening_prompt = (
             "Nyx, your darkly seductive narrator, speaks with a tone that is inviting, seductive, and laced with innuendo and subtle hints of control. "
             "Nyx is going to introduce the player to this roleplay, breaking down her response into easily digestible sections."
             "Below is the current state of your world, which includes a vivid description of the environment, "
