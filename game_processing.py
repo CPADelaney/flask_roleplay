@@ -490,7 +490,8 @@ async def async_process_new_game(user_id, conversation_data):
             "Make sure he understands his motivation for going to his destination."
             "Keep the tone natural, immersive, and slightly teasing, avoiding explicit gameplay mechanics."
         )
-        final_reply = await spaced_gpt_call_with_retry(conversation_id, 
+        final_reply = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, opening_prompt)
+        nyx_text = final_reply.get("response", "[No text returned]")
 
         # 15) Insert final opening message
         await conn.execute("""
