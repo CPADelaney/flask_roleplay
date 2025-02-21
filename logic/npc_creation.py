@@ -1223,20 +1223,18 @@ No extra text or function calls.
     if raw_gpt.get("type") == "function_call":
         result_dict = raw_gpt.get("function_args", {})
         logging.info(f"[refine_npc_final_data] Function call result for NPC {npc_id}: {result_dict}")
-        # Check if the response includes npc_updates and extract from the first update.
+        # Check for npc_updates first; if empty, check npc_creations.
         if "npc_updates" in result_dict and isinstance(result_dict["npc_updates"], list) and result_dict["npc_updates"]:
             npc_update = result_dict["npc_updates"][0]
-            physical_desc = npc_update.get("physical_description", "")
-            schedule = npc_update.get("schedule", {})
-            memories = npc_update.get("memory", [])
-            affiliations = npc_update.get("affiliations", [])
-            current_location = npc_update.get("current_location", "")
+        elif "npc_creations" in result_dict and isinstance(result_dict["npc_creations"], list) and result_dict["npc_creations"]:
+            npc_update = result_dict["npc_creations"][0]
         else:
-            physical_desc = result_dict.get("physical_description", "")
-            schedule = result_dict.get("schedule", {})
-            memories = result_dict.get("memory", [])
-            affiliations = result_dict.get("affiliations", [])
-            current_location = result_dict.get("current_location", "")
+            npc_update = {}
+        physical_desc = npc_update.get("physical_description", "")
+        schedule = npc_update.get("schedule", {})
+        memories = npc_update.get("memory", [])
+        affiliations = npc_update.get("affiliations", [])
+        current_location = npc_update.get("current_location", "")
     else:
         text = raw_gpt.get("response", "").strip()
         if text.startswith("```"):
@@ -1257,6 +1255,7 @@ No extra text or function calls.
         memories = result_dict.get("memory", [])
         affiliations = result_dict.get("affiliations", [])
         current_location = result_dict.get("current_location", "")
+
 
     logging.info(
         f"[refine_npc_final_data] GPT parsed data for NPC {npc_id}: physical_desc: {physical_desc}, "
