@@ -1211,21 +1211,40 @@ import re
 
 def parse_bullet_physical_description(text: str) -> str:
     """
-    If GPT lumps physical description in lines like:
-      - Physical Description: She stands tall...
-    or
-      PhysicalDesc: She has a slender figure...
-    we can parse it. Return the entire line after the colon, or empty if not found.
+    Extracts physical description from various text formats including:
+    - Bullet points with labels like "Physical Description:" 
+    - JSON-like sections with physical description labels
+    - Multiple lines or paragraphs of description
+    Returns the concatenated description or empty string if not found.
     """
-    pattern = re.compile(r"^- (Physical\s*Description|PhysicalDesc|Body|Appearance)\s*:\s*(.+)$", re.IGNORECASE)
-    lines = text.splitlines()
-    for line in lines:
-        line = line.strip()
-        match = pattern.match(line)
-        if match:
-            return match.group(2).strip()
+    # Multiple patterns to match different formats
+    bullet_pattern = re.compile(r"(?:^|\n)[-*•]?\s*(Physical\s*Description|PhysicalDesc|Body|Appearance|Looks|Features)\s*:?\s*(.+?)(?=\n[-*•]|\n\n|$)", re.IGNORECASE | re.DOTALL)
+    json_pattern = re.compile(r'"(physical_?description|appearance|physique)":\s*"(.+?)"(?=,|\})', re.IGNORECASE | re.DOTALL)
+    
+    # Try bullet pattern first (more common in GPT outputs)
+    matches = bullet_pattern.findall(text)
+    if matches:
+        # Combine all matches into paragraphs
+        descriptions = [match[1].strip() for match in matches]
+        return "\n\n".join(descriptions)
+    
+    # Try JSON-like pattern
+    matches = json_pattern.findall(text)
+    if matches:
+        descriptions = [match[1].strip() for match in matches]
+        return "\n\n".join(descriptions)
+    
+    # Look for standalone paragraphs that might be descriptions
+    description_keywords = ["tall", "height", "build", "hair", "eyes", "face", "skin", "wearing", "dressed", "outfit", "figure", "physique"]
+    paragraphs = re.split(r'\n\s*\n', text)
+    
+    for para in paragraphs:
+        # If paragraph contains multiple description keywords and no obvious headers, it might be a description
+        if sum(1 for kw in description_keywords if kw.lower() in para.lower()) >= 3 and ":" not in para[:20]:
+            return para.strip()
+    
     return ""
-
+    
 def parse_bullet_current_location(text: str) -> str:
     """
     If GPT lumps current location in lines like:
@@ -1437,9 +1456,9 @@ Return a JSON object with EXACTLY these keys:
 {days_template}
   }},
   "memory": [
-    "First memory about a relationship",
-    "Second memory about a relationship",
-    "Third memory about a relationship"
+    "First memory about a relationship from the point of view of the NPC",
+    "Second memory about a relationship from the point of view of the NPC",
+    "Third memory about a relationship from the point of view of the NPC"
   ],
   "affiliations": [
     "Group or faction affiliation 1",
@@ -1545,8 +1564,61 @@ Return ONLY valid JSON with no explanation, comments, or code blocks.
         field_values = flatten_nested_data(extracted_data)
         
         # Update our variables with any found values
-        if field_values["physical_description"] and isinstance(field_values["physical_description"], str):
-            physical_desc = field_values["physical_description"]
+        # Enhanced field extraction with better physical description handling
+        if field_values["physical_description"] is not None:
+            # Handle various formats physical_description might come in
+            if isinstance(field_values["physical_description"], str):
+                physical_desc = field_values["physical_description"].strip()
+            elif isinstance(field_values["physical_description"], list):
+                # Join paragraphs if it's a list
+                physical_desc = "\n\n".join([str(p) for p in field_values["physical_description"]])
+            elif isinstance(field_values["physical_description"], dict):
+                # Sometimes may come as nested object with paragraph keys
+                physical_desc = "\n\n".join([str(v) for v in field_values["physical_description"].values()])
+            else:
+                physical_desc = str(field_values["physical_description"])
+        
+        # Improved fallback extraction for physical description
+        if not physical_desc or len(physical_desc.strip()) < 30:  # Require substantial description
+            extracted_desc = parse_bullet_physical_description(text_response)
+            if extracted_desc and len(extracted_desc) > len(physical_desc):
+                physical_desc = extracted_desc
+                
+            # If still inadequate, try to find any substantial text block that might be a description
+            if not physical_desc or len(physical_desc.strip()) < 30:
+                # Look for the longest paragraph that might be a description
+                paragraphs = re.split(r'\n\s*\n', text_response)
+                desc_candidates = []
+                
+                for para in paragraphs:
+                    para = para.strip()
+                    # Skip obvious non-descriptions (JSON blocks, schedule entries, etc.)
+                    if (para.startswith('{') or para.startswith('[') or 
+                        re.match(r'^[-*•]', para) or 
+                        len(para) < 50 or
+                        any(label in para.lower() for label in ['schedule:', 'memory:', 'relationship:'])):
+                        continue
+                    
+                    desc_candidates.append(para)
+                
+                # Take the longest paragraph as likely description if substantial
+                if desc_candidates:
+                    longest = max(desc_candidates, key=len)
+                    if len(longest) > 100:  # Only use if reasonably long
+                        physical_desc = longest
+        
+        # Final validation before database update
+        if not physical_desc or len(physical_desc.strip()) < 30:
+            # Create a reasonable default description based on other NPC attributes
+            sex = npc_data.get('sex', '').lower() or 'person'
+            age = npc_data.get('age', 'adult')
+            traits = npc_data.get('personality_traits', ['mysterious'])
+            trait_text = traits[0] if isinstance(traits, list) and traits else 'distinctive'
+            
+            physical_desc = (f"A {age} {sex} with a {trait_text} demeanor. "
+                            f"Their appearance reflects their personality, showing subtle signs of "
+                            f"their {npc_data.get('dominance', 'balanced')} nature and "
+                            f"{npc_data.get('cruelty', 'neutral')} tendencies.")
         
         if field_values["schedule"] and isinstance(field_values["schedule"], dict):
             schedule_obj = field_values["schedule"]
