@@ -16,6 +16,18 @@ from logic.memory_logic import get_shared_memory, record_npc_event, propagate_sh
 from logic.social_links import create_social_link
 from logic.calendar import load_calendar_names
 
+def enforce_correct_npc_id(gpt_id: int, correct_id: int, context_str: str) -> int:
+    """
+    If GPT provided 'gpt_id' is not the same as the 'correct_id',
+    log a warning and override with correct_id.
+    'context_str' is e.g. 'npc_updates' or 'relationship_updates' so we know where it happened.
+    """
+    if gpt_id is not None and gpt_id != correct_id:
+        logging.warning(
+            f"[{context_str}] GPT provided npc_id={gpt_id}, but we are using npc_id={correct_id} => overriding."
+        )
+        return correct_id
+    return correct_id  # or gpt_id if it matches
 
 ###################
 # 1) File Paths & Data Loading
@@ -623,6 +635,9 @@ def create_npc_partial(user_id: int, conversation_id: int, sex: str = "female",
 # 6) DB Insert Stub
 ###################
 async def insert_npc_stub_into_db(partial_npc: dict, user_id: int, conversation_id: int) -> int:
+    """
+    Insert the partial_npc data into NPCStats, returning the actual npc_id from the DB.
+    """
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -633,7 +648,7 @@ async def insert_npc_stub_into_db(partial_npc: dict, user_id: int, conversation_
           dominance, cruelty, closeness, trust, respect, intensity,
           archetypes, archetype_summary, archetype_extras_summary,
           likes, dislikes, hobbies, personality_traits,
-          age, birthdate,          -- 'birthdate' now TEXT in DB
+          age, birthdate,
           relationships, memory, schedule,
           physical_description
         )
@@ -642,7 +657,7 @@ async def insert_npc_stub_into_db(partial_npc: dict, user_id: int, conversation_
                 %s, %s, %s, %s, %s, %s,
                 %s, %s, %s,
                 %s, %s, %s, %s,
-                %s, %s,   -- pass partial_npc["birthdate"] as text
+                %s, %s,
                 '[]'::jsonb, '[]'::jsonb, '{}'::jsonb,
                 ''
         )
@@ -671,14 +686,17 @@ async def insert_npc_stub_into_db(partial_npc: dict, user_id: int, conversation_
             json.dumps(partial_npc.get("personality_traits", [])),
 
             partial_npc.get("age", 25),
-            partial_npc.get("birthdate", ""),  # TEXT field now
+            partial_npc.get("birthdate", ""),
         )
     )
     row = cur.fetchone()
     npc_id = row[0]
     conn.commit()
     conn.close()
+
+    logging.info(f"[insert_npc_stub_into_db] Inserted NPC => assigned npc_id={npc_id}")
     return npc_id
+
 
 ###################
 # 7) Relationship + Archetype expansions
@@ -962,9 +980,14 @@ No extra text or function calls.
 async def add_archetype_to_npc(user_id, conversation_id, npc_id, new_arc):
     """
     Insert new_arc into the NPC's archetypes array, re-run synergy, recalc stats.
-    new_arc e.g. {"id": 9001, "name": "Maternal Overlord"}
-    We'll store only 'name' in the DB, ignoring 'id' for consistency.
+    We'll store only 'name' in the DB, ignoring GPT-provided numeric ID if any.
     """
+    # If GPT gave us 'new_arc' that includes "npc_id" we might do:
+
+    # new_arc["npc_id"] = enforce_correct_npc_id(
+    #    new_arc.get("npc_id"), npc_id, "add_archetype_to_npc"
+    # )
+
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
@@ -973,7 +996,7 @@ async def add_archetype_to_npc(user_id, conversation_id, npc_id, new_arc):
     )
     row = cur.fetchone()
     if not row:
-        logging.warning(f"No NPCStats found for npc_id={npc_id}, can't add archetype.")
+        logging.warning(f"[add_archetype_to_npc] No NPCStats found for npc_id={npc_id}.")
         conn.close()
         return
 
@@ -992,6 +1015,7 @@ async def add_archetype_to_npc(user_id, conversation_id, npc_id, new_arc):
     existing_arcs.append({"name": new_arc["name"]})
     new_arcs_json = json.dumps(existing_arcs)
 
+    # synergy
     updated_synergy = await await_prompted_synergy_after_add_archetype(existing_arcs, user_id, conversation_id, npc_id)
     if not updated_synergy:
         updated_synergy = "No updated synergy"
@@ -1005,7 +1029,7 @@ async def add_archetype_to_npc(user_id, conversation_id, npc_id, new_arc):
     conn.commit()
     conn.close()
 
-    # recalc
+    # recalc final stats
     recalc_npc_stats_with_new_archetypes(user_id, conversation_id, npc_id)
     logging.info(f"[add_archetype_to_npc] added '{new_arc['name']}' to npc_id={npc_id}.")
 
@@ -1815,18 +1839,40 @@ Return ONLY valid JSON with no explanation, comments, or code blocks.
         "current_location": current_loc
     }
 
-async def spawn_single_npc(user_id: int, conversation_id: int, environment_desc: str, day_names: list) -> int:
+async def spawn_single_npc(
+    user_id: int,
+    conversation_id: int,
+    environment_desc: str,
+    day_names: list
+) -> int:
+    """
+    Create a partial NPC stub, insert into DB => get real NPC ID,
+    assign relationships, refine data. 
+    Ensures we keep the same npc_id throughout so we don't mismatch GPT IDs.
+    """
     logging.info("[spawn_single_npc] Starting spawn for a new NPC.")
-    partial_npc = create_npc_partial(user_id, conversation_id, sex="female", total_archetypes=4, environment_desc=environment_desc)
+    partial_npc = create_npc_partial(
+        user_id, conversation_id, sex="female", total_archetypes=4, environment_desc=environment_desc
+    )
     logging.info(f"[spawn_single_npc] Partial NPC created: {partial_npc}")
+
+    # Insert => get the real ID from DB
     npc_id = await insert_npc_stub_into_db(partial_npc, user_id, conversation_id)
     logging.info(f"[spawn_single_npc] NPC stub inserted with ID: {npc_id}")
-    # Pass partial_npc["archetypes"] to assign_random_relationships
-    await assign_random_relationships(user_id, conversation_id, npc_id, partial_npc["npc_name"], partial_npc.get("archetypes", []))
+
+    # Assign relationships using that official ID
+    await assign_random_relationships(
+        user_id, conversation_id, npc_id, partial_npc["npc_name"], partial_npc.get("archetypes", [])
+    )
     logging.info(f"[spawn_single_npc] Relationships assigned for NPC ID: {npc_id}")
-    await refine_npc_final_data(user_id, conversation_id, npc_id, day_names, environment_desc)
+
+    # Final refinement
+    await refine_npc_final_data(
+        user_id, conversation_id, npc_id, day_names, environment_desc
+    )
     logging.info(f"[spawn_single_npc] Final refinement completed for NPC ID: {npc_id}")
     return npc_id
+
     
 ###################
 # 11) Spawn multiple NPCs
