@@ -1407,10 +1407,21 @@ async def refine_npc_final_data(
     current_loc = ""
     relationships = npc_data.get('relationships', [])
 
+    # Construct day template for prompt
+    days_template = ""
+    for day in day_names:
+        days_template += f'    "{day}": {{\n'
+        days_template += '      "morning": "Activity description",\n'
+        days_template += '      "afternoon": "Activity description",\n'
+        days_template += '      "evening": "Activity description",\n'
+        days_template += '      "night": "Activity description"\n'
+        days_template += '    },\n'
+    days_template = days_template.rstrip(",\n")  # Remove trailing comma
+
     while attempt < max_retries:
         attempt += 1
 
-        # Build the GPT prompt with MORE explicit structure guidance
+        # Build the GPT prompt with cleaner JSON example structure
         system_prompt = f"""
 You have an NPC in a femdom environment. Current data:
 {json.dumps(npc_data, indent=2)}
@@ -1423,22 +1434,19 @@ Return a JSON object with EXACTLY these keys:
   "physical_description": "Detailed physical appearance, at least 2 paragraphs",
   "current_location": "Where the character is currently located",
   "schedule": {{
-    "{day_names[0]}": {{
-      "morning": "Activity",
-      "afternoon": "Activity",
-      "evening": "Activity",
-      "night": "Activity"
-    }},
-    // EXACT same format for all {len(day_names)} days
+{days_template}
   }},
   "memory": [
     "First memory about a relationship",
     "Second memory about a relationship",
-    // At least 3 memories
+    "Third memory about a relationship"
   ],
   "affiliations": [
-    "Group or faction affiliation"
-    // Any relevant affiliations
+    "Group or faction affiliation 1",
+    "Group or faction affiliation 2",
+    "Group or faction affiliation 3",
+    "Group or faction affiliation 4",
+    "Group or faction affiliation 5",
   ],
   "relationships": [
     {{
@@ -1446,11 +1454,10 @@ Return a JSON object with EXACTLY these keys:
       "entity_type": "npc",
       "relationship_label": "The relationship description"
     }}
-    // List all relationships if any exist
   ]
 }}
 
-Return ONLY valid JSON with no explanation or code blocks.
+Return ONLY valid JSON with no explanation, comments, or code blocks.
 """
 
         # Call GPT
@@ -1681,6 +1688,19 @@ Return ONLY valid JSON with no explanation or code blocks.
         "relationships": relationships,
         "current_location": current_loc
     }
+
+async def spawn_single_npc(user_id: int, conversation_id: int, environment_desc: str, day_names: list) -> int:
+    logging.info("[spawn_single_npc] Starting spawn for a new NPC.")
+    partial_npc = create_npc_partial(user_id, conversation_id, sex="female", total_archetypes=4, environment_desc=environment_desc)
+    logging.info(f"[spawn_single_npc] Partial NPC created: {partial_npc}")
+    npc_id = await insert_npc_stub_into_db(partial_npc, user_id, conversation_id)
+    logging.info(f"[spawn_single_npc] NPC stub inserted with ID: {npc_id}")
+    # Pass partial_npc["archetypes"] to assign_random_relationships
+    await assign_random_relationships(user_id, conversation_id, npc_id, partial_npc["npc_name"], partial_npc.get("archetypes", []))
+    logging.info(f"[spawn_single_npc] Relationships assigned for NPC ID: {npc_id}")
+    await refine_npc_final_data(user_id, conversation_id, npc_id, day_names, environment_desc)
+    logging.info(f"[spawn_single_npc] Final refinement completed for NPC ID: {npc_id}")
+    return npc_id
     
 ###################
 # 11) Spawn multiple NPCs
