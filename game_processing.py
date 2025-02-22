@@ -7,6 +7,7 @@ import time
 import asyncio
 import os
 import asyncpg
+import re
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
 from datetime import datetime
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
