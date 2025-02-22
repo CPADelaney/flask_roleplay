@@ -1151,8 +1151,6 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
 
     logging.info(f"[assign_random_relationships] Finished relationships for NPC {new_npc_id}.")
 
-import re
-
 def parse_bullet_schedule_from_narrative(text: str, day_names: list) -> dict:
     """
     1) Finds bullet-list schedule blocks in 'text' that look like:
@@ -1231,8 +1229,6 @@ def parse_bullet_schedule_from_narrative(text: str, day_names: list) -> dict:
             }
 
     return schedule
-
-import re
 
 def parse_bullet_physical_description(text: str) -> str:
     """
@@ -1581,7 +1577,6 @@ Return ONLY valid JSON with no explanation, comments, or code blocks.
         if not extracted_data:
             try:
                 # Look for JSON-like structure with regex to handle cases where text might surround JSON
-                import re
                 json_match = re.search(r'({[\s\S]*})', text_response)
                 if json_match:
                     json_str = json_match.group(1)
