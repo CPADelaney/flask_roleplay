@@ -4307,6 +4307,44 @@
     ]
   },
   {
+    "name": "Spider Queen",
+    "baseline_stats": {
+      "dominance_range": [80, 100],
+      "dominance_modifier": 0,
+      "cruelty_range": [70, 90],
+      "cruelty_modifier": 0,
+      "closeness_range": [20, 40],
+      "closeness_modifier": 0,
+      "trust_range": [10, 30],
+      "trust_modifier": 0,
+      "respect_range": [5, 25],
+      "respect_modifier": 0,
+      "intensity_range": [80, 100],
+      "intensity_modifier": 0
+    },
+    "progression_rules": [
+      "Every act of defiance is met with uncompromising, punishing retribution that leaves no space for weakness.",
+      "Dominance intensifies with brutal, relentless commands that strip you of any semblance of autonomy.",
+      "Intensity escalates as hardcore challenges push you to the very edge of physical and psychological endurance."
+    ],
+    "setting_examples": [
+      "Abandoned Industrial Complex: A stark, cold arena where every echo amplifies the harsh, commanding demands of your submission.",
+      "Underground Dungeon: A hidden lair with concrete walls and iron restraints that set the stage for raw, unfiltered domination.",
+      "Post-Apocalyptic Wasteland: Amid desolation, her severe control becomes the sole constant, forging submission from chaos."
+    ],
+    "unique_traits": [
+      "Embodies an aura of invincible, hardcore control that crushes resistance without mercy.",
+      "Masterfully blends extreme psychological and physical domination, leaving you shattered and obedient.",
+      "Combines seductive cruelty with a visceral, almost savage enforcement of her rules, compelling you to surrender completely."
+    ],
+    "preferred_kinks": [
+      "Extreme Bondage: Forces you into physically demanding restraints that push your endurance to its limits.",
+      "Brutal Impact Play: Delivers hard, punishing spankings and whippings that resonate with every defiant heartbeat.",
+      "Explicit Humiliation: Uses scathing, unrelenting language to degrade you in every possible way, ensuring total submission.",
+      "Forced Endurance Challenges: Compels you to complete punishing tasks that blur the line between pleasure and pain."
+    ]
+  },
+  {
     "name": "Reporter",
     "baseline_stats": {
       "dominance_range": [40, 65],
