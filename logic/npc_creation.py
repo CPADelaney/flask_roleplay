@@ -1357,6 +1357,37 @@ def remap_day_blocks(schedule_data: dict, day_names: list) -> dict:
         used += 1
     return final_schedule
 
+def check_location_description(description: str, user_id: int, conversation_id: int) -> bool:
+    """
+    Check if a description matches any location descriptions in the database.
+    Returns True if it matches a location description.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        # Query the Locations table to see if this description matches any location descriptions
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM Locations
+            WHERE user_id = %s 
+              AND conversation_id = %s
+              AND (
+                  description = %s 
+                  OR description LIKE %s
+                  OR %s LIKE CONCAT('%', description, '%')
+              )
+        """, (user_id, conversation_id, description, f"%{description}%", description))
+        
+        count = cur.fetchone()[0]
+        return count > 0
+    except Exception as e:
+        logging.error(f"[check_location_description] Error checking location descriptions: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
 async def refine_npc_final_data(
     user_id: int,
     conversation_id: int,
@@ -1567,17 +1598,21 @@ Return ONLY valid JSON with no explanation, comments, or code blocks.
         # Update our variables with any found values
         # Enhanced field extraction with better physical description handling
         if field_values["physical_description"] is not None:
-            # Handle various formats physical_description might come in
+            candidate_desc = ""
             if isinstance(field_values["physical_description"], str):
-                physical_desc = field_values["physical_description"].strip()
+                candidate_desc = field_values["physical_description"].strip()
             elif isinstance(field_values["physical_description"], list):
-                # Join paragraphs if it's a list
-                physical_desc = "\n\n".join([str(p) for p in field_values["physical_description"]])
-            elif isinstance(field_values["physical_description"], dict):
-                # Sometimes may come as nested object with paragraph keys
-                physical_desc = "\n\n".join([str(v) for v in field_values["physical_description"].values()])
+                candidate_desc = "\n\n".join([str(p) for p in field_values["physical_description"]])
             else:
-                physical_desc = str(field_values["physical_description"])
+                candidate_desc = str(field_values["physical_description"])
+            
+            # Check against locations table to prevent using location descriptions
+            is_location_desc = check_location_description(candidate_desc, user_id, conversation_id)
+            
+            if not is_location_desc:
+                physical_desc = candidate_desc
+            else:
+                logging.warning(f"[refine_npc_final_data] Rejected physical description as it matches a location description")
         
         # Improved fallback extraction for physical description
         if not physical_desc or len(physical_desc.strip()) < 30:  # Require substantial description
