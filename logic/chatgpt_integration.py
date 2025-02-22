@@ -424,7 +424,7 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
         model="gpt-4o",
         messages=messages,
         temperature=0.2,
-        max_tokens=4000,
+        max_tokens=10000,
         frequency_penalty=0.0,
         functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
         function_call={"name": "apply_universal_update"}
