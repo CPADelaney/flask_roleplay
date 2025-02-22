@@ -1359,34 +1359,52 @@ def remap_day_blocks(schedule_data: dict, day_names: list) -> dict:
 
 def check_location_description(description: str, user_id: int, conversation_id: int) -> bool:
     """
-    Check if a description matches any location descriptions in the database.
-    Returns True if it matches a location description.
+    Check if the given 'description' text matches (exactly or partially) any location
+    descriptions in the database. Returns True if any match is found, otherwise False.
     """
     conn = get_db_connection()
     cur = conn.cursor()
-    
+
     try:
-        # Query the Locations table to see if this description matches any location descriptions
+        # Query the Locations table to see if 'description' matches
+        # or is contained in or contains any existing location descriptions.
         cur.execute("""
             SELECT COUNT(*)
             FROM Locations
-            WHERE user_id = %s 
+            WHERE user_id = %s
               AND conversation_id = %s
               AND (
-                  description = %s 
+                  description = %s
                   OR description LIKE %s
-                  OR %s LIKE CONCAT('%', description, '%')
+                  OR %s LIKE CONCAT('%%', description, '%%')
               )
-        """, (user_id, conversation_id, description, f"%{description}%", description))
+        """, (
+            user_id,
+            conversation_id,
+            description,
+            f"%{description}%",
+            description
+        ))
         
-        count = cur.fetchone()[0]
+        row = cur.fetchone()
+        if not row:
+            # This is extremely rare (COUNT(*) should return exactly one row),
+            # but if row is None, we handle it gracefully.
+            logging.warning("[check_location_description] No row returned from COUNT(*).")
+            return False
+        
+        # row should be a tuple with one element: the integer count
+        count = row[0]
         return count > 0
+
     except Exception as e:
         logging.error(f"[check_location_description] Error checking location descriptions: {e}")
         return False
+
     finally:
         cur.close()
         conn.close()
+
 
 async def refine_npc_final_data(
     user_id: int,
