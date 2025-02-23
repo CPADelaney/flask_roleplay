@@ -1206,12 +1206,6 @@ def extract_field_from_function_call(
     # Nothing found
     return ""
 
-
-import json
-import re
-import logging
-import asyncio
-
 async def refine_physical_description(
     user_id: int,
     conversation_id: int,
@@ -1345,8 +1339,9 @@ async def refine_schedule(
     1) GPT request focusing ONLY on "schedule".
     2) We pass official day_names, and require JSON with key "schedule" => object.
     3) Each day must have morning/afternoon/evening/night short strings.
-    """
+    """   
     attempt = 0
+    npc_id = npc_data.get("npc_id", None)  # in case we store the ID
     final_schedule = {}
 
     # If NPC already has a partial schedule, we keep it if GPT fails
