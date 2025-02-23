@@ -1263,7 +1263,6 @@ If you cannot comply, return {{}}.
         # 2) Attempt to parse from function_call
         desc_candidate = ""
         if raw_gpt.get("type") == "function_call":
-            from .your_helpers import extract_field_from_function_call
             candidate = extract_field_from_function_call(raw_gpt, "physical_description", npc_id)
             if candidate:
                 desc_candidate = candidate
@@ -1405,7 +1404,6 @@ Return {{}} if these requirements cannot be met. No additional text or formattin
         # 1) Function call check
         new_sched = {}
         if raw_gpt.get("type") == "function_call":
-            from .your_helpers import extract_field_from_function_call
             candidate = extract_field_from_function_call(raw_gpt, "schedule", npc_id)
             if candidate and isinstance(candidate, dict):
                 new_sched = candidate
@@ -1515,7 +1513,6 @@ Each relationship needs 3+ references showing evolving dynamics. Memories can bu
         new_mem = []
 
         if raw_gpt.get("type") == "function_call":
-            from .your_helpers import extract_field_from_function_call
             candidate = extract_field_from_function_call(raw_gpt, "memory", npc_id)
             if isinstance(candidate, list):
                 new_mem = candidate
@@ -1700,7 +1697,6 @@ Environment: {environment_desc}
         new_rels = []
 
         if raw_gpt.get("type") == "function_call":
-            from .your_helpers import extract_field_from_function_call
             loc_candidate = extract_field_from_function_call(raw_gpt, "current_location", npc_id)
             rel_candidate = extract_field_from_function_call(raw_gpt, "relationships", npc_id)
 
