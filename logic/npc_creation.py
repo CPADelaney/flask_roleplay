@@ -1865,8 +1865,8 @@ async def refine_npc_final_data(
         npc_data["memory"] = new_mem
 
     # Affiliations
-    if new_affils:
-        npc_data["affiliations"] = new_affils
+    if new_affil:
+        npc_data["affiliations"] = new_affil
 
     #
     # 4) Write final data to DB
