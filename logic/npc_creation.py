@@ -1183,6 +1183,10 @@ Return strictly valid JSON with exactly 1 key:
   "physical_description"
 This must be at least 2 paragraphs describing the NPC's body/appearance.
 NPC should be over-the-top curvaceous (inspired by M-size games). Almost comical level of boobs/ass, but keep it in-lore.
+Example format:
+{{
+  "physical_description": "First paragraph describing appearance...\n\nSecond paragraph with more details..."
+}}
 """
         raw_gpt = await asyncio.to_thread(
             get_chatgpt_response,
@@ -1250,34 +1254,41 @@ async def refine_schedule(
         attempt += 1
 
         # Build example structure
-        day_template = ""
-        for d in day_names:
-            day_template += f'"{d}": {{"morning": "?", "afternoon": "?", "evening": "?", "night": "?"}},\n'
-        day_template = day_template.rstrip(",\n")
+        days_template = ""
+        for day in day_names:
+            days_template += f'    "{day}": {{\n'
+            days_template += '      "morning": "Activity description",\n'
+            days_template += '      "afternoon": "Activity description",\n'
+            days_template += '      "evening": "Activity description",\n'
+            days_template += '      "night": "Activity description"\n'
+            days_template += '    },\n'
+        days_template = days_template.rstrip(",\n")  # Remove trailing comma
 
         system_prompt = f"""
-NPC partial data:
+NPC Info:
 {json.dumps(npc_data, indent=2)}
-
-Environment:
+Setting:
 {environment_desc}
 
-We ONLY want strictly valid JSON with 1 key => "schedule".
-The value is an object with these days: {day_names}.
-1. Use EXACTLY these day names in this order: {', '.join(day_names)}.
-2. For each day, provide "morning", "afternoon", "evening", and "night".
-3. Avoid giving the same location/activity in all four time-slots.
-4. Reflect the NPC’s likes, dislikes, hobbies, archetypes, and relationships.
-5. Keep it realistic or fitting to the setting.
+For this NPC, create a detailed daily schedule that follows these requirements:
+1. Use EXACTLY these days in order: {', '.join(day_names)}
+2. Each day MUST include all four time periods: morning, afternoon, evening, and night
+3. Activities should vary throughout the day - avoid repetition in time slots
+4. Schedule must reflect the NPC's:
+   - Personal interests and hobbies
+   - Social relationships
+   - Role and archetype
+   - Likes and dislikes
+5. All activities must be realistic for the setting and maintain appropriate themes
 
-Example:
+Return ONLY valid JSON matching this structure:
 {{
   "schedule": {{
-    {day_template}
+{days_template}
   }}
 }}
 
-No extra commentary, code fences, or function calls. If you cannot comply, return {{}}.
+Return {{}} if these requirements cannot be met. No additional text or formatting.
 """
 
         raw_gpt = await asyncio.to_thread(
@@ -1660,6 +1671,9 @@ async def refine_npc_final_data(
         user_id, conversation_id, npc_data, environment_desc
     )
 
+    if isinstance(new_desc, dict):
+        new_desc = new_desc.get("physical_description", "")
+
     # b) schedule
     new_sched = await refine_schedule(
         user_id, conversation_id, npc_data, environment_desc, day_names
@@ -1670,8 +1684,15 @@ async def refine_npc_final_data(
         user_id, conversation_id, npc_data, environment_desc
     )
 
+    if isinstance(new_loc, dict):
+        new_loc = new_loc.get("current_location", "")
+
     # d) memories + affiliations (now that relationships are final)
-    new_mem, new_affils = await refine_memories_and_affiliations(
+    new_mem = await refine_memories(
+        user_id, conversation_id, npc_data, environment_desc
+    )
+
+    new_affil = await refine_affiliations(
         user_id, conversation_id, npc_data, environment_desc
     )
 
@@ -1720,7 +1741,7 @@ async def refine_npc_final_data(
                 relationships=%s
             WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
         """, (
-            npc_data["physical_description"],
+            npc_data["physical_description"],  # This will now be text, not JSON
             json.dumps(npc_data["schedule"]),
             json.dumps(npc_data["memory"]),
             json.dumps(npc_data["affiliations"]),
