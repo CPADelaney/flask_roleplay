@@ -1166,19 +1166,19 @@ async def refine_physical_description(
     """
     attempt = 0
     final_description = npc_data.get("physical_description", "") or ""
-
+    
+    logging.info(f"[refine_physical_description] Starting refinement for NPC {npc_data.get('npc_name')}")
+    
     while attempt < max_retries:
         attempt += 1
+        logging.info(f"[refine_physical_description] Attempt {attempt} of {max_retries}")
         
         system_prompt = f"""
 We have an NPC in a femdom environment.
-
 NPC partial data (no schedule or memory, just background):
 {json.dumps(npc_data, indent=2)}
-
 Environment:
 {environment_desc}
-
 Return strictly valid JSON with exactly 1 key:
   "physical_description"
 This must be at least 2 paragraphs describing the NPC's body/appearance.
@@ -1188,46 +1188,67 @@ Example format:
   "physical_description": "First paragraph describing appearance...\n\nSecond paragraph with more details..."
 }}
 """
+        # Log the raw GPT request
+        logging.debug(f"[refine_physical_description] Sending prompt for attempt {attempt}")
+        
         raw_gpt = await asyncio.to_thread(
             get_chatgpt_response,
             conversation_id,
             environment_desc,
             system_prompt
         )
+        
+        # Log the raw response
+        logging.info(f"[refine_physical_description] Raw GPT response: {raw_gpt}")
+        
         text_response = raw_gpt.get("response", "")
+        logging.info(f"[refine_physical_description] Text response: {text_response[:200]}...")
+        
         extracted = {}
-
         if raw_gpt.get("type") == "function_call":
             extracted = raw_gpt.get("function_args", {})
+            logging.info(f"[refine_physical_description] Function call args: {extracted}")
         else:
             # Try direct JSON parse
             try:
                 extracted = json.loads(text_response)
-            except:
+                logging.info(f"[refine_physical_description] Successfully parsed JSON: {extracted}")
+            except json.JSONDecodeError as e:
+                logging.error(f"[refine_physical_description] Direct JSON parse failed: {e}")
                 # Attempt curly‐brace extraction
                 match_j = re.search(r'(\{[\s\S]*\})', text_response)
                 if match_j:
                     jstr = match_j.group(1)
+                    logging.info(f"[refine_physical_description] Found JSON-like string: {jstr[:200]}...")
                     try:
                         extracted = json.loads(jstr)
-                    except:
+                        logging.info(f"[refine_physical_description] Successfully parsed extracted JSON: {extracted}")
+                    except json.JSONDecodeError as e:
+                        logging.error(f"[refine_physical_description] Extracted JSON parse failed: {e}")
                         extracted = {}
+                else:
+                    logging.error("[refine_physical_description] No JSON-like structure found in response")
         
         desc_candidate = extracted.get("physical_description", "")
+        logging.info(f"[refine_physical_description] Candidate description length: {len(desc_candidate)}")
+        logging.info(f"[refine_physical_description] Candidate preview: {desc_candidate[:100]}...")
+        
         if desc_candidate and len(desc_candidate.strip()) >= 30:
             final_description = desc_candidate.strip()
+            logging.info("[refine_physical_description] Successfully got valid description")
             break
         else:
             logging.warning(
-                f"[refine_physical_description] attempt={attempt}, short/empty => retry."
+                f"[refine_physical_description] attempt={attempt}, short/empty ({len(desc_candidate)} chars) => retry."
             )
-
+    
     # Fallback if empty
     if not final_description or len(final_description) < 30:
         logging.warning("[refine_physical_description] using fallback desc.")
         sex = npc_data.get("sex", "female")
         final_description = f"A generic {sex} NPC with no distinguishing features."
-
+    
+    logging.info(f"[refine_physical_description] Final description length: {len(final_description)}")
     return final_description
 
 
