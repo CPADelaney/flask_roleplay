@@ -1806,7 +1806,7 @@ async def refine_npc_final_data(
 
     # a) physical description
     new_desc = await refine_physical_description(
-        user_id, conversation_id, npc_data, environment_desc
+        user_id, conversation_id, npc_id, npc_data, environment_desc
     )
 
     if isinstance(new_desc, dict):
@@ -1814,12 +1814,12 @@ async def refine_npc_final_data(
 
     # b) schedule
     new_sched = await refine_schedule(
-        user_id, conversation_id, npc_data, environment_desc, day_names
+        user_id, conversation_id, npc_id, npc_data, environment_desc, day_names
     )
 
     # c) location + relationships => we finalize relationships before memories
     new_loc, new_rels = await refine_location_and_relationships(
-        user_id, conversation_id, npc_data, environment_desc
+        user_id, conversation_id, npc_id, npc_data, environment_desc
     )
 
     if isinstance(new_loc, dict):
@@ -1827,11 +1827,11 @@ async def refine_npc_final_data(
 
     # d) memories + affiliations (now that relationships are final)
     new_mem = await refine_memories(
-        user_id, conversation_id, npc_data, environment_desc
+        user_id, conversation_id, npc_id, npc_data, environment_desc
     )
 
     new_affil = await refine_affiliations(
-        user_id, conversation_id, npc_data, environment_desc
+        user_id, conversation_id, npc_id, npc_data, environment_desc
     )
 
     #
