@@ -1655,16 +1655,6 @@ async def refine_npc_final_data(
 
     logging.info(f"[refine_npc_final_data] Loaded NPC {npc_data.get('npc_name')} => ID={npc_id}")
 
-    #
-    # 2) Perform each mini-call in the right order
-    #
-    from .your_small_calls import (
-        refine_physical_description,
-        refine_schedule,
-        refine_location_and_relationships,
-        refine_memories_and_affiliations
-    )
-
     # a) physical description
     new_desc = await refine_physical_description(
         user_id, conversation_id, npc_data, environment_desc
