@@ -1550,15 +1550,14 @@ Each relationship needs 3+ references showing evolving dynamics. Memories can bu
 async def refine_affiliations(
     user_id: int,
     conversation_id: int,
-    npc_id: int, 
+    npc_id: int,
     npc_data: dict,
     environment_desc: str,
     max_retries: int = 2
 ) -> list:
     """
-    1) GPT request focusing ONLY on "affiliations" => array of 3‐5 distinct group/faction names.
-    2) We show NPC schedule, hobbies, likes, environment, etc. to inform the groups.
-    3) If GPT fails, fallback to existing or empty.
+    Ask GPT solely for an 'affiliations' array of 3-5 distinct groups or factions.
+    If GPT fails, we fallback to npc_data["affiliations"].
     """
     existing_affils = npc_data.get("affiliations", [])
     attempt = 0
@@ -1567,71 +1566,90 @@ async def refine_affiliations(
     schedule_txt = json.dumps(npc_data.get("schedule", {}), indent=2)
     hobbies_txt = npc_data.get("hobbies", [])
     likes_txt = npc_data.get("likes", [])
-    npc_name = npc_data.get("npc_name", "Unknown")
+    npc_name = npc_data.get("npc_name", "UnknownNPC")
 
     while attempt < max_retries:
         attempt += 1
+        logging.info(f"[refine_affiliations] Attempt {attempt} of {max_retries}")
 
+        # Build the prompt
         system_prompt = f"""
 NPC name: {npc_name}
 Environment:
 {environment_desc}
 
-Return JSON with key "affiliations" containing 3-5 groups:
-- Professional organizations
-- Social circles
-- Modern hobby groups
-- Community organizations
-- Local networks
+Return strictly valid JSON with exactly 1 top-level key:
+  "affiliations"
 
-Value is an array of group/faction names that make sense
-given the NPC's schedule, hobbies, and likes.
+The value is an array of 3-5 distinct groups or factions the NPC belongs to.
+They must make sense given the NPC's schedule, hobbies, likes, and environment.
 
 Schedule:
 {schedule_txt}
 Hobbies: {hobbies_txt}
 Likes: {likes_txt}
 
-
-
-No duplicates, no near-duplicates. If a group/faction is similar to one that already exists, use the name from the first one instead.
+No duplicates or near-duplicates. If you cannot comply, return {{}}.
 """
+
+        # Call GPT
         raw_gpt = await asyncio.to_thread(
             get_chatgpt_response,
             conversation_id,
             environment_desc,
             system_prompt
         )
-        text_response = raw_gpt.get("response","")
-        extracted = {}
 
+        text_response = raw_gpt.get("response", "")
+        logging.debug(f"[refine_affiliations] GPT raw => {raw_gpt}")
+
+        extracted_affils = []
+
+        # 1) If GPT used function_call
         if raw_gpt.get("type") == "function_call":
-            extracted = raw_gpt.get("function_args", {})
+            # Attempt to extract 'affiliations' from function call
+            extracted_affils = extract_field_from_function_call(raw_gpt, "affiliations", npc_id)
+            if not extracted_affils:
+                # Optionally parse 'narrative' or other text if you want a fallback
+                narrative_text = raw_gpt.get("function_args", {}).get("narrative", "")
+                if narrative_text:
+                    # If you want, parse bullet lines from narrative
+                    pass  # not implemented here
+
         else:
+            # 2) Normal text response => parse top-level JSON
             try:
-                extracted = json.loads(text_response)
+                data = json.loads(text_response)
+                maybe = data.get("affiliations")
+                if isinstance(maybe, list):
+                    extracted_affils = maybe
             except:
+                # 3) curly brace fallback
                 match_j = re.search(r'(\{[\s\S]*\})', text_response)
                 if match_j:
                     jstr = match_j.group(1)
                     try:
-                        extracted = json.loads(jstr)
+                        data = json.loads(jstr)
+                        maybe = data.get("affiliations")
+                        if isinstance(maybe, list):
+                            extracted_affils = maybe
                     except:
-                        extracted = {}
+                        pass
 
-        new_affil = extracted.get("affiliations", [])
-        if isinstance(new_affil, list) and 3 <= len(new_affil) <= 5:
-            final_affils = new_affil
+        # Now check if we have 3-5 distinct items
+        if extracted_affils and 3 <= len(extracted_affils) <= 5:
+            final_affils = extracted_affils
+            logging.info("[refine_affiliations] Found valid affiliations array.")
             break
         else:
-            logging.warning(f"[refine_affiliations] attempt={attempt}, invalid => retry.")
+            logging.warning(f"[refine_affiliations] attempt={attempt} => invalid array => retrying...")
 
+    # If still empty, fallback
     if not final_affils:
-        logging.warning("[refine_affiliations] fallback => old or empty.")
+        logging.warning("[refine_affiliations] Fallback => using existing affiliations or empty.")
         return existing_affils
 
     return final_affils
-
 
 async def refine_location_and_relationships(
     user_id: int,
