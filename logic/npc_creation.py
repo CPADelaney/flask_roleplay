@@ -1163,7 +1163,6 @@ def extract_field_from_function_call(
     Returns the extracted field (string/list/dict) or "" / {} / [] if not found.
     """
     fn_args = raw_gpt.get("function_args", {})
-    npc_id = npc_data.get("npc_id", None)
     if not isinstance(fn_args, dict):
         return ""
 
@@ -1210,6 +1209,7 @@ def extract_field_from_function_call(
 async def refine_physical_description(
     user_id: int,
     conversation_id: int,
+    npc_id: int, 
     npc_data: dict,
     environment_desc: str,
     max_retries: int = 2
@@ -1222,7 +1222,6 @@ async def refine_physical_description(
     """
     attempt = 0
     final_description = npc_data.get("physical_description", "") or ""
-    npc_id = npc_data.get("npc_id", None)  # in case we store the ID
     npc_name = npc_data.get("npc_name", "Unknown NPC")
 
     logging.info(f"[refine_physical_description] Starting refinement for NPC {npc_name}")
@@ -1331,6 +1330,7 @@ def parse_physical_desc_from_text(text: str) -> str:
 async def refine_schedule(
     user_id: int,
     conversation_id: int,
+    npc_id: int, 
     npc_data: dict,
     environment_desc: str,
     day_names: list,
@@ -1342,7 +1342,6 @@ async def refine_schedule(
     3) Each day must have morning/afternoon/evening/night short strings.
     """   
     attempt = 0
-    npc_id = npc_data.get("npc_id", None)  # in case we store the ID
     final_schedule = {}
 
     # If NPC already has a partial schedule, we keep it if GPT fails
@@ -1445,6 +1444,7 @@ Return {{}} if these requirements cannot be met. No additional text or formattin
 async def refine_memories(
     user_id: int,
     conversation_id: int,
+    npc_id: int, 
     npc_data: dict,
     environment_desc: str,
     max_retries: int = 2
@@ -1550,6 +1550,7 @@ Each relationship needs 3+ references showing evolving dynamics. Memories can bu
 async def refine_affiliations(
     user_id: int,
     conversation_id: int,
+    npc_id: int, 
     npc_data: dict,
     environment_desc: str,
     max_retries: int = 2
@@ -1635,6 +1636,7 @@ No duplicates, no near-duplicates. If a group/faction is similar to one that alr
 async def refine_location_and_relationships(
     user_id: int,
     conversation_id: int,
+    npc_id: int, 
     npc_data: dict,
     environment_desc: str,
     max_retries: int = 2
