@@ -1163,6 +1163,7 @@ def extract_field_from_function_call(
     Returns the extracted field (string/list/dict) or "" / {} / [] if not found.
     """
     fn_args = raw_gpt.get("function_args", {})
+    npc_id = npc_data.get("npc_id", None)
     if not isinstance(fn_args, dict):
         return ""
 
