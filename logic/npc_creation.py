@@ -1502,7 +1502,7 @@ Each relationship needs 3+ references showing evolving dynamics. Memories can bu
             get_chatgpt_response,
             conversation_id,
             environment_desc,
-            prompt
+            system_prompt
         )
         text_response = raw_gpt.get("response","")
 
@@ -1687,7 +1687,7 @@ Environment: {environment_desc}
             get_chatgpt_response,
             conversation_id,
             environment_desc,
-            prompt
+            system_prompt
         )
         text_response = raw_gpt.get("response","")
 
