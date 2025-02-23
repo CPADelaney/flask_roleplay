@@ -1151,6 +1151,67 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
 
     logging.info(f"[assign_random_relationships] Finished relationships for NPC {new_npc_id}.")
 
+def extract_field_from_function_call(
+    raw_gpt: dict,
+    field_name: str,
+    target_npc_id: int = None
+) -> str | dict | list:
+    """
+    Looks for `field_name` in either npc_creations or npc_updates within a GPT function_call.
+    If `target_npc_id` is provided, tries to match that in npc_updates/npc_creations;
+    otherwise, if there is only one item, uses that one.
+    Returns the extracted field (string/list/dict) or "" / {} / [] if not found.
+    """
+    fn_args = raw_gpt.get("function_args", {})
+    if not isinstance(fn_args, dict):
+        return ""
+
+    # 1) Possibly check top-level first
+    if field_name in fn_args and fn_args[field_name]:
+        return fn_args[field_name]
+
+    # 2) Check npc_creations
+    creations = fn_args.get("npc_creations", [])
+    if isinstance(creations, list) and creations:
+        # If we have a target_npc_id, try to match
+        if target_npc_id is not None:
+            match = next(
+                (c for c in creations if c.get("npc_id") == target_npc_id),
+                None
+            )
+            if match and field_name in match:
+                return match[field_name]
+        # If no target_npc_id or none matched, but there's only 1 item, fallback
+        if len(creations) == 1:
+            candidate = creations[0].get(field_name)
+            if candidate not in [None, ""]:
+                return candidate
+
+    # 3) Check npc_updates
+    updates = fn_args.get("npc_updates", [])
+    if isinstance(updates, list) and updates:
+        if target_npc_id is not None:
+            match = next(
+                (u for u in updates if u.get("npc_id") == target_npc_id),
+                None
+            )
+            if match and field_name in match:
+                return match[field_name]
+        # fallback if single update
+        if len(updates) == 1:
+            candidate = updates[0].get(field_name)
+            if candidate not in [None, ""]:
+                return candidate
+
+    # Nothing found
+    return ""
+
+
+import json
+import re
+import logging
+import asyncio
+
 async def refine_physical_description(
     user_id: int,
     conversation_id: int,
@@ -1159,97 +1220,118 @@ async def refine_physical_description(
     max_retries: int = 2
 ) -> str:
     """
-    1) GPT request focuses ONLY on a 'physical_description'.
+    1) GPT request focuses ONLY on 'physical_description'.
     2) We ask for strictly valid JSON with top-level key "physical_description".
-    3) The value must be at least 2 paragraphs describing the NPC's appearance
-       (not location items, not perk text).
+    3) The value must be at least 2 paragraphs describing the NPC's (over-the-top) appearance.
+    4) Also handle function_call => npc_creations / npc_updates with "physical_description" inside.
     """
     attempt = 0
     final_description = npc_data.get("physical_description", "") or ""
-    
-    logging.info(f"[refine_physical_description] Starting refinement for NPC {npc_data.get('npc_name')}")
-    
+    npc_id = npc_data.get("npc_id", None)  # in case we store the ID
+    npc_name = npc_data.get("npc_name", "Unknown NPC")
+
+    logging.info(f"[refine_physical_description] Starting refinement for NPC {npc_name}")
+
     while attempt < max_retries:
         attempt += 1
         logging.info(f"[refine_physical_description] Attempt {attempt} of {max_retries}")
-        
+
+        # Build the prompt
         system_prompt = f"""
 We have an NPC in a femdom environment.
 NPC partial data (no schedule or memory, just background):
 {json.dumps(npc_data, indent=2)}
 Environment:
 {environment_desc}
+
 Return strictly valid JSON with exactly 1 key:
   "physical_description"
-This must be at least 2 paragraphs describing the NPC's body/appearance.
-NPC should be over-the-top curvaceous (inspired by M-size games). Almost comical level of boobs/ass, but keep it in-lore.
-Example format:
-{{
-  "physical_description": "First paragraph describing appearance...\n\nSecond paragraph with more details..."
-}}
+
+It must be at least 2 paragraphs describing the NPC's body/appearance, especially over-the-top curves. 
+If you cannot comply, return {{}}.
 """
-        # Log the raw GPT request
-        logging.debug(f"[refine_physical_description] Sending prompt for attempt {attempt}")
-        
+        # 1) Call GPT
         raw_gpt = await asyncio.to_thread(
             get_chatgpt_response,
             conversation_id,
             environment_desc,
             system_prompt
         )
-        
-        # Log the raw response
-        logging.info(f"[refine_physical_description] Raw GPT response: {raw_gpt}")
-        
         text_response = raw_gpt.get("response", "")
-        logging.info(f"[refine_physical_description] Text response: {text_response[:200]}...")
-        
-        extracted = {}
+        logging.debug(f"[refine_physical_description] GPT raw => {raw_gpt}")
+
+        # 2) Attempt to parse from function_call
+        desc_candidate = ""
         if raw_gpt.get("type") == "function_call":
-            extracted = raw_gpt.get("function_args", {})
-            logging.info(f"[refine_physical_description] Function call args: {extracted}")
+            from .your_helpers import extract_field_from_function_call
+            candidate = extract_field_from_function_call(raw_gpt, "physical_description", npc_id)
+            if candidate:
+                desc_candidate = candidate
+            else:
+                # Maybe there's a 'narrative' we can parse as a fallback
+                narrative_text = raw_gpt.get("function_args", {}).get("narrative", "")
+                if narrative_text:
+                    desc_candidate = parse_physical_desc_from_text(narrative_text)
         else:
-            # Try direct JSON parse
+            # 3) If normal JSON, try top-level
             try:
-                extracted = json.loads(text_response)
-                logging.info(f"[refine_physical_description] Successfully parsed JSON: {extracted}")
-            except json.JSONDecodeError as e:
-                logging.error(f"[refine_physical_description] Direct JSON parse failed: {e}")
-                # Attempt curly‐brace extraction
+                data = json.loads(text_response)
+                if "physical_description" in data:
+                    desc_candidate = data["physical_description"]
+            except:
+                # 4) If we can’t parse entire text, look for curly braces
                 match_j = re.search(r'(\{[\s\S]*\})', text_response)
                 if match_j:
                     jstr = match_j.group(1)
-                    logging.info(f"[refine_physical_description] Found JSON-like string: {jstr[:200]}...")
                     try:
-                        extracted = json.loads(jstr)
-                        logging.info(f"[refine_physical_description] Successfully parsed extracted JSON: {extracted}")
-                    except json.JSONDecodeError as e:
-                        logging.error(f"[refine_physical_description] Extracted JSON parse failed: {e}")
-                        extracted = {}
-                else:
-                    logging.error("[refine_physical_description] No JSON-like structure found in response")
-        
-        desc_candidate = extracted.get("physical_description", "")
-        logging.info(f"[refine_physical_description] Candidate description length: {len(desc_candidate)}")
-        logging.info(f"[refine_physical_description] Candidate preview: {desc_candidate[:100]}...")
-        
-        if desc_candidate and len(desc_candidate.strip()) >= 30:
-            final_description = desc_candidate.strip()
-            logging.info("[refine_physical_description] Successfully got valid description")
+                        data = json.loads(jstr)
+                        if "physical_description" in data:
+                            desc_candidate = data["physical_description"]
+                    except:
+                        pass
+
+        # 5) If still empty, fallback to bullet parse in text_response
+        if not desc_candidate:
+            desc_candidate = parse_physical_desc_from_text(text_response)
+
+        desc_candidate = (desc_candidate or "").strip()
+        logging.info(f"[refine_physical_description] Candidate desc length={len(desc_candidate)}")
+
+        # Validate length
+        if len(desc_candidate) >= 30:
+            final_description = desc_candidate
+            logging.info("[refine_physical_description] Successfully got valid description.")
             break
         else:
-            logging.warning(
-                f"[refine_physical_description] attempt={attempt}, short/empty ({len(desc_candidate)} chars) => retry."
-            )
-    
-    # Fallback if empty
+            logging.warning("[refine_physical_description] insufficient => retrying.")
+
+    # 6) If still missing, fallback
     if not final_description or len(final_description) < 30:
-        logging.warning("[refine_physical_description] using fallback desc.")
-        sex = npc_data.get("sex", "female")
+        sex = npc_data.get("sex","female")
         final_description = f"A generic {sex} NPC with no distinguishing features."
-    
-    logging.info(f"[refine_physical_description] Final description length: {len(final_description)}")
+
+    logging.info(f"[refine_physical_description] Final desc length={len(final_description)}")
     return final_description
+
+
+def parse_physical_desc_from_text(text: str) -> str:
+    """
+    Minimal bullet/paragraph fallback if GPT didn't give direct JSON.
+    """
+    # A simple example: look for lines with "Physical Description:"
+    bullet_pattern = re.compile(r"(?i)(?:^|\n)-?\s*Physical\s*Description\s*:\s*(.+?)(?:\n|$)")
+    match = bullet_pattern.search(text)
+    if match:
+        return match.group(1).strip()
+
+    # fallback paragraph guess
+    paragraphs = re.split(r"\n\s*\n", text)
+    best = ""
+    for para in paragraphs:
+        if len(para) > len(best) and "hair" in para.lower() and "eyes" in para.lower():
+            best = para
+    return best.strip()
+
 
 
 async def refine_schedule(
@@ -1318,41 +1400,50 @@ Return {{}} if these requirements cannot be met. No additional text or formattin
             environment_desc,
             system_prompt
         )
-        text_response = raw_gpt.get("response","")
-        extracted = {}
+        text_response = raw_gpt.get("response", "")
 
+        # 1) Function call check
+        new_sched = {}
         if raw_gpt.get("type") == "function_call":
-            extracted = raw_gpt.get("function_args", {})
+            from .your_helpers import extract_field_from_function_call
+            candidate = extract_field_from_function_call(raw_gpt, "schedule", npc_id)
+            if candidate and isinstance(candidate, dict):
+                new_sched = candidate
         else:
+            # 2) Parse top-level
             try:
-                extracted = json.loads(text_response)
+                data = json.loads(text_response)
+                if "schedule" in data and isinstance(data["schedule"], dict):
+                    new_sched = data["schedule"]
             except:
                 match_j = re.search(r'(\{[\s\S]*\})', text_response)
                 if match_j:
                     jstr = match_j.group(1)
                     try:
-                        extracted = json.loads(jstr)
+                        data = json.loads(jstr)
+                        if "schedule" in data and isinstance(data["schedule"], dict):
+                            new_sched = data["schedule"]
                     except:
-                        extracted = {}
+                        pass
 
-        schedule_candidate = extracted.get("schedule", {})
-        # Validate shape
-        if isinstance(schedule_candidate, dict) and len(schedule_candidate) == len(day_names):
-            final_schedule = schedule_candidate
+        # 3) Validate new_sched structure (day_names, each day => 4 timeslots)
+        if new_sched and all(day in new_sched for day in day_names):
+            final_schedule = new_sched
             break
         else:
-            logging.warning(f"[refine_schedule] attempt={attempt}, invalid => retry.")
+            logging.warning("[refine_schedule] attempt=%d, invalid => retry.", attempt)
 
+    # fallback
     if not final_schedule:
-        logging.warning("[refine_schedule] using fallback with Free time.")
-        final_schedule = {}
-        for d in day_names:
-            final_schedule[d] = {
-                "morning": "Free time",
-                "afternoon": "Free time",
-                "evening": "Free time",
-                "night": "Free time"
-            }
+        logging.warning("[refine_schedule] using fallback => free time")
+        final_schedule = {
+            d: {
+                "Morning": "Free time",
+                "Afternoon": "Free time",
+                "Evening": "Free time",
+                "Night": "Free time"
+            } for d in day_names
+        }
 
     return final_schedule
 
@@ -1417,35 +1508,48 @@ Each relationship needs 3+ references showing evolving dynamics. Memories can bu
             get_chatgpt_response,
             conversation_id,
             environment_desc,
-            system_prompt
+            prompt
         )
         text_response = raw_gpt.get("response","")
-        extracted = {}
+
+        new_mem = []
 
         if raw_gpt.get("type") == "function_call":
-            extracted = raw_gpt.get("function_args", {})
+            from .your_helpers import extract_field_from_function_call
+            candidate = extract_field_from_function_call(raw_gpt, "memory", npc_id)
+            if isinstance(candidate, list):
+                new_mem = candidate
+            elif isinstance(candidate, str):
+                # if it's a single string
+                new_mem = [candidate]
         else:
             try:
-                extracted = json.loads(text_response)
+                data = json.loads(text_response)
+                # memory might be an array or string => unify to array
+                mem_val = data.get("memory", [])
+                if isinstance(mem_val, list):
+                    new_mem = mem_val
+                elif isinstance(mem_val, str):
+                    new_mem = [mem_val]
             except:
                 match_j = re.search(r'(\{[\s\S]*\})', text_response)
                 if match_j:
                     jstr = match_j.group(1)
                     try:
-                        extracted = json.loads(jstr)
+                        data = json.loads(jstr)
+                        mem_val = data.get("memory", [])
+                        if isinstance(mem_val, list):
+                            new_mem = mem_val
+                        elif isinstance(mem_val, str):
+                            new_mem = [mem_val]
                     except:
-                        extracted = {}
+                        pass
 
-        new_mem = extracted.get("memory", [])
-        if isinstance(new_mem, list) and len(new_mem) >= needed_count:
+        if len(new_mem) >= needed_count:
             final_mem = new_mem
             break
         else:
-            logging.warning(f"[refine_memories] attempt={attempt}, insufficient => retry.")
-
-    if not final_mem or len(final_mem) < needed_count:
-        logging.warning("[refine_memories] using fallback to existing memories.")
-        return existing_mem
+            logging.warning("[refine_memories] attempt=%d => insufficient memory entries, retry", attempt)
 
     return final_mem
 
@@ -1588,36 +1692,55 @@ Environment: {environment_desc}
             get_chatgpt_response,
             conversation_id,
             environment_desc,
-            system_prompt
+            prompt
         )
         text_response = raw_gpt.get("response","")
-        extracted = {}
+
+        new_loc = ""
+        new_rels = []
 
         if raw_gpt.get("type") == "function_call":
-            extracted = raw_gpt.get("function_args", {})
+            from .your_helpers import extract_field_from_function_call
+            loc_candidate = extract_field_from_function_call(raw_gpt, "current_location", npc_id)
+            rel_candidate = extract_field_from_function_call(raw_gpt, "relationships", npc_id)
+
+            if isinstance(loc_candidate, str):
+                new_loc = loc_candidate
+            if isinstance(rel_candidate, list):
+                new_rels = rel_candidate
+
         else:
             try:
-                extracted = json.loads(text_response)
+                data = json.loads(text_response)
+                loc_val = data.get("current_location","")
+                rel_val = data.get("relationships", [])
+                if isinstance(loc_val, str):
+                    new_loc = loc_val
+                if isinstance(rel_val, list):
+                    new_rels = rel_val
             except:
                 match_j = re.search(r'(\{[\s\S]*\})', text_response)
                 if match_j:
                     jstr = match_j.group(1)
                     try:
-                        extracted = json.loads(jstr)
+                        data = json.loads(jstr)
+                        loc_val = data.get("current_location", "")
+                        rel_val = data.get("relationships", [])
+                        if isinstance(loc_val, str):
+                            new_loc = loc_val
+                        if isinstance(rel_val, list):
+                            new_rels = rel_val
                     except:
-                        extracted = {}
+                        pass
 
-        new_loc = extracted.get("current_location", "")
-        new_rels = extracted.get("relationships", [])
-
-        if isinstance(new_loc, str) and isinstance(new_rels, list):
+        if new_loc and isinstance(new_rels, list):
             final_loc = new_loc
             final_rels = new_rels
             break
         else:
-            logging.warning(f"[refine_location_and_relationships] attempt={attempt}, invalid => retry.")
+            logging.warning("[refine_location_and_relationships] attempt=%d => invalid, retry", attempt)
 
-    return final_loc, final_rels
+    return (final_loc, final_rels)
 
 async def refine_npc_final_data(
     user_id: int,
