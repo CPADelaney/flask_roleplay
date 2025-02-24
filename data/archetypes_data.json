@@ -3415,7 +3415,7 @@
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 0],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
       "respect_range": [40, 50],
       "respect_modifier": 0,
