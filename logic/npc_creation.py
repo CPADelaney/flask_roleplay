@@ -1042,35 +1042,70 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
 
     relationships = []
 
-    # Automatically add familial relationships based on NPC archetypes
-    familial_set = {"mother", "stepmother", "aunt", "older sister", "stepsister", "babysitter"}
+    # Define explicit mapping for archetypes to relationship labels.
+    # This mapping covers both familial and non-familial roles.
+    explicit_role_map = {
+        "mother": "mother",
+        "stepmother": "stepmother",
+        "aunt": "aunt",
+        "older sister": "older sister",
+        "stepsister": "stepsister",
+        "babysitter": "babysitter",
+        "friend from online interactions": "online friend",
+        "neighbor": "neighbor",
+        "rival": "rival",
+        "classmate": "classmate",
+        "lover": "lover",
+        "colleague": "colleague",
+        "teammate": "teammate",
+        "boss/supervisor": "boss/supervisor",
+        "teacher/principal": "teacher/principal",
+        "landlord": "landlord",
+        "roommate/housemate": "roommate",
+        "ex-girlfriend/ex-wife": "ex-partner",
+        "therapist": "therapist",
+        "domestic authority": "head of household",
+        "the one who got away": "the one who got away",
+        "childhood friend": "childhood friend",
+        "friend's wife": "friend",
+        "friend's girlfriend": "friend",
+        "best friend's sister": "friend's sister"
+    }
+    
+    # First, add relationships based on explicit archetype mapping.
     if npc_archetypes:
         for arc in npc_archetypes:
             arc_name = arc.get("name", "").strip().lower()
-            if arc_name in familial_set:
-                # Automatically add a relationship from this NPC to the player
+            if arc_name in explicit_role_map:
+                rel_label = explicit_role_map[arc_name]
+                # Add relationship from NPC to player using the explicit role.
                 relationships.append({
                     "target_entity_type": "player",
                     "target_entity_id": user_id,  # player ID
-                    "relationship_label": arc_name  # e.g., "aunt"
+                    "relationship_label": rel_label
                 })
-                logging.info(f"[assign_random_relationships] Automatically added familial relationship '{arc_name}' for NPC {new_npc_id} to player.")
-
-    # Existing random relationship assignment:
-    familial = ["mother", "sister", "aunt"]
-    non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
-                    "colleague", "classmate", "teammate", "underling", "thrall", "rival"]
-
-    # 1) Maybe 50% chance to relate with the player (in addition to familial)
-    if random.random() < 0.5:
-        rel_type = random.choice(familial) if random.random() < 0.2 else random.choice(non_familial)
-        relationships.append({
-            "target_entity_type": "player",
-            "target_entity_id": user_id,
-            "relationship_label": rel_type
-        })
-
-    # 2) Gather other NPCs
+                logging.info(f"[assign_random_relationships] Added explicit relationship '{rel_label}' for NPC {new_npc_id} to player.")
+    
+    # Next, determine which explicit roles (if any) were already added.
+    explicit_roles_added = {rel["relationship_label"] for rel in relationships}
+    
+    # Define default lists for random selection.
+    default_familial = ["mother", "sister", "aunt"]
+    default_non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
+                              "colleague", "classmate", "teammate", "underling", "thrall", "rival", "ex-girlfriend", "ex-wife", "boss", "roommate", "childhood friend"]
+    
+    # If no explicit familial role was added, consider assigning a random non-familial relationship with the player.
+    if not (explicit_roles_added & set(default_familial)):
+        if random.random() < 0.5:
+            rel_type = random.choice(default_non_familial)
+            relationships.append({
+                "target_entity_type": "player",
+                "target_entity_id": user_id,
+                "relationship_label": rel_type
+            })
+            logging.info(f"[assign_random_relationships] Randomly added non-familial relationship '{rel_type}' for NPC {new_npc_id} to player.")
+    
+    # Now add relationships with other NPCs.
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -1080,21 +1115,25 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
     """, (user_id, conversation_id, new_npc_id))
     rows = cursor.fetchall()
     conn.close()
-
-    # 3) For each other NPC, 30% chance
+    
+    # For each other NPC, use explicit mapping if possible; otherwise, fall back to random choice.
     for (old_npc_id, old_npc_name, old_arche_summary) in rows:
         if random.random() < 0.3:
-            rel_type = (random.choice(familial)
-                        if random.random() < 0.2 else
-                        random.choice(non_familial))
+            # Check if the current NPC's explicit roles should be used.
+            if explicit_roles_added:
+                # Prefer one of the explicit roles if available.
+                rel_type = random.choice(list(explicit_roles_added))
+            else:
+                rel_type = random.choice(default_non_familial)
             relationships.append({
                 "target_entity_type": "npc",
                 "target_entity_id": old_npc_id,
                 "relationship_label": rel_type,
                 "target_archetype_summary": old_arche_summary or ""
             })
-
-    # 4) Actually create them (existing logic remains unchanged)
+            logging.info(f"[assign_random_relationships] Added relationship '{rel_type}' between NPC {new_npc_id} and NPC {old_npc_id}.")
+    
+    # Finally, create these relationships in the database and generate associated memories.
     for rel in relationships:
         memory_text = get_shared_memory(user_id, conversation_id, rel, new_npc_name)
         record_npc_event(user_id, conversation_id, new_npc_id, memory_text)
@@ -1105,7 +1144,7 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
         if rel["target_entity_type"] == "player":
             create_social_link(
                 user_id, conversation_id,
-                entity1_type="npc",  entity1_id=new_npc_id,
+                entity1_type="npc", entity1_id=new_npc_id,
                 entity2_type="player", entity2_id=rel["target_entity_id"],
                 link_type=rel["relationship_label"]
             )
@@ -1148,8 +1187,9 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
                 rec_type,
                 "npc", new_npc_id
             )
-
+    
     logging.info(f"[assign_random_relationships] Finished relationships for NPC {new_npc_id}.")
+
 
 def extract_field_from_function_call(
     raw_gpt: dict,
