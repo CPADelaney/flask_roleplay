@@ -1452,30 +1452,26 @@ async def refine_memories(
     """
     1) Sends a GPT request focusing ONLY on "memory".
     2) Requires at least 3 short memory entries per relationship.
-    3) Each memory is a short 1–3 sentence snippet describing a key event
-       that reveals how the relationship formed or evolved.
-    4) Returns a JSON array under the "memory" key.
+    3) Each memory is a short 1–3 sentence snippet describing how the relationship formed/evolved.
+    4) Returns a JSON array under the "memory" key or uses existing memories if GPT fails.
     """
+    import json, re
 
     existing_mem = npc_data.get("memory", [])
     relationships = npc_data.get("relationships", [])
     if not relationships:
-        # No relationships => no new memories are required.
-        return existing_mem
+        return existing_mem  # No relationships => no new memories needed
 
-    # Calculate the minimal number of memory entries required.
     needed_count = 3 * len(relationships)
+    final_mem = existing_mem[:]
 
-    # Build a text summary of the relationships for context.
+    # Build a text summary of the relationships
     rel_info = []
     for r in relationships:
         eid = r.get("entity_id", 0)
         lbl = r.get("relationship_label", "unknown")
         etype = r.get("entity_type", "npc")
         rel_info.append(f"- ID={eid} [{etype}] => '{lbl}'")
-
-    attempt = 0
-    final_mem = existing_mem[:]
 
     system_prompt = f"""
 NPC partial data:
@@ -1491,11 +1487,11 @@ Return strictly valid JSON with exactly 1 key: "memory".
 Its value must be a JSON array with at least {needed_count} entries (strings).
 There should be three memories for each relationship between the NPCs.
 Each entry must be a 1–3 sentence memory that:
-  - References at least one of the relationships listed above,
-  - Describes a small but meaningful event that shows how the relationship formed or evolved,
+  - References at least one of the relationships above,
+  - Describes a small, meaningful event that shaped the relationship,
   - Can mention more than one relationship if appropriate.
 
-Follow this exact example format (note the doubled curly braces for literal braces):
+Follow exactly this format:
 
 {{
   "memory": [
@@ -1505,13 +1501,14 @@ Follow this exact example format (note the doubled curly braces for literal brac
   ]
 }}
 
-Do not include any extra commentary, code fences, or additional keys.
-If you cannot comply, return {{}}
+No extra commentary, code fences, or keys. If you cannot comply, return {{}}.
 """
-    # Attempt to get a valid response from GPT.
+
+    attempt = 0
     while attempt < max_retries:
         attempt += 1
 
+        # Call GPT
         raw_gpt = await asyncio.to_thread(
             get_chatgpt_response,
             conversation_id,
@@ -1519,34 +1516,71 @@ If you cannot comply, return {{}}
             system_prompt
         )
         text_response = raw_gpt.get("response", "")
-        extracted = {}
 
+        # 1) If GPT used a function call, we try to extract "memory" from function_args
         if raw_gpt.get("type") == "function_call":
-            extracted = raw_gpt.get("function_args", {})
-        else:
-            try:
-                extracted = json.loads(text_response)
-            except json.JSONDecodeError:
-                match_j = re.search(r'(\{[\s\S]*\})', text_response)
-                if match_j:
-                    jstr = match_j.group(1)
-                    try:
-                        extracted = json.loads(jstr)
-                    except json.JSONDecodeError:
-                        extracted = {}
+            # First, try our custom helper that checks npc_creations / npc_updates, etc.
+            candidate_mem = extract_field_from_function_call(raw_gpt, "memory", npc_id)
+            if candidate_mem:
+                # If the returned data is a list and big enough, great!
+                if isinstance(candidate_mem, list) and len(candidate_mem) >= needed_count:
+                    final_mem = candidate_mem
+                    break
+                else:
+                    # fallback to normal text parsing
+                    new_mem = parse_memory_from_text(text_response)
+            else:
+                # No "memory" field found => parse the text fallback
+                new_mem = parse_memory_from_text(text_response)
 
-        new_mem = extracted.get("memory", [])
-        if isinstance(new_mem, list) and len(new_mem) >= needed_count:
+        else:
+            # 2) No function call => parse from text
+            new_mem = parse_memory_from_text(text_response)
+
+        if len(new_mem) >= needed_count:
             final_mem = new_mem
             break
         else:
-            logging.warning(f"[refine_memories] attempt={attempt}, insufficient memory entries ({len(new_mem)} provided) => retry.")
+            logging.warning(
+                f"[refine_memories] attempt={attempt}, "
+                f"insufficient memory entries ({len(new_mem)} provided) => retry."
+            )
 
-    if not final_mem or len(final_mem) < needed_count:
+    if len(final_mem) < needed_count:
         logging.warning("[refine_memories] Fallback: returning existing memories.")
         return existing_mem
 
     return final_mem
+
+
+def parse_memory_from_text(text: str) -> list:
+    """
+    Try to parse a "memory" array from plain text JSON. Returns [] if not found or invalid.
+    """
+    import json, re
+
+    # 1) Direct parse
+    try:
+        data = json.loads(text)
+        mem = data.get("memory")
+        if isinstance(mem, list):
+            return mem
+    except json.JSONDecodeError:
+        pass
+
+    # 2) Fallback: look for a curly-brace substring
+    match_j = re.search(r'(\{[\s\S]*\})', text)
+    if match_j:
+        jstr = match_j.group(1)
+        try:
+            data = json.loads(jstr)
+            mem = data.get("memory")
+            if isinstance(mem, list):
+                return mem
+        except json.JSONDecodeError:
+            pass
+
+    return []
 
 
 
@@ -1995,6 +2029,34 @@ async def spawn_multiple_npcs(
         npc_ids.append(new_id)
     return npc_ids
 
+def extract_chase_schedule(data):
+    """Helper function to extract the ChaseSchedule from various possible structures"""
+    if isinstance(data, dict):
+        # Direct match at top level
+        if "ChaseSchedule" in data:
+            return data["ChaseSchedule"]
+        
+        # Look one level deeper in case it's nested
+        for key, value in data.items():
+            if isinstance(value, dict) and "ChaseSchedule" in value:
+                return value["ChaseSchedule"]
+            
+            # If we have a key that matches a day name, this might be the schedule itself
+            # without the "ChaseSchedule" wrapper
+            if key in day_names and all(period in value for period in ["Morning", "Afternoon", "Evening", "Night"]):
+                # We found what looks like a day's schedule, so the parent object might be the schedule
+                if all(day in data for day in day_names):
+                    return data
+        
+        # As a last resort, check if the structure matches our expected format directly
+        if all(day in data for day in day_names) and all(
+            all(period in data[day] for period in ["Morning", "Afternoon", "Evening", "Night"])
+            for day in data if day in day_names
+        ):
+            return data
+    
+    return {}
+
 async def generate_chase_schedule(
     user_id: int,
     conversation_id: int,
@@ -2007,11 +2069,6 @@ async def generate_chase_schedule(
     3) Store the schedule in CurrentRoleplay or wherever you want.
     4) Return the schedule.
     """
-    import json
-    import asyncio
-    from logic.gpt_utils import spaced_gpt_call
-    from db.connection import get_db_connection
-
     # Step A: load 'Chase' stats from PlayerStats
     conn = get_db_connection()
     cur = conn.cursor()
@@ -2068,10 +2125,10 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
 """
 
     # Step C: Do the GPT call
-    response_dict = await spaced_gpt_call(conversation_id, environment_desc, chase_prompt, delay=1.0)
     if response_dict.get("type") == "function_call":
         # If GPT returned function_call, parse result
         chase_sched_data = response_dict.get("function_args", {})
+        chase_schedule = extract_chase_schedule(chase_sched_data)
     else:
         raw_text = response_dict.get("response", "").strip()
         # remove triple-backticks if needed
@@ -2082,12 +2139,13 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
             if lines and lines[-1].startswith("```"):
                 lines.pop()
             raw_text = "\n".join(lines).strip()
-
+    
         try:
             chase_sched_data = json.loads(raw_text)
+            chase_schedule = extract_chase_schedule(chase_sched_data)
         except Exception as e:
             logging.error("[generate_chase_schedule] parse error: %s", e)
-            chase_sched_data = {}
+            chase_schedule = {}
 
     chase_schedule = chase_sched_data.get("ChaseSchedule", {})
     # If GPT doesn't include 'ChaseSchedule', fallback empty
