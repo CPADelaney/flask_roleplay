@@ -3,17 +3,17 @@
     {
     "name": "Stepmother",
     "baseline_stats": {
-      "dominance_range": [40, 60],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [10, 20],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -40,17 +40,17 @@
   {
     "name": "Stepsister",
     "baseline_stats": {
-      "dominance_range": [40, 60],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [10, 20],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -76,17 +76,17 @@
   {
     "name": "Mother",
     "baseline_stats": {
-      "dominance_range": [50, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [10, 20],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -111,17 +111,17 @@
   {
     "name": "Aunt",
     "baseline_stats": {
-      "dominance_range": [50, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [10, 20],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -147,17 +147,17 @@
   {
     "name": "Older Sister",
     "baseline_stats": {
-      "dominance_range": [50, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [10, 20],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -181,17 +181,17 @@
   {
     "name": "Best Friend's Girlfriend",
     "baseline_stats": {
-      "dominance_range": [30, 60],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [5, 10],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -215,17 +215,17 @@
   {
     "name": "Best Friend's Sister",
     "baseline_stats": {
-      "dominance_range": [30, 60],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [5, 10],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -249,17 +249,17 @@
   {
     "name": "Friend's Wife",
     "baseline_stats": {
-      "dominance_range": [50, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [5, 10],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -283,17 +283,17 @@
   {
     "name": "Friend's Girlfriend",
     "baseline_stats": {
-      "dominance_range": [50, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [5, 10],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -317,17 +317,17 @@
   {
     "name": "Boss/Supervisor",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [10, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -351,17 +351,17 @@
   {
     "name": "Teacher/Principal",
     "baseline_stats": {
-      "dominance_range": [50, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [0, 5],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -385,17 +385,17 @@
   {
     "name": "Babysitter",
     "baseline_stats": {
-      "dominance_range": [40, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 60],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [0, 10],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -420,17 +420,17 @@
   {
     "name": "Landlord",
     "baseline_stats": {
-      "dominance_range": [50, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 60],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [10, 30],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -454,17 +454,17 @@
   {
     "name": "Roommate/Housemate",
     "baseline_stats": {
-      "dominance_range": [30, 50],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 40],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [0, 15],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 60],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -488,17 +488,17 @@
   {
     "name": "Neighbor",
     "baseline_stats": {
-      "dominance_range": [30, 60],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [0, 5],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -522,17 +522,17 @@
   {
     "name": "Ex-Girlfriend/Ex-Wife",
     "baseline_stats": {
-      "dominance_range": [40, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [5, 20],
+      "closeness_range": [10, 30],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -556,17 +556,17 @@
   {
     "name": "Therapist",
     "baseline_stats": {
-      "dominance_range": [40, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 40],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [50, 80],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 60],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -590,17 +590,17 @@
   {
     "name": "Doctor",
     "baseline_stats": {
-      "dominance_range": [60, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 60],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -624,17 +624,17 @@
   {
     "name": "Colleague",
     "baseline_stats": {
-      "dominance_range": [30, 60],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [0, 10],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 60],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -658,17 +658,17 @@
   {
     "name": "Celebrity",
     "baseline_stats": {
-      "dominance_range": [50, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [10, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -692,17 +692,17 @@
   {
     "name": "Warden",
     "baseline_stats": {
-      "dominance_range": [80, 100],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [70, 100],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [10, 30],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 100],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -726,17 +726,17 @@
   {
     "name": "Politician",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -760,17 +760,17 @@
   {
     "name": "Government Agent",
     "baseline_stats": {
-      "dominance_range": [60, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -794,17 +794,17 @@
   {
     "name": "CEO",
     "baseline_stats": {
-      "dominance_range": [80, 100],
+      "dominance_range": [30, 50],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [50, 70],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [-100, -80],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [60, 80],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -828,17 +828,17 @@
   {
     "name": "Drifter",
     "baseline_stats": {
-      "dominance_range": [40, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -862,17 +862,17 @@
   {
     "name": "College Student",
     "baseline_stats": {
-      "dominance_range": [30, 50],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 40],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 60],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -896,17 +896,17 @@
   {
     "name": "Rockstar",
     "baseline_stats": {
-      "dominance_range": [50, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -930,17 +930,17 @@
   {
     "name": "Serial Killer",
     "baseline_stats": {
-      "dominance_range": [80, 100],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [90, 100],
+      "cruelty_range": [80, 100],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [-50, 10],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [0, 30],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 100],
+      "intensity_range": [80, 100],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -964,17 +964,17 @@
   {
     "name": "Bank Robber",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -998,17 +998,17 @@
   {
     "name": "Cybercriminal",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1032,17 +1032,17 @@
   {
     "name": "Artificial Intelligence",
     "baseline_stats": {
-      "dominance_range": [70, 100],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1066,17 +1066,17 @@
   {
     "name": "Giantess",
     "baseline_stats": {
-      "dominance_range": [85, 100],
+      "dominance_range": [60, 80],
       "dominance_modifier": 0,
-      "cruelty_range": [80, 100],
+      "cruelty_range": [30, 40],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [10, 30],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [10, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [90, 100],
+      "intensity_range": [60, 80],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1104,17 +1104,17 @@
   {
     "name": "Cuckoldress/Hotwife",
     "baseline_stats": {
-      "dominance_range": [60, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 90],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1138,17 +1138,17 @@
   {
     "name": "A Woman Who Just Happens to Be Married",
     "baseline_stats": {
-      "dominance_range": [50, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 60],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1172,17 +1172,17 @@
   {
     "name": "A “Main Character” or “Hero” (RPG-Esque)",
     "baseline_stats": {
-      "dominance_range": [50, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 60],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1206,17 +1206,17 @@
   {
     "name": "Villain (RPG-Esque Character)",
     "baseline_stats": {
-      "dominance_range": [70, 100],
+      "dominance_range": [0, 20],
       "dominance_modifier": 0,
-      "cruelty_range": [60, 90],
+      "cruelty_range": [0, 20],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 100],
+      "intensity_range": [0, 20],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1240,17 +1240,17 @@
   {
     "name": "Mercenary",
     "baseline_stats": {
-      "dominance_range": [60, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1274,17 +1274,17 @@
   {
     "name": "Small Business Owner",
     "baseline_stats": {
-      "dominance_range": [40, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 60],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1342,17 +1342,17 @@
   {
     "name": "Fey",
     "baseline_stats": {
-      "dominance_range": [40, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1376,17 +1376,17 @@
   {
     "name": "Goth",
     "baseline_stats": {
-      "dominance_range": [40, 60],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1410,17 +1410,17 @@
   {
     "name": "A True Goddess",
     "baseline_stats": {
-      "dominance_range": [90, 100],
+      "dominance_range": [20, 40],
       "dominance_modifier": 0,
-      "cruelty_range": [70, 100],
+      "cruelty_range": [40, 60],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
       "trust_range": [20, 40],
       "trust_modifier": 0,
-      "respect_range": [10, 30],
+      "respect_range": [-100, -80],
       "respect_modifier": 0,
-      "intensity_range": [80, 100],
+      "intensity_range": [50, 70],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1444,17 +1444,17 @@
   {
     "name": "Haruhi Suzumiya-Type Goddess",
     "baseline_stats": {
-      "dominance_range": [90, 100],
+      "dominance_range": [20, 40],
       "dominance_modifier": 0,
-      "cruelty_range": [60, 90],
+      "cruelty_range": [40, 60],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [20, 40],
       "trust_modifier": 0,
-      "respect_range": [10, 30],
+      "respect_range": [-40, -20],
       "respect_modifier": 0,
-      "intensity_range": [70, 100],
+      "intensity_range": [50, 70],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1478,17 +1478,17 @@
   {
     "name": "Bowsette Personality",
     "baseline_stats": {
-      "dominance_range": [80, 100],
+      "dominance_range": [20, 40],
       "dominance_modifier": 0,
-      "cruelty_range": [70, 100],
+      "cruelty_range": [40, 60],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
       "trust_range": [20, 40],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [-40, -20],
       "respect_modifier": 0,
-      "intensity_range": [70, 100],
+      "intensity_range": [50, 70],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1512,17 +1512,17 @@
   {
     "name": "Junko Enoshima Personality",
     "baseline_stats": {
-      "dominance_range": [80, 100],
+      "dominance_range": [20, 40],
       "dominance_modifier": 0,
-      "cruelty_range": [80, 100],
+      "cruelty_range": [40, 60],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [10, 30],
+      "trust_range": [20, 40],
       "trust_modifier": 0,
-      "respect_range": [10, 30],
+      "respect_range": [-40, -20],
       "respect_modifier": 0,
-      "intensity_range": [80, 100],
+      "intensity_range": [50, 70],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1546,17 +1546,17 @@
   {
     "name": "Juri Han Personality",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [20, 40],
       "dominance_modifier": 0,
-      "cruelty_range": [70, 100],
+      "cruelty_range": [40, 60],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
       "trust_range": [20, 40],
       "trust_modifier": 0,
-      "respect_range": [20, 40],
+      "respect_range": [-40, -20],
       "respect_modifier": 0,
-      "intensity_range": [70, 100],
+      "intensity_range": [50, 70],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1580,17 +1580,17 @@
   {
     "name": "Gamer",
     "baseline_stats": {
-      "dominance_range": [30, 60],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 60],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1614,17 +1614,17 @@
   {
     "name": "Social Media Influencer",
     "baseline_stats": {
-      "dominance_range": [50, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [10, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1648,17 +1648,17 @@
   {
     "name": "Fitness Trainer",
     "baseline_stats": {
-      "dominance_range": [60, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1682,17 +1682,17 @@
   {
     "name": "Cheerleader/Team Captain",
     "baseline_stats": {
-      "dominance_range": [50, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1716,17 +1716,17 @@
   {
     "name": "Military Officer",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [50, 70],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1749,17 +1749,17 @@
   {
     "name": "Sorceress",
     "baseline_stats": {
-      "dominance_range": [70, 100],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1782,17 +1782,17 @@
   {
     "name": "Slave Overseer",
     "baseline_stats": {
-      "dominance_range": [80, 100],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [70, 90],
+      "cruelty_range": [50, 80],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [10, 30],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 100],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1815,17 +1815,17 @@
   {
     "name": "Enigmatic Stranger",
     "baseline_stats": {
-      "dominance_range": [50, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 60],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [10, 30],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1848,17 +1848,17 @@
   {
     "name": "Market Vendor",
     "baseline_stats": {
-      "dominance_range": [30, 60],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 50],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1881,17 +1881,17 @@
   {
     "name": "Rival",
     "baseline_stats": {
-      "dominance_range": [50, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [0, 10],
+      "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1914,17 +1914,17 @@
   {
     "name": "Queen Bee",
     "baseline_stats": {
-      "dominance_range": [60, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1947,17 +1947,17 @@
   {
     "name": "Haunted Entity",
     "baseline_stats": {
-      "dominance_range": [50, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [60, 90],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [-50, 10],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 100],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -1980,17 +1980,17 @@
   {
     "name": "Pirate",
     "baseline_stats": {
-      "dominance_range": [60, 90],
+      "dominance_range": [10, 25],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [10, 25],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [-80, -50],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [20, 30],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2013,17 +2013,17 @@
   {
     "name": "Drug Dealer",
     "baseline_stats": {
-      "dominance_range": [60, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 80],
+      "cruelty_range": [0, 10],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [-50, -40],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [20, 30],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2321,17 +2321,17 @@
   {
     "name": "Loan Shark",
     "baseline_stats": {
-      "dominance_range": [65, 85],
+      "dominance_range": [10, 30],
       "dominance_modifier": 0,
-      "cruelty_range": [55, 80],
+      "cruelty_range": [10, 30],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [0, 20],
+      "trust_range": [-80, -30],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 90],
+      "intensity_range": [40, 60],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2357,17 +2357,17 @@
   {
     "name": "Professional Wrestler",
     "baseline_stats": {
-      "dominance_range": [60, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [40, 60],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2391,17 +2391,17 @@
   {
     "name": "Martial Artist",
     "baseline_stats": {
-      "dominance_range": [60, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [40, 60],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2425,17 +2425,17 @@
   {
     "name": "Empress",
     "baseline_stats": {
-      "dominance_range": [80, 100],
+      "dominance_range": [70, 80],
       "dominance_modifier": 0,
-      "cruelty_range": [60, 90],
+      "cruelty_range": [10, 80],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 10],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [-50, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 90],
+      "intensity_range": [60, 100],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2459,17 +2459,17 @@
   {
     "name": "Queen",
     "baseline_stats": {
-      "dominance_range": [80, 100],
+      "dominance_range": [70, 80],
       "dominance_modifier": 0,
-      "cruelty_range": [60, 90],
+      "cruelty_range": [10, 80],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 10],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [-50, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 90],
+      "intensity_range": [60, 100],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2493,17 +2493,17 @@
   {
     "name": "Bartender",
     "baseline_stats": {
-      "dominance_range": [30, 50],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [10, 40],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 60],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2527,17 +2527,17 @@
   {
     "name": "Playful Tease",
     "baseline_stats": {
-      "dominance_range": [30, 50],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [10, 40],
+      "cruelty_range": [30, 50],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 60],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2561,17 +2561,17 @@
   {
     "name": "Primal Huntress",
     "baseline_stats": {
-      "dominance_range": [70, 100],
+      "dominance_range": [50, 75],
       "dominance_modifier": 0,
-      "cruelty_range": [60, 90],
+      "cruelty_range": [30, 40],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 100],
+      "intensity_range": [40, 50],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2595,17 +2595,17 @@
   {
     "name": "Primal Predator",
     "baseline_stats": {
-      "dominance_range": [70, 100],
+      "dominance_range": [50, 75],
       "dominance_modifier": 0,
-      "cruelty_range": [60, 90],
+      "cruelty_range": [30, 40],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 100],
+      "intensity_range": [40, 50],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2629,17 +2629,17 @@
   {
     "name": "Intern",
     "baseline_stats": {
-      "dominance_range": [30, 60],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 60],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2663,17 +2663,17 @@
   {
     "name": "Student",
     "baseline_stats": {
-      "dominance_range": [30, 60],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [20, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 60],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2697,17 +2697,17 @@
   {
     "name": "Nun",
     "baseline_stats": {
-      "dominance_range": [60, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2731,17 +2731,17 @@
   {
     "name": "Priestess",
     "baseline_stats": {
-      "dominance_range": [60, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2765,17 +2765,17 @@
   {
     "name": "Demoness",
     "baseline_stats": {
-      "dominance_range": [80, 100],
+      "dominance_range": [50, 80],
       "dominance_modifier": 0,
-      "cruelty_range": [70, 100],
+      "cruelty_range": [50, 80],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [10, 30],
+      "trust_range": [-100, -90],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [-100, -90],
       "respect_modifier": 0,
-      "intensity_range": [70, 100],
+      "intensity_range": [40, 50],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2799,17 +2799,17 @@
   {
     "name": "Devil",
     "baseline_stats": {
-      "dominance_range": [80, 100],
+      "dominance_range": [50, 80],
       "dominance_modifier": 0,
-      "cruelty_range": [70, 100],
+      "cruelty_range": [50, 80],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [10, 30],
+      "trust_range": [-100, -90],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [-100, -90],
       "respect_modifier": 0,
-      "intensity_range": [70, 100],
+      "intensity_range": [40, 50],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2833,17 +2833,17 @@
   {
     "name": "Filmmaker",
     "baseline_stats": {
-      "dominance_range": [50, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2869,17 +2869,17 @@
   {
     "name": "Gambler",
     "baseline_stats": {
-      "dominance_range": [45, 75],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [35, 65],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 50],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [25, 55],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2905,17 +2905,17 @@
   {
     "name": "Cannibal",
     "baseline_stats": {
-      "dominance_range": [70, 95],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [80, 100],
+      "cruelty_range": [50, 60],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [0, 20],
+      "trust_range": [-100, -20],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [80, 100],
+      "intensity_range": [50, 75],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2941,17 +2941,17 @@
   {
     "name": "Manic Pixie Dream Girl",
     "baseline_stats": {
-      "dominance_range": [30, 55],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [15, 40],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [50, 80],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 55],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -2977,17 +2977,17 @@
   {
     "name": "Corporate Dominator",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [30, 50],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [10, 20],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 10],
       "respect_modifier": 0,
-      "intensity_range": [60, 85],
+      "intensity_range": [10, 25],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3013,17 +3013,17 @@
   {
     "name": "Digital Dominatrix",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [10, 30],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [10, 30],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 10],
       "trust_modifier": 0,
-      "respect_range": [20, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 85],
+      "intensity_range": [0, 15],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3049,17 +3049,17 @@
   {
     "name": "Techie",
     "baseline_stats": {
-      "dominance_range": [40, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 60],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3085,17 +3085,17 @@
   {
     "name": "Horror Guru",
     "baseline_stats": {
-      "dominance_range": [60, 85],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [10, 30],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 95],
+      "intensity_range": [0, 20],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3121,17 +3121,17 @@
   {
     "name": "MILF",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 80],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3157,17 +3157,17 @@
   {
     "name": "Vigilante",
     "baseline_stats": {
-      "dominance_range": [60, 85],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [10, 30],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3193,17 +3193,17 @@
   {
     "name": "Yoga Instructor",
     "baseline_stats": {
-      "dominance_range": [30, 55],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [15, 40],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [50, 80],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 55],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3229,17 +3229,17 @@
   {
     "name": "Comedian",
     "baseline_stats": {
-      "dominance_range": [40, 65],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [25, 50],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [-100, 0],
       "respect_modifier": 0,
-      "intensity_range": [35, 60],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3265,17 +3265,17 @@
   {
     "name": "Domestic Authority",
     "baseline_stats": {
-      "dominance_range": [50, 75],
+      "dominance_range": [0, 15],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 55],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [0, 0],
+      "closeness_range": [5, 20],
       "closeness_modifier": 0,
-      "trust_range": [40, 70],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 60],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 65],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3301,17 +3301,17 @@
   {
     "name": "Futanari",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 60],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3337,17 +3337,17 @@
   {
     "name": "Foreign Royalty",
     "baseline_stats": {
-      "dominance_range": [80, 100],
+      "dominance_range": [30, 70],
       "dominance_modifier": 0,
-      "cruelty_range": [60, 90],
+      "cruelty_range": [0, 50],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [-50, 50],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 95],
+      "intensity_range": [25, 75],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3373,17 +3373,17 @@
   {
     "name": "Guard",
     "baseline_stats": {
-      "dominance_range": [50, 75],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 65],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 4],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 10],
       "respect_modifier": 0,
-      "intensity_range": [60, 80],
+      "intensity_range": [10, 20],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3409,17 +3409,17 @@
   {
     "name": "Royal Knight",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": 20, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [40, 50],
       "respect_modifier": 0,
-      "intensity_range": [60, 85],
+      "intensity_range": [0, 15],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3445,17 +3445,17 @@
   {
     "name": "Nihilist",
     "baseline_stats": {
-      "dominance_range": [50, 75],
+      "dominance_range": [0, 5],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 65],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [0, 20],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 45],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 85],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3481,17 +3481,17 @@
   {
     "name": "Emotionless Enforcer",
     "baseline_stats": {
-      "dominance_range": [65, 85],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [55, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [0, 20],
+      "trust_range": [-20, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3517,17 +3517,17 @@
   {
     "name": "Secret Agent",
     "baseline_stats": {
-      "dominance_range": [60, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [45, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [-50, -30],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 85],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3553,17 +3553,17 @@
   {
     "name": "Hitman",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [60, 85],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [0, 20],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 95],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3589,17 +3589,17 @@
   {
     "name": "Gladiator",
     "baseline_stats": {
-      "dominance_range": [65, 90],
+      "dominance_range": [0, 00],
       "dominance_modifier": 0,
-      "cruelty_range": [55, 85],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 95],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3625,17 +3625,17 @@
   {
     "name": "Witch",
     "baseline_stats": {
-      "dominance_range": [70, 95],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [55, 85],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [65, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3661,17 +3661,17 @@
   {
     "name": "Arsonist",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [60, 85],
+      "cruelty_range": [20, 30],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [10, 30],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [80, 100],
+      "intensity_range": [25, 40],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3697,17 +3697,17 @@
   {
     "name": "Eldritch Abomination",
     "baseline_stats": {
-      "dominance_range": [80, 100],
+      "dominance_range": [20, 50],
       "dominance_modifier": 0,
-      "cruelty_range": [80, 100],
+      "cruelty_range": [20, 50],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
       "trust_range": [-20, 0],
       "trust_modifier": 0,
-      "respect_range": [10, 40],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [90, 100],
+      "intensity_range": [50, 70],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3733,17 +3733,17 @@
   {
     "name": "Streamer",
     "baseline_stats": {
-      "dominance_range": [40, 65],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 55],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 55],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [20, 45],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 75],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3769,17 +3769,17 @@
   {
     "name": "Punk",
     "baseline_stats": {
-      "dominance_range": [45, 70],
+      "dominance_range": [0, 10],
       "dominance_modifier": 0,
-      "cruelty_range": [35, 60],
+      "cruelty_range": [0, 20],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 45],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [25, 50],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [50, 75],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3805,17 +3805,17 @@
   {
     "name": "Leona Morimoto Personality",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [20, 50],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [20, 50],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 55],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 85],
+      "intensity_range": [20, 50],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3841,17 +3841,17 @@
   {
     "name": "Reina Morimoto Personality",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [20, 50],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [20, 50],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 55],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 85],
+      "intensity_range": [20, 50],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3877,17 +3877,17 @@
   {
     "name": "Rebel Leader",
     "baseline_stats": {
-      "dominance_range": [70, 90],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [45, 75],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 65],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 85],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3913,17 +3913,17 @@
   {
     "name": "Mystic Dominatrix",
     "baseline_stats": {
-      "dominance_range": [70, 95],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [65, 90],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3949,17 +3949,17 @@
   {
     "name": "Girl Next Door",
     "baseline_stats": {
-      "dominance_range": [30, 55],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [15, 40],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [50, 80],
+      "trust_range": [0, 20],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [30, 55],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -3985,17 +3985,17 @@
   {
     "name": "Tattoo Artist",
     "baseline_stats": {
-      "dominance_range": [50, 75],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 55],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 55],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [45, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -4021,17 +4021,17 @@
   {
     "name": "Muscle Mommy",
     "baseline_stats": {
-      "dominance_range": [75, 95],
+      "dominance_range": [15, 50],
       "dominance_modifier": 0,
-      "cruelty_range": [50, 80],
+      "cruelty_range": [0, 30],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 55],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 70],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [70, 90],
+      "intensity_range": [0, 30],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -4057,17 +4057,17 @@
   {
     "name": "Surfer",
     "baseline_stats": {
-      "dominance_range": [40, 65],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 55],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 55],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 65],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -4093,17 +4093,17 @@
   {
     "name": "Game Developer",
     "baseline_stats": {
-      "dominance_range": [45, 70],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [30, 55],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 55],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [40, 70],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -4129,17 +4129,17 @@
   {
     "name": "Space Traveler",
     "baseline_stats": {
-      "dominance_range": [55, 80],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
-      "cruelty_range": [45, 70],
+      "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [30, 55],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 0],
       "respect_modifier": 0,
-      "intensity_range": [60, 85],
+      "intensity_range": [0, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -4165,17 +4165,17 @@
   {
     "name": "Local Politician",
     "baseline_stats": {
-      "dominance_range": [60, 85],
+      "dominance_range": [0, 30],
       "dominance_modifier": 0,
-      "cruelty_range": [40, 70],
+      "cruelty_range": [0, 30],
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": [20, 40],
+      "trust_range": [0, 0],
       "trust_modifier": 0,
-      "respect_range": [40, 65],
+      "respect_range": [0, 5],
       "respect_modifier": 0,
-      "intensity_range": [60, 85],
+      "intensity_range": [0, 45],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -4201,17 +4201,17 @@
   {
     "name": "The One Who Got Away",
     "baseline_stats": {
-      "dominance_range": [50, 75],
+      "dominance_range": [0, 30],
       "dominance_modifier": 0,
-      "cruelty_range": [35, 60],
+      "cruelty_range": [5, 30],
       "cruelty_modifier": 0,
-      "closeness_range": [0, 0],
+      "closeness_range": [0, 15],
       "closeness_modifier": 0,
-      "trust_range": [30, 55],
+      "trust_range": [0, 15],
       "trust_modifier": 0,
-      "respect_range": [30, 55],
+      "respect_range": [0, 10],
       "respect_modifier": 0,
-      "intensity_range": [45, 70],
+      "intensity_range": [0, 10],
       "intensity_modifier": 0
     },
     "progression_rules": [
