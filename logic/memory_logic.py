@@ -304,7 +304,7 @@ Generate three first-person memories from {npc_name}'s perspective about their r
 2. Show different stages of their relationship (early, middle, recent).
 3. Each take place in a specific location chosen from the locations list above or a location that would make sense in this setting.
 4. Include at least one sensory detail (sight, sound, smell, taste, touch).
-5. Clearly demonstrate the femdom power dynamic through specific interactions, commands, or rituals.
+5. Very subtley foreshadows the characters in the context of a future femdom dynamic.
 6. Show an emotional reaction from both characters.
 7. Include a small consequence or change in the relationship from each interaction.
 
