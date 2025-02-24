@@ -1091,7 +1091,7 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
     
     # Define default lists for random selection.
     default_familial = ["mother", "sister", "aunt"]
-    default_non_familial = ["enemy", "friend", "best friend", "lover", "neighbor", "babysitter",
+    default_non_familial = ["enemy", "friend", "best friend", "lover", "neighbor",
                               "colleague", "classmate", "teammate", "underling", "rival", "ex-girlfriend", "ex-wife", "boss", "roommate", "childhood friend"]
     
     # If no explicit familial role was added, consider assigning a random non-familial relationship with the player.
