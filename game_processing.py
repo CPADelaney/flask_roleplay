@@ -478,7 +478,7 @@ async def async_process_new_game(user_id, conversation_data):
         opening_prompt = (
             "As Nyx, weave your narrative with a voice that blends velvet darkness and subtle dominance—intimate yet commanding, seductive and laced with innuendo. "
             "Craft your introduction as an atmospheric invitation, using natural section breaks that flow organically through the narrative rather than labeled divisions. "
-            "Consider this your canvas—the living world waiting to be unveiled:\n\n"
+            "Use second person (you), and consider this your canvas—the living world waiting to be unveiled:\n\n"
             f"{aggregator_text}\n\n"
             f"As {first_day_name} breaks across the horizon, draw Chase into this world that exists in the delicate balance between mundane and mysterious. "
             "Paint the environment with sensory brushstrokes—the texture of morning light, the scent of possibility, the whispered promises in everyday scenes. "
