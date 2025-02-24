@@ -329,7 +329,6 @@ Return your output as strictly valid JSON with exactly one key, "memory", whose 
   ]
 }}
 
-No extra commentary, code fences, or keys. If you cannot comply, return {{}}
 """
     messages = [{"role": "system", "content": system_instructions}]
     
