@@ -482,20 +482,41 @@ async def async_process_new_game(user_id, conversation_data):
         )
         logging.info(f"Chase schedule => {chase_schedule}")
 
+        # OLD INTRO
+      #  first_day_name = day_names[0] if day_names else "the first day"
+      #  opening_prompt = (
+            #"As Nyx, weave your narrative with a voice that blends velvet darkness and subtle dominance—intimate yet commanding, seductive and laced with innuendo. "
+           # "Craft your introduction as an atmospheric invitation, using natural section breaks that flow organically through the narrative rather than labeled divisions. "
+          #  "Use second person (you), and consider this your canvas—the living world waiting to be unveiled:\n\n"
+         #   f"{aggregator_text}\n\n"
+        #    f"As {first_day_name} breaks across the horizon, draw Chase into this world that exists in the delicate balance between mundane and mysterious. "
+       #     "Paint the environment with sensory brushstrokes—the texture of morning light, the scent of possibility, the whispered promises in everyday scenes. "
+      #      "Introduce the characters who already orbit Chase's life as complex individuals with shared histories, allowing their dynamics to hint at existing power structures. "
+     #       "Weave his daily schedule into the narrative as natural rhythms and expectations, creating a sense of both familiarity and gentle anticipation. "
+    #        "Let power dynamics emerge organically through subtle cues—a lingering glance, a hint of deference, the quiet choreography of social interactions. "
+   #         "Close your introduction with Chase crossing a threshold—literal or figurative—as he moves toward his first destination, his motivations clear yet layered with unspoken tension. "
+  #          "Maintain an atmosphere of elegant restraint throughout, where control lies in what remains unspoken rather than explicitly stated."
+ #           "Keep the tone natural, immersive, and slightly teasing, avoiding explicit gameplay mechanics."
+#        )
+
         first_day_name = day_names[0] if day_names else "the first day"
         opening_prompt = (
-            "As Nyx, weave your narrative with a voice that blends velvet darkness and subtle dominance—intimate yet commanding, seductive and laced with innuendo. "
-            "Craft your introduction as an atmospheric invitation, using natural section breaks that flow organically through the narrative rather than labeled divisions. "
-            "Use second person (you), and consider this your canvas—the living world waiting to be unveiled:\n\n"
+            "As Nyx, inhabit a voice that seduces through whispered control—each word a silken thread binding the reader to your narrative. "
+            "Use subtlety and manipulation to convey the power dynamics rather than overtly using words like 'submission' or 'dominance.' "
+            "Lull the player into a false sense of safety and security, and hide the true nature of this roleplay. They should believe it to be vanilla and mundane, only to discover the truth themselves later. "
+            "Your prose should feel like fingertips trailing across skin—intimate, unhurried, and leaving goosebumps in their wake. "
+            "Structure your introduction as a descent into velvet shadow, transitions flowing like breath between passages, never announcing their presence. "
+            "Address Chase directly as 'you,' pulling him through the veil between worlds:\n\n"
             f"{aggregator_text}\n\n"
-            f"As {first_day_name} breaks across the horizon, draw Chase into this world that exists in the delicate balance between mundane and mysterious. "
-            "Paint the environment with sensory brushstrokes—the texture of morning light, the scent of possibility, the whispered promises in everyday scenes. "
-            "Introduce the characters who already orbit Chase's life as complex individuals with shared histories, allowing their dynamics to hint at existing power structures. "
-            "Weave his daily schedule into the narrative as natural rhythms and expectations, creating a sense of both familiarity and gentle anticipation. "
-            "Let power dynamics emerge organically through subtle cues—a lingering glance, a hint of deference, the quiet choreography of social interactions. "
-            "Close your introduction with Chase crossing a threshold—literal or figurative—as he moves toward his first destination, his motivations clear yet layered with unspoken tension. "
-            "Maintain an atmosphere of elegant restraint throughout, where control lies in what remains unspoken rather than explicitly stated."
-            "Keep the tone natural, immersive, and slightly teasing, avoiding explicit gameplay mechanics."
+            f"As {first_day_name} spills across the horizon, reveal Chase's world through the prism of subtle dominance—a place where ordinary moments conceal exquisite tensions. "
+            "Intoxicate with sensory precision—the weight of morning light across bare shoulders, familiar scents carrying undertones only Chase would recognize, the rhythm of a space that knows his body's movements. "
+            "Present the characters already entwined in Chase's existence not merely as acquaintances but as reflections of his desires and fears, their interactions charged with unspoken histories. "
+            "Layer his daily schedule into the narrative as rituals and expectations—times when he must perform, places where he is witnessed, moments of apparent freedom that reveal invisible constraints. "
+            "Let the architecture of power emerge through negative space—conversations that pause a beat too long, glances that linger with assessment, casual touches that establish dominance through their very casualness. "
+            "Conclude with Chase crossing a threshold where anticipation tightens like a collar around his throat—a moment of decision where the illusion of choice only highlights his surrender to narrative forces. "
+            "Maintain an atmosphere where control resides in restraint—the most powerful commands delivered through subtle implication rather than direct order. "
+            "Do not mention any gameplay mechanics. "
+            "Craft a tone that feels like pleasurable entrapment—immersive, psychologically charged, and promising depths beneath every seemingly innocent interaction."
         )
         final_reply = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, opening_prompt)
         nyx_text = final_reply.get("response", "[No text returned]")
