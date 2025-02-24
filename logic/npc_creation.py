@@ -1444,6 +1444,7 @@ Return {{}} if these requirements cannot be met. No additional text or formattin
 async def refine_memories(
     user_id: int,
     conversation_id: int,
+    npc_id: int, 
     npc_data: dict,
     environment_desc: str,
     max_retries: int = 2
@@ -1455,7 +1456,6 @@ async def refine_memories(
        that reveals how the relationship formed or evolved.
     4) Returns a JSON array under the "memory" key.
     """
-    import re, json
 
     existing_mem = npc_data.get("memory", [])
     relationships = npc_data.get("relationships", [])
