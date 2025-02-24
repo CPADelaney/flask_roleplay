@@ -1451,14 +1451,11 @@ async def refine_memories(
 ) -> list:
     """
     1) Sends a GPT request focusing ONLY on "memory".
-    2) Requires at least 3 short memory entries per relationship.
+    2) Requires at least 3 memory entries per unique target in the NPC's relationships.
     3) Each memory is a short 1–3 sentence snippet describing how the relationship formed/evolved.
     4) Returns a JSON array under the "memory" key or uses existing memories if GPT fails.
     """
-    import json, re
-    import logging
 
-    # Create a logger with a unique name for this function
     logger = logging.getLogger(f"refine_memories_{npc_id}")
     logger.setLevel(logging.DEBUG)
     
@@ -1472,13 +1469,11 @@ async def refine_memories(
     relationships = npc_data.get("relationships", [])
     logger.debug(f"Found {len(relationships)} relationships")
     
-    if not relationships:
-        logger.info("No relationships found, returning existing memories without changes")
-        return existing_mem  # No relationships => no new memories needed
+    # Group relationships by unique target (using entity_id)
+    unique_targets = set(r.get("entity_id") for r in relationships if r.get("entity_id") is not None)
+    needed_count = 3 * len(unique_targets)
+    logger.info(f"Need {needed_count} memories (3 per unique target, {len(unique_targets)} unique targets)")
 
-    needed_count = 3 * len(relationships)
-    logger.info(f"Need {needed_count} memories (3 per relationship)")
-    
     final_mem = existing_mem[:]
     logger.debug(f"Starting with {len(final_mem)} existing memories")
 
@@ -1492,6 +1487,27 @@ async def refine_memories(
         rel_info.append(rel_str)
         logger.debug(f"Relationship {i+1}: {rel_str}")
 
+    # Build additional context from NPC data
+    personality = json.dumps(npc_data.get("personality_traits", []))
+    likes = json.dumps(npc_data.get("likes", []))
+    dislikes = json.dumps(npc_data.get("dislikes", []))
+    hobbies = json.dumps(npc_data.get("hobbies", []))
+    archetype_extras = npc_data.get("archetype_extras_summary", "None")
+    schedule = json.dumps(npc_data.get("schedule", {}), indent=2)
+
+    # Note: {mega_description} and {extra_context} could have been set earlier during environment refinement.
+    # For this example, we assume mega_description is environment_desc (or part of it) and extra_context can be built from our extra data.
+    extra_context = (
+        f"Personality Traits: {personality}\n"
+        f"Likes: {likes}\n"
+        f"Dislikes: {dislikes}\n"
+        f"Hobbies: {hobbies}\n"
+        f"Archetype Extras: {archetype_extras}\n"
+        f"Schedule: {schedule}\n"
+    )
+    # You might also have a separate aggregated roleplay context; include it here if available.
+    
+    # Construct the system prompt
     system_prompt = f"""
 NPC partial data:
 {json.dumps(npc_data, indent=2)}
@@ -1499,16 +1515,37 @@ NPC partial data:
 Environment:
 {environment_desc}
 
+Additional Context:
+{extra_context}
+
 We have these relationships:
 {chr(10).join(rel_info)}
 
-Return strictly valid JSON with exactly 1 key: "memory".
-Its value must be a JSON array with at least {needed_count} entries (strings).
-There should be three memories for each relationship between the NPCs.
-Each entry must be a 1–3 sentence memory that:
-  - References at least one of the relationships above,
-  - Describes a small, meaningful event that shaped the relationship,
-  - Can mention more than one relationship if appropriate.
+Return strictly valid JSON with exactly one key: "memory". Its value must be a JSON array with at least {needed_count} entries (strings).
+Note: If multiple relationships refer to the same target, generate three memories in total for that target.
+
+The NPC {npc_data.get("npc_name", "Unknown NPC")} has a relationship with a target. This relationship may be defined by a single role (for example, solely a babysitter) or by multiple roles (for instance, both an older sister and a babysitter). It is crucial that the memories generated accurately reflect the NPC’s archetypes and the appropriate dynamics of the relationship. For example, if the NPC is a 'mother', the memory must not depict a first-time meeting with the target later in life—instead, it should evoke the ongoing, nurturing, and familiar nature of a mother-child bond.
+
+When generating memories, please follow these guidelines:
+
+**Role Specifics:**  
+- If there is only one relationship role, focus on that role’s defining characteristics (e.g., for a babysitter, emphasize formal introductions via the parents, caring gestures, and playful interactions).  
+- If multiple roles exist with the target, blend the elements naturally (e.g., if the NPC is both an older sister and a babysitter, the memory might recall a formal introduction that later evolved into a more intimate, sibling-like connection).
+
+**Context & Setting:**  
+- The current setting is: {environment_desc}.  
+- Additional context from the NPC's background is provided above.
+
+**Memory Requirements:**  
+1. Generate three distinct first-person memories from the NPC's perspective about their relationship with the target. (Note: If multiple relationships refer to the same target, generate a total of three memories for that target.)  
+2. Each memory should be 2–3 sentences written in the NPC's authentic voice.  
+3. Clearly reflect the relationship dynamics by incorporating role-specific details, ensuring the memory is appropriate to the archetype (e.g., a 'mother' should not recall meeting her child for the first time when they are already established).  
+4. Each memory should take place in a specific location selected from the provided list or another setting-appropriate locale.  
+5. Include at least one sensory detail (sight, sound, smell, taste, or touch).  
+6. Subtly foreshadow or hint at an evolving femdom dynamic without overt exposition.  
+7. Show clear emotional reactions from both parties.  
+8. Include a small consequence or change in the relationship from each interaction.  
+9. Memories may be positive or negative, but must remain consistent with the NPC’s established roles and archetypes.
 
 Follow exactly this format:
 
@@ -1520,7 +1557,7 @@ Follow exactly this format:
   ]
 }}
 
-No extra commentary, code fences, or keys. If you cannot comply, return {{}}.
+No extra commentary, code fences, or keys. If you cannot comply, return {{}}
 """
     logger.debug(f"System prompt length: {len(system_prompt)} characters")
     
@@ -1529,9 +1566,8 @@ No extra commentary, code fences, or keys. If you cannot comply, return {{}}.
         attempt += 1
         logger.info(f"Starting attempt {attempt}/{max_retries}")
 
-        # Call GPT
-        logger.info("Calling GPT with system prompt")
         try:
+            logger.info("Calling GPT with system prompt")
             raw_gpt = await asyncio.to_thread(
                 get_chatgpt_response,
                 conversation_id,
@@ -1550,29 +1586,24 @@ No extra commentary, code fences, or keys. If you cannot comply, return {{}}.
             attempt += 1
             continue
 
-        # 1) If GPT used a function call, we try to extract "memory" from function_args
         if raw_gpt.get("type") == "function_call":
             logger.info("Processing function call response")
-            # First, try our custom helper that checks npc_creations / npc_updates, etc.
             try:
                 logger.debug("Attempting to extract memory from function call")
                 candidate_mem = extract_field_from_function_call(raw_gpt, "memory", npc_id)
-                logger.debug(f"Extracted candidate memory: {type(candidate_mem)}, " + 
+                logger.debug(f"Extracted candidate memory: {type(candidate_mem)}, " +
                             (f"length: {len(candidate_mem)}" if candidate_mem else "None"))
                 
                 if candidate_mem:
-                    # If the returned data is a list and big enough, great!
                     if isinstance(candidate_mem, list) and len(candidate_mem) >= needed_count:
                         logger.info(f"Successfully extracted {len(candidate_mem)} memories from function call")
                         final_mem = candidate_mem
                         break
                     else:
-                        # fallback to normal text parsing
                         logger.info("Candidate memory insufficient, falling back to text parsing")
                         new_mem = parse_memory_from_text(text_response)
                         logger.debug(f"Parsed {len(new_mem)} memories from text")
                 else:
-                    # No "memory" field found => parse the text fallback
                     logger.info("No memory field found in function call, parsing from text")
                     new_mem = parse_memory_from_text(text_response)
                     logger.debug(f"Parsed {len(new_mem)} memories from text")
@@ -1581,7 +1612,6 @@ No extra commentary, code fences, or keys. If you cannot comply, return {{}}.
                 new_mem = parse_memory_from_text(text_response)
                 logger.debug(f"Fallback: parsed {len(new_mem)} memories from text")
         else:
-            # 2) No function call => parse from text
             logger.info("No function call detected, parsing memory from text")
             try:
                 new_mem = parse_memory_from_text(text_response)
@@ -1595,9 +1625,7 @@ No extra commentary, code fences, or keys. If you cannot comply, return {{}}.
             final_mem = new_mem
             break
         else:
-            logger.warning(
-                f"Attempt {attempt}: insufficient memory entries ({len(new_mem)}/{needed_count}) => retry."
-            )
+            logger.warning(f"Attempt {attempt}: insufficient memory entries ({len(new_mem)}/{needed_count}) => retry.")
 
     if len(final_mem) < needed_count:
         logger.warning(f"All attempts failed. Returning {len(existing_mem)} existing memories.")
@@ -1606,7 +1634,6 @@ No extra commentary, code fences, or keys. If you cannot comply, return {{}}.
     logger.info(f"Successfully generated {len(final_mem)} memories")
     logger.debug(f"Final memories: {json.dumps(final_mem, indent=2)}")
     return final_mem
-
 
 def parse_memory_from_text(text: str) -> list:
     """
@@ -1652,10 +1679,9 @@ def parse_memory_from_text(text: str) -> list:
     else:
         logger.debug("No JSON-like pattern found with regex")
 
-    # Additional attempts for more robust parsing
+    # 3) Additional robust attempts
     logger.debug("Attempting to find array pattern directly")
     try:
-        # Look for "memory": [...] pattern
         array_match = re.search(r'"memory"\s*:\s*(\[[\s\S]*?\])', text)
         if array_match:
             array_str = array_match.group(1)
@@ -1672,6 +1698,7 @@ def parse_memory_from_text(text: str) -> list:
 
     logger.warning("All parsing attempts failed, returning empty list")
     return []
+
 
 
 async def refine_affiliations(
