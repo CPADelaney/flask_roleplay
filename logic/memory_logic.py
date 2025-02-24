@@ -221,71 +221,101 @@ def propagate_shared_memories(user_id, conversation_id, source_npc_id, source_np
                 # Use your existing record_npc_event
                 record_npc_event(user_id, conversation_id, other_npc_id, mem_text)
 
-# Assuming locations is a list of dictionaries or database rows
-locations_table_formatted = ""
-for loc in locations:
-    location_name = loc[0]
-    description = loc[1][:80] + "..." if loc[1] and len(loc[1]) > 80 else loc[1] or "No description"
-    locations_table_formatted += f"- {location_name}: {description}\n"
+def fetch_formatted_locations(user_id, conversation_id):
+    """
+    Query the Locations table for the given user_id and conversation_id,
+    then format each location into a bullet list string with a truncated description.
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        query = """
+            SELECT location_name, description
+            FROM Locations
+            WHERE user_id = %s AND conversation_id = %s
+        """
+        cursor.execute(query, (user_id, conversation_id))
+        rows = cursor.fetchall()
+        
+        formatted = ""
+        for loc in rows:
+            location_name = loc[0]
+            # If description exists and is longer than 80 characters, truncate it.
+            if loc[1]:
+                description = loc[1][:80] + "..." if len(loc[1]) > 80 else loc[1]
+            else:
+                description = "No description"
+            formatted += f"- {location_name}: {description}\n"
+        return formatted
+    except Exception as e:
+        logging.error(f"[fetch_formatted_locations] Error fetching locations: {e}")
+        return "No location data available."
+    finally:
+        conn.close()
 
 
 def get_shared_memory(user_id, conversation_id, relationship, npc_name, archetype_summary="", archetype_extras_summary=""):
     """
     Given a relationship dict and the NPC's name, returns a shared memory.
-    Uses the stored setting from CurrentRoleplay (keys 'CurrentSetting' and 'EnvironmentDesc').
+    It uses the stored setting from CurrentRoleplay (keys 'CurrentSetting' and 'EnvironmentDesc')
+    and includes current location data from the Locations table.
     """
-    from db.connection import get_db_connection
-    import logging
+    # Fetch stored environment details from CurrentRoleplay.
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        # Query for the stored setting details, filtering by user_id and conversation_id.
         cursor.execute("""
             SELECT key, value FROM CurrentRoleplay 
-            WHERE user_id=%s AND conversation_id=%s AND key IN ('CurrentSetting', 'EnvironmentDesc')
+            WHERE user_id=%s AND conversation_id=%s 
+              AND key IN ('CurrentSetting', 'EnvironmentDesc')
         """, (user_id, conversation_id))
         rows = cursor.fetchall()
         stored = {row[0]: row[1] for row in rows}
-        # Use EnvironmentDesc for the detailed setting description.
         mega_description = stored.get("EnvironmentDesc", "an undefined setting")
     except Exception as e:
         logging.error(f"[get_shared_memory] Error retrieving stored setting: {e}")
         mega_description = "an undefined setting"
     finally:
         conn.close()
-
+    
+    # Fetch and format current locations.
+    locations_table_formatted = fetch_formatted_locations(user_id, conversation_id)
+    
     target = relationship.get("target", "player")
     target_name = relationship.get("target_name", "the player")
     rel_type = relationship.get("type", "related")
+    
     extra_context = ""
     if archetype_summary:
         extra_context += f"Background: {archetype_summary}. "
     if archetype_extras_summary:
         extra_context += f"Extra Details: {archetype_extras_summary}. "
+    
     system_instructions = f"""
-    The NPC {npc_name} has a pre-existing relationship as a {rel_type} with {target_name}.
-    The current setting is: {mega_description}.
-    {extra_context}
-    Current established locations are {locations_table_formatted}
-    
-    Generate three first-person memories from {npc_name}'s perspective about their relationship with {target_name}. These memories should:
-    
-    1. Be 2-3 sentences each, written in {npc_name}'s authentic voice
-    2. Show different stages of their relationship (early, middle, recent)
-    3. Each take place in a specific location chosen from the locations list above or a location that would make sense to exist in this setting.
-    4. Include at least one sensory detail (sight, sound, smell, taste, touch)
-    5. Clearly demonstrate the femdom power dynamic through specific interactions, commands, or rituals
-    6. Show an emotional reaction from both characters
-    7. Include a small consequence or way the relationship changed from each interaction
-    
-    Each memory should feel personal, impactful, concise, vivid, and naturally fit within the setting.
-    Memories can be either positive or negative.
-    To determine the nature of their relationship, use {npc_name}'s likes, dislikes, affiliations, and schedule, and develop a plausible connection to {target_name}.
-    """
-    gpt_client = get_openai_client()
+The NPC {npc_name} has a pre-existing relationship as a {rel_type} with {target_name}.
+The current setting is: {mega_description}.
+{extra_context}
+Current established locations are:
+{locations_table_formatted}
+
+Generate three first-person memories from {npc_name}'s perspective about their relationship with {target_name}. These memories should:
+
+1. Be 2–3 sentences each, written in {npc_name}'s authentic voice.
+2. Show different stages of their relationship (early, middle, recent).
+3. Each take place in a specific location chosen from the locations list above or a location that would make sense in this setting.
+4. Include at least one sensory detail (sight, sound, smell, taste, touch).
+5. Clearly demonstrate the femdom power dynamic through specific interactions, commands, or rituals.
+6. Show an emotional reaction from both characters.
+7. Include a small consequence or change in the relationship from each interaction.
+
+Each memory should feel personal, impactful, concise, vivid, and naturally fit within the setting.
+Memories can be either positive or negative.
+To determine the nature of their relationship, consider {npc_name}'s likes, dislikes, affiliations, and schedule, and develop a plausible connection to {target_name}.
+"""
     messages = [{"role": "system", "content": system_instructions}]
+    
     try:
-        response = gpt_client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model="gpt-4o",
             messages=messages,
             temperature=0.7,
@@ -295,4 +325,3 @@ def get_shared_memory(user_id, conversation_id, relationship, npc_name, archetyp
     except Exception as e:
         logging.error(f"[get_shared_memory] GPT error: {e}")
         return "Shared memory could not be generated."
-
