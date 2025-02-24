@@ -1563,7 +1563,7 @@ Additional Context:
 
 Archetypal Context:
 The NPC's archetypes are: {archetypes_str}.
-Please integrate all of these archetypal elements into each memory as appropriate. Some may not be relevant when considering a character's age during the memory.
+Please integrate all of these archetypal elements into each memory. For example, if "giantess" is one of the archetypes, ensure that the size difference and power dynamics are evident; if "pirate" is present, include hints of rebelliousness or nautical imagery.
 
 We have these relationships:
 {chr(10).join(rel_info)}
