@@ -318,7 +318,7 @@ When generating memories, please follow these guidelines:
 8. Include a small consequence or change in the relationship from each interaction.  
 9. Ensure that each memory is consistent with the natural progression of the relationship—for example, a 'mother' should not recall a first meeting later in life if familiarity is already established.
 
-Return your output as strictly valid JSON with exactly one key, "memory", whose value is an array of at least {needed_count} strings. Follow exactly this format:
+Return your output as strictly valid JSON with exactly one key, "memory", whose value is an array of at least three strings for each character the NPC has a relationship with. Follow exactly this format:
 
 {{
   "memory": [
