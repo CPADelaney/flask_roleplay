@@ -18,7 +18,7 @@ from logic.gpt_utils import spaced_gpt_call, safe_int
 from logic.universal_updater import apply_universal_updates_async
 from logic.calendar import update_calendar_names
 from db.connection import get_db_connection
-from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
+from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc, init_chase_schedule
 
 DB_DSN = os.getenv("DB_DSN") 
 
@@ -473,6 +473,14 @@ async def async_process_new_game(user_id, conversation_data):
             build_aggregator_text,
             aggregator_data
         )
+
+        chase_schedule = await init_chase_schedule(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            combined_env=combined_env,
+            day_names=day_names
+        )
+        logging.info(f"Chase schedule => {chase_schedule}")
 
         first_day_name = day_names[0] if day_names else "the first day"
         opening_prompt = (
