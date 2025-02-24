@@ -310,13 +310,14 @@ When generating memories, please follow these guidelines:
 **Memory Requirements:**  
 1. Generate three distinct first-person memories from {npc_name}'s perspective about their relationship with {target_name}. (If multiple relationships refer to the same target, generate a total of three memories for that target.)  
 2. Each memory should be 2–3 sentences written in {npc_name}'s authentic voice.  
-3. Clearly reflect the relationship dynamics by incorporating details from all of {npc_name}'s archetypes (for example, if being a giantess is one of the traits, include references to size and power; if being a pirate is an archetype, include hints of rebellion or nautical imagery).  
+3. Clearly reflect the relationship dynamics by incorporating details from all of {npc_name}'s archetypes.
 4. Each memory should be set in a specific location from the provided list or another context-appropriate locale.  
 5. Include at least one sensory detail (sight, sound, smell, taste, or touch).  
 6. Subtly foreshadow or hint at an evolving femdom dynamic without overt exposition.  
 7. Show clear emotional reactions from both {npc_name} and {target_name}.  
 8. Include a small consequence or change in the relationship from each interaction.  
 9. Ensure that each memory is consistent with the natural progression of the relationship—for example, a 'mother' should not recall a first meeting later in life if familiarity is already established.
+10. Memories can be a positive experience (like sharing drinks, recounting tales, a nice walk on the beach, etc.), as well as negative (Getting punished, having a fight, etc.)
 
 Return your output as strictly valid JSON with exactly one key, "memory", whose value is an array of at least three strings for each character the NPC has a relationship with. Follow exactly this format:
 
