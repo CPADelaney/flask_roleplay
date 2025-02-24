@@ -1546,6 +1546,9 @@ async def refine_memories(
         f"Schedule: {schedule}\n"
     )
     # You might also have a separate aggregated roleplay context; include it here if available.
+
+    archetypes_list = [arc.get("name", "").strip() for arc in npc_data.get("archetypes", [])]
+    archetypes_str = ", ".join(archetypes_list)    
     
     # Construct the system prompt
     system_prompt = f"""
@@ -1558,6 +1561,10 @@ Environment:
 Additional Context:
 {extra_context}
 
+Archetypal Context:
+The NPC's archetypes are: {archetypes_str}.
+Please integrate all of these archetypal elements into each memory as appropriate. Some may not be relevant when considering a character's age during the memory.
+
 We have these relationships:
 {chr(10).join(rel_info)}
 
@@ -1569,17 +1576,17 @@ The NPC {npc_data.get("npc_name", "Unknown NPC")} has a relationship with a targ
 When generating memories, please follow these guidelines:
 
 **Role Specifics:**  
-- If there is only one relationship role, focus on that role’s defining characteristics (e.g., for a babysitter, emphasize formal introductions via the parents, caring gestures, and playful interactions).  
-- If multiple roles exist with the target, blend the elements naturally (e.g., if the NPC is both an older sister and a babysitter, the memory might recall a formal introduction that later evolved into a more intimate, sibling-like connection).
+- If there is only one relationship role, focus on that role’s defining characteristics.  
+- If multiple roles exist with the target, blend the elements naturally so that each memory reflects the full complexity of the relationship.
 
 **Context & Setting:**  
 - The current setting is: {environment_desc}.  
 - Additional context from the NPC's background is provided above.
 
 **Memory Requirements:**  
-1. Generate three distinct first-person memories from the NPC's perspective about their relationship with the target. (Note: If multiple relationships refer to the same target, generate a total of three memories for that target.)  
+1. Generate three distinct first-person memories from the NPC's perspective about their relationship with the target. (If multiple relationships refer to the same target, generate a total of three memories for that target.)  
 2. Each memory should be 2–3 sentences written in the NPC's authentic voice.  
-3. Clearly reflect the relationship dynamics by incorporating role-specific details, ensuring the memory is appropriate to the archetype (e.g., a 'mother' should not recall meeting her child for the first time when they are already established).  
+3. Clearly reflect the relationship dynamics by incorporating role-specific details appropriate to the archetypes.  
 4. Each memory should take place in a specific location selected from the provided list or another setting-appropriate locale.  
 5. Include at least one sensory detail (sight, sound, smell, taste, or touch).  
 6. Subtly foreshadow or hint at an evolving femdom dynamic without overt exposition.  
@@ -1587,13 +1594,13 @@ When generating memories, please follow these guidelines:
 8. Include a small consequence or change in the relationship from each interaction.  
 9. Memories may be positive or negative, but must remain consistent with the NPC’s established roles and archetypes.
 
-Follow exactly this format:
+Return your output as JSON following exactly this structure:
 
 {{
   "memory": [
-    "I remember the night when Lady Seraphine whispered her commands in the old library, binding us together in an unspoken pact.",
-    "At dawn, Mistress Dalia orchestrated a subtle test that revealed the true nature of our bond.",
-    "During the summer festival, a quiet moment of understanding forged a lasting connection between us."
+    "<memory 1>",
+    "<memory 2>",
+    "<memory 3>"
   ]
 }}
 
