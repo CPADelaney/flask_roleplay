@@ -2497,7 +2497,7 @@ async def init_chase_schedule(user_id, conversation_id, combined_env, day_names)
     chase_sched = await generate_chase_schedule(
         user_id=user_id,
         conversation_id=conversation_id,
-        combined_env=combined_env,
+        environment_desc=combined_env,
         day_names=day_names
     )
     return chase_sched
