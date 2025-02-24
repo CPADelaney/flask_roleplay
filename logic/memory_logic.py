@@ -292,25 +292,29 @@ def get_shared_memory(user_id, conversation_id, relationship, npc_name, archetyp
         extra_context += f"Extra Details: {archetype_extras_summary}. "
     
     system_instructions = f"""
-The NPC {npc_name} has a pre-existing relationship as a {rel_type} with {target_name}.
+The NPC {npc_name} has a relationship with {target_name}. This relationship may be defined by a single role (e.g., just a babysitter) or by multiple roles (e.g., both an older sister and a babysitter). 
+
+When generating memories, please follow these guidelines:
+- **Single Role:** If there is only one relationship role, focus on that role’s defining characteristics. For example, if {npc_name} is solely a babysitter, emphasize formal introductions through the parents, caring gestures, and playful interactions typical of that role.
+- **Multiple Roles:** If {npc_name} has multiple relationship roles with {target_name}, blend the elements of each role naturally. For instance, if they are both an older sister and a babysitter, maybe the memory is about parents leaving her in charge for the first time.
+
 The current setting is: {mega_description}.
 {extra_context}
 Current established locations are:
 {locations_table_formatted}
 
-Generate three first-person memories from {npc_name}'s perspective about their relationship with {target_name}. These memories should:
-
-1. Be 2–3 sentences each, written in {npc_name}'s authentic voice.
-2. Show different stages of their relationship (early, middle, recent).
-3. Each take place in a specific location chosen from the locations list above or a location that would make sense in this setting.
-4. Include at least one sensory detail (sight, sound, smell, taste, touch).
-5. Very subtley foreshadows the characters in the context of a future femdom dynamic.
-6. Show an emotional reaction from both characters.
+Generate three distinct first-person memories from {npc_name}'s perspective about their relationship with {target_name}. Each memory should:
+1. Be 2–3 sentences written in {npc_name}'s authentic voice.
+2. Clearly reflect the relationship dynamics. Use the specific role characteristics (or a blend, if multiple) to shape the memory.
+3. Occur in a specific location chosen from the locations list above or another setting-appropriate locale.
+4. Include at least one sensory detail (sight, sound, smell, taste, or touch).
+5. Subtly foreshadow or hint at an evolving femdom dynamic, even if it's not yet overt.
+6. Show clear emotional reactions from both {npc_name} and {target_name}.
 7. Include a small consequence or change in the relationship from each interaction.
+8. Make sense in the context of the relationship (eg., a 'mother' NPC usually wouldn't be meeting their child 'for the first time' later in life)
+9. Memories don't necessarily need to be positive experiences between the characters (and probably should not be in the case of 'enemies,' 'rivals,' and other 'antagonistic' relationships)
 
-Each memory should feel personal, impactful, concise, vivid, and naturally fit within the setting.
-Memories can be either positive or negative.
-To determine the nature of their relationship, consider {npc_name}'s likes, dislikes, affiliations, and schedule, and develop a plausible connection to {target_name}.
+Each memory should feel personal, vivid, and naturally integrated into the overall setting. Leverage {npc_name}'s archetypes, likes, dislikes, affiliations, and schedule to inform how these memories unfold.
 """
     messages = [{"role": "system", "content": system_instructions}]
     
