@@ -1444,36 +1444,40 @@ Return {{}} if these requirements cannot be met. No additional text or formattin
 async def refine_memories(
     user_id: int,
     conversation_id: int,
-    npc_id: int, 
     npc_data: dict,
     environment_desc: str,
     max_retries: int = 2
 ) -> list:
     """
-    1) GPT request focusing ONLY on "memory".
-    2) We require at least 3 short memory entries per relationship the NPC has.
-    3) If insufficient, we fallback to the old memory or empty.
+    1) Sends a GPT request focusing ONLY on "memory".
+    2) Requires at least 3 short memory entries per relationship.
+    3) Each memory is a short 1–3 sentence snippet describing a key event
+       that reveals how the relationship formed or evolved.
+    4) Returns a JSON array under the "memory" key.
     """
+    import re, json
+
     existing_mem = npc_data.get("memory", [])
     relationships = npc_data.get("relationships", [])
     if not relationships:
-        # no relationships => no new memories
+        # No relationships => no new memories are required.
         return existing_mem
 
+    # Calculate the minimal number of memory entries required.
     needed_count = 3 * len(relationships)
-    attempt = 0
-    final_mem = existing_mem[:]
 
+    # Build a text summary of the relationships for context.
     rel_info = []
     for r in relationships:
         eid = r.get("entity_id", 0)
-        lbl = r.get("relationship_label","unknown")
-        etype = r.get("entity_type","npc")
+        lbl = r.get("relationship_label", "unknown")
+        etype = r.get("entity_type", "npc")
         rel_info.append(f"- ID={eid} [{etype}] => '{lbl}'")
 
-    while attempt < max_retries:
-        attempt += 1
-        system_prompt = f"""
+    attempt = 0
+    final_mem = existing_mem[:]
+
+    system_prompt = f"""
 NPC partial data:
 {json.dumps(npc_data, indent=2)}
 
@@ -1484,28 +1488,29 @@ We have these relationships:
 {chr(10).join(rel_info)}
 
 Return strictly valid JSON with exactly 1 key: "memory".
+Its value must be a JSON array with at least {needed_count} entries (strings).
+There should be three memories for each relationship between the NPCs.
+Each entry must be a 1–3 sentence memory that:
+  - References at least one of the relationships listed above,
+  - Describes a small but meaningful event that shows how the relationship formed or evolved,
+  - Can mention more than one relationship if appropriate.
 
-Its value must be a JSON array of {needed_count}+ short memories (strings). 
-Each memory is a short 1–3 sentence snippet referencing at least one of the existing relationships, 
-explaining how the bond formed or evolved, or an impactful shared moment. 
-If more than one relationship was present in that memory, mention them both.
+Follow this exact example format (note the doubled curly braces for literal braces):
 
-**Example format**:
-
-{
+{{
   "memory": [
-    "I remember the night Lady Seraphine first whispered her commands to me in the old library, a moment that bound us closer than I'd ever imagined.",
-    "At dawn, Mistress Dalia forced both me and Camilla to spar in front of the entire court, a humbling event that revealed my own weaknesses.",
-    "After the summer festival, Mother Ariana stripped away all pretense and taught me how to serve, imprinting a sense of awe and fear I'd carry forever.",
-    "She once locked me in the palace's grand archives, commanding me to study forgotten texts, forging a bond of knowledge and submission between us."
+    "I remember the night when Lady Seraphine whispered her commands in the old library, binding us together in an unspoken pact.",
+    "At dawn, Mistress Dalia orchestrated a subtle test that revealed the true nature of our bond.",
+    "During the summer festival, a quiet moment of understanding forged a lasting connection between us."
   ]
-}
+}}
 
-- The array **must** have at least three (3) memory entries per existing relationship. 
-- Each entry is a short recollection, revealing a piece of the NPC's backstory or an event that shaped the relationship. 
-- Do not include any extra commentary, code blocks, or top-level JSON fields beyond `"memory"`.
-
+Do not include any extra commentary, code fences, or additional keys.
+If you cannot comply, return {{}}
 """
+    # Attempt to get a valid response from GPT.
+    while attempt < max_retries:
+        attempt += 1
 
         raw_gpt = await asyncio.to_thread(
             get_chatgpt_response,
@@ -1513,47 +1518,36 @@ If more than one relationship was present in that memory, mention them both.
             environment_desc,
             system_prompt
         )
-        text_response = raw_gpt.get("response","")
-
-        new_mem = []
+        text_response = raw_gpt.get("response", "")
+        extracted = {}
 
         if raw_gpt.get("type") == "function_call":
-            candidate = extract_field_from_function_call(raw_gpt, "memory", npc_id)
-            if isinstance(candidate, list):
-                new_mem = candidate
-            elif isinstance(candidate, str):
-                # if it's a single string
-                new_mem = [candidate]
+            extracted = raw_gpt.get("function_args", {})
         else:
             try:
-                data = json.loads(text_response)
-                # memory might be an array or string => unify to array
-                mem_val = data.get("memory", [])
-                if isinstance(mem_val, list):
-                    new_mem = mem_val
-                elif isinstance(mem_val, str):
-                    new_mem = [mem_val]
-            except:
+                extracted = json.loads(text_response)
+            except json.JSONDecodeError:
                 match_j = re.search(r'(\{[\s\S]*\})', text_response)
                 if match_j:
                     jstr = match_j.group(1)
                     try:
-                        data = json.loads(jstr)
-                        mem_val = data.get("memory", [])
-                        if isinstance(mem_val, list):
-                            new_mem = mem_val
-                        elif isinstance(mem_val, str):
-                            new_mem = [mem_val]
-                    except:
-                        pass
+                        extracted = json.loads(jstr)
+                    except json.JSONDecodeError:
+                        extracted = {}
 
-        if len(new_mem) >= needed_count:
+        new_mem = extracted.get("memory", [])
+        if isinstance(new_mem, list) and len(new_mem) >= needed_count:
             final_mem = new_mem
             break
         else:
-            logging.warning("[refine_memories] attempt=%d => insufficient memory entries, retry", attempt)
+            logging.warning(f"[refine_memories] attempt={attempt}, insufficient memory entries ({len(new_mem)} provided) => retry.")
+
+    if not final_mem or len(final_mem) < needed_count:
+        logging.warning("[refine_memories] Fallback: returning existing memories.")
+        return existing_mem
 
     return final_mem
+
 
 
 async def refine_affiliations(
