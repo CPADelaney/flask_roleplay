@@ -2463,11 +2463,11 @@ def adjust_family_ages(user_id, conversation_id):
     conn.close()
 
 # 2) Now do a separate GPT call for Chase
-async def init_chase_schedule():
+async def init_chase_schedule(user_id, conversation_id, environment_desc, day_names):
     chase_sched = await generate_chase_schedule(
         user_id=user_id,
         conversation_id=conversation_id,
-        environment_desc=combined_env,
+        environment_desc=environment_desc,
         day_names=day_names
     )
     return chase_sched
