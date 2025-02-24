@@ -1483,18 +1483,27 @@ Environment:
 We have these relationships:
 {chr(10).join(rel_info)}
 
-Return JSON with key "memory" containing {needed_count}+ entries that:
-- Focus on small but meaningful moments
-- Show gradual development of influence
-- Include mundane situations with underlying tension
-- Demonstrate subtle shifts in relationships
-- Mix professional and personal dynamics
+Return strictly valid JSON with exactly 1 key: "memory".
 
-- For each relationship, provide at least three distinct memory entries referencing the relationships in 'npc_data["relationships"]' if relevant.
-- Each memory is either: a short reference to a past event that reveals how these relationships formed, any relevant backstory, or a major/impactful event involving both parties.
-- Memories can be shared between 3 or more characters ONLY if they all have a relationship, and they must all have the memory.
+Its value must be a JSON array of {needed_count}+ short memories (strings). 
+Each memory is a short 1–3 sentence snippet referencing at least one of the existing relationships, 
+explaining how the bond formed or evolved, or an impactful shared moment. 
+If more than one relationship was present in that memory, mention them both.
 
-Each relationship needs 3+ references showing evolving dynamics. Memories can but do not necessarily involve multiple NPCs.
+**Example format**:
+
+{
+  "memory": [
+    "I remember the night Lady Seraphine first whispered her commands to me in the old library, a moment that bound us closer than I'd ever imagined.",
+    "At dawn, Mistress Dalia forced both me and Camilla to spar in front of the entire court, a humbling event that revealed my own weaknesses.",
+    "After the summer festival, Mother Ariana stripped away all pretense and taught me how to serve, imprinting a sense of awe and fear I'd carry forever.",
+    "She once locked me in the palace's grand archives, commanding me to study forgotten texts, forging a bond of knowledge and submission between us."
+  ]
+}
+
+- The array **must** have at least three (3) memory entries per existing relationship. 
+- Each entry is a short recollection, revealing a piece of the NPC's backstory or an event that shaped the relationship. 
+- Do not include any extra commentary, code blocks, or top-level JSON fields beyond `"memory"`.
 
 """
 
