@@ -1456,22 +1456,41 @@ async def refine_memories(
     4) Returns a JSON array under the "memory" key or uses existing memories if GPT fails.
     """
     import json, re
+    import logging
+
+    # Create a logger with a unique name for this function
+    logger = logging.getLogger(f"refine_memories_{npc_id}")
+    logger.setLevel(logging.DEBUG)
+    
+    logger.info(f"Starting refine_memories for NPC ID: {npc_id}, User ID: {user_id}, Conversation ID: {conversation_id}")
+    logger.debug(f"Input NPC data: {json.dumps(npc_data, indent=2)}")
+    logger.debug(f"Environment description: {environment_desc[:100]}...")  # Truncated for readability
 
     existing_mem = npc_data.get("memory", [])
+    logger.debug(f"Existing memories: {json.dumps(existing_mem, indent=2)}")
+    
     relationships = npc_data.get("relationships", [])
+    logger.debug(f"Found {len(relationships)} relationships")
+    
     if not relationships:
+        logger.info("No relationships found, returning existing memories without changes")
         return existing_mem  # No relationships => no new memories needed
 
     needed_count = 3 * len(relationships)
+    logger.info(f"Need {needed_count} memories (3 per relationship)")
+    
     final_mem = existing_mem[:]
+    logger.debug(f"Starting with {len(final_mem)} existing memories")
 
     # Build a text summary of the relationships
     rel_info = []
-    for r in relationships:
+    for i, r in enumerate(relationships):
         eid = r.get("entity_id", 0)
         lbl = r.get("relationship_label", "unknown")
         etype = r.get("entity_type", "npc")
-        rel_info.append(f"- ID={eid} [{etype}] => '{lbl}'")
+        rel_str = f"- ID={eid} [{etype}] => '{lbl}'"
+        rel_info.append(rel_str)
+        logger.debug(f"Relationship {i+1}: {rel_str}")
 
     system_prompt = f"""
 NPC partial data:
@@ -1503,53 +1522,89 @@ Follow exactly this format:
 
 No extra commentary, code fences, or keys. If you cannot comply, return {{}}.
 """
-
+    logger.debug(f"System prompt length: {len(system_prompt)} characters")
+    
     attempt = 0
     while attempt < max_retries:
         attempt += 1
+        logger.info(f"Starting attempt {attempt}/{max_retries}")
 
         # Call GPT
-        raw_gpt = await asyncio.to_thread(
-            get_chatgpt_response,
-            conversation_id,
-            environment_desc,
-            system_prompt
-        )
-        text_response = raw_gpt.get("response", "")
+        logger.info("Calling GPT with system prompt")
+        try:
+            raw_gpt = await asyncio.to_thread(
+                get_chatgpt_response,
+                conversation_id,
+                environment_desc,
+                system_prompt
+            )
+            logger.debug(f"GPT response type: {raw_gpt.get('type', 'unknown')}")
+            text_response = raw_gpt.get("response", "")
+            logger.debug(f"Text response length: {len(text_response)} characters")
+            if len(text_response) < 500:
+                logger.debug(f"Text response content: {text_response}")
+            else:
+                logger.debug(f"Text response content (truncated): {text_response[:500]}...")
+        except Exception as e:
+            logger.error(f"GPT call failed: {str(e)}", exc_info=True)
+            attempt += 1
+            continue
 
         # 1) If GPT used a function call, we try to extract "memory" from function_args
         if raw_gpt.get("type") == "function_call":
+            logger.info("Processing function call response")
             # First, try our custom helper that checks npc_creations / npc_updates, etc.
-            candidate_mem = extract_field_from_function_call(raw_gpt, "memory", npc_id)
-            if candidate_mem:
-                # If the returned data is a list and big enough, great!
-                if isinstance(candidate_mem, list) and len(candidate_mem) >= needed_count:
-                    final_mem = candidate_mem
-                    break
+            try:
+                logger.debug("Attempting to extract memory from function call")
+                candidate_mem = extract_field_from_function_call(raw_gpt, "memory", npc_id)
+                logger.debug(f"Extracted candidate memory: {type(candidate_mem)}, " + 
+                            (f"length: {len(candidate_mem)}" if candidate_mem else "None"))
+                
+                if candidate_mem:
+                    # If the returned data is a list and big enough, great!
+                    if isinstance(candidate_mem, list) and len(candidate_mem) >= needed_count:
+                        logger.info(f"Successfully extracted {len(candidate_mem)} memories from function call")
+                        final_mem = candidate_mem
+                        break
+                    else:
+                        # fallback to normal text parsing
+                        logger.info("Candidate memory insufficient, falling back to text parsing")
+                        new_mem = parse_memory_from_text(text_response)
+                        logger.debug(f"Parsed {len(new_mem)} memories from text")
                 else:
-                    # fallback to normal text parsing
+                    # No "memory" field found => parse the text fallback
+                    logger.info("No memory field found in function call, parsing from text")
                     new_mem = parse_memory_from_text(text_response)
-            else:
-                # No "memory" field found => parse the text fallback
+                    logger.debug(f"Parsed {len(new_mem)} memories from text")
+            except Exception as e:
+                logger.error(f"Error extracting memory from function call: {str(e)}", exc_info=True)
                 new_mem = parse_memory_from_text(text_response)
-
+                logger.debug(f"Fallback: parsed {len(new_mem)} memories from text")
         else:
             # 2) No function call => parse from text
-            new_mem = parse_memory_from_text(text_response)
+            logger.info("No function call detected, parsing memory from text")
+            try:
+                new_mem = parse_memory_from_text(text_response)
+                logger.debug(f"Parsed {len(new_mem)} memories from text")
+            except Exception as e:
+                logger.error(f"Error parsing memory from text: {str(e)}", exc_info=True)
+                new_mem = []
 
         if len(new_mem) >= needed_count:
+            logger.info(f"Sufficient memories found: {len(new_mem)} >= {needed_count}")
             final_mem = new_mem
             break
         else:
-            logging.warning(
-                f"[refine_memories] attempt={attempt}, "
-                f"insufficient memory entries ({len(new_mem)} provided) => retry."
+            logger.warning(
+                f"Attempt {attempt}: insufficient memory entries ({len(new_mem)}/{needed_count}) => retry."
             )
 
     if len(final_mem) < needed_count:
-        logging.warning("[refine_memories] Fallback: returning existing memories.")
+        logger.warning(f"All attempts failed. Returning {len(existing_mem)} existing memories.")
         return existing_mem
 
+    logger.info(f"Successfully generated {len(final_mem)} memories")
+    logger.debug(f"Final memories: {json.dumps(final_mem, indent=2)}")
     return final_mem
 
 
@@ -1558,30 +1613,65 @@ def parse_memory_from_text(text: str) -> list:
     Try to parse a "memory" array from plain text JSON. Returns [] if not found or invalid.
     """
     import json, re
-
+    import logging
+    
+    logger = logging.getLogger("parse_memory_from_text")
+    logger.setLevel(logging.DEBUG)
+    
+    logger.debug(f"Attempting to parse memory from text of length {len(text)}")
+    
     # 1) Direct parse
     try:
+        logger.debug("Trying direct JSON parse")
         data = json.loads(text)
         mem = data.get("memory")
         if isinstance(mem, list):
+            logger.info(f"Successfully parsed memory directly: {len(mem)} entries")
             return mem
-    except json.JSONDecodeError:
-        pass
+        else:
+            logger.debug(f"Found 'memory' key but it's not a list: {type(mem)}")
+    except json.JSONDecodeError as e:
+        logger.debug(f"Direct JSON parse failed: {str(e)}")
 
     # 2) Fallback: look for a curly-brace substring
+    logger.debug("Attempting regex extraction of JSON")
     match_j = re.search(r'(\{[\s\S]*\})', text)
     if match_j:
         jstr = match_j.group(1)
+        logger.debug(f"Found JSON-like substring of length {len(jstr)}")
         try:
             data = json.loads(jstr)
             mem = data.get("memory")
             if isinstance(mem, list):
+                logger.info(f"Successfully parsed memory from substring: {len(mem)} entries")
                 return mem
-        except json.JSONDecodeError:
-            pass
+            else:
+                logger.debug(f"Found 'memory' key in substring but it's not a list: {type(mem)}")
+        except json.JSONDecodeError as e:
+            logger.debug(f"JSON parse of substring failed: {str(e)}")
+    else:
+        logger.debug("No JSON-like pattern found with regex")
 
+    # Additional attempts for more robust parsing
+    logger.debug("Attempting to find array pattern directly")
+    try:
+        # Look for "memory": [...] pattern
+        array_match = re.search(r'"memory"\s*:\s*(\[[\s\S]*?\])', text)
+        if array_match:
+            array_str = array_match.group(1)
+            logger.debug(f"Found array-like pattern of length {len(array_str)}")
+            try:
+                mem_array = json.loads(array_str)
+                if isinstance(mem_array, list):
+                    logger.info(f"Successfully parsed memory array directly: {len(mem_array)} entries")
+                    return mem_array
+            except json.JSONDecodeError as e:
+                logger.debug(f"Array parse failed: {str(e)}")
+    except Exception as e:
+        logger.debug(f"Array extraction attempt failed: {str(e)}")
+
+    logger.warning("All parsing attempts failed, returning empty list")
     return []
-
 
 
 async def refine_affiliations(
