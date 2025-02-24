@@ -3,17 +3,17 @@
     {
     "name": "Stepmother",
     "baseline_stats": {
-      "dominance_range": [0, 0],
+      "dominance_range": [0, 10],
       "dominance_modifier": 0,
       "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [0, 0],
+      "closeness_range": [5, 25],
       "closeness_modifier": 0,
-      "trust_range": [0, 0],
+      "trust_range": [0, 10],
       "trust_modifier": 0,
-      "respect_range": [0, 0],
+      "respect_range": [0, 10],
       "respect_modifier": 0,
-      "intensity_range": [0, 0],
+      "intensity_range": [-20, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -76,17 +76,17 @@
   {
     "name": "Mother",
     "baseline_stats": {
-      "dominance_range": [0, 0],
+      "dominance_range": [0, 10],
       "dominance_modifier": 0,
       "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [0, 0],
+      "closeness_range": [5, 25],
       "closeness_modifier": 0,
-      "trust_range": [0, 0],
+      "trust_range": [0, 10],
       "trust_modifier": 0,
-      "respect_range": [0, 0],
+      "respect_range": [0, 10],
       "respect_modifier": 0,
-      "intensity_range": [0, 0],
+      "intensity_range": [-20, 0],
       "intensity_modifier": 0
     },
     "progression_rules": [
@@ -111,17 +111,17 @@
   {
     "name": "Aunt",
     "baseline_stats": {
-      "dominance_range": [0, 0],
+      "dominance_range": [0, 10],
       "dominance_modifier": 0,
       "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
-      "closeness_range": [0, 0],
+      "closeness_range": [5, 15],
       "closeness_modifier": 0,
-      "trust_range": [0, 0],
+      "trust_range": [0, 10],
       "trust_modifier": 0,
-      "respect_range": [0, 0],
+      "respect_range": [0, 10],
       "respect_modifier": 0,
-      "intensity_range": [0, 0],
+      "intensity_range": [-30, 10],
       "intensity_modifier": 0
     },
     "progression_rules": [
