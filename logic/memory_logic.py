@@ -221,6 +221,13 @@ def propagate_shared_memories(user_id, conversation_id, source_npc_id, source_np
                 # Use your existing record_npc_event
                 record_npc_event(user_id, conversation_id, other_npc_id, mem_text)
 
+# Assuming locations is a list of dictionaries or database rows
+locations_table_formatted = ""
+for loc in locations:
+    location_name = loc[0]
+    description = loc[1][:80] + "..." if loc[1] and len(loc[1]) > 80 else loc[1] or "No description"
+    locations_table_formatted += f"- {location_name}: {description}\n"
+
 
 def get_shared_memory(user_id, conversation_id, relationship, npc_name, archetype_summary="", archetype_extras_summary=""):
     """
@@ -259,12 +266,13 @@ def get_shared_memory(user_id, conversation_id, relationship, npc_name, archetyp
     The NPC {npc_name} has a pre-existing relationship as a {rel_type} with {target_name}.
     The current setting is: {mega_description}.
     {extra_context}
+    Current established locations are {locations_table_formatted}
     
     Generate three first-person memories from {npc_name}'s perspective about their relationship with {target_name}. These memories should:
     
     1. Be 2-3 sentences each, written in {npc_name}'s authentic voice
     2. Show different stages of their relationship (early, middle, recent)
-    3. Each take place in a specific location within {setting_name}
+    3. Each take place in a specific location chosen from the locations list above or a location that would make sense to exist in this setting.
     4. Include at least one sensory detail (sight, sound, smell, taste, touch)
     5. Clearly demonstrate the femdom power dynamic through specific interactions, commands, or rituals
     6. Show an emotional reaction from both characters
