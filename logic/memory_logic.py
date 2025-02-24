@@ -319,7 +319,6 @@ To determine the nature of their relationship, consider {npc_name}'s likes, disl
             model="gpt-4o",
             messages=messages,
             temperature=0.7,
-            max_tokens=150
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
