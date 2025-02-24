@@ -3415,7 +3415,7 @@
       "cruelty_modifier": 0,
       "closeness_range": [0, 0],
       "closeness_modifier": 0,
-      "trust_range": 20, 0],
+      "trust_range": [20, 0],
       "trust_modifier": 0,
       "respect_range": [40, 50],
       "respect_modifier": 0,
@@ -3589,7 +3589,7 @@
   {
     "name": "Gladiator",
     "baseline_stats": {
-      "dominance_range": [0, 00],
+      "dominance_range": [0, 0],
       "dominance_modifier": 0,
       "cruelty_range": [0, 0],
       "cruelty_modifier": 0,
