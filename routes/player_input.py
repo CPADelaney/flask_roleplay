@@ -9,6 +9,7 @@ from flask_socketio import emit
 import logging
 
 player_input_bp = Blueprint("player_input", __name__)
+player_input_root_bp = Blueprint("player_input_root", __name__)
 
 @player_input_bp.route("/start_chat", methods=["POST"])
 def start_chat():
