@@ -296,6 +296,10 @@
       handleNewToken("[Error: " + payload.error + "]");
       finalizeAssistantMessage("");
     });
+    
+    socket.on("joined", (data) => {
+      console.log("Joined room:", data.room);
+    }); 
   };
 
   // We accumulate the partial streamed content in a single bubble
