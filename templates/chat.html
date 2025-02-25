@@ -470,11 +470,9 @@
   async function selectConversation(convId) {
       currentConvId = convId;
       messagesOffset = 0;
-      // Immediately join the Socket.IO room
       if (socket) {
           socket.emit("join", { conversation_id: convId });
       }
-      // Load older messages from DB, etc.
       await loadMessages(convId, true);
   }
 
@@ -569,16 +567,14 @@
       const userMsgObj = { sender: "user", content: userText };
       appendMessage(userMsgObj, true);
   
-      // Reset any partial from a previous message
+      // Reset any partial message state
       currentAssistantBubble = null;
       partialAssistantText = "";
   
       try {
-          // First, ensure we've joined the room for this conversation.
-          socket.emit('join', { conversation_id: currentConvId });
+          // (No need to re-emit join here if you've already joined)
           
           // Now send the HTTP request to trigger the background task.
-          // Removed socket.emit('message', ...) to avoid double triggering.
           const resp = await fetch("/start_chat", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -598,6 +594,7 @@
           finalizeAssistantMessage("");
       }
   }
+
 
 
   // =====================
