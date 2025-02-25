@@ -2251,14 +2251,25 @@ Each of these keys should map to a short string describing Chase's activity duri
 Do not include any extra keys, text, or commentary. Do not wrap your output in code fences.
 """
 
-    # Step C: Do the GPT call
+    # Step C: Do the GPT call and capture the response
+    try:
+        response_dict = get_openai_client().chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": chase_prompt}],
+            temperature=0.7,
+            max_tokens=300
+        )
+    except Exception as e:
+        logging.error("[generate_chase_schedule] GPT call error: %s", e)
+        return {}
+
+    # Process the response
     if response_dict.get("type") == "function_call":
-        # If GPT returned function_call, parse result
         chase_sched_data = response_dict.get("function_args", {})
         chase_schedule = extract_chase_schedule(chase_sched_data)
     else:
         raw_text = response_dict.get("response", "").strip()
-        # remove triple-backticks if needed
+        # Remove triple-backticks if needed
         if raw_text.startswith("```"):
             lines = raw_text.splitlines()
             if lines and lines[0].startswith("```"):
@@ -2266,7 +2277,6 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
             if lines and lines[-1].startswith("```"):
                 lines.pop()
             raw_text = "\n".join(lines).strip()
-    
         try:
             chase_sched_data = json.loads(raw_text)
             chase_schedule = extract_chase_schedule(chase_sched_data)
@@ -2274,14 +2284,13 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
             logging.error("[generate_chase_schedule] parse error: %s", e)
             chase_schedule = {}
 
+    # Ensure we have a valid ChaseSchedule
     chase_schedule = chase_sched_data.get("ChaseSchedule", {})
-    # If GPT doesn't include 'ChaseSchedule', fallback empty
     if not chase_schedule:
         logging.warning("[generate_chase_schedule] GPT gave no 'ChaseSchedule'.")
         chase_schedule = {}
 
-    # Step D: Optionally store in DB (CurrentRoleplay or PlayerStats).
-    # For example, store in CurrentRoleplay as 'ChaseSchedule':
+    # Step D: Optionally store in DB (CurrentRoleplay or PlayerStats)
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
