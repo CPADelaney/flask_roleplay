@@ -9,7 +9,7 @@ from asgiref.wsgi import WsgiToAsgi
 
 # Blueprint imports
 from routes.new_game import new_game_bp
-from routes.player_input import player_input_bp
+from routes.player_input import player_input_bp, player_input_root_bp
 from routes.settings_routes import settings_bp
 from routes.knowledge_routes import knowledge_bp
 from routes.story_routes import story_bp
