@@ -328,9 +328,11 @@
     console.log("Processing token:", token);
     if (!currentAssistantBubble) {
       console.log("Creating new bubble");
-      // Create a new message bubble for the assistant
+      // Create a new message row for the assistant
       const newMsg = { sender: "Nyx", content: "" };
-      currentAssistantBubble = appendMessage(newMsg, true);
+      const newRow = appendMessage(newMsg, true);
+      // Get the bubble element inside the row
+      currentAssistantBubble = newRow.querySelector('.message-bubble');
       partialAssistantText = "";
     }
     
@@ -340,21 +342,19 @@
     // Update the bubble's inner HTML
     console.log("Updating bubble with text:", partialAssistantText);
     currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(partialAssistantText)}`;
-    // Auto-scroll
+    
+    // Optionally, scroll the chat window to the bottom
     const chatWindow = document.getElementById("chatWindow");
     chatWindow.scrollTop = chatWindow.scrollHeight;
   }
 
   function finalizeAssistantMessage(finalText) {
-    // If there's no open bubble, do nothing
     if (!currentAssistantBubble) return;
-    // Set the final text
     currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(finalText)}`;
-    // Reset
     currentAssistantBubble = null;
     partialAssistantText = "";
   }
-
+  
   // Basic login check
   async function checkLoggedIn() {
     try {
