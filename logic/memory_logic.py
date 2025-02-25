@@ -318,7 +318,7 @@ When generating memories, please follow these guidelines:
 7. Show clear emotional reactions from both {npc_name} and {target_name}.  
 8. Include a small consequence or change in the relationship from each interaction.  
 9. Ensure that each memory is consistent with the natural progression of the relationship—for example, a 'mother' should not recall a first meeting later in life if familiarity is already established.
-10. Memories can be a positive experience (like sharing drinks, recounting tales, a nice walk on the beach, etc.), as well as negative (getting punished, having a fight, etc.)
+10. There should be at least one positive memory (eg., laughing over shared drinks, a nice walk on the beach, etc.) and at least one negative memory (eg., getting punished, having a fight, engaging in conflict etc.)
 
 Return your output as strictly valid JSON with exactly one key, "memory", whose value is an array of at least three strings. Follow exactly this format:
 
