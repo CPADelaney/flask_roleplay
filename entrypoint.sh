@@ -7,6 +7,6 @@ if [ "$SERVICE_TYPE" = "worker" ]; then
 else
     echo "Starting Web Server with SocketIO..."
     PORT=${PORT:-8080}
-    # Use gunicorn with the eventlet worker and point to our new wsgi.py file
-    exec gunicorn --bind 0.0.0.0:$PORT --worker-class eventlet --log-level info wsgi:app
+    # Use the "eventlet" worker class with only 1 worker
+    exec gunicorn --bind 0.0.0.0:$PORT --worker-class eventlet --workers 1 --log-level info --timeout 120 wsgi:app
 fi
