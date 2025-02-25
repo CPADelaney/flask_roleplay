@@ -1505,6 +1505,11 @@ async def refine_memories(
     existing_memories = npc_data.get("memory", [])
     logger.debug(f"Initial memories: {json.dumps(existing_memories, indent=2)}")
     
+    # Early exit if no existing memories to work with
+    if not existing_memories:
+        logger.warning(f"No initial memories found for NPC {npc_id}. Returning empty list.")
+        return []
+    
     # Build additional context from NPC data:
     archetypes_list = [arc.get("name", "").strip() for arc in npc_data.get("archetypes", [])]
     archetypes_str = ", ".join(archetypes_list)
@@ -1523,7 +1528,7 @@ async def refine_memories(
         f"Schedule: {schedule}\n"
     )
     
-    # (Optional) Build a summary of current relationships.
+    # Build a summary of current relationships.
     relationships = npc_data.get("relationships", [])
     rel_info = "\n".join(
         f"- ID={r.get('entity_id')}, Type={r.get('entity_type')}, Label='{r.get('relationship_label')}'"
@@ -1532,58 +1537,93 @@ async def refine_memories(
     
     # Define needed_count based on unique relationship targets:
     unique_targets = set(r.get("entity_id") for r in relationships if r.get("entity_id") is not None)
-    needed_count = 3 * len(unique_targets)
+    needed_count = max(3 * len(unique_targets), 3)  # At least 3 memories even with no relationships
     logger.info(f"Need {needed_count} memories (3 per unique target, {len(unique_targets)} unique targets)")
     
-    # Construct the system prompt
+    # Example of correctly formatted output
+    example_output = {
+        "memory": [
+            f"I remember when {npc_data.get('npc_name', 'I')} first arrived at the mansion and felt overwhelmed by its grandeur. The cool marble floors beneath my feet and the whispers of the staff made me feel both excited and nervous about what was to come.",
+            f"During our first real conversation, {npc_data.get('npc_name', 'I')} couldn't help but notice how attentively they listened to my story. Their eyes locked with mine in a way that made me feel both seen and slightly uncomfortable, creating an unexpected tension between us.",
+            f"Last week when {npc_data.get('npc_name', 'I')} accidentally spilled wine on their favorite outfit, I was surprised by their calm reaction. Instead of anger, they laughed it off which made me see a different side to them - more human and less intimidating."
+        ]
+    }
+    
+    # Construct the system prompt with clearer instructions and example
     system_prompt = f"""
+# Memory Refinement Task
+
+## Current Data
 We have generated the following initial memories for NPC {npc_data.get("npc_name", "Unknown NPC")}:
+```json
 {json.dumps(existing_memories, indent=2)}
+```
 
-Environment:
+## Environment Context
+```
 {environment_desc}
+```
 
-Additional Context:
+## NPC Information
+```
 {extra_context}
+```
 
-Relationships:
+## Relationships
+```
 {rel_info}
+```
 
-Refine the above memories to ensure they are fully consistent with the NPC's archetypes and relationship dynamics. 
-In your refinement, please:
-- Ensure that all of the NPC's archetypal traits are naturally integrated.
-- Adjust any details that seem inconsistent or strange.
-- Add any extra sensory or descriptive details that enhance the internal consistency of the narrative.
-- Ensure at least one memory has conflict between the characters.
+## INSTRUCTIONS
+Refine the initial memories to ensure they:
+1. Fully reflect the NPC's archetypes and personality traits
+2. Maintain consistency with the environment and relationships
+3. Include sensory and emotional details
+4. Feature at least one memory with interpersonal conflict
+5. Align with the NPC's likes/dislikes and hobbies
 
-Return strictly valid JSON with exactly one key, "memory", whose value is an array of refined memory strings. Follow exactly this format:
+## REQUIRED OUTPUT FORMAT
+You MUST return valid JSON with exactly ONE key named "memory" containing an array of strings.
+Each string should be a refined memory from the NPC's perspective.
 
-{{
-  "memory": [
-    "<refined memory 1>",
-    "<refined memory 2>",
-    "<refined memory 3>"
-  ]
-}}
+Example of CORRECT output format:
+```json
+{json.dumps(example_output, indent=2)}
+```
 
-No extra commentary, code fences, or additional keys. If you cannot comply, return {{}}
+⚠️ IMPORTANT: 
+- DO NOT include code fences (```) in your response
+- DO NOT include any explanations or extra text
+- DO NOT modify the key name "memory"
+- Return ONLY the JSON object
 """
     logger.debug(f"System prompt length: {len(system_prompt)} characters")
     
     attempt = 0
     final_mem = existing_memories[:]  # fallback if needed
+    
+    # Define the memory extraction function to use in multiple places
+    def extract_memory_array(data):
+        if isinstance(data, dict) and "memory" in data:
+            memories = data["memory"]
+            if isinstance(memories, list):
+                return memories
+        return []
+    
     while attempt < max_retries:
         attempt += 1
         logger.info(f"Starting attempt {attempt}/{max_retries}")
 
         try:
             logger.info("Calling GPT with system prompt")
+            # New: Set response format to force JSON output
             raw_gpt = await asyncio.to_thread(
-                get_chatgpt_response,
+                get_chatgpt_response_with_json_format,  # Updated function that sets response_format="json_object"
                 conversation_id,
                 environment_desc,
                 system_prompt
             )
+            
             logger.debug(f"GPT response type: {raw_gpt.get('type', 'unknown')}")
             text_response = raw_gpt.get("response", "")
             logger.debug(f"Text response length: {len(text_response)} characters")
@@ -1593,57 +1633,154 @@ No extra commentary, code fences, or additional keys. If you cannot comply, retu
                 logger.debug(f"Text response content (truncated): {text_response[:500]}...")
         except Exception as e:
             logger.error(f"GPT call failed: {str(e)}", exc_info=True)
-            attempt += 1
             continue
 
+        # Try parsing the response - first check if it's a function call
         if raw_gpt.get("type") == "function_call":
             logger.info("Processing function call response")
             try:
-                logger.debug("Attempting to extract memory from function call")
-                candidate_mem = extract_field_from_function_call(raw_gpt, "memory", npc_id)
-                logger.debug(f"Extracted candidate memory: {type(candidate_mem)}, " +
-                             (f"length: {len(candidate_mem)}" if candidate_mem else "None"))
+                # Try to extract memory directly from function args
+                function_args = raw_gpt.get("function_args", {})
+                memories = extract_memory_array(function_args)
                 
-                if candidate_mem:
-                    if isinstance(candidate_mem, list) and len(candidate_mem) >= needed_count:
-                        logger.info(f"Successfully extracted {len(candidate_mem)} memories from function call")
-                        final_mem = candidate_mem
+                if memories:
+                    logger.info(f"Successfully extracted {len(memories)} memories from function call")
+                    if len(memories) >= needed_count:
+                        final_mem = memories
                         break
-                    else:
-                        logger.info("Candidate memory insufficient, falling back to text parsing")
-                        new_mem = parse_memory_from_text(text_response)
-                        logger.debug(f"Parsed {len(new_mem)} memories from text")
-                else:
-                    logger.info("No memory field found in function call, parsing from text")
-                    new_mem = parse_memory_from_text(text_response)
-                    logger.debug(f"Parsed {len(new_mem)} memories from text")
+                
+                # If that fails, try other extraction methods
+                if not memories:
+                    logger.info("No direct memory field found, checking for nested response")
+                    if "response" in function_args and isinstance(function_args["response"], dict):
+                        memories = extract_memory_array(function_args["response"])
+                        if memories and len(memories) >= needed_count:
+                            logger.info(f"Found {len(memories)} memories in nested response")
+                            final_mem = memories
+                            break
             except Exception as e:
                 logger.error(f"Error extracting memory from function call: {str(e)}", exc_info=True)
-                new_mem = parse_memory_from_text(text_response)
-                logger.debug(f"Fallback: parsed {len(new_mem)} memories from text")
-        else:
-            logger.info("No function call detected, parsing memory from text")
+        
+        # If we get here, try to parse from text
+        if text_response:
             try:
-                new_mem = parse_memory_from_text(text_response)
-                logger.debug(f"Parsed {len(new_mem)} memories from text")
+                # First try direct JSON parsing
+                logger.info("Attempting direct JSON parsing of text response")
+                cleaned_text = text_response.strip()
+                
+                # Remove code fences if present
+                if cleaned_text.startswith("```") and cleaned_text.endswith("```"):
+                    cleaned_text = "\n".join(cleaned_text.split("\n")[1:-1])
+                elif cleaned_text.startswith("```"):
+                    # Handle case where only opening fence exists
+                    cleaned_text = "\n".join(cleaned_text.split("\n")[1:])
+                
+                # Remove "json" language identifier if present
+                if cleaned_text.startswith("json"):
+                    cleaned_text = cleaned_text[4:].strip()
+                
+                # Try parsing
+                try:
+                    parsed_json = json.loads(cleaned_text)
+                    memories = extract_memory_array(parsed_json)
+                    if memories and len(memories) >= needed_count:
+                        logger.info(f"Successfully parsed {len(memories)} memories from text JSON")
+                        final_mem = memories
+                        break
+                except json.JSONDecodeError:
+                    logger.warning("Direct JSON parsing failed")
+                
+                # If direct parsing fails, try regex extraction
+                if not memories:
+                    logger.info("Attempting regex extraction")
+                    regex_pattern = r'\{\s*"memory"\s*:\s*\[(.*?)\]\s*\}'
+                    match = re.search(regex_pattern, cleaned_text, re.DOTALL)
+                    if match:
+                        # Extract items from the array
+                        items_str = match.group(1)
+                        # Parse items by splitting on commas but respecting quotes
+                        items = []
+                        in_quotes = False
+                        current_item = ""
+                        for char in items_str:
+                            if char == '"' and (not current_item or current_item[-1] != '\\'):
+                                in_quotes = not in_quotes
+                            
+                            current_item += char
+                            
+                            if not in_quotes and char == ',':
+                                # End of item
+                                item_json = current_item.rsplit(',', 1)[0].strip()
+                                if item_json.startswith('"') and item_json.endswith('"'):
+                                    items.append(json.loads(item_json))
+                                current_item = ""
+                        
+                        # Add the last item
+                        if current_item.strip():
+                            if current_item.startswith('"') and current_item.endswith('"'):
+                                items.append(json.loads(current_item))
+                        
+                        if items and len(items) >= needed_count:
+                            logger.info(f"Extracted {len(items)} memories via regex")
+                            final_mem = items
+                            break
             except Exception as e:
                 logger.error(f"Error parsing memory from text: {str(e)}", exc_info=True)
-                new_mem = []
-
-        if len(new_mem) >= needed_count:
-            logger.info(f"Sufficient memories found: {len(new_mem)} >= {needed_count}")
-            final_mem = new_mem
-            break
-        else:
-            logger.warning(f"Attempt {attempt}: insufficient memory entries ({len(new_mem)}/{needed_count}) => retry.")
-
+        
+        logger.warning(f"Attempt {attempt}: failed to extract sufficient memories. Retrying...")
+    
+    # If we couldn't generate enough memories, use what we have
     if len(final_mem) < needed_count:
-        logger.warning(f"All attempts failed. Returning {len(existing_memories)} existing memories.")
-        return existing_memories
-
-    logger.info(f"Successfully generated {len(final_mem)} memories")
-    logger.debug(f"Final memories: {json.dumps(final_mem, indent=2)}")
+        logger.warning(f"All attempts failed. Generated {len(final_mem)} memories, needed {needed_count}.")
+        # If we have no memories at all, generate a minimal set
+        if not final_mem:
+            logger.info("Generating fallback memories")
+            npc_name = npc_data.get("npc_name", "Unknown")
+            final_mem = [
+                f"I remember my first day here, the weight of expectations heavy on my shoulders. The air felt different, charged with possibility.",
+                f"There was a time when I had to make a difficult choice that tested my values. The decision I made that day still influences who I am now.",
+                f"I once witnessed something beautiful that changed my perspective forever. It was a small moment, but it made me feel connected to something larger."
+            ]
+    
+    logger.info(f"Final memory count: {len(final_mem)}")
     return final_mem
+
+def get_chatgpt_response_with_json_format(conversation_id, environment_desc, system_prompt):
+    """
+    Enhanced version of get_chatgpt_response that forces JSON output format.
+    """
+    try:
+        response = get_openai_client().chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": system_prompt}],
+            temperature=0.7,
+            response_format={"type": "json_object"}  # Force JSON output
+        )
+        
+        # Extract content from the response
+        if hasattr(response, 'choices') and len(response.choices) > 0:
+            message = response.choices[0].message
+            
+            # Check if there's a function call (should be rare with response_format=json_object)
+            if hasattr(message, 'function_call') and message.function_call:
+                return {
+                    "type": "function_call",
+                    "function_name": message.function_call.name,
+                    "function_args": json.loads(message.function_call.arguments),
+                    "response": message.content or ""
+                }
+            else:
+                # Regular response
+                return {
+                    "type": "text",
+                    "response": message.content or ""
+                }
+        
+        # Fallback if response structure is unexpected
+        return {"type": "unknown", "response": ""}
+    except Exception as e:
+        logging.error(f"Error in get_chatgpt_response_with_json_format: {e}")
+        return {"type": "error", "response": str(e)}
 
 
 def parse_memory_from_text(text: str) -> list:
@@ -2215,7 +2352,7 @@ async def generate_chase_schedule(
 
     if not row:
         logging.warning("[generate_chase_schedule] Player 'Chase' not found in PlayerStats.")
-        return {}
+        return generate_default_schedule(day_names)
 
     (corrupt, confid, willp, obed, dep, lust, ment_res, phys_end) = row
 
@@ -2232,26 +2369,57 @@ async def generate_chase_schedule(
         "physical_endurance": phys_end
     }
 
-    # Step B: Build the prompt
+    # Create an example of the exact output format we want
+    example_schedule = {
+        "ChaseSchedule": {
+            day_names[0]: {
+                "Morning": "Wakes up early to exercise, building physical endurance.",
+                "Afternoon": "Attends personal development workshop to build confidence.",
+                "Evening": "Relaxes with a book on mindfulness to improve mental resilience.",
+                "Night": "Practices meditation before sleep to reinforce willpower."
+            }
+        }
+    }
+
+    # Step B: Build the prompt with clearer instructions and example
     chase_prompt = f"""
-We have a player character 'Chase' in this femdom environment.
-Environment:
+# Chase Schedule Generation Task
+
+## Environment Context
+```
 {environment_desc}
+```
 
-Chase partial data:
+## Character Data
+```json
 {json.dumps(chase_data, indent=2)}
+```
 
-The list of days is: {day_names}
+## INSTRUCTIONS
+Generate a realistic daily schedule for "Chase" for each of the days listed below.
+The schedule should reflect Chase's character traits (corruption, confidence, etc.)
+and be appropriate for the environment described above.
 
-Using details from the setting, please generate a realistic daily schedule for "Chase" for each of the days listed. Your output must be a valid JSON object with exactly one top-level key, "ChaseSchedule". The value of "ChaseSchedule" must be an object whose keys exactly match the days in the list (e.g., if the list is ["Monday", "Tuesday", ...], then these must be the keys). For each day, the value must be an object with exactly the following keys:
-- "Morning"
-- "Afternoon"
-- "Evening"
-- "Night"
+## Days to Schedule
+{json.dumps(day_names)}
 
-Each of these keys should map to a short string describing Chase's activity during that time slot.
+## REQUIRED OUTPUT FORMAT
+Your response MUST be valid JSON with exactly this structure:
+```json
+{json.dumps(example_schedule, indent=2)}
+```
 
-Do not include any extra keys, text, or commentary. Do not wrap your output in code fences.
+For each day in the provided list, create entries for all four time periods:
+- Morning
+- Afternoon
+- Evening
+- Night
+
+⚠️ IMPORTANT: 
+- DO NOT include code fences (```) in your response
+- DO NOT include any explanations or extra text
+- DO NOT modify the key names
+- Return ONLY the JSON object with exactly one top-level key: "ChaseSchedule"
 """
 
     # Step C: Call GPT and capture the response
@@ -2260,49 +2428,97 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
             model="gpt-4o",
             messages=[{"role": "system", "content": chase_prompt}],
             temperature=0.7,
+            response_format={"type": "json_object"}  # Force JSON output format
         )
         # Convert the response to a dictionary
         response_dict = response.dict()
     except Exception as e:
         logging.error("[generate_chase_schedule] GPT call error: %s", e)
-        return {}
+        return generate_default_schedule(day_names)
 
     # Initialize an empty dict for extracted data
-    chase_sched_data = {}
+    chase_schedule = {}
 
-    # Process the response depending on its type
-    if response_dict.get("type") == "function_call":
-        chase_sched_data = response_dict.get("function_args", {})
-        # Extra extraction: if "ChaseSchedule" is not found, check for a nested "response"
-        if not chase_sched_data.get("ChaseSchedule"):
-            nested = chase_sched_data.get("response")
-            if isinstance(nested, dict) and nested.get("ChaseSchedule"):
-                chase_sched_data = nested
-        logging.debug(f"Function call extraction yields: {chase_sched_data}")
-        chase_schedule = extract_chase_schedule(chase_sched_data)
-    else:
-        raw_text = response_dict.get("response", "").strip()
-        # Remove triple-backticks if present
-        if raw_text.startswith("```"):
-            lines = raw_text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines.pop(0)
-            if lines and lines[-1].startswith("```"):
-                lines.pop()
-            raw_text = "\n".join(lines).strip()
-        try:
-            chase_sched_data = json.loads(raw_text)
-            chase_schedule = extract_chase_schedule(chase_sched_data)
-        except Exception as e:
-            logging.error("[generate_chase_schedule] parse error: %s", e)
-            chase_sched_data = {}
-            chase_schedule = {}
-
-    # Ensure we have a valid ChaseSchedule
-    chase_schedule = chase_sched_data.get("ChaseSchedule", {})
+    # Process the response
+    try:
+        # First check if there was a function call
+        if hasattr(response.choices[0].message, 'function_call') and response.choices[0].message.function_call:
+            function_args = json.loads(response.choices[0].message.function_call.arguments)
+            if "ChaseSchedule" in function_args:
+                chase_schedule = function_args["ChaseSchedule"]
+            else:
+                # Try looking for nested response
+                for key, value in function_args.items():
+                    if isinstance(value, dict) and "ChaseSchedule" in value:
+                        chase_schedule = value["ChaseSchedule"]
+                        break
+        else:
+            # Handle regular text response
+            raw_text = response.choices[0].message.content.strip()
+            
+            # Remove triple-backticks if present
+            if raw_text.startswith("```") and raw_text.endswith("```"):
+                raw_text = raw_text[3:-3].strip()
+            elif raw_text.startswith("```"):
+                raw_text = raw_text[3:].strip()
+            
+            # Remove "json" language identifier if present
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:].strip()
+            
+            # Parse the JSON
+            try:
+                parsed_data = json.loads(raw_text)
+                if "ChaseSchedule" in parsed_data:
+                    chase_schedule = parsed_data["ChaseSchedule"]
+            except json.JSONDecodeError as e:
+                logging.error("[generate_chase_schedule] JSON parse error: %s", e)
+                # Try regex extraction as a last resort
+                import re
+                schedule_pattern = r'"ChaseSchedule"\s*:\s*(\{.*?\})'
+                match = re.search(schedule_pattern, raw_text, re.DOTALL)
+                if match:
+                    try:
+                        wrapped_json = '{"ChaseSchedule":' + match.group(1) + '}'
+                        parsed_data = json.loads(wrapped_json)
+                        chase_schedule = parsed_data["ChaseSchedule"]
+                    except Exception as e2:
+                        logging.error("[generate_chase_schedule] Regex extraction failed: %s", e2)
+    except Exception as e:
+        logging.error("[generate_chase_schedule] Processing error: %s", e)
+    
+    # Validate the schedule contains all required days and time periods
+    is_valid = True
+    time_periods = ["Morning", "Afternoon", "Evening", "Night"]
+    
+    # Check if chase_schedule is empty
     if not chase_schedule:
-        logging.warning("[generate_chase_schedule] GPT gave no 'ChaseSchedule'.")
-        chase_schedule = {}
+        logging.warning("[generate_chase_schedule] Empty or invalid schedule generated.")
+        is_valid = False
+    else:
+        # Validate structure: each day should have all time periods
+        for day in day_names:
+            if day not in chase_schedule:
+                logging.warning(f"[generate_chase_schedule] Missing day: {day}")
+                is_valid = False
+                break
+            
+            day_schedule = chase_schedule[day]
+            if not isinstance(day_schedule, dict):
+                logging.warning(f"[generate_chase_schedule] Invalid format for day: {day}")
+                is_valid = False
+                break
+            
+            for period in time_periods:
+                if period not in day_schedule:
+                    logging.warning(f"[generate_chase_schedule] Missing time period {period} for day {day}")
+                    is_valid = False
+                    break
+    
+    # If invalid, generate a default schedule
+    if not is_valid:
+        logging.info("[generate_chase_schedule] Using default schedule")
+        chase_schedule = generate_default_schedule(day_names)
 
     # Step D: Store the schedule in the database (CurrentRoleplay)
     conn = get_db_connection()
@@ -2319,7 +2535,32 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
     logging.info("[generate_chase_schedule] Stored chase schedule => %s", chase_schedule)
     return chase_schedule
 
-
+def generate_default_schedule(day_names):
+    """
+    Generate a default schedule for Chase when the GPT generation fails.
+    """
+    default_schedule = {}
+    
+    for day in day_names:
+        default_schedule[day] = {
+            "Morning": "Wakes up early and prepares for the day ahead.",
+            "Afternoon": "Attends to responsibilities and daily tasks.",
+            "Evening": "Takes time to unwind and reflect on the day.",
+            "Night": "Retires to bed at a reasonable hour."
+        }
+    
+    # Add a little variety based on day of week
+    if "Monday" in day_names:
+        default_schedule["Monday"]["Morning"] = "Starts the week with determination, setting goals for the days ahead."
+    if "Friday" in day_names:
+        default_schedule["Friday"]["Evening"] = "Celebrates the end of the week with some personal relaxation time."
+    if "Saturday" in day_names:
+        default_schedule["Saturday"]["Morning"] = "Sleeps in a bit longer than usual."
+        default_schedule["Saturday"]["Night"] = "Stays up later, enjoying the freedom of the weekend."
+    if "Sunday" in day_names:
+        default_schedule["Sunday"]["Evening"] = "Prepares for the upcoming week, organizing thoughts and plans."
+    
+    return default_schedule
 
 # --- NEW: Define relationship groups for propagation ---
 RELATIONSHIP_GROUPS = {
