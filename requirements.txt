@@ -1,6 +1,6 @@
 Flask[async]==2.3.2
 psycopg2-binary==2.9.6  # Pre-compiled PostgreSQL adapter
-gunicorn==20.1.0
+gunicorn==21.2.0
 python-dotenv==1.0.0    # For local .env file support (optional)
 flask-cors==4.0.0  # Add this line
 openai
