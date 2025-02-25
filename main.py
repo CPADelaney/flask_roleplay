@@ -36,7 +36,7 @@ def create_flask_app():
     # Register blueprint modules
     app.register_blueprint(new_game_bp)
     app.register_blueprint(player_input_bp, url_prefix="/player")
-    app.register_blueprint(player_input_bp)  # Also register at root level
+    app.register_blueprint(player_input_root_bp)
     app.register_blueprint(settings_bp, url_prefix="/settings")
     app.register_blueprint(memory_bp, url_prefix="/memory")
     app.register_blueprint(rule_enforcement_bp, url_prefix="/rules")
