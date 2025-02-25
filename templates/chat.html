@@ -340,6 +340,9 @@
     // Update the bubble's inner HTML
     console.log("Updating bubble with text:", partialAssistantText);
     currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(partialAssistantText)}`;
+    // Auto-scroll
+    const chatWindow = document.getElementById("chatWindow");
+    chatWindow.scrollTop = chatWindow.scrollHeight;
   }
 
   function finalizeAssistantMessage(finalText) {
