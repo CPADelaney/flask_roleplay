@@ -2,11 +2,10 @@
 from celery import Celery
 import os
 
-# Use RabbitMQ as the broker.
-# The default URL for RabbitMQ (with guest/guest) is: amqp://guest:guest@localhost//
-# For the result backend, you can use RPC (which is free) or choose another backend.
-
+# Use RabbitMQ as the broker (or override via environment variable)
 broker_url = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost//")
+
+# Create the Celery app with an RPC result backend (or another backend of your choice)
 celery_app = Celery('tasks', broker=broker_url, backend='rpc://')
 
 celery_app.conf.update(
