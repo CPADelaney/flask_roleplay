@@ -325,15 +325,20 @@
   let partialAssistantText = "";
 
   function handleNewToken(token) {
+    console.log("Processing token:", token);
     if (!currentAssistantBubble) {
-      // Create a new message bubble for Nyx
+      console.log("Creating new bubble");
+      // Create a new message bubble for the assistant
       const newMsg = { sender: "Nyx", content: "" };
       currentAssistantBubble = appendMessage(newMsg, true);
       partialAssistantText = "";
     }
+    
     // Append chunk to partial text
     partialAssistantText += token;
+    
     // Update the bubble's inner HTML
+    console.log("Updating bubble with text:", partialAssistantText);
     currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(partialAssistantText)}`;
   }
 
@@ -586,44 +591,29 @@
 
   // Send a new message (streaming approach)
   async function sendMessage() {
-      const userInputElem = document.getElementById("userMsg");
-      const userText = userInputElem.value.trim();
-      userInputElem.value = "";
-      if (!userText || !currentConvId) return;
-  
-      // Show the user's message right away
-      const userMsgObj = { sender: "user", content: userText };
-      appendMessage(userMsgObj, true);
-  
-      // Reset any partial message state
-      currentAssistantBubble = null;
-      partialAssistantText = "";
-  
-      try {
-          // (No need to re-emit join here if you've already joined)
-          
-          // Now send the HTTP request to trigger the background task.
-          const resp = await fetch("/start_chat", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              credentials: "include",
-              body: JSON.stringify({
-                  user_input: userText,
-                  conversation_id: currentConvId,
-                  universal_update: pendingUniversalUpdates
-              })
-          });
-          
-          // Reset pending updates if needed
-          resetPendingUniversalUpdates();
-      } catch (err) {
-          console.error("sendMessage error:", err);
-          handleNewToken("[Error: " + err + "]");
-          finalizeAssistantMessage("");
-      }
-  }
+    const userInputElem = document.getElementById("userMsg");
+    const userText = userInputElem.value.trim();
+    userInputElem.value = "";
+    if (!userText || !currentConvId) return;
 
+    // Show the user's message right away
+    const userMsgObj = { sender: "user", content: userText };
+    appendMessage(userMsgObj, true);
 
+    // Reset any partial message state
+    currentAssistantBubble = null;
+    partialAssistantText = "";
+
+    // Use socket.io to send the message instead of fetch
+    socket.emit("message", {
+        user_input: userText,
+        conversation_id: currentConvId,
+        universal_update: pendingUniversalUpdates
+    });
+    
+    // Reset pending updates
+    resetPendingUniversalUpdates();
+}
 
   // =====================
   // Context Menu
