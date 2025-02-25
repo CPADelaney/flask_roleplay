@@ -292,6 +292,14 @@ def get_shared_memory(user_id, conversation_id, relationship, npc_name, archetyp
     if archetype_extras_summary:
         extra_context += f"Extra Details: {archetype_extras_summary}. "
     
+    # Create an example of the expected output format
+    example_output = {
+        "memory": [
+            f"I still remember the first time {target_name} and I crossed paths at the marketplace. The scent of fresh spices hung in the air as our eyes met briefly over a display of exotic fruits, creating an unexpected moment of connection in the midst of the bustling crowd.",
+            f"Last month when {target_name} challenged my authority during the council meeting, I felt my temper flare dangerously. The tension in the room was palpable as our voices rose, but somehow that confrontation led to a grudging respect between us that wasn't there before.",
+            f"The afternoon we spent by the lake skipping stones remains vivid in my mind. The cool mist on my face and the soft laughter we shared created a rare moment of peace between us, momentarily setting aside our complicated history."
+        ]
+    }
     system_instructions = f"""
 # Memory Generation for {npc_name}
 
@@ -309,13 +317,16 @@ These memories should authentically represent all aspects of {npc_name}'s identi
 ## Memory Generation Guidelines
 
 ### Core Requirements:
-1. Generate exactly THREE distinct first-person memories from {npc_name}'s perspective for EACH relationship target.
+1. Generate THREE distinct first-person memories from {npc_name}'s perspective about interactions with {target_name}.
    - If no relationships exist, create three defining life moment memories instead.
 2. Each memory must be 2-3 sentences written in {npc_name}'s authentic voice.
 3. Set each memory in a specific location from the provided list or another contextually appropriate location.
 4. Include at least one vivid sensory detail (sight, sound, smell, taste, or touch) per memory.
 5. Show clear emotional responses from both {npc_name} and {target_name}.
-6. Incorporate a small consequence or relationship shift in each interaction.
+6. Include different types of interactions:
+   - One positive experience (e.g., shared laughter, mutual accomplishment)
+   - One challenging interaction (e.g., conflict, disappointment)
+   - One memory that adds additional dimension to their relationship
 
 ### Memory Diversity:
 - Include at least one positive experience (e.g., shared laughter, mutual accomplishment, comfort)
@@ -328,30 +339,120 @@ These memories should authentically represent all aspects of {npc_name}'s identi
 - Subtly incorporate and foreshadow evolving femdom dynamics in the relationship
 - Maintain timeline consistency with established relationship history
 
-## Output Format
-Return ONLY valid JSON with a single key "memory" containing an array of all required memories:
+## REQUIRED OUTPUT FORMAT
+Your response MUST be valid JSON with exactly this structure:
+```json
+{json.dumps(example_output, indent=2)}
+```
 
-{{
-  "memory": [
-    "<memory 1>",
-    "<memory 2>",
-    "<memory 3>"
-  ]
-}}
+⚠️ IMPORTANT: 
+- DO NOT include code fences (```) in your response
+- DO NOT include any explanations or extra text
+- DO NOT modify the key name "memory"
+- Return ONLY the JSON object
 """
     logging.debug(f"Constructed system instructions with length: {len(system_instructions)} characters")
     
     messages = [{"role": "system", "content": system_instructions}]
     logging.info("Calling GPT for shared memory generation...")
-    try:
-        response = get_openai_client().chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            temperature=0.7,
-        )
-        memory_output = response.choices[0].message.content.strip()
-        logging.info("GPT response received for shared memory.")
-        return memory_output
-    except Exception as e:
-        logging.error(f"Error during GPT call in get_shared_memory: {e}")
-        return "Shared memory could not be generated."
+    
+    # Implement retry logic with backoff
+    max_retries = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            logging.info(f"Memory generation attempt {attempt}/{max_retries}")
+            response = get_openai_client().chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                temperature=0.7,
+                response_format={"type": "json_object"}  # Force JSON output
+            )
+            
+            # Extract and process the content
+            memory_output = response.choices[0].message.content.strip()
+            logging.info(f"GPT response received (length: {len(memory_output)})")
+            
+            # Basic validation - check if it looks like JSON
+            if memory_output.startswith("{") and memory_output.endswith("}"):
+                try:
+                    # Parse the JSON to validate it
+                    memory_data = json.loads(memory_output)
+                    # Check if it has the expected structure
+                    if "memory" in memory_data and isinstance(memory_data["memory"], list):
+                        if len(memory_data["memory"]) >= 3:
+                            return memory_output
+                        else:
+                            logging.warning(f"Memory list too short, only {len(memory_data['memory'])} entries")
+                    else:
+                        logging.warning("Response missing 'memory' array")
+                except json.JSONDecodeError as e:
+                    logging.error(f"Invalid JSON in response: {e}")
+            else:
+                logging.warning(f"Response doesn't look like JSON: {memory_output[:50]}...")
+                
+            # If we're here, validation failed but we have a response
+            if attempt == max_retries:
+                # Last attempt, try to salvage what we can
+                return extract_or_create_memory_fallback(memory_output, npc_name, target_name)
+                
+        except Exception as e:
+            logging.error(f"Error during GPT call in get_shared_memory (attempt {attempt}): {e}")
+            if attempt == max_retries:
+                # Generate a fallback on final attempt
+                return create_memory_fallback(npc_name, target_name)
+    
+    # If we somehow get here, provide a basic fallback
+    return create_memory_fallback(npc_name, target_name)
+
+def extract_or_create_memory_fallback(text_output, npc_name, target_name):
+    """
+    Attempts to extract memories from malformed output or creates fallbacks.
+    """
+    import json, re
+    
+    # Try to find a JSON-like structure with regex
+    json_pattern = r'\{.*"memory"\s*:\s*\[.*\].*\}'
+    match = re.search(json_pattern, text_output, re.DOTALL)
+    
+    if match:
+        try:
+            # Try to parse the extracted JSON
+            extracted_json = match.group(0)
+            memory_data = json.loads(extracted_json)
+            if "memory" in memory_data and isinstance(memory_data["memory"], list):
+                if len(memory_data["memory"]) >= 1:
+                    # We got at least one valid memory
+                    logging.info(f"Extracted {len(memory_data['memory'])} memories from malformed response")
+                    
+                    # Ensure we have exactly 3 memories
+                    memories = memory_data["memory"]
+                    while len(memories) < 3:
+                        # Add fallback memories if needed
+                        index = len(memories)
+                        if index == 0:
+                            memories.append(f"I remember meeting {target_name} for the first time. There was something about their presence that left a lasting impression on me.")
+                        elif index == 1:
+                            memories.append(f"Once {target_name} and I had a disagreement that tested our relationship. Despite the tension, we found a way to resolve our differences.")
+                        else:
+                            memories.append(f"I cherish the quiet moments {target_name} and I have shared. Those simple times together have strengthened our bond in ways words cannot express.")
+                    
+                    return json.dumps({"memory": memories})
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to parse extracted JSON: {e}")
+    
+    # If extraction failed, create complete fallback
+    return create_memory_fallback(npc_name, target_name)
+
+def create_memory_fallback(npc_name, target_name):
+    """
+    Creates a basic set of fallback memories when all else fails.
+    """
+    logging.warning(f"Using fallback memory generation for {npc_name} and {target_name}")
+    
+    memories = [
+        f"I still remember when I first met {target_name}. There was an immediate sense of connection between us that I hadn't expected, and it made a lasting impression on me.",
+        f"The time {target_name} and I had that heated disagreement taught me something important. Though our voices were raised and emotions ran high, I came to respect their conviction and perspective.",
+        f"One quiet evening, {target_name} and I shared a moment of unexpected understanding. Sometimes the most meaningful connections happen in the simplest moments, away from the noise of daily life."
+    ]
+    
+    return json.dumps({"memory": memories})
