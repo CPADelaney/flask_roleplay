@@ -1530,6 +1530,11 @@ async def refine_memories(
         for r in relationships
     )
     
+    # Define needed_count based on unique relationship targets:
+    unique_targets = set(r.get("entity_id") for r in relationships if r.get("entity_id") is not None)
+    needed_count = 3 * len(unique_targets)
+    logger.info(f"Need {needed_count} memories (3 per unique target, {len(unique_targets)} unique targets)")
+    
     # Construct the system prompt
     system_prompt = f"""
 We have generated the following initial memories for NPC {npc_data.get("npc_name", "Unknown NPC")}:
@@ -1565,6 +1570,7 @@ No extra commentary, code fences, or additional keys. If you cannot comply, retu
     logger.debug(f"System prompt length: {len(system_prompt)} characters")
     
     attempt = 0
+    final_mem = existing_memories[:]  # fallback if needed
     while attempt < max_retries:
         attempt += 1
         logger.info(f"Starting attempt {attempt}/{max_retries}")
@@ -1637,6 +1643,7 @@ No extra commentary, code fences, or additional keys. If you cannot comply, retu
     logger.info(f"Successfully generated {len(final_mem)} memories")
     logger.debug(f"Final memories: {json.dumps(final_mem, indent=2)}")
     return final_mem
+
 
 def parse_memory_from_text(text: str) -> list:
     """
