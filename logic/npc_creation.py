@@ -1554,6 +1554,7 @@ In your refinement, please:
 - Ensure that all of the NPC's archetypal traits are naturally integrated.
 - Adjust any details that seem inconsistent or strange.
 - Add any extra sensory or descriptive details that enhance the internal consistency of the narrative.
+- Ensure at least one memory has conflict between the characters.
 
 Return strictly valid JSON with exactly one key, "memory", whose value is an array of refined memory strings. Follow exactly this format:
 
@@ -1601,7 +1602,7 @@ No extra commentary, code fences, or additional keys. If you cannot comply, retu
                 logger.debug("Attempting to extract memory from function call")
                 candidate_mem = extract_field_from_function_call(raw_gpt, "memory", npc_id)
                 logger.debug(f"Extracted candidate memory: {type(candidate_mem)}, " +
-                            (f"length: {len(candidate_mem)}" if candidate_mem else "None"))
+                             (f"length: {len(candidate_mem)}" if candidate_mem else "None"))
                 
                 if candidate_mem:
                     if isinstance(candidate_mem, list) and len(candidate_mem) >= needed_count:
@@ -2192,10 +2193,13 @@ async def generate_chase_schedule(
 ) -> dict:
     """
     1) Gather 'Chase' stats from PlayerStats (for flavor).
-    2) GPT call to produce Chase's schedule as a dict keyed by each day => subkeys (morning,afternoon, etc.)
+    2) GPT call to produce Chase's schedule as a dict keyed by each day => subkeys (morning, afternoon, etc.)
     3) Store the schedule in CurrentRoleplay or wherever you want.
     4) Return the schedule.
     """
+    import json
+    import logging
+
     # Step A: load 'Chase' stats from PlayerStats
     conn = get_db_connection()
     cur = conn.cursor()
@@ -2229,7 +2233,6 @@ async def generate_chase_schedule(
     }
 
     # Step B: Build the prompt
-    # We'll re-use the idea from your old NPC_PROMPT.
     chase_prompt = f"""
 We have a player character 'Chase' in this femdom environment.
 Environment:
@@ -2253,12 +2256,14 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
 
     # Step C: Do the GPT call and capture the response
     try:
-        response_dict = get_openai_client().chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "system", "content": chase_prompt}],
             temperature=0.7,
             max_tokens=300
         )
+        # Convert the response to a dictionary so that we can use .get()
+        response_dict = response.dict()
     except Exception as e:
         logging.error("[generate_chase_schedule] GPT call error: %s", e)
         return {}
@@ -2304,6 +2309,7 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
 
     logging.info("[generate_chase_schedule] Stored chase schedule => %s", chase_schedule)
     return chase_schedule
+
 
 # --- NEW: Define relationship groups for propagation ---
 RELATIONSHIP_GROUPS = {
