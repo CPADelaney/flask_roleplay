@@ -324,6 +324,6 @@ if __name__ == "__main__":
         logging.basicConfig(level=logging.INFO)
         port = int(os.getenv("PORT", 5000))
         socketio.run(app, host="0.0.0.0", port=port, debug=False)
-    else:
+else:
         # Just expose the create_flask_app function for wsgi.py to use
-        pass
+    pass
