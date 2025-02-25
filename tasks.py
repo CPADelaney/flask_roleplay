@@ -3,23 +3,21 @@ import os
 import json
 import logging
 import asyncio
-# We do NOT create a new Celery() here; we import the existing one from main.py
-from main import celery_app
+from celery_config import celery_app  # Import our dedicated Celery app
+
+# Import your helper functions and task logic
 from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
-#from logic.npc_creation import spawn_and_refine_npcs_with_relationships
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from game_processing import async_process_new_game
-
 
 @celery_app.task
 def test_task():
     return "Hello from dummy task!"
 
-
 @celery_app.task
 def process_new_game_task(user_id, conversation_data):
     """
-    Celery task to run the heavy game startup processing.
+    Celery task to run heavy game startup processing.
     This function runs the asynchronous helper using asyncio.run().
     """
     try:
@@ -30,7 +28,6 @@ def process_new_game_task(user_id, conversation_data):
         logging.exception("Error in process_new_game_task for user_id=%s", user_id)
         return {"status": "failed", "error": str(e)}
 
-
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
     import asyncio
@@ -38,7 +35,7 @@ def create_npcs_task(user_id, conversation_id, count=10):
     from logic.npc_creation import spawn_multiple_npcs
 
     async def main():
-        # 1) Get an async connection (if you need one)
+        # 1) Get an async connection
         conn = await get_async_db_connection()
 
         # 2) Fetch environment_desc from DB
@@ -47,12 +44,9 @@ def create_npcs_task(user_id, conversation_id, count=10):
             FROM CurrentRoleplay
             WHERE user_id=$1 AND conversation_id=$2 AND key='EnvironmentDesc'
         """, user_id, conversation_id)
-        if row_env:
-            environment_desc = row_env["value"]
-        else:
-            environment_desc = "A fallback environment description"
+        environment_desc = row_env["value"] if row_env else "A fallback environment description"
 
-        # 3) Fetch 'CalendarNames' from DB, which might have { "days": [...], ... }
+        # 3) Fetch 'CalendarNames' from DB
         row_cal = await conn.fetchrow("""
             SELECT value
             FROM CurrentRoleplay
@@ -64,7 +58,7 @@ def create_npcs_task(user_id, conversation_id, count=10):
         else:
             day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
 
-        # 4) Spawn NPCs with new approach
+        # 4) Spawn NPCs using your new approach
         npc_ids = await spawn_multiple_npcs(
             user_id=user_id,
             conversation_id=conversation_id,
@@ -82,7 +76,6 @@ def create_npcs_task(user_id, conversation_id, count=10):
             "day_names": day_names
         }
 
-    # Actually run the async logic
     final_info = asyncio.run(main())
     return final_info
 
