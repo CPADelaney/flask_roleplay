@@ -1,3 +1,4 @@
+Flask-SocketIO==5.3.2
 Flask[async]==2.3.2
 psycopg2-binary==2.9.6  # Pre-compiled PostgreSQL adapter
 gunicorn==20.1.0
@@ -11,3 +12,4 @@ uvicorn
 RabbitMQ
 httpx
 asgiref
+eventlet==0.33.0
