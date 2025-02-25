@@ -55,12 +55,12 @@ def create_flask_app():
     def start_chat():
         if "user_id" not in session:
             return jsonify({"error": "Not authenticated"}), 401
-        
+    
         data = request.get_json()
         user_input = data.get("user_input")
         conversation_id = data.get("conversation_id")
         universal_update = data.get("universal_update", {})
-        
+    
         # Store user message in the database.
         conn = get_db_connection()
         cur = conn.cursor()
@@ -71,16 +71,13 @@ def create_flask_app():
         conn.commit()
         cur.close()
         conn.close()
-        
-        # Emit a Socket.IO event to start the chat.
-        socketio.emit('chat_started', {
-            'conversation_id': conversation_id,
-            'user_input': user_input,
-            'universal_update': universal_update
-        }, room=conversation_id)
-        
+    
+        # Directly start the background chat task.
+        socketio.start_background_task(background_chat_task, conversation_id, user_input, universal_update)
+    
         return jsonify({"status": "success", "message": "Chat started"})
     
+        
     @app.route("/login_page", methods=["GET"])
     def login_page():
         return render_template("login.html")
