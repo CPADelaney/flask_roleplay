@@ -1637,8 +1637,8 @@ No extra commentary, code fences, or additional keys. If you cannot comply, retu
             logger.warning(f"Attempt {attempt}: insufficient memory entries ({len(new_mem)}/{needed_count}) => retry.")
 
     if len(final_mem) < needed_count:
-        logger.warning(f"All attempts failed. Returning {len(existing_mem)} existing memories.")
-        return existing_mem
+        logger.warning(f"All attempts failed. Returning {len(existing_memories)} existing memories.")
+        return existing_memories
 
     logger.info(f"Successfully generated {len(final_mem)} memories")
     logger.debug(f"Final memories: {json.dumps(final_mem, indent=2)}")
