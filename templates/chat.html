@@ -280,6 +280,7 @@
 
     // 2) Listen for partial tokens from the server
     socket.on("new_token", (payload) => {
+      console.log("Received new token payload:", payload);
       handleNewToken(payload.token);
     });
 
@@ -328,22 +329,19 @@
     console.log("Processing token:", token);
     if (!currentAssistantBubble) {
       console.log("Creating new bubble");
-      // Create a new message row for the assistant
       const newMsg = { sender: "Nyx", content: "" };
       const newRow = appendMessage(newMsg, true);
-      // Get the bubble element inside the row
-      currentAssistantBubble = newRow.querySelector('.message-bubble');
+      // Now grab the bubble element inside the row
+      currentAssistantBubble = newRow.querySelector(".message-bubble");
       partialAssistantText = "";
     }
-    
-    // Append chunk to partial text
+  
+    // Append the new token
     partialAssistantText += token;
-    
-    // Update the bubble's inner HTML
-    console.log("Updating bubble with text:", partialAssistantText);
+    // Update the bubble's content
     currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(partialAssistantText)}`;
-    
-    // Optionally, scroll the chat window to the bottom
+  
+    // Auto-scroll to ensure the new tokens are visible
     const chatWindow = document.getElementById("chatWindow");
     chatWindow.scrollTop = chatWindow.scrollHeight;
   }
