@@ -7,6 +7,53 @@ from db.connection import get_db_connection
 
 player_input_bp = Blueprint('player_input', __name__)
 
+from flask import Blueprint, request, jsonify, session
+from flask_socketio import emit
+from db.connection import get_db_connection
+import logging
+
+player_input_bp = Blueprint("player_input", __name__)
+
+@player_input_bp.route("/start_chat", methods=["POST"])
+def start_chat():
+    try:
+        if "user_id" not in session:
+            return jsonify({"error": "Not authenticated"}), 401
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        user_input = data.get("user_input")
+        conversation_id = data.get("conversation_id")
+        universal_update = data.get("universal_update", {})
+        
+        if not user_input or not conversation_id:
+            return jsonify({"error": "Missing required fields"}), 400
+        
+        # Store user message in database
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO messages (conversation_id, sender, content) 
+            VALUES (%s, %s, %s)
+        """, (conversation_id, "user", user_input))
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # The socketio object is imported and used in main.py
+        # This route just returns success, and the actual processing happens via Socket.IO
+        
+        return jsonify({
+            "status": "success", 
+            "message": "Request received, processing started",
+            "conversation_id": conversation_id
+        })
+    except Exception as e:
+        logging.exception("Error in start_chat endpoint")
+        return jsonify({"error": str(e)}), 500
+
 @player_input_bp.route('/player_input', methods=['POST'])
 def handle_player_input():
     """
