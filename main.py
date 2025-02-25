@@ -1,13 +1,13 @@
 # main.py
 
-from flask import Flask, render_template, session, request, jsonify, redirect
-from flask_socketio import SocketIO, emit, join_room, leave_room
 import os
 import logging
+from flask import Flask, render_template, session, request, jsonify, redirect
+from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
 from asgiref.wsgi import WsgiToAsgi
 
-# Blueprint imports
+# Import your blueprint modules
 from routes.new_game import new_game_bp
 from routes.player_input import player_input_bp, player_input_root_bp
 from routes.settings_routes import settings_bp
@@ -20,20 +20,20 @@ from routes.debug import debug_bp
 from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
 
-# DB connection helper
+# Import your database connection helper
 from db.connection import get_db_connection
 
-def create_flask_app():
+def create_app():
     """
     Create and configure the Flask application.
     """
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_dev_key")
     
-    # Enable CORS for all routes
+    # Enable CORS for all routes.
     CORS(app)
     
-    # Register blueprint modules
+    # Register blueprint modules.
     app.register_blueprint(new_game_bp)
     app.register_blueprint(player_input_bp, url_prefix="/player")
     app.register_blueprint(player_input_root_bp)
@@ -47,7 +47,7 @@ def create_flask_app():
     app.register_blueprint(universal_bp, url_prefix="/universal")
     app.register_blueprint(multiuser_bp, url_prefix="/multiuser")
     
-    # Example HTTP Routes
+    # Define HTTP routes.
     @app.route("/chat")
     def chat_page():
         if "user_id" not in session:
@@ -64,26 +64,29 @@ def create_flask_app():
         conversation_id = data.get("conversation_id")
         universal_update = data.get("universal_update", {})
         
-        # Store user message in database
+        # Store the user's message in the database.
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO messages (conversation_id, sender, content) 
-            VALUES (%s, %s, %s)
-        """, (conversation_id, "user", user_input))
+        cur.execute(
+            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+            (conversation_id, "user", user_input)
+        )
         conn.commit()
         cur.close()
         conn.close()
         
-        # Emit an event to notify the Socket.IO connection that a new chat has started
-        socketio.emit('chat_started', {
-            'conversation_id': conversation_id,
-            'user_input': user_input,
-            'universal_update': universal_update
-        }, room=conversation_id)
-        
+        # Emit an event to notify the Socket.IO connection that a new chat has started.
+        socketio.emit(
+            'chat_started',
+            {
+                'conversation_id': conversation_id,
+                'user_input': user_input,
+                'universal_update': universal_update
+            },
+            room=conversation_id
+        )
         return jsonify({"status": "success", "message": "Chat started"})
-    
+
     @app.route("/login_page", methods=["GET"])
     def login_page():
         return render_template("login.html")
@@ -134,18 +137,17 @@ def create_flask_app():
     
         conn = get_db_connection()
         cur = conn.cursor()
-        # Check if username already exists
+        # Check if username already exists.
         cur.execute("SELECT id FROM users WHERE username = %s", (username,))
         if cur.fetchone():
             cur.close()
             conn.close()
             return jsonify({"error": "Username already taken"}), 400
     
-        cur.execute("""
-            INSERT INTO users (username, password_hash)
-            VALUES (%s, %s)
-            RETURNING id
-        """, (username, password))
+        cur.execute(
+            "INSERT INTO users (username, password_hash) VALUES (%s, %s) RETURNING id",
+            (username, password)
+        )
         new_user_id = cur.fetchone()[0]
         conn.commit()
         cur.close()
@@ -156,11 +158,13 @@ def create_flask_app():
     
     return app
 
-# Create the Flask app
-app = create_flask_app()
+# Create the Flask app.
+app = create_app()
+
+# Create the Socket.IO instance (using eventlet for async).
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
 
-# Define SocketIO event handlers only once.
+# Socket.IO Event Handlers.
 @socketio.on('connect')
 def handle_connect():
     logging.info("SocketIO: Client connected")
@@ -190,25 +194,17 @@ def handle_message(data):
     
     join_room(conversation_id)
     
-    # Simulate a response (replace with your actual GPT integration)
+    # Simulate a response (replace this with your actual GPT integration logic).
     response = f"Echo: {user_input}"
     
-    # Stream the response token by token
+    # Stream the response token by token.
     for i in range(0, len(response), 2):
         token = response[i:i+2]
         emit('new_token', {'token': token}, room=conversation_id)
         socketio.sleep(0.1)
     
-    # Send the "done" event when complete
+    # Send the "done" event when complete.
     emit('done', {'full_text': response}, room=conversation_id)
-
-@socketio.on('join')
-def on_join(data):
-    conversation_id = data.get('conversation_id')
-    if conversation_id:
-        # Join the room for this conversation
-        join_room(conversation_id)
-        emit('joined', {'room': conversation_id})
 
 @socketio.on('chat_started')
 def handle_chat_started(data):
@@ -220,7 +216,7 @@ def handle_chat_started(data):
     socketio.start_background_task(background_chat_task, conversation_id, user_input, universal_update)
 
 def background_chat_task(conversation_id, user_input, universal_update):
-    # For demonstration, we simulate a GPT response.
+    # For demonstration purposes, we simulate a GPT response.
     ai_response = "This is a sample response from Nyx."
     
     # Stream the response token by token.
@@ -232,81 +228,23 @@ def background_chat_task(conversation_id, user_input, universal_update):
     # Store the AI message in the database.
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO messages (conversation_id, sender, content) 
-        VALUES (%s, %s, %s)
-    """, (conversation_id, "Nyx", ai_response))
+    cur.execute(
+        "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+        (conversation_id, "Nyx", ai_response)
+    )
     conn.commit()
     cur.close()
     conn.close()
     
-    # Send the "done" event when complete.
+    # Emit the "done" event when complete.
     socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
 
-# Optional ASGI wrapper (if needed)
+# Optional ASGI wrapper (if you need to run in an ASGI server).
 asgi_app = WsgiToAsgi(app)
 
 if __name__ == "__main__":
     import eventlet
     eventlet.monkey_patch()
-    
-    app = create_flask_app()
-    
-    # Initialize SocketIO with Eventlet
-    socketio = SocketIO(app, 
-                       async_mode='eventlet', 
-                       cors_allowed_origins="*",
-                       ping_timeout=60)
-    
-    # SocketIO Event Handlers
-    # SocketIO Event Handlers
-    @socketio.on('connect')
-    def handle_connect():
-        logging.info("SocketIO: Client connected")
-        emit('response', {'data': 'Connected to SocketIO server!'})
-    
-    @socketio.on('disconnect')
-    def handle_disconnect():
-        logging.info("SocketIO: Client disconnected")
-    
-    @socketio.on('join')
-    def handle_join(data):
-        conversation_id = data.get('conversation_id')
-        if conversation_id:
-            from flask_socketio import join_room
-            join_room(conversation_id)
-            logging.info(f"SocketIO: Client joined room {conversation_id}")
-            emit('joined', {'room': conversation_id})
-    
-    @socketio.on('message')
-    def handle_message(data):
-        from flask_socketio import join_room
-        logging.info(f"SocketIO: Received message: {data}")
-        user_input = data.get('user_input')
-        conversation_id = data.get('conversation_id')
-        
-        if not user_input or not conversation_id:
-            emit('error', {'error': 'Missing required fields'})
-            return
-        
-        join_room(conversation_id)
-        
-        # Simulate a response (replace with your actual logic)
-        response = f"Echo: {user_input}"
-        
-        # Stream the response token by token
-        for i in range(0, len(response), 2):
-            token = response[i:i+2]
-            emit('new_token', {'token': token}, room=conversation_id)
-            socketio.sleep(0.1)
-        
-        # Send the "done" event when complete
-        emit('done', {'full_text': response}, room=conversation_id)
-        
-        # Start the server
-        logging.basicConfig(level=logging.INFO)
-        port = int(os.getenv("PORT", 5000))
-        socketio.run(app, host="0.0.0.0", port=port, debug=False)
-else:
-        # Just expose the create_flask_app function for wsgi.py to use
-    pass
+    logging.basicConfig(level=logging.INFO)
+    port = int(os.getenv("PORT", 5000))
+    socketio.run(app, host="0.0.0.0", port=port, debug=False)
