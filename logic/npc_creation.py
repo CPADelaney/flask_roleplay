@@ -2287,6 +2287,7 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
             chase_schedule = extract_chase_schedule(chase_sched_data)
         except Exception as e:
             logging.error("[generate_chase_schedule] parse error: %s", e)
+            chase_sched_data = {}  # Initialize to avoid UnboundLocalError
             chase_schedule = {}
 
     # Ensure we have a valid ChaseSchedule
