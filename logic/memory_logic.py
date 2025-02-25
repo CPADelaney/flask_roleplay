@@ -293,34 +293,43 @@ def get_shared_memory(user_id, conversation_id, relationship, npc_name, archetyp
         extra_context += f"Extra Details: {archetype_extras_summary}. "
     
     system_instructions = f"""
-The NPC {npc_name} has a relationship with {target_name}. This relationship may be defined by one or more roles that reflect the NPC's full range of archetypes. It is essential that the memories generated consider all of {npc_name}'s defining traits—whether they suggest familial, professional, or unconventional roles—and that they reflect the natural evolution of the relationship. For instance, if the NPC is known for being a giantess, a pirate, and a friend from online interactions, then the memories should naturally highlight elements such as size and power dynamics, rebellious flair, or digital affinity without defaulting to any one archetype.
+# Memory Generation for {npc_name}
 
-When generating memories, please follow these guidelines:
+## Relationship Context
+{npc_name} has a relationship with {target_name} that may encompass multiple roles reflecting {npc_name}'s complete character. 
+These memories should authentically represent all aspects of {npc_name}'s identity—whether they involve familial bonds, professional connections, or unique dynamics based on their defining traits.
 
-**Role Integration:**  
-- If the relationship is defined by a single role, focus on the key characteristics of that role.  
-- If multiple roles are present, blend the elements so that each memory reflects the complete, complex identity of the NPC.
-
-**Context & Setting:**  
-- The current setting is: {mega_description}.  
-- Additional context is provided below:
-{extra_context}
-- Current established locations are:
+## Setting Information
+- **Current World:** {mega_description}
+- **Key Locations:**
 {locations_table_formatted}
+- **Additional Context:**
+{extra_context}
 
-**Memory Requirements:**  
-1. Generate three distinct first-person memories from {npc_name}'s perspective about their relationship with {target_name}. (If multiple relationships refer to the same target, generate a total of three memories for that target.)  If NPC has no relationships, the memory should be a defining moment in their life.
-2. Each memory should be 2–3 sentences written in {npc_name}'s authentic voice.  
-3. Clearly reflect the relationship dynamics by incorporating details from all of {npc_name}'s archetypes.
-4. Each memory should be set in a specific location from the provided list or another context-appropriate locale.  
-5. Include at least one sensory detail (sight, sound, smell, taste, or touch).  
-6. Subtly foreshadow or hint at an evolving femdom dynamic without overt exposition.  
-7. Show clear emotional reactions from both {npc_name} and {target_name}.  
-8. Include a small consequence or change in the relationship from each interaction.  
-9. Ensure that each memory is consistent with the natural progression of the relationship—for example, a 'mother' should not recall a first meeting later in life if familiarity is already established.
-10. There should be at least one positive memory (eg., laughing over shared drinks, a nice walk on the beach, etc.) and at least one negative memory (eg., getting punished, having a fight, engaging in conflict etc.)
+## Memory Generation Guidelines
 
-Return your output as strictly valid JSON with exactly one key, "memory", whose value is an array of at least three strings. Follow exactly this format:
+### Core Requirements:
+1. Generate exactly THREE distinct first-person memories from {npc_name}'s perspective for EACH relationship target.
+   - If no relationships exist, create three defining life moment memories instead.
+2. Each memory must be 2-3 sentences written in {npc_name}'s authentic voice.
+3. Set each memory in a specific location from the provided list or another contextually appropriate location.
+4. Include at least one vivid sensory detail (sight, sound, smell, taste, or touch) per memory.
+5. Show clear emotional responses from both {npc_name} and {target_name}.
+6. Incorporate a small consequence or relationship shift in each interaction.
+
+### Memory Diversity:
+- Include at least one positive experience (e.g., shared laughter, mutual accomplishment, comfort)
+- Include at least one challenging interaction (e.g., conflict, disappointment, consequence)
+- Ensure the third memory provides additional dimension to the relationship
+
+### Character Integration:
+- Weave ALL of {npc_name}'s defining traits and archetypes into the memories organically
+- If {npc_name} has multiple roles or characteristics (e.g., giantess, pirate, online friend), ensure memories reflect this complex identity rather than focusing on a single trait
+- Subtly incorporate and foreshadow evolving femdom dynamics in the relationship
+- Maintain timeline consistency with established relationship history
+
+## Output Format
+Return ONLY valid JSON with a single key "memory" containing an array of all required memories:
 
 {{
   "memory": [
