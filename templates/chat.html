@@ -560,46 +560,49 @@
 
   // Send a new message (streaming approach)
   async function sendMessage() {
-    const userInputElem = document.getElementById("userMsg");
-    const userText = userInputElem.value.trim();
-    userInputElem.value = "";
-    if (!userText || !currentConvId) return;
-
-    // Show the user's message right away
-    const userMsgObj = { sender: "user", content: userText };
-    appendMessage(userMsgObj, true);
-
-    // Reset any partial from a previous message
-    currentAssistantBubble = null;
-    partialAssistantText = "";
-
-    // POST to /start_chat (Celery streaming route)
-    try {
-      const resp = await fetch("/start_chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          user_input: userText,
-          conversation_id: currentConvId,
-          universal_update: pendingUniversalUpdates
-        })
-      });
-      const data = await resp.json();
-      if (!resp.ok) {
-        console.error("Server error:", data);
-        handleNewToken("[Error retrieving response]");
-        finalizeAssistantMessage("");
-        return;
+      const userInputElem = document.getElementById("userMsg");
+      const userText = userInputElem.value.trim();
+      userInputElem.value = "";
+      if (!userText || !currentConvId) return;
+  
+      // Show the user's message right away
+      const userMsgObj = { sender: "user", content: userText };
+      appendMessage(userMsgObj, true);
+  
+      // Reset any partial from a previous message
+      currentAssistantBubble = null;
+      partialAssistantText = "";
+  
+      try {
+          // First, make sure we've joined the room for this conversation
+          socket.emit('join', { conversation_id: currentConvId });
+          
+          // Now send the message via Socket.IO
+          socket.emit('message', {
+              user_input: userText,
+              conversation_id: currentConvId,
+              universal_update: pendingUniversalUpdates
+          });
+          
+          // Also send the HTTP request to record in database
+          const resp = await fetch("/start_chat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({
+                  user_input: userText,
+                  conversation_id: currentConvId,
+                  universal_update: pendingUniversalUpdates
+              })
+          });
+          
+          // Reset pending updates if needed
+          resetPendingUniversalUpdates();
+      } catch (err) {
+          console.error("sendMessage error:", err);
+          handleNewToken("[Error: " + err + "]");
+          finalizeAssistantMessage("");
       }
-      console.log("start_chat response:", data);
-      // You can reset pending updates if needed
-      resetPendingUniversalUpdates();
-    } catch (err) {
-      console.error("sendMessage error:", err);
-      handleNewToken("[Error: " + err + "]");
-      finalizeAssistantMessage("");
-    }
   }
 
   // =====================
