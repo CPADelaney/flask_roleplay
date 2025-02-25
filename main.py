@@ -3,10 +3,11 @@
 from flask import Flask, render_template, session, request, jsonify, redirect
 from flask_socketio import SocketIO, emit
 import eventlet
-eventlet.monkey_patch()  # Ensure compatibility with eventlet
+eventlet.monkey_patch()  # Ensure compatibility with Eventlet
 import os
 import logging
 from flask_cors import CORS
+from asgiref.wsgi import WsgiToAsgi
 
 # Blueprint imports
 from routes.new_game import new_game_bp
@@ -30,10 +31,10 @@ def create_flask_app():
     """
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "fallback_dev_key")
-
+    
     # Enable CORS for all routes
     CORS(app)
-
+    
     # Register blueprint modules
     app.register_blueprint(new_game_bp)
     app.register_blueprint(player_input_bp, url_prefix="/player")
@@ -46,76 +47,72 @@ def create_flask_app():
     app.register_blueprint(debug_bp, url_prefix='/debug')
     app.register_blueprint(universal_bp, url_prefix="/universal")
     app.register_blueprint(multiuser_bp, url_prefix="/multiuser")
-
-    # -----------------
-    # Example Routes
-    # -----------------
+    
+    # Example HTTP Routes
     @app.route("/chat")
     def chat_page():
         if "user_id" not in session:
             return redirect("/login_page")
         return render_template("chat.html")
-
+    
     @app.route("/login_page", methods=["GET"])
     def login_page():
         return render_template("login.html")
-
+    
     @app.route("/login", methods=["POST"])
     def login():
         data = request.get_json()
         username = data.get("username")
         password = data.get("password")
-
+    
         if not username or not password:
             return jsonify({"error": "Username and password required"}), 400
-
+    
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT id, password_hash FROM users WHERE username = %s", (username,))
         row = cur.fetchone()
         cur.close()
         conn.close()
-
+    
         if not row:
             return jsonify({"error": "Invalid username"}), 401
-
-        user_id, password_hash = row
+    
+        user_id, _ = row
         session["user_id"] = user_id
         return jsonify({"message": "Logged in", "user_id": user_id})
-
+    
     @app.route("/whoami", methods=["GET"])
     def whoami():
         user_id = session.get("user_id")
         if user_id:
             return jsonify({"logged_in": True, "user_id": user_id}), 200
-        else:
-            return jsonify({"logged_in": False}), 200
-
+        return jsonify({"logged_in": False}), 200
+    
     @app.route("/logout", methods=["POST"])
     def logout():
         session.clear()
         return jsonify({"message": "Logged out"}), 200
-
+    
     @app.route("/register", methods=["POST"])
     def register():
         data = request.get_json()
         username = data.get("username")
         password = data.get("password")
-
+    
         if not username or not password:
             return jsonify({"error": "Username and password required"}), 400
-
+    
         conn = get_db_connection()
         cur = conn.cursor()
-
+    
         # Check if username already exists
         cur.execute("SELECT id FROM users WHERE username = %s", (username,))
-        existing = cur.fetchone()
-        if existing:
+        if cur.fetchone():
             cur.close()
             conn.close()
             return jsonify({"error": "Username already taken"}), 400
-
+    
         cur.execute("""
             INSERT INTO users (username, password_hash)
             VALUES (%s, %s)
@@ -125,19 +122,19 @@ def create_flask_app():
         conn.commit()
         cur.close()
         conn.close()
-
+    
         session["user_id"] = new_user_id
         return jsonify({"message": "User registered successfully", "user_id": new_user_id})
-
+    
     return app
 
-# Create Flask app
+# Create the Flask app
 app = create_flask_app()
 
-# Initialize Flask-SocketIO with Eventlet for asynchronous support
+# Initialize SocketIO with Eventlet (for WebSocket support)
 socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
 
-# (Optional) You can add SocketIO event handlers here:
+# SocketIO Event Handlers
 @socketio.on('connect')
 def handle_connect():
     logging.info("SocketIO: Client connected")
@@ -146,11 +143,13 @@ def handle_connect():
 @socketio.on('message')
 def handle_message(data):
     logging.info("SocketIO: Received message: %s", data)
-    # Echo the message back to the sender
     emit('response', {'data': 'Message received!'}, broadcast=True)
+
+# Optional ASGI wrapper if needed elsewhere
+asgi_app = WsgiToAsgi(app)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     port = int(os.getenv("PORT", 5000))
-    # For local development, run the SocketIO server:
+    # For local development, run the SocketIO server directly:
     socketio.run(app, host="0.0.0.0", port=port, debug=False)
