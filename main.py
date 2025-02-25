@@ -78,7 +78,8 @@ def create_flask_app():
         # Emit an event to notify the Socket.IO connection that a new chat has started
         socketio.emit('chat_started', {
             'conversation_id': conversation_id,
-            'user_input': user_input
+            'user_input': user_input,
+            'universal_update': universal_update
         }, room=conversation_id)
         
         return jsonify({"status": "success", "message": "Chat started"})
@@ -157,17 +158,9 @@ def create_flask_app():
 
 # Create the Flask app
 app = create_flask_app()
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
 
-# Initialize Flask-SocketIO with Eventlet.
-# The 'path' parameter ensures that the socket endpoint is /socket.io.
-socketio = SocketIO(app, 
-                   cors_allowed_origins="*",
-                   async_mode='eventlet',
-                   logger=True,
-                   engineio_logger=True)
-
-
-# SocketIO Event Handlers
+# Define SocketIO event handlers only once.
 @socketio.on('connect')
 def handle_connect():
     logging.info("SocketIO: Client connected")
@@ -181,14 +174,12 @@ def handle_disconnect():
 def handle_join(data):
     conversation_id = data.get('conversation_id')
     if conversation_id:
-        from flask_socketio import join_room
         join_room(conversation_id)
         logging.info(f"SocketIO: Client joined room {conversation_id}")
         emit('joined', {'room': conversation_id})
 
 @socketio.on('message')
 def handle_message(data):
-    from flask_socketio import join_room
     logging.info(f"SocketIO: Received message: {data}")
     user_input = data.get('user_input')
     conversation_id = data.get('conversation_id')
@@ -199,7 +190,7 @@ def handle_message(data):
     
     join_room(conversation_id)
     
-    # Simulate a response (replace with your actual logic)
+    # Simulate a response (replace with your actual GPT integration)
     response = f"Echo: {user_input}"
     
     # Stream the response token by token
@@ -219,19 +210,26 @@ def on_join(data):
         join_room(conversation_id)
         emit('joined', {'room': conversation_id})
 
-# Create a background task to process the chat responses
+@socketio.on('chat_started')
+def handle_chat_started(data):
+    conversation_id = data.get('conversation_id')
+    user_input = data.get('user_input')
+    universal_update = data.get('universal_update', {})
+    
+    # Start a background task to process the chat response.
+    socketio.start_background_task(background_chat_task, conversation_id, user_input, universal_update)
+
 def background_chat_task(conversation_id, user_input, universal_update):
-    # Get the AI response - this would use your existing logic
-    # For simplicity, let's just simulate a response here
+    # For demonstration, we simulate a GPT response.
     ai_response = "This is a sample response from Nyx."
     
-    # Stream it token by token (simulate streaming)
+    # Stream the response token by token.
     for i in range(0, len(ai_response), 3):
         token = ai_response[i:i+3]
         socketio.emit('new_token', {'token': token}, room=conversation_id)
-        socketio.sleep(0.1)  # Small delay between tokens
+        socketio.sleep(0.1)
     
-    # Store AI message in database
+    # Store the AI message in the database.
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -242,23 +240,8 @@ def background_chat_task(conversation_id, user_input, universal_update):
     cur.close()
     conn.close()
     
-    # Send the "done" event with the full text
+    # Send the "done" event when complete.
     socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
-
-# Listen for the chat_started event and launch the background task
-@socketio.on('chat_started')
-def handle_chat_started(data):
-    conversation_id = data.get('conversation_id')
-    user_input = data.get('user_input')
-    universal_update = data.get('universal_update', {})
-    
-    # Start a background task to process the chat
-    socketio.start_background_task(
-        background_chat_task, 
-        conversation_id, 
-        user_input,
-        universal_update
-    )
 
 # Optional ASGI wrapper (if needed)
 asgi_app = WsgiToAsgi(app)
