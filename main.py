@@ -1,9 +1,5 @@
 # main.py
 
-if __name__ == "__main__":
-    import eventlet
-    eventlet.monkey_patch()
-
 from flask import Flask, render_template, session, request, jsonify, redirect
 from flask_socketio import SocketIO, emit
 import os
@@ -156,11 +152,32 @@ def handle_message(data):
 asgi_app = WsgiToAsgi(app)
 
 if __name__ == "__main__":
+    import eventlet
+    eventlet.monkey_patch()
+    
+    app = create_flask_app()
+    
+    # Initialize SocketIO with Eventlet
+    socketio = SocketIO(app, 
+                       async_mode='eventlet', 
+                       cors_allowed_origins="*",
+                       ping_timeout=60)
+    
+    # SocketIO Event Handlers
+    @socketio.on('connect')
+    def handle_connect():
+        logging.info("SocketIO: Client connected")
+        emit('response', {'data': 'Connected to SocketIO server!'})
+
+    @socketio.on('message')
+    def handle_message(data):
+        logging.info("SocketIO: Received message: %s", data)
+        emit('response', {'data': 'Message received!'}, broadcast=True)
+    
+    # Start the server
     logging.basicConfig(level=logging.INFO)
     port = int(os.getenv("PORT", 5000))
-    # For local development only
-    socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host="0.0.0.0", port=port, debug=False)
 else:
-    # This is important for production with Gunicorn
-    # No need to call socketio.run() as Gunicorn will handle it
+    # Just expose the create_flask_app function for wsgi.py to use
     pass
