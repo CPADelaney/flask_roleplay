@@ -14,3 +14,5 @@ httpx
 asgiref
 eventlet==0.33.0
 dnspython==2.1.0
+python-socketio
+python-engineio
