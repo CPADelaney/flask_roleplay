@@ -270,7 +270,12 @@
 
     // 1) Connect to Socket.IO
     //    If your Flask app runs on the same domain, you can do:
-    socket = io.connect(location.origin);
+    socket = io.connect(location.origin, {
+      path: '/socket.io',
+      transports: ['websocket'],
+      reconnection: true,
+      reconnectionAttempts: 5
+    });
 
     // 2) Listen for partial tokens from the server
     socket.on("new_token", (payload) => {
