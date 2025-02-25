@@ -1,7 +1,7 @@
 # main.py
 
 from flask import Flask, render_template, session, request, jsonify, redirect
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room, leave_room
 import os
 import logging
 from flask_cors import CORS
@@ -52,6 +52,35 @@ def create_flask_app():
         if "user_id" not in session:
             return redirect("/login_page")
         return render_template("chat.html")
+
+    @app.route("/start_chat", methods=["POST"])
+    def start_chat():
+        if "user_id" not in session:
+            return jsonify({"error": "Not authenticated"}), 401
+        
+        data = request.get_json()
+        user_input = data.get("user_input")
+        conversation_id = data.get("conversation_id")
+        universal_update = data.get("universal_update", {})
+        
+        # Store user message in database
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO messages (conversation_id, sender, content) 
+            VALUES (%s, %s, %s)
+        """, (conversation_id, "user", user_input))
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # Emit an event to notify the Socket.IO connection that a new chat has started
+        socketio.emit('chat_started', {
+            'conversation_id': conversation_id,
+            'user_input': user_input
+        }, room=conversation_id)
+        
+        return jsonify({"status": "success", "message": "Chat started"})
     
     @app.route("/login_page", methods=["GET"])
     def login_page():
@@ -147,6 +176,55 @@ def handle_connect():
 def handle_message(data):
     logging.info("SocketIO: Received message: %s", data)
     emit('response', {'data': 'Message received!'}, broadcast=True)
+
+@socketio.on('join')
+def on_join(data):
+    conversation_id = data.get('conversation_id')
+    if conversation_id:
+        # Join the room for this conversation
+        join_room(conversation_id)
+        emit('joined', {'room': conversation_id})
+
+# Create a background task to process the chat responses
+def background_chat_task(conversation_id, user_input, universal_update):
+    # Get the AI response - this would use your existing logic
+    # For simplicity, let's just simulate a response here
+    ai_response = "This is a sample response from Nyx."
+    
+    # Stream it token by token (simulate streaming)
+    for i in range(0, len(ai_response), 3):
+        token = ai_response[i:i+3]
+        socketio.emit('new_token', {'token': token}, room=conversation_id)
+        socketio.sleep(0.1)  # Small delay between tokens
+    
+    # Store AI message in database
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO messages (conversation_id, sender, content) 
+        VALUES (%s, %s, %s)
+    """, (conversation_id, "Nyx", ai_response))
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    # Send the "done" event with the full text
+    socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
+
+# Listen for the chat_started event and launch the background task
+@socketio.on('chat_started')
+def handle_chat_started(data):
+    conversation_id = data.get('conversation_id')
+    user_input = data.get('user_input')
+    universal_update = data.get('universal_update', {})
+    
+    # Start a background task to process the chat
+    socketio.start_background_task(
+        background_chat_task, 
+        conversation_id, 
+        user_input,
+        universal_update
+    )
 
 # Optional ASGI wrapper (if needed)
 asgi_app = WsgiToAsgi(app)
