@@ -1,10 +1,10 @@
 # main.py
 
+import os
 from flask import Flask, render_template, session, request, jsonify, redirect
 from flask_socketio import SocketIO, emit
 import eventlet
 eventlet.monkey_patch()  # Ensure compatibility with Eventlet
-import os
 import logging
 from flask_cors import CORS
 from asgiref.wsgi import WsgiToAsgi
@@ -105,7 +105,6 @@ def create_flask_app():
     
         conn = get_db_connection()
         cur = conn.cursor()
-    
         # Check if username already exists
         cur.execute("SELECT id FROM users WHERE username = %s", (username,))
         if cur.fetchone():
@@ -131,8 +130,9 @@ def create_flask_app():
 # Create the Flask app
 app = create_flask_app()
 
-# Initialize SocketIO with Eventlet (for WebSocket support)
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
+# Initialize Flask-SocketIO with Eventlet.
+# The 'path' parameter ensures that the socket endpoint is /socket.io.
+socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*", path="/socket.io")
 
 # SocketIO Event Handlers
 @socketio.on('connect')
@@ -145,7 +145,7 @@ def handle_message(data):
     logging.info("SocketIO: Received message: %s", data)
     emit('response', {'data': 'Message received!'}, broadcast=True)
 
-# Optional ASGI wrapper if needed elsewhere
+# Optional ASGI wrapper (if needed)
 asgi_app = WsgiToAsgi(app)
 
 if __name__ == "__main__":
@@ -153,3 +153,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     # For local development, run the SocketIO server directly:
     socketio.run(app, host="0.0.0.0", port=port, debug=False)
+
