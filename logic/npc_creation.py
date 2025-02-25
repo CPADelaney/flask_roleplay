@@ -2193,14 +2193,14 @@ async def generate_chase_schedule(
 ) -> dict:
     """
     1) Gather 'Chase' stats from PlayerStats (for flavor).
-    2) GPT call to produce Chase's schedule as a dict keyed by each day => subkeys (morning, afternoon, etc.)
-    3) Store the schedule in CurrentRoleplay or wherever you want.
+    2) GPT call to produce Chase's schedule as a dict keyed by each day => subkeys (Morning, Afternoon, Evening, Night)
+    3) Store the schedule in CurrentRoleplay.
     4) Return the schedule.
     """
     import json
     import logging
 
-    # Step A: load 'Chase' stats from PlayerStats
+    # Step A: Load 'Chase' stats from PlayerStats
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -2219,7 +2219,7 @@ async def generate_chase_schedule(
 
     (corrupt, confid, willp, obed, dep, lust, ment_res, phys_end) = row
 
-    # Build a short "Chase partial data" to feed GPT
+    # Build Chase partial data for GPT
     chase_data = {
         "player_name": "Chase",
         "corruption": corrupt,
@@ -2243,7 +2243,7 @@ Chase partial data:
 
 The list of days is: {day_names}
 
-Please generate a realistic daily schedule for "Chase" for each of the days listed. Your output must be a valid JSON object with exactly one top-level key, "ChaseSchedule". The value of "ChaseSchedule" must be an object whose keys exactly match the days in the list (e.g., if the list is ["Monday", "Tuesday", ...], then these must be the keys). For each day, the value must be an object with exactly the following keys:
+Using details from the setting, please generate a realistic daily schedule for "Chase" for each of the days listed. Your output must be a valid JSON object with exactly one top-level key, "ChaseSchedule". The value of "ChaseSchedule" must be an object whose keys exactly match the days in the list (e.g., if the list is ["Monday", "Tuesday", ...], then these must be the keys). For each day, the value must be an object with exactly the following keys:
 - "Morning"
 - "Afternoon"
 - "Evening"
@@ -2254,27 +2254,35 @@ Each of these keys should map to a short string describing Chase's activity duri
 Do not include any extra keys, text, or commentary. Do not wrap your output in code fences.
 """
 
-    # Step C: Do the GPT call and capture the response
+    # Step C: Call GPT and capture the response
     try:
         response = get_openai_client().chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "system", "content": chase_prompt}],
             temperature=0.7,
-            max_tokens=300
         )
-        # Convert the response to a dictionary so that we can use .get()
+        # Convert the response to a dictionary
         response_dict = response.dict()
     except Exception as e:
         logging.error("[generate_chase_schedule] GPT call error: %s", e)
         return {}
 
-    # Process the response
+    # Initialize an empty dict for extracted data
+    chase_sched_data = {}
+
+    # Process the response depending on its type
     if response_dict.get("type") == "function_call":
         chase_sched_data = response_dict.get("function_args", {})
+        # Extra extraction: if "ChaseSchedule" is not found, check for a nested "response"
+        if not chase_sched_data.get("ChaseSchedule"):
+            nested = chase_sched_data.get("response")
+            if isinstance(nested, dict) and nested.get("ChaseSchedule"):
+                chase_sched_data = nested
+        logging.debug(f"Function call extraction yields: {chase_sched_data}")
         chase_schedule = extract_chase_schedule(chase_sched_data)
     else:
         raw_text = response_dict.get("response", "").strip()
-        # Remove triple-backticks if needed
+        # Remove triple-backticks if present
         if raw_text.startswith("```"):
             lines = raw_text.splitlines()
             if lines and lines[0].startswith("```"):
@@ -2287,7 +2295,7 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
             chase_schedule = extract_chase_schedule(chase_sched_data)
         except Exception as e:
             logging.error("[generate_chase_schedule] parse error: %s", e)
-            chase_sched_data = {}  # Initialize to avoid UnboundLocalError
+            chase_sched_data = {}
             chase_schedule = {}
 
     # Ensure we have a valid ChaseSchedule
@@ -2296,7 +2304,7 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
         logging.warning("[generate_chase_schedule] GPT gave no 'ChaseSchedule'.")
         chase_schedule = {}
 
-    # Step D: Optionally store in DB (CurrentRoleplay or PlayerStats)
+    # Step D: Store the schedule in the database (CurrentRoleplay)
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("""
@@ -2310,6 +2318,7 @@ Do not include any extra keys, text, or commentary. Do not wrap your output in c
 
     logging.info("[generate_chase_schedule] Stored chase schedule => %s", chase_schedule)
     return chase_schedule
+
 
 
 # --- NEW: Define relationship groups for propagation ---
