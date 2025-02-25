@@ -279,9 +279,11 @@
     });
 
     // 2) Listen for partial tokens from the server
-    socket.on("new_token", (payload) => {
-      console.log("Received new token payload:", payload);
-      handleNewToken(payload.token);
+    socket.on("new_token", function(payload) {
+      console.log("Minimal test: received token", payload.token);
+      const chatWindow = document.getElementById("chatWindow");
+      // Directly append a paragraph for each token
+      chatWindow.innerHTML += `<p>${payload.token}</p>`;
     });
 
     // 3) Listen for final "done" event
@@ -326,22 +328,25 @@
   let partialAssistantText = "";
 
   function handleNewToken(token) {
-    console.log("Processing token:", token);
+    // If we haven't created the bubble yet, do it
     if (!currentAssistantBubble) {
-      console.log("Creating new bubble");
+      console.log("Creating new assistant bubble");
+      // Create a new message object (customize as needed)
       const newMsg = { sender: "Nyx", content: "" };
+      // appendMessage should create and append a new message row,
+      // and return that row element.
       const newRow = appendMessage(newMsg, true);
-      // Now grab the bubble element inside the row
+      // Grab the inner bubble element (make sure your HTML structure includes it)
       currentAssistantBubble = newRow.querySelector(".message-bubble");
       partialAssistantText = "";
     }
-  
-    // Append the new token
+    // Append the new token to our accumulated text
     partialAssistantText += token;
-    // Update the bubble's content
+    console.log("Updated bubble content:", partialAssistantText);
+    // Update the bubble's HTML (using your sanitization/rendering function)
     currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(partialAssistantText)}`;
   
-    // Auto-scroll to ensure the new tokens are visible
+    // Auto-scroll to the bottom of the chat window
     const chatWindow = document.getElementById("chatWindow");
     chatWindow.scrollTop = chatWindow.scrollHeight;
   }
