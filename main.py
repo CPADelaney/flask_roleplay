@@ -36,6 +36,7 @@ def create_flask_app():
     # Register blueprint modules
     app.register_blueprint(new_game_bp)
     app.register_blueprint(player_input_bp, url_prefix="/player")
+    app.register_blueprint(player_input_bp)  # Also register at root level
     app.register_blueprint(settings_bp, url_prefix="/settings")
     app.register_blueprint(memory_bp, url_prefix="/memory")
     app.register_blueprint(rule_enforcement_bp, url_prefix="/rules")
@@ -172,10 +173,43 @@ def handle_connect():
     logging.info("SocketIO: Client connected")
     emit('response', {'data': 'Connected to SocketIO server!'})
 
+@socketio.on('disconnect')
+def handle_disconnect():
+    logging.info("SocketIO: Client disconnected")
+
+@socketio.on('join')
+def handle_join(data):
+    conversation_id = data.get('conversation_id')
+    if conversation_id:
+        from flask_socketio import join_room
+        join_room(conversation_id)
+        logging.info(f"SocketIO: Client joined room {conversation_id}")
+        emit('joined', {'room': conversation_id})
+
 @socketio.on('message')
 def handle_message(data):
-    logging.info("SocketIO: Received message: %s", data)
-    emit('response', {'data': 'Message received!'}, broadcast=True)
+    from flask_socketio import join_room
+    logging.info(f"SocketIO: Received message: {data}")
+    user_input = data.get('user_input')
+    conversation_id = data.get('conversation_id')
+    
+    if not user_input or not conversation_id:
+        emit('error', {'error': 'Missing required fields'})
+        return
+    
+    join_room(conversation_id)
+    
+    # Simulate a response (replace with your actual logic)
+    response = f"Echo: {user_input}"
+    
+    # Stream the response token by token
+    for i in range(0, len(response), 2):
+        token = response[i:i+2]
+        emit('new_token', {'token': token}, room=conversation_id)
+        socketio.sleep(0.1)
+    
+    # Send the "done" event when complete
+    emit('done', {'full_text': response}, room=conversation_id)
 
 @socketio.on('join')
 def on_join(data):
@@ -242,20 +276,54 @@ if __name__ == "__main__":
                        ping_timeout=60)
     
     # SocketIO Event Handlers
+    # SocketIO Event Handlers
     @socketio.on('connect')
     def handle_connect():
         logging.info("SocketIO: Client connected")
         emit('response', {'data': 'Connected to SocketIO server!'})
-
+    
+    @socketio.on('disconnect')
+    def handle_disconnect():
+        logging.info("SocketIO: Client disconnected")
+    
+    @socketio.on('join')
+    def handle_join(data):
+        conversation_id = data.get('conversation_id')
+        if conversation_id:
+            from flask_socketio import join_room
+            join_room(conversation_id)
+            logging.info(f"SocketIO: Client joined room {conversation_id}")
+            emit('joined', {'room': conversation_id})
+    
     @socketio.on('message')
     def handle_message(data):
-        logging.info("SocketIO: Received message: %s", data)
-        emit('response', {'data': 'Message received!'}, broadcast=True)
-    
-    # Start the server
-    logging.basicConfig(level=logging.INFO)
-    port = int(os.getenv("PORT", 5000))
-    socketio.run(app, host="0.0.0.0", port=port, debug=False)
-else:
-    # Just expose the create_flask_app function for wsgi.py to use
-    pass
+        from flask_socketio import join_room
+        logging.info(f"SocketIO: Received message: {data}")
+        user_input = data.get('user_input')
+        conversation_id = data.get('conversation_id')
+        
+        if not user_input or not conversation_id:
+            emit('error', {'error': 'Missing required fields'})
+            return
+        
+        join_room(conversation_id)
+        
+        # Simulate a response (replace with your actual logic)
+        response = f"Echo: {user_input}"
+        
+        # Stream the response token by token
+        for i in range(0, len(response), 2):
+            token = response[i:i+2]
+            emit('new_token', {'token': token}, room=conversation_id)
+            socketio.sleep(0.1)
+        
+        # Send the "done" event when complete
+        emit('done', {'full_text': response}, room=conversation_id)
+        
+        # Start the server
+        logging.basicConfig(level=logging.INFO)
+        port = int(os.getenv("PORT", 5000))
+        socketio.run(app, host="0.0.0.0", port=port, debug=False)
+    else:
+        # Just expose the create_flask_app function for wsgi.py to use
+        pass
