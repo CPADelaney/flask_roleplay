@@ -214,7 +214,7 @@ def background_chat_task(conversation_id, user_input, universal_update):
     cur.close()
     conn.close()
     socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
-
+    
 # Optional ASGI wrapper for ASGI servers.
 asgi_app = WsgiToAsgi(app)
 
