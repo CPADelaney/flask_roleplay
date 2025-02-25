@@ -1,9 +1,12 @@
+# main.py
+
+from flask import Flask, render_template, session, request, jsonify, redirect
+from flask_socketio import SocketIO, emit
+import eventlet
+eventlet.monkey_patch()  # Ensure compatibility with eventlet
 import os
 import logging
-from flask import Flask, render_template, request, session, jsonify, redirect
 from flask_cors import CORS
-from celery import Celery
-from asgiref.wsgi import WsgiToAsgi
 
 # Blueprint imports
 from routes.new_game import new_game_bp
@@ -20,30 +23,6 @@ from routes.multiuser_routes import multiuser_bp
 
 # DB connection helper
 from db.connection import get_db_connection
-
-def create_celery_app():
-    """
-    Create and configure a single Celery app instance.
-    """
-    # Retrieve the RabbitMQ URL from environment variables
-    RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672//")
-    
-    celery_app = Celery("my_celery_app")
-    celery_app.conf.broker_url = RABBITMQ_URL
-    celery_app.conf.result_backend = "rpc://"  # or "redis://localhost:6379/1"
-
-    # Additional config (if needed)
-    celery_app.conf.update(
-        task_serializer='json',
-        accept_content=['json'],
-        result_serializer='json',
-        timezone='UTC',
-        enable_utc=True,
-        worker_log_format="%(levelname)s:%(name)s:%(message)s",
-        worker_redirect_stdouts_level='INFO'
-    )
-
-    return celery_app
 
 def create_flask_app():
     """
@@ -152,12 +131,26 @@ def create_flask_app():
 
     return app
 
-# Instantiate both Celery and Flask
-celery_app = create_celery_app()
+# Create Flask app
 app = create_flask_app()
-asgi_app = WsgiToAsgi(app)
+
+# Initialize Flask-SocketIO with Eventlet for asynchronous support
+socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*")
+
+# (Optional) You can add SocketIO event handlers here:
+@socketio.on('connect')
+def handle_connect():
+    logging.info("SocketIO: Client connected")
+    emit('response', {'data': 'Connected to SocketIO server!'})
+
+@socketio.on('message')
+def handle_message(data):
+    logging.info("SocketIO: Received message: %s", data)
+    # Echo the message back to the sender
+    emit('response', {'data': 'Message received!'}, broadcast=True)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    # For local development, you might run:
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
+    port = int(os.getenv("PORT", 5000))
+    # For local development, run the SocketIO server:
+    socketio.run(app, host="0.0.0.0", port=port, debug=False)
