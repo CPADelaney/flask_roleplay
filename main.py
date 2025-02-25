@@ -1,10 +1,12 @@
 # main.py
 
-import os
+if __name__ == "__main__":
+    import eventlet
+    eventlet.monkey_patch()
+
 from flask import Flask, render_template, session, request, jsonify, redirect
 from flask_socketio import SocketIO, emit
-import eventlet
-eventlet.monkey_patch()  # Ensure compatibility with Eventlet
+import os
 import logging
 from flask_cors import CORS
 from asgiref.wsgi import WsgiToAsgi
@@ -132,7 +134,12 @@ app = create_flask_app()
 
 # Initialize Flask-SocketIO with Eventlet.
 # The 'path' parameter ensures that the socket endpoint is /socket.io.
-socketio = SocketIO(app, async_mode='eventlet', cors_allowed_origins="*", path="/socket.io")
+socketio = SocketIO(app, 
+                   cors_allowed_origins="*",
+                   async_mode='eventlet',
+                   logger=True,
+                   engineio_logger=True)
+
 
 # SocketIO Event Handlers
 @socketio.on('connect')
