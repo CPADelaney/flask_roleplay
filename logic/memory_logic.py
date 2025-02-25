@@ -255,12 +255,10 @@ def fetch_formatted_locations(user_id, conversation_id):
 
 
 def get_shared_memory(user_id, conversation_id, relationship, npc_name, archetype_summary="", archetype_extras_summary=""):
-    """
-    Given a relationship dict and the NPC's name, returns a shared memory.
-    It uses the stored setting from CurrentRoleplay (keys 'CurrentSetting' and 'EnvironmentDesc')
-    and includes current location data from the Locations table.
-    """
+    logging.info(f"Starting get_shared_memory for NPC '{npc_name}' with relationship: {relationship}")
+    
     # Fetch stored environment details from CurrentRoleplay.
+    logging.debug("Fetching stored environment details from CurrentRoleplay...")
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
@@ -272,14 +270,17 @@ def get_shared_memory(user_id, conversation_id, relationship, npc_name, archetyp
         rows = cursor.fetchall()
         stored = {row[0]: row[1] for row in rows}
         mega_description = stored.get("EnvironmentDesc", "an undefined setting")
+        logging.info(f"Retrieved environment description (first 100 chars): {mega_description[:100]}...")
     except Exception as e:
-        logging.error(f"[get_shared_memory] Error retrieving stored setting: {e}")
+        logging.error(f"Error retrieving stored setting: {e}")
         mega_description = "an undefined setting"
     finally:
         conn.close()
     
     # Fetch and format current locations.
+    logging.debug("Fetching and formatting current locations...")
     locations_table_formatted = fetch_formatted_locations(user_id, conversation_id)
+    logging.info(f"Formatted locations: {locations_table_formatted}")
     
     target = relationship.get("target", "player")
     target_name = relationship.get("target_name", "the player")
@@ -317,9 +318,9 @@ When generating memories, please follow these guidelines:
 7. Show clear emotional reactions from both {npc_name} and {target_name}.  
 8. Include a small consequence or change in the relationship from each interaction.  
 9. Ensure that each memory is consistent with the natural progression of the relationship—for example, a 'mother' should not recall a first meeting later in life if familiarity is already established.
-10. Memories can be a positive experience (like sharing drinks, recounting tales, a nice walk on the beach, etc.), as well as negative (Getting punished, having a fight, etc.)
+10. Memories can be a positive experience (like sharing drinks, recounting tales, a nice walk on the beach, etc.), as well as negative (getting punished, having a fight, etc.)
 
-Return your output as strictly valid JSON with exactly one key, "memory", whose value is an array of at least three strings for each character the NPC has a relationship with. Follow exactly this format:
+Return your output as strictly valid JSON with exactly one key, "memory", whose value is an array of at least three strings. Follow exactly this format:
 
 {{
   "memory": [
@@ -328,17 +329,20 @@ Return your output as strictly valid JSON with exactly one key, "memory", whose 
     "<memory 3>"
   ]
 }}
-
 """
-    messages = [{"role": "system", "content": system_instructions}]
+    logging.debug(f"Constructed system instructions with length: {len(system_instructions)} characters")
     
+    messages = [{"role": "system", "content": system_instructions}]
+    logging.info("Calling GPT for shared memory generation...")
     try:
         response = get_openai_client().chat.completions.create(
             model="gpt-4o",
             messages=messages,
             temperature=0.7,
         )
-        return response.choices[0].message.content.strip()
+        memory_output = response.choices[0].message.content.strip()
+        logging.info("GPT response received for shared memory.")
+        return memory_output
     except Exception as e:
-        logging.error(f"[get_shared_memory] GPT error: {e}")
+        logging.error(f"Error during GPT call in get_shared_memory: {e}")
         return "Shared memory could not be generated."
