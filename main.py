@@ -23,7 +23,7 @@ from routes.multiuser_routes import multiuser_bp
 # Import your database connection helper
 from db.connection import get_db_connection
 
-def create_app():
+def create_flask_app():
     """
     Create and configure the Flask application.
     """
