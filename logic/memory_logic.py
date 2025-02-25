@@ -309,7 +309,7 @@ When generating memories, please follow these guidelines:
 {locations_table_formatted}
 
 **Memory Requirements:**  
-1. Generate three distinct first-person memories from {npc_name}'s perspective about their relationship with {target_name}. (If multiple relationships refer to the same target, generate a total of three memories for that target.)  
+1. Generate three distinct first-person memories from {npc_name}'s perspective about their relationship with {target_name}. (If multiple relationships refer to the same target, generate a total of three memories for that target.)  If NPC has no relationships, the memory should be a defining moment in their life.
 2. Each memory should be 2–3 sentences written in {npc_name}'s authentic voice.  
 3. Clearly reflect the relationship dynamics by incorporating details from all of {npc_name}'s archetypes.
 4. Each memory should be set in a specific location from the provided list or another context-appropriate locale.  
