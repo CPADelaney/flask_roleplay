@@ -151,6 +151,9 @@ asgi_app = WsgiToAsgi(app)
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     port = int(os.getenv("PORT", 5000))
-    # For local development, run the SocketIO server directly:
-    socketio.run(app, host="0.0.0.0", port=port, debug=False)
-
+    # For local development only
+    socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
+else:
+    # This is important for production with Gunicorn
+    # No need to call socketio.run() as Gunicorn will handle it
+    pass
