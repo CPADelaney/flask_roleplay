@@ -7,6 +7,6 @@ if [ "$SERVICE_TYPE" = "worker" ]; then
 else
     echo "Starting Web Server with SocketIO..."
     PORT=${PORT:-8080}
-    # Use python directly to run the app with socketio
-    exec python -c "import os; from main import app, socketio; socketio.run(app, host='0.0.0.0', port=$PORT, allow_unsafe_werkzeug=True)"
+    # Use gunicorn with the eventlet worker and point to our new wsgi.py file
+    exec gunicorn --bind 0.0.0.0:$PORT --worker-class eventlet --log-level info wsgi:app
 fi
