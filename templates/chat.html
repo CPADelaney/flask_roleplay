@@ -272,9 +272,10 @@
     //    If your Flask app runs on the same domain, you can do:
     socket = io.connect(location.origin, {
       path: '/socket.io',
-      transports: ['websocket'],
+      transports: ['websocket', 'polling'], // Try both transports
       reconnection: true,
-      reconnectionAttempts: 5
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000
     });
 
     // 2) Listen for partial tokens from the server
@@ -295,6 +296,23 @@
       // Optionally show in the chat window
       handleNewToken("[Error: " + payload.error + "]");
       finalizeAssistantMessage("");
+    });
+
+    // Add these event handlers after creating the socket connection
+    socket.on('connect', () => {
+      console.log('Socket connected!');
+      // Re-join the current conversation room if there is one
+      if (currentConvId) {
+        socket.emit('join', { conversation_id: currentConvId });
+      }
+    });
+    
+    socket.on('disconnect', () => {
+      console.log('Socket disconnected');
+    });
+    
+    socket.on('connect_error', (error) => {
+      console.error('Connection error:', error);
     });
     
     socket.on("joined", (data) => {
@@ -472,12 +490,18 @@
   }
 
   async function selectConversation(convId) {
-      currentConvId = convId;
-      messagesOffset = 0;
-      if (socket) {
-          socket.emit("join", { conversation_id: convId });
-      }
-      await loadMessages(convId, true);
+    currentConvId = convId;
+    messagesOffset = 0;
+    
+    // Make sure socket is connected before trying to join
+    if (socket && socket.connected) {
+      console.log('Joining room:', convId);
+      socket.emit('join', { conversation_id: convId });
+    } else {
+      console.warn('Socket not connected, cannot join room');
+    }
+    
+    await loadMessages(convId, true);
   }
 
   // Load older messages
