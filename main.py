@@ -160,6 +160,7 @@ def create_flask_app():
 
 # Create the Flask app.
 app = create_app()
+create_flask_app = create_app
 
 # Create the Socket.IO instance (using eventlet for async).
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
