@@ -736,9 +736,15 @@ async def create_and_refine_npc(user_id, conversation_id, environment_desc, day_
         (user_id, conversation_id, npc_id)
     )
     row = cursor.fetchone()
-    relationships = json.loads(row[0] if row and row[0] else "[]")
+    if row and row[0]:
+        if isinstance(row[0], str):
+            relationships = json.loads(row[0])
+        else:
+            relationships = row[0]
+    else:
+        relationships = []
     conn.close()
-    
+
     # Step 5: Generate enhanced fields using GPT
     physical_description = await gpt_generate_physical_description(partial_npc, environment_desc)
     schedule = await gpt_generate_schedule(partial_npc, environment_desc, day_names)
