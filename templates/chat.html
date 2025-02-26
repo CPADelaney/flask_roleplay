@@ -234,6 +234,14 @@
     perk_unlocks: []
   };
 
+  function appendMessageToChat(data) {
+    const messageObj = {
+      sender: data.sender || "Nyx",
+      content: data.content || data.message
+    };
+    appendMessage(messageObj, true);
+  }
+
   function resetPendingUniversalUpdates() {
     pendingUniversalUpdates = {
       roleplay_updates: {},
@@ -279,15 +287,7 @@
   
     // 2) Listen for partial tokens from the server
     socket.on("new_token", function(payload) {
-      console.log("Minimal test: received token", payload.token);
-      const chatWindow = document.getElementById("chatWindow");
-      // Create a new paragraph element
-      const p = document.createElement("p");
-      p.textContent = payload.token;
-      // Append the new paragraph to the chat window
-      chatWindow.appendChild(p);
-      // Scroll to the bottom
-      chatWindow.scrollTop = chatWindow.scrollHeight;
+      handleNewToken(payload.token);
     });
   
     // 3) Listen for final "done" event
