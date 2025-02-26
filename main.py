@@ -199,7 +199,7 @@ def background_chat_task(conversation_id, user_input, universal_update):
     ai_response = "This is a sample response from Nyx."
     for i in range(0, len(ai_response), 3):
         token = ai_response[i:i+3]
-        socketio.emit('new_token', {'token': token}, room=conversation_id)
+        socketio.emit('new_token', {'token': token, 'sender': 'Nyx'}, room=conversation_id)
         socketio.sleep(0.1)
     # Store the AI response in the database
     conn = get_db_connection()
