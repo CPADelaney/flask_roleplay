@@ -28,6 +28,9 @@ from db.connection import get_db_connection
 socketio = None
 
 def background_chat_task(conversation_id, user_input, universal_update):
+    """
+    Process chat messages in a background task and stream responses
+    """
     try:
         logging.info(f"Starting background chat task for conversation {conversation_id}")
         
@@ -36,7 +39,6 @@ def background_chat_task(conversation_id, user_input, universal_update):
         ai_response = f"This is a response to: '{user_input}'. Generated at {time.strftime('%H:%M:%S')}"
         
         # Stream the response token by token
-        # In a real system, you might stream from your AI service directly
         for i in range(0, len(ai_response), 3):
             token = ai_response[i:i+3]
             socketio.emit('new_token', {'token': token}, room=conversation_id)
@@ -46,14 +48,13 @@ def background_chat_task(conversation_id, user_input, universal_update):
         # Store the complete response in the database
         try:
             conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-                (conversation_id, "Nyx", ai_response)
-            )
-            conn.commit()
-            cur.close()
-            conn.close()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                        (conversation_id, "Nyx", ai_response)
+                    )
+                    conn.commit()
             logging.info(f"AI response stored in database for conversation {conversation_id}")
         except Exception as db_error:
             logging.error(f"Database error storing AI response: {str(db_error)}")
@@ -105,23 +106,26 @@ def create_flask_app():
         conversation_id = data.get("conversation_id")
         universal_update = data.get("universal_update", {})
     
-        # Store user message in the database.
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-            (conversation_id, "user", user_input)
-        )
-        conn.commit()
-        cur.close()
-        conn.close()
+        # Store user message in the database
+        try:
+            conn = get_db_connection()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                        (conversation_id, "user", user_input)
+                    )
+                    conn.commit()
+        except Exception as e:
+            logging.error(f"Database error: {str(e)}")
+            return jsonify({"error": "Database error"}), 500
     
-        # Directly start the background chat task.
+        # Start the background chat task
         socketio.start_background_task(background_chat_task, conversation_id, user_input, universal_update)
     
         return jsonify({"status": "success", "message": "Chat started"})
     
-        
+    # Authentication routes
     @app.route("/login_page", methods=["GET"])
     def login_page():
         return render_template("login.html")
@@ -134,18 +138,22 @@ def create_flask_app():
         if not username or not password:
             return jsonify({"error": "Username and password required"}), 400
         
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, password_hash FROM users WHERE username = %s", (username,))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        if not row:
-            return jsonify({"error": "Invalid username"}), 401
-        
-        user_id, _ = row
-        session["user_id"] = user_id
-        return jsonify({"message": "Logged in", "user_id": user_id})
+        try:
+            conn = get_db_connection()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id, password_hash FROM users WHERE username = %s", (username,))
+                    row = cur.fetchone()
+            
+            if not row:
+                return jsonify({"error": "Invalid username"}), 401
+            
+            user_id, _ = row
+            session["user_id"] = user_id
+            return jsonify({"message": "Logged in", "user_id": user_id})
+        except Exception as e:
+            logging.error(f"Login error: {str(e)}")
+            return jsonify({"error": "Server error"}), 500
     
     @app.route("/whoami", methods=["GET"])
     def whoami():
@@ -167,33 +175,39 @@ def create_flask_app():
         if not username or not password:
             return jsonify({"error": "Username and password required"}), 400
         
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM users WHERE username = %s", (username,))
-        if cur.fetchone():
-            cur.close()
-            conn.close()
-            return jsonify({"error": "Username already taken"}), 400
-        
-        cur.execute(
-            "INSERT INTO users (username, password_hash) VALUES (%s, %s) RETURNING id",
-            (username, password)
-        )
-        new_user_id = cur.fetchone()[0]
-        conn.commit()
-        cur.close()
-        conn.close()
-        session["user_id"] = new_user_id
-        return jsonify({"message": "User registered successfully", "user_id": new_user_id})
+        try:
+            conn = get_db_connection()
+            with conn:
+                with conn.cursor() as cur:
+                    # Check if username exists
+                    cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+                    if cur.fetchone():
+                        return jsonify({"error": "Username already taken"}), 400
+                    
+                    # Create new user
+                    cur.execute(
+                        "INSERT INTO users (username, password_hash) VALUES (%s, %s) RETURNING id",
+                        (username, password)  # Note: In production, hash the password!
+                    )
+                    new_user_id = cur.fetchone()[0]
+                    conn.commit()
+            
+            session["user_id"] = new_user_id
+            return jsonify({"message": "User registered successfully", "user_id": new_user_id})
+        except Exception as e:
+            logging.error(f"Registration error: {str(e)}")
+            return jsonify({"error": "Server error"}), 500
     
     return app
 
 def create_socketio(app):
+    """
+    Create and configure the SocketIO instance
+    """
     global socketio
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', 
-                       logger=True, engineio_logger=True)
+                       logger=True, engineio_logger=True, ping_timeout=60)
     
-    # Register all your Socket.IO event handlers here
     @socketio.on('connect')
     def handle_connect():
         logging.info("SocketIO: Client connected")
@@ -210,6 +224,9 @@ def create_socketio(app):
             join_room(conversation_id)
             logging.info(f"SocketIO: Client joined room {conversation_id}")
             emit('joined', {'room': conversation_id})
+        else:
+            logging.warning("Client attempted to join room without conversation_id")
+            emit('error', {'error': 'Missing conversation_id'})
     
     @socketio.on('message')
     def handle_message(data):
@@ -223,29 +240,26 @@ def create_socketio(app):
                 emit('error', {'error': 'Missing required fields'})
                 return
             
-            # Log that we're joining the room
-            logging.info(f"Joining room: {conversation_id}")
+            # Join the room for this conversation
             join_room(conversation_id)
             
             # Store user message in database
             try:
                 conn = get_db_connection()
-                cur = conn.cursor()
-                cur.execute(
-                    "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-                    (conversation_id, "user", user_input)
-                )
-                conn.commit()
-                cur.close()
-                conn.close()
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                            (conversation_id, "user", user_input)
+                        )
+                        conn.commit()
                 logging.info("User message stored in database")
             except Exception as db_error:
                 logging.error(f"Database error: {str(db_error)}")
                 emit('error', {'error': 'Database error'}, room=conversation_id)
                 return
             
-            # IMPORTANT CHANGE: Start the background task for message processing
-            # This allows the message to be processed asynchronously and stream tokens back
+            # Start the background task for message processing
             socketio.start_background_task(
                 background_chat_task, 
                 conversation_id, 
@@ -256,23 +270,24 @@ def create_socketio(app):
         except Exception as e:
             logging.error(f"Error in handle_message: {str(e)}")
             emit('error', {'error': f'Server error: {str(e)}'}, room=conversation_id)
-            
-    @socketio.on('chat_started')
-    def handle_chat_started(data):
-        conversation_id = data.get('conversation_id')
-        user_input = data.get('user_input')
-        universal_update = data.get('universal_update', {})
-        socketio.start_background_task(background_chat_task, conversation_id, user_input, universal_update)
     
     return socketio
     
-# Optional ASGI wrapper for ASGI servers.
-asgi_app = WsgiToAsgi(app)
+# Optional ASGI wrapper for ASGI servers
+asgi_app = None
+
+def init_asgi():
+    global asgi_app
+    app = create_flask_app()
+    socketio = create_socketio(app)
+    asgi_app = WsgiToAsgi(app)
+    return asgi_app
 
 if __name__ == "__main__":
     import eventlet
     eventlet.monkey_patch()
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, 
+                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     port = int(os.getenv("PORT", 5000))
     app = create_flask_app()
     socketio = create_socketio(app)
