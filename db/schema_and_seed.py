@@ -332,7 +332,7 @@ def create_all_tables():
         );
     ''')
 
-    # 18) SocialLinks
+    # 18) SocialLinks - with enhanced relationship columns
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS SocialLinks (
             link_id SERIAL PRIMARY KEY,
@@ -345,6 +345,10 @@ def create_all_tables():
             link_type TEXT,
             link_level INT DEFAULT 0,
             link_history JSONB,
+            dynamics JSONB,
+            experienced_crossroads JSONB,
+            experienced_rituals JSONB,
+            relationship_stage TEXT,
             UNIQUE (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -399,6 +403,75 @@ def create_all_tables():
             stat_dynamics JSONB,
             examples JSONB,
             triggers JSONB
+        );
+    ''')
+
+    # ----------------------------------------------------------------
+    # New tables for enhanced systems
+    # ----------------------------------------------------------------
+
+    # PlayerJournal - For personal revelations, narrative moments, dreams, etc.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerJournal (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            entry_type TEXT NOT NULL,
+            entry_text TEXT NOT NULL,
+            revelation_types TEXT,
+            narrative_moment TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
+
+    # NPCEvolution - To track mask slippage events and evolution history
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NPCEvolution (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            npc_id INTEGER NOT NULL,
+            mask_slippage_events JSONB,
+            evolution_events JSONB,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+            FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
+        );
+    ''')
+
+    # NPCRevelations - To track NPC revelations at different narrative stages
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NPCRevelations (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            npc_id INTEGER NOT NULL,
+            narrative_stage TEXT NOT NULL,
+            revelation_text TEXT NOT NULL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+            FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
+        );
+    ''')
+
+    # StatsHistory - To track significant stat changes
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS StatsHistory (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name TEXT NOT NULL,
+            stat_name TEXT NOT NULL,
+            old_value INTEGER NOT NULL,
+            new_value INTEGER NOT NULL,
+            cause TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
