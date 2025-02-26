@@ -24,6 +24,48 @@ from routes.multiuser_routes import multiuser_bp
 # DB connection helper
 from db.connection import get_db_connection
 
+# Global socketio instance
+socketio = None
+
+def background_chat_task(conversation_id, user_input, universal_update):
+    try:
+        logging.info(f"Starting background chat task for conversation {conversation_id}")
+        
+        # Here you would typically call your AI/NLP service to generate a response
+        # For testing, we'll use a simple sample response
+        ai_response = f"This is a response to: '{user_input}'. Generated at {time.strftime('%H:%M:%S')}"
+        
+        # Stream the response token by token
+        # In a real system, you might stream from your AI service directly
+        for i in range(0, len(ai_response), 3):
+            token = ai_response[i:i+3]
+            socketio.emit('new_token', {'token': token}, room=conversation_id)
+            # Add a small delay to simulate streaming
+            socketio.sleep(0.05)
+        
+        # Store the complete response in the database
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                (conversation_id, "Nyx", ai_response)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            logging.info(f"AI response stored in database for conversation {conversation_id}")
+        except Exception as db_error:
+            logging.error(f"Database error storing AI response: {str(db_error)}")
+        
+        # Send the done event with the full text
+        socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
+        logging.info(f"Completed streaming response for conversation {conversation_id}")
+        
+    except Exception as e:
+        logging.error(f"Error in background_chat_task: {str(e)}")
+        socketio.emit('error', {'error': f'Server error: {str(e)}'}, room=conversation_id)
+
 def create_flask_app():
     """
     Create and configure the Flask application.
@@ -146,9 +188,8 @@ def create_flask_app():
     
     return app
 
-# Create the app and initialize Socket.IO (only once)
-app = create_flask_app()
 def create_socketio(app):
+    global socketio
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', 
                        logger=True, engineio_logger=True)
     
@@ -223,47 +264,7 @@ def create_socketio(app):
         universal_update = data.get('universal_update', {})
         socketio.start_background_task(background_chat_task, conversation_id, user_input, universal_update)
     
-    # You should also enhance the background_chat_task function for better streaming
-    def background_chat_task(conversation_id, user_input, universal_update):
-        try:
-            logging.info(f"Starting background chat task for conversation {conversation_id}")
-            
-            # Here you would typically call your AI/NLP service to generate a response
-            # For testing, we'll use a simple sample response
-            ai_response = f"This is a response to: '{user_input}'. Generated at {time.strftime('%H:%M:%S')}"
-            
-            # Stream the response token by token
-            # In a real system, you might stream from your AI service directly
-            for i in range(0, len(ai_response), 3):
-                token = ai_response[i:i+3]
-                socketio.emit('new_token', {'token': token}, room=conversation_id)
-                # Add a small delay to simulate streaming
-                socketio.sleep(0.05)
-            
-            # Store the complete response in the database
-            try:
-                conn = get_db_connection()
-                cur = conn.cursor()
-                cur.execute(
-                    "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-                    (conversation_id, "Nyx", ai_response)
-                )
-                conn.commit()
-                cur.close()
-                conn.close()
-                logging.info(f"AI response stored in database for conversation {conversation_id}")
-            except Exception as db_error:
-                logging.error(f"Database error storing AI response: {str(db_error)}")
-            
-            # Send the done event with the full text
-            socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
-            logging.info(f"Completed streaming response for conversation {conversation_id}")
-            
-        except Exception as e:
-            logging.error(f"Error in background_chat_task: {str(e)}")
-            socketio.emit('error', {'error': f'Server error: {str(e)}'}, room=conversation_id)
-
-return socketio
+    return socketio
     
 # Optional ASGI wrapper for ASGI servers.
 asgi_app = WsgiToAsgi(app)
@@ -273,4 +274,6 @@ if __name__ == "__main__":
     eventlet.monkey_patch()
     logging.basicConfig(level=logging.INFO)
     port = int(os.getenv("PORT", 5000))
+    app = create_flask_app()
+    socketio = create_socketio(app)
     socketio.run(app, host="0.0.0.0", port=port, debug=False)
