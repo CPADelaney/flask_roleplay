@@ -1,3 +1,19 @@
+import os
+import json
+import re
+import random
+import logging
+import asyncio
+from datetime import datetime
+
+from logic.chatgpt_integration import get_openai_client, get_chatgpt_response
+from logic.gpt_utils import spaced_gpt_call
+from logic.gpt_helpers import fetch_npc_name, adjust_npc_complete
+from db.connection import get_db_connection
+from logic.memory_logic import get_shared_memory, record_npc_event, propagate_shared_memories
+from logic.social_links import create_social_link
+from logic.calendar import load_calendar_names
+
 async def gpt_generate_physical_description(npc_data, environment_desc):
     """
     Generate a robust physical description for an NPC with multiple fallback methods.
@@ -883,22 +899,6 @@ async def init_chase_schedule(user_id, conversation_id, combined_env, day_names)
     
     return default_schedule
                         "# logic/npc_creation.py
-
-import os
-import json
-import re
-import random
-import logging
-import asyncio
-from datetime import datetime
-
-from logic.chatgpt_integration import get_openai_client, get_chatgpt_response
-from logic.gpt_utils import spaced_gpt_call
-from logic.gpt_helpers import fetch_npc_name, adjust_npc_complete
-from db.connection import get_db_connection
-from logic.memory_logic import get_shared_memory, record_npc_event, propagate_shared_memories
-from logic.social_links import create_social_link
-from logic.calendar import load_calendar_names
 
 # -------------------------------------------------------------------------
 # HELPERS FOR ROBUST JSON PARSING
