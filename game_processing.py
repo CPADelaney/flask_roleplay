@@ -140,7 +140,7 @@ Stat modifiers: {{stat_modifiers}}
 """
 
 
-NPC_PROMPT = """
+_PROMPT = """
 You are finalizing schedules for multiple NPCs in this environment:
 {environment_desc}
 
@@ -453,7 +453,7 @@ async def async_process_new_game(user_id, conversation_data):
         # NEW STEP: spawn multiple NPCs (instead of old spawn_and_refine_npcs_with_relationships).
         # ---------------------------------------------------------------------
         logging.info("[async_process_new_game] Spawning multiple NPCs (count=5) via new approach.")
-        new_npc_ids = await spawn_multiple_npcs(
+        new_npc_ids = await spawn_multiple_npcs_enhanced(
             user_id=user_id,
             conversation_id=conversation_id,
             environment_desc=combined_env,
