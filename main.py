@@ -174,6 +174,7 @@ def handle_message(data):
         logging.info(f"SocketIO: Received message: {data}")
         user_input = data.get('user_input')
         conversation_id = data.get('conversation_id')
+        universal_update = data.get('universal_update', {})
         
         if not user_input or not conversation_id:
             emit('error', {'error': 'Missing required fields'})
@@ -200,35 +201,14 @@ def handle_message(data):
             emit('error', {'error': 'Database error'}, room=conversation_id)
             return
         
-        # Generate response (for now just echo)
-        response = f"Echo: {user_input}"
-        logging.info(f"Generated response: {response}")
-        
-        # Stream tokens with explicit debugging
-        for i in range(0, len(response), 2):
-            token = response[i:i+2]
-            logging.info(f"Emitting token: {token}")
-            emit('new_token', {'token': token}, room=conversation_id)
-            socketio.sleep(0.1)
-        
-        # Store AI response
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-                (conversation_id, "Nyx", response)
-            )
-            conn.commit()
-            cur.close()
-            conn.close()
-            logging.info("AI response stored in database")
-        except Exception as db_error:
-            logging.error(f"Database error storing AI response: {str(db_error)}")
-        
-        # Send done event
-        logging.info("Emitting done event")
-        emit('done', {'full_text': response}, room=conversation_id)
+        # IMPORTANT CHANGE: Start the background task for message processing
+        # This allows the message to be processed asynchronously and stream tokens back
+        socketio.start_background_task(
+            background_chat_task, 
+            conversation_id, 
+            user_input, 
+            universal_update
+        )
         
     except Exception as e:
         logging.error(f"Error in handle_message: {str(e)}")
@@ -241,24 +221,45 @@ def handle_chat_started(data):
     universal_update = data.get('universal_update', {})
     socketio.start_background_task(background_chat_task, conversation_id, user_input, universal_update)
 
+# You should also enhance the background_chat_task function for better streaming
 def background_chat_task(conversation_id, user_input, universal_update):
-    # Simulate generating a response from Nyx
-    ai_response = "This is a sample response from Nyx."
-    for i in range(0, len(ai_response), 3):
-        token = ai_response[i:i+3]
-        socketio.emit('new_token', {'token': token, 'sender': 'Nyx'}, room=conversation_id)
-        socketio.sleep(0.1)
-    # Store the AI response in the database
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO messages (conversation_id, sender, content)
-        VALUES (%s, %s, %s)
-    """, (conversation_id, "Nyx", ai_response))
-    conn.commit()
-    cur.close()
-    conn.close()
-    socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
+    try:
+        logging.info(f"Starting background chat task for conversation {conversation_id}")
+        
+        # Here you would typically call your AI/NLP service to generate a response
+        # For testing, we'll use a simple sample response
+        ai_response = f"This is a response to: '{user_input}'. Generated at {time.strftime('%H:%M:%S')}"
+        
+        # Stream the response token by token
+        # In a real system, you might stream from your AI service directly
+        for i in range(0, len(ai_response), 3):
+            token = ai_response[i:i+3]
+            socketio.emit('new_token', {'token': token}, room=conversation_id)
+            # Add a small delay to simulate streaming
+            socketio.sleep(0.05)
+        
+        # Store the complete response in the database
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                (conversation_id, "Nyx", ai_response)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            logging.info(f"AI response stored in database for conversation {conversation_id}")
+        except Exception as db_error:
+            logging.error(f"Database error storing AI response: {str(db_error)}")
+        
+        # Send the done event with the full text
+        socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
+        logging.info(f"Completed streaming response for conversation {conversation_id}")
+        
+    except Exception as e:
+        logging.error(f"Error in background_chat_task: {str(e)}")
+        socketio.emit('error', {'error': f'Server error: {str(e)}'}, room=conversation_id)
     
 # Optional ASGI wrapper for ASGI servers.
 asgi_app = WsgiToAsgi(app)
