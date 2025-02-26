@@ -23,6 +23,45 @@ from logic.inventory_logic import add_item_to_inventory, remove_item_from_invent
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
 from routes.settings_routes import generate_mega_setting_logic
 
+# Import new enhanced modules
+from logic.enhanced_stats import (
+    get_player_current_tier, 
+    check_for_combination_triggers, 
+    apply_stat_change,
+    apply_activity_effects
+)
+from logic.npc_evolution import (
+    process_daily_npc_activities,
+    check_for_mask_slippage,
+    detect_relationship_stage_changes
+)
+from logic.narrative_progression import (
+    get_current_narrative_stage,
+    check_for_personal_revelations,
+    check_for_narrative_moments,
+    check_for_npc_revelations,
+    add_dream_sequence,
+    add_moment_of_clarity
+)
+from logic.enhanced_social_links import (
+    get_relationship_dynamic_level,
+    update_relationship_dynamic,
+    check_for_relationship_crossroads,
+    check_for_relationship_ritual,
+    get_relationship_summary
+)
+from logic.enhanced_time_cycle import (
+    ActivityManager,
+    should_advance_time,
+    advance_time_with_events
+)
+from logic.addiction_system import (
+    check_addiction_levels,
+    update_addiction_level,
+    process_addiction_effects,
+    get_addiction_status
+)
+
 story_bp = Blueprint("story_bp", __name__)
 
 # -------------------------------------------------------------------
@@ -89,6 +128,30 @@ FUNCTION_SCHEMAS = [
     {
         "name": "get_interactions",
         "description": "Retrieve all Interactions from the Interactions table (detailed_rules, etc.).",
+        "parameters": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "get_relationship_summary",
+        "description": "Retrieve a summary of the relationship between two entities",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entity1_type": {"type": "string"},
+                "entity1_id": {"type": "number"},
+                "entity2_type": {"type": "string"},
+                "entity2_id": {"type": "number"}
+            },
+            "required": ["entity1_type", "entity1_id", "entity2_type", "entity2_id"]
+        }
+    },
+    {
+        "name": "get_narrative_stage",
+        "description": "Retrieve the current narrative stage for a player",
+        "parameters": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "get_addiction_status",
+        "description": "Retrieve the current addiction status for a player",
         "parameters": {"type": "object", "properties": {}}
     }
 ]
@@ -357,6 +420,7 @@ async def next_storybeat():
         user_input = data.get("user_input", "").strip()
         conv_id = data.get("conversation_id")
         player_name = data.get("player_name", "Chase")
+        requested_activity = data.get("activity_type", None)
 
         if not user_input:
             return jsonify({"error": "No user_input provided"}), 400
@@ -392,9 +456,10 @@ async def next_storybeat():
         env_desc = aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", "A default environment description.")
         calendar = aggregator_data.get("calendar", {})
         day_names = calendar.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
+        
         if count < 2:
             logging.info("Only %d unintroduced NPC(s) found; generating 3 more.", count)
-            await asyncio.to_thread(spawn_multiple_npcs, user_id, conv_id, env_desc, day_names, count=3)
+            await spawn_multiple_npcs_enhanced(user_id, conv_id, env_desc, day_names, count=3)
 
         # 2) Insert user message.
         cur.execute(
@@ -421,58 +486,233 @@ async def next_storybeat():
                 conn.close()
                 return jsonify(update_result), 500
 
-        # 4) Possibly advance time.
-        if data.get("advance_time", False):
-            new_year, new_month, new_day, new_phase = advance_time_and_update(user_id, conv_id, increment=1)
-            aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
+        # 4) Analyze input for time advancement and special events
+        context = {
+            "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
+            "time_of_day": aggregator_data.get("timeOfDay", "Morning")
+        }
+        
+        # If an activity type was explicitly requested, use it, otherwise determine from input
+        activity_type = requested_activity or ActivityManager.get_activity_type(user_input, context)
+        
+        # Process addiction effects based on current addiction levels
+        addiction_status = await get_addiction_status(user_id, conv_id, player_name)
+        addiction_effects = await process_addiction_effects(user_id, conv_id, player_name, addiction_status)
+        
+        # Get current narrative stage
+        narrative_stage = await get_current_narrative_stage(user_id, conv_id)
+        
+        # Check if we need to confirm time advancement with the player
+        should_time_advance = should_advance_time(activity_type, context.get("time_of_day"))
+        
+        # If player asked for time confirmation, process time advancement
+        if data.get("confirm_time_advance", False):
+            time_result = await advance_time_with_events(user_id, conv_id, activity_type)
+            
+            # Process addiction progression chance when time advances
+            if time_result["time_advanced"]:
+                for addiction_type in ["socks", "feet", "sweat", "ass", "scent"]:
+                    # Random chance for addiction to progress based on exposure
+                    if "exposed_to_" + addiction_type in data:
+                        progression_chance = 0.2  # 20% chance
+                        await update_addiction_level(user_id, conv_id, player_name, addiction_type, progression_chance)
+        
         else:
-            new_year = aggregator_data.get("year", 1)
-            new_month = aggregator_data.get("month", 1)
-            new_day = aggregator_data.get("day", 1)
-            new_phase = aggregator_data.get("timeOfDay", "Morning")
+            # Just return information about what the time advancement would be for confirmation
+            time_result = {
+                "time_advanced": False,
+                "would_advance": should_time_advance["should_advance"],
+                "periods": should_time_advance["periods"],
+                "current_time": context.get("time_of_day"),
+                "confirm_needed": should_time_advance["should_advance"]
+            }
 
-        aggregator_text = aggregator_data.get("aggregator_text", "No aggregator text available.")
-
-        # 5) Append additional NPC context.
-        cur.execute("""
-            SELECT npc_name, memory, archetype_extras_summary
-            FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s AND introduced=TRUE
-        """, (user_id, conv_id))
-        npc_context_rows = cur.fetchall()
-        npc_context_summary = ""
-        for row in npc_context_rows:
-            npc_name, memory_json, extras_summary = row
-            mem_text = ""
-            if memory_json:
-                try:
-                    mem_list = json.loads(memory_json)
-                    mem_text = " ".join(mem_list)
-                except Exception:
-                    mem_text = str(memory_json)
-            extra_text = extras_summary if extras_summary else ""
-            npc_context_summary += f"{npc_name}: {mem_text} {extra_text}\n"
-        if npc_context_summary:
-            aggregator_text += "\nNPC Context:\n" + npc_context_summary
-        logging.debug("[next_storybeat] Aggregator text: %s", aggregator_text)
-
-        # 6) Enqueue the heavy GPT task via Celery.
-        from tasks import process_storybeat_task  # Use the correct task name!
-        task_result = process_storybeat_task.delay(user_id, conv_id, aggregator_text, user_input)
-        logging.info("Celery task enqueued: %s", task_result.id)
-
+        # 5) Check for relationship crossroads if appropriate
+        crossroads_event = None
+        if data.get("check_crossroads", False):
+            crossroads_event = await check_for_relationship_crossroads(user_id, conv_id)
+            
+            # If a crossroads choice was made, apply it
+            if data.get("crossroads_choice") is not None and data.get("crossroads_name") and data.get("link_id"):
+                choice_result = await apply_crossroads_choice(
+                    user_id, conv_id, 
+                    data["link_id"], 
+                    data["crossroads_name"], 
+                    data["crossroads_choice"]
+                )
+                if "error" in choice_result:
+                    crossroads_result = {"error": choice_result["error"]}
+                else:
+                    crossroads_result = {
+                        "choice_applied": True,
+                        "outcome": choice_result["outcome_text"]
+                    }
+        
+        # 6) Gather aggregated context and produce response
+        # Get updated aggregator data after all state changes
+        aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
+        aggregator_text = build_aggregator_text(aggregator_data)
+        
+        # Add addiction context to aggregator_text
+        if addiction_status and addiction_status["has_addictions"]:
+            addiction_context = "\n\n=== ADDICTION STATUS ===\n"
+            for addiction_type, level in addiction_status["addiction_levels"].items():
+                if level > 0:
+                    addiction_context += f"{addiction_type.capitalize()}: {get_addiction_label(level)}\n"
+            
+            if addiction_status["npc_specific_addictions"]:
+                addiction_context += "\nNPC-Specific Addictions:\n"
+                for npc_addiction in addiction_status["npc_specific_addictions"]:
+                    addiction_context += f"{npc_addiction['npc_name']}'s {npc_addiction['addiction_type']}: {get_addiction_label(npc_addiction['level'])}\n"
+            
+            aggregator_text += addiction_context
+        
+        # Generate response from GPT
+        response_data = get_chatgpt_response(conv_id, aggregator_text, user_input)
+        
+        # Extract narrative
+        if response_data["type"] == "function_call":
+            # When the response is a function call, extract the narrative field
+            ai_response = response_data["function_args"].get("narrative", "")
+            
+            # Process any universal updates received
+            try:
+                # Only apply updates if we received function call with args
+                if response_data["function_args"]:
+                    import asyncio
+                    import asyncpg
+                    from logic.universal_updater import apply_universal_updates_async
+                    
+                    async def apply_updates():
+                        dsn = os.getenv("DB_DSN")
+                        conn = await asyncpg.connect(dsn=dsn, statement_cache_size=0)
+                        try:
+                            await apply_universal_updates_async(
+                                user_id, 
+                                conv_id, 
+                                response_data["function_args"], 
+                                conn
+                            )
+                        finally:
+                            await conn.close()
+                    
+                    # Run the async function
+                    await apply_updates()
+                    logging.info(f"Applied universal updates for conversation {conv_id}")
+            except Exception as update_error:
+                logging.error(f"Error applying universal updates: {str(update_error)}")
+        else:
+            ai_response = response_data.get("response", "")
+        
+        # Store the GPT response
+        cur.execute(
+            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+            (conv_id, "Nyx", ai_response)
+        )
+        conn.commit()
         cur.close()
         conn.close()
-
-        # Return a quick response; state updates are processed in the background.
-        return jsonify({
-            "message": "Your action has been queued. Please wait for the next update.",
-            "conversation_id": conv_id,
-            "celery_task_id": task_result.id
-        })
+        
+        # Prepare and return the final response
+        response = {
+            "message": ai_response,
+            "time_result": time_result,
+            "confirm_needed": should_time_advance["should_advance"] and not data.get("confirm_time_advance", False),
+            "addiction_effects": addiction_effects,
+            "narrative_stage": narrative_stage.name if narrative_stage else None
+        }
+        
+        if crossroads_event:
+            response["crossroads_event"] = crossroads_event
+            
+        if data.get("crossroads_choice") is not None:
+            response["crossroads_result"] = crossroads_result
+            
+        return jsonify(response)
 
     except Exception as e:
         logging.exception("[next_storybeat] Error")
+        return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/relationship_summary", methods=["GET"])
+def get_relationship_details():
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        conversation_id = request.args.get("conversation_id")
+        entity1_type = request.args.get("entity1_type")
+        entity1_id = request.args.get("entity1_id")
+        entity2_type = request.args.get("entity2_type")
+        entity2_id = request.args.get("entity2_id")
+        
+        if not all([conversation_id, entity1_type, entity1_id, entity2_type, entity2_id]):
+            return jsonify({"error": "Missing required parameters"}), 400
+            
+        summary = get_relationship_summary(
+            user_id, conversation_id,
+            entity1_type, int(entity1_id),
+            entity2_type, int(entity2_id)
+        )
+        
+        if not summary:
+            return jsonify({"error": "Relationship not found"}), 404
+            
+        return jsonify(summary)
+        
+    except Exception as e:
+        logging.exception("[get_relationship_details] Error")
+        return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/addiction_status", methods=["GET"])
+def addiction_status():
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        conversation_id = request.args.get("conversation_id")
+        player_name = request.args.get("player_name", "Chase")
+        
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id parameter"}), 400
+            
+        status = get_addiction_status(user_id, conversation_id, player_name)
+        return jsonify(status)
+        
+    except Exception as e:
+        logging.exception("[addiction_status] Error")
+        return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/apply_crossroads_choice", methods=["POST"])
+async def apply_choice():
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        data = request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        link_id = data.get("link_id")
+        crossroads_name = data.get("crossroads_name")
+        choice_index = data.get("choice_index")
+        
+        if not all([conversation_id, link_id, crossroads_name, choice_index is not None]):
+            return jsonify({"error": "Missing required parameters"}), 400
+            
+        result = await apply_crossroads_choice(
+            user_id, int(conversation_id),
+            int(link_id), crossroads_name, int(choice_index)
+        )
+        
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+            
+        return jsonify(result)
+        
+    except Exception as e:
+        logging.exception("[apply_choice] Error")
         return jsonify({"error": str(e)}), 500
 
 def gather_rule_knowledge():
