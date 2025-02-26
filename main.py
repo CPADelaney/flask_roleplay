@@ -20,6 +20,7 @@ from db.admin import admin_bp
 from routes.debug import debug_bp
 from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
+from logic.chatgpt_integration import build_message_history
 
 # DB connection helper
 from db.connection import get_db_connection
