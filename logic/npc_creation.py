@@ -702,7 +702,6 @@ async def create_and_refine_npc(user_id, conversation_id, environment_desc, day_
     
     # Step 1: Create the partial NPC (base data)
     from logic.npc_creation import create_npc_partial, insert_npc_stub_into_db
-    
     partial_npc = create_npc_partial(
         user_id=user_id,
         conversation_id=conversation_id,
@@ -720,7 +719,6 @@ async def create_and_refine_npc(user_id, conversation_id, environment_desc, day_
     
     # Step 3: Assign relationships
     from logic.npc_creation import assign_random_relationships
-    
     await assign_random_relationships(
         user_id=user_id,
         conversation_id=conversation_id,
