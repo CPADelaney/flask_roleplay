@@ -9,7 +9,8 @@ from logic.npc_creation import (
     create_npc_partial,
     insert_npc_stub_into_db,
     recalc_npc_stats_with_new_archetypes,
-    refine_npc_final_data
+    spawn_multiple_npcs_enhanced, 
+    create_and_refine_npc
 )
 from logic.social_links import (
     get_social_link, create_social_link,
