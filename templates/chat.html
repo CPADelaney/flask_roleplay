@@ -260,16 +260,15 @@
 
   // Socket.IO reference
   let socket = null;
-
+  
   // On page load
   window.onload = async function() {
     await checkLoggedIn();
     attachEnterKey();
     loadDarkModeFromStorage();
     await loadConversations();
-
+  
     // 1) Connect to Socket.IO
-    //    If your Flask app runs on the same domain, you can do:
     socket = io.connect(location.origin, {
       path: '/socket.io',
       transports: ['websocket', 'polling'], // Try both transports
@@ -277,22 +276,27 @@
       reconnectionAttempts: 5,
       reconnectionDelay: 1000
     });
-
+  
     // 2) Listen for partial tokens from the server
     socket.on("new_token", function(payload) {
       console.log("Minimal test: received token", payload.token);
       const chatWindow = document.getElementById("chatWindow");
-      // Directly append a paragraph for each token
-      chatWindow.innerHTML += `<p>${payload.token}</p>`;
+      // Create a new paragraph element
+      const p = document.createElement("p");
+      p.textContent = payload.token;
+      // Append the new paragraph to the chat window
+      chatWindow.appendChild(p);
+      // Scroll to the bottom
+      chatWindow.scrollTop = chatWindow.scrollHeight;
     });
-
+  
     // 3) Listen for final "done" event
     socket.on("done", (payload) => {
       const fullText = payload.full_text;
       console.log("Done streaming. Full text:", fullText);
       finalizeAssistantMessage(fullText);
     });
-
+  
     // 4) Handle errors from server
     socket.on("error", (payload) => {
       console.error("Server error:", payload.error);
@@ -300,7 +304,7 @@
       handleNewToken("[Error: " + payload.error + "]");
       finalizeAssistantMessage("");
     });
-
+  
     // Add these event handlers after creating the socket connection
     socket.on('connect', () => {
       console.log('Socket connected!');
@@ -320,37 +324,57 @@
     
     socket.on("joined", (data) => {
       console.log("Joined room:", data.room);
-    }); 
-  };
+    });
+    
+    socket.on("message", function(data) {
+      console.log("Client received message event:", data);
+      // Then update your DOM:
+      appendMessageToChat(data);
+    });
+  };  // <-- Corrected closing for window.onload
 
   // We accumulate the partial streamed content in a single bubble
   let currentAssistantBubble = null;
   let partialAssistantText = "";
 
+  function appendMessage(messageObj, autoScroll = true) {
+    // Create a container for the message row
+    const row = document.createElement("div");
+    row.classList.add("message-row");
+    // Create the bubble element
+    const bubble = document.createElement("div");
+    bubble.classList.add("message-bubble");
+    // Set initial content (you can modify this as needed)
+    bubble.innerHTML = `<strong>${messageObj.sender}:</strong> ${messageObj.content}`;
+    // Append the bubble to the row
+    row.appendChild(bubble);
+    // Append the row to the chat window
+    document.getElementById("chatWindow").appendChild(row);
+    // Optionally auto-scroll
+    if (autoScroll) {
+      const chatWindow = document.getElementById("chatWindow");
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+    return row;
+  }
+
   function handleNewToken(token) {
-    // If we haven't created the bubble yet, do it
     if (!currentAssistantBubble) {
       console.log("Creating new assistant bubble");
-      // Create a new message object (customize as needed)
       const newMsg = { sender: "Nyx", content: "" };
-      // appendMessage should create and append a new message row,
-      // and return that row element.
       const newRow = appendMessage(newMsg, true);
-      // Grab the inner bubble element (make sure your HTML structure includes it)
+      // Grab the inner bubble element that you'll update
       currentAssistantBubble = newRow.querySelector(".message-bubble");
       partialAssistantText = "";
     }
-    // Append the new token to our accumulated text
     partialAssistantText += token;
     console.log("Updated bubble content:", partialAssistantText);
-    // Update the bubble's HTML (using your sanitization/rendering function)
+    // Use your markdown sanitizer/render function
     currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(partialAssistantText)}`;
-  
-    // Auto-scroll to the bottom of the chat window
     const chatWindow = document.getElementById("chatWindow");
     chatWindow.scrollTop = chatWindow.scrollHeight;
   }
-
+  
   function finalizeAssistantMessage(finalText) {
     if (!currentAssistantBubble) return;
     currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(finalText)}`;
