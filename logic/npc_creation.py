@@ -16,7 +16,7 @@ from logic.memory_logic import get_shared_memory, record_npc_event, propagate_sh
 from logic.social_links import create_social_link
 from logic.calendar import load_calendar_names
 
-async def gpt_generate_physical_description(npc_data, environment_desc):
+async def gpt_generate_physical_description(user_id, conversation_id, npc_data, environment_desc):
     """
     Generate a robust physical description for an NPC with multiple fallback methods.
     Returns a string description tailored for mature/femdom themes, incorporating archetype elements.
@@ -84,7 +84,7 @@ Return a valid JSON object with the key "physical_description" containing the de
     # Final fallback: Generate a basic description if all else fails
     return f"{npc_name} has an appearance that matches their personality and role in this environment."
 
-async def gpt_generate_schedule(npc_data, environment_desc, day_names):
+async def gpt_generate_schedule(user_id, conversation_id, npc_data, environment_desc, day_names):
     """
     Generate a weekly schedule for an NPC with error handling and fallbacks.
     Returns a dictionary mapping days to time periods.
@@ -171,7 +171,7 @@ Activities should reflect the NPC's personality, archetypes, and the environment
         } for day in day_names
     }
 
-async def gpt_generate_memories(npc_data, environment_desc, relationships):
+async def gpt_generate_memories(user_id, conversation_id, npc_data, environment_desc, relationships):
     """
     Generate rich, detailed memories for an NPC that create a vivid shared history,
     including both positive and negative interactions with subtle power dynamics.
@@ -270,7 +270,7 @@ async def gpt_generate_memories(npc_data, environment_desc, relationships):
         # If we have sufficient target data, generate relationship-specific memories
         if target_data:
             rel_memories = await gpt_generate_relationship_specific_memories(
-                npc_data, target_data, primary_rel, environment_desc
+                user_id, conversation_id, npc_data, target_data, primary_rel, environment_desc
             )
             all_memories.extend(rel_memories)
     
@@ -409,7 +409,7 @@ Return a valid JSON object with a single "memories" key containing an array of m
     
     return all_memories
 
-async def gpt_generate_affiliations(npc_data, environment_desc):
+async def gpt_generate_affiliations(user_id, conversation_id, npc_data, environment_desc):
     """
     Generate a list of 3 to 5 distinct affiliation groups for the NPC.
     
@@ -471,7 +471,7 @@ If you cannot comply, return an empty JSON object {{}}
         return []
 
 
-async def gpt_generate_relationship_specific_memories(npc_data, target_data, primary_rel, environment_desc):
+async def gpt_generate_relationship_specific_memories(user_id, conversation_id, npc_data, target_data, primary_rel, environment_desc):
     """
     Generate 1 to 3 detailed, relationship-specific memories describing a significant interaction
     between the NPC (npc_data) and a target (target_data), using the relationship label (primary_rel)
@@ -746,10 +746,10 @@ async def create_and_refine_npc(user_id, conversation_id, environment_desc, day_
     conn.close()
 
     # Step 5: Generate enhanced fields using GPT
-    physical_description = await gpt_generate_physical_description(partial_npc, environment_desc)
-    schedule = await gpt_generate_schedule(partial_npc, environment_desc, day_names)
-    memories = await gpt_generate_memories(partial_npc, environment_desc, relationships)
-    affiliations = await gpt_generate_affiliations(partial_npc, environment_desc)
+    physical_description = await gpt_generate_physical_description(user_id, conversation_id, partial_npc, environment_desc)
+    schedule = await gpt_generate_schedule(user_id, conversation_id, partial_npc, environment_desc, day_names)
+    memories = await gpt_generate_memories(user_id, conversation_id, partial_npc, environment_desc, relationships)
+    affiliations = await gpt_generate_affiliations(user_id, conversation_id, partial_npc, environment_desc)
     
     # Step 6: Determine current location based on time of day and schedule
     conn = get_db_connection()
