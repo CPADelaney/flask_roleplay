@@ -229,7 +229,118 @@ def create_flask_app():
         if user_id:
             return jsonify({"logged_in": True, "user_id": user_id}), 200
         return jsonify({"logged_in": False}), 200
+    
+    @app.route("/logout", methods=["POST"])
+    def logout():
+        session.clear()
+        return jsonify({"message": "Logged out"}), 200
+    
+    @app.route("/register", methods=["POST"])
+    def register():
+        data = request.get_json()
+        username = data.get("username")
+        password = data.get("password")
+        if not username or not password:
+            return jsonify({"error": "Username and password required"}), 400
+        
+        try:
+            conn = get_db_connection()
+            with conn:
+                with conn.cursor() as cur:
+                    # Check if username exists
+                    cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+                    if cur.fetchone():
+                        return jsonify({"error": "Username already taken"}), 400
+                    
+                    # Create new user
+                    cur.execute(
+                        "INSERT INTO users (username, password_hash) VALUES (%s, %s) RETURNING id",
+                        (username, password)  # Note: In production, hash the password!
+                    )
+                    new_user_id = cur.fetchone()[0]
+                    conn.commit()
+            
+            session["user_id"] = new_user_id
+            return jsonify({"message": "User registered successfully", "user_id": new_user_id})
+        except Exception as e:
+            logging.error(f"Registration error: {str(e)}")
+            return jsonify({"error": "Server error"}), 500
+    
+    return app
 
+def create_socketio(app):
+    """
+    Create and configure the SocketIO instance
+    """
+    global socketio
+    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', 
+                       logger=True, engineio_logger=True, ping_timeout=60)
+    
+    @socketio.on('connect')
+    def handle_connect():
+        logging.info("SocketIO: Client connected")
+        emit('response', {'data': 'Connected to SocketIO server!'})
+
+    @socketio.on('disconnect')
+    def handle_disconnect():
+        logging.info("SocketIO: Client disconnected")
+    
+    @socketio.on('join')
+    def handle_join(data):
+        conversation_id = data.get('conversation_id')
+        if conversation_id:
+            join_room(conversation_id)
+            logging.info(f"SocketIO: Client joined room {conversation_id}")
+            emit('joined', {'room': conversation_id})
+        else:
+            logging.warning("Client attempted to join room without conversation_id")
+            emit('error', {'error': 'Missing conversation_id'})
+    
+    @socketio.on('message')
+    def handle_message(data):
+        try:
+            logging.info(f"SocketIO: Received message: {data}")
+            user_input = data.get('user_input')
+            conversation_id = data.get('conversation_id')
+            universal_update = data.get('universal_update', {})
+            
+            if not user_input or not conversation_id:
+                emit('error', {'error': 'Missing required fields'})
+                return
+            
+            # Join the room for this conversation
+            join_room(conversation_id)
+            
+            # Store user message in database
+            try:
+                conn = get_db_connection()
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                            (conversation_id, "user", user_input)
+                        )
+                        conn.commit()
+                logging.info("User message stored in database")
+            except Exception as db_error:
+                logging.error(f"Database error: {str(db_error)}")
+                emit('error', {'error': 'Database error'}, room=conversation_id)
+                return
+            
+            # Start the background task for message processing
+            # This now uses the enhanced context generator from story_routes.py
+            socketio.start_background_task(
+                background_chat_task, 
+                conversation_id, 
+                user_input, 
+                universal_update
+            )
+            
+        except Exception as e:
+            logging.error(f"Error in handle_message: {str(e)}")
+            emit('error', {'error': f'Server error: {str(e)}'}, room=conversation_id)
+    
+    # Move the storybeat handler here
     @socketio.on('storybeat')
     def handle_storybeat(data):
         """
@@ -472,115 +583,7 @@ def create_flask_app():
             logging.error(f"Unexpected error in handle_storybeat: {str(e)}")
             emit('error', {'error': f"Unexpected server error: {str(e)}"})
     
-    @app.route("/logout", methods=["POST"])
-    def logout():
-        session.clear()
-        return jsonify({"message": "Logged out"}), 200
-    
-    @app.route("/register", methods=["POST"])
-    def register():
-        data = request.get_json()
-        username = data.get("username")
-        password = data.get("password")
-        if not username or not password:
-            return jsonify({"error": "Username and password required"}), 400
-        
-        try:
-            conn = get_db_connection()
-            with conn:
-                with conn.cursor() as cur:
-                    # Check if username exists
-                    cur.execute("SELECT id FROM users WHERE username = %s", (username,))
-                    if cur.fetchone():
-                        return jsonify({"error": "Username already taken"}), 400
-                    
-                    # Create new user
-                    cur.execute(
-                        "INSERT INTO users (username, password_hash) VALUES (%s, %s) RETURNING id",
-                        (username, password)  # Note: In production, hash the password!
-                    )
-                    new_user_id = cur.fetchone()[0]
-                    conn.commit()
-            
-            session["user_id"] = new_user_id
-            return jsonify({"message": "User registered successfully", "user_id": new_user_id})
-        except Exception as e:
-            logging.error(f"Registration error: {str(e)}")
-            return jsonify({"error": "Server error"}), 500
-    
-    return app
-
-def create_socketio(app):
-    """
-    Create and configure the SocketIO instance
-    """
-    global socketio
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', 
-                       logger=True, engineio_logger=True, ping_timeout=60)
-    
-    @socketio.on('connect')
-    def handle_connect():
-        logging.info("SocketIO: Client connected")
-        emit('response', {'data': 'Connected to SocketIO server!'})
-
-    @socketio.on('disconnect')
-    def handle_disconnect():
-        logging.info("SocketIO: Client disconnected")
-    
-    @socketio.on('join')
-    def handle_join(data):
-        conversation_id = data.get('conversation_id')
-        if conversation_id:
-            join_room(conversation_id)
-            logging.info(f"SocketIO: Client joined room {conversation_id}")
-            emit('joined', {'room': conversation_id})
-        else:
-            logging.warning("Client attempted to join room without conversation_id")
-            emit('error', {'error': 'Missing conversation_id'})
-    
-    @socketio.on('message')
-    def handle_message(data):
-        try:
-            logging.info(f"SocketIO: Received message: {data}")
-            user_input = data.get('user_input')
-            conversation_id = data.get('conversation_id')
-            universal_update = data.get('universal_update', {})
-            
-            if not user_input or not conversation_id:
-                emit('error', {'error': 'Missing required fields'})
-                return
-            
-            # Join the room for this conversation
-            join_room(conversation_id)
-            
-            # Store user message in database
-            try:
-                conn = get_db_connection()
-                with conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-                            (conversation_id, "user", user_input)
-                        )
-                        conn.commit()
-                logging.info("User message stored in database")
-            except Exception as db_error:
-                logging.error(f"Database error: {str(db_error)}")
-                emit('error', {'error': 'Database error'}, room=conversation_id)
-                return
-            
-            # Start the background task for message processing
-            # This now uses the enhanced context generator from story_routes.py
-            socketio.start_background_task(
-                background_chat_task, 
-                conversation_id, 
-                user_input, 
-                universal_update
-            )
-            
-        except Exception as e:
-            logging.error(f"Error in handle_message: {str(e)}")
-            emit('error', {'error': f'Server error: {str(e)}'}, room=conversation_id)
+    return socketio
         
 # Optional ASGI wrapper for ASGI servers
 asgi_app = None
