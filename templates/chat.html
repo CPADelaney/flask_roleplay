@@ -268,6 +268,31 @@
 
   // Socket.IO reference
   let socket = null;
+
+  // Add this to your JavaScript - helps debug socket.io connections
+  function setupSocketDebugging() {
+    // Debug listeners for socket events
+    socket.on("connect", () => {
+      console.log("Socket.IO connected with ID:", socket.id);
+    });
+    
+    socket.on("disconnect", (reason) => {
+      console.log("Socket.IO disconnected:", reason);
+    });
+    
+    socket.on("connect_error", (error) => {
+      console.error("Socket.IO connection error:", error);
+    });
+    
+    // Log all incoming socket events
+    const originalOnEvent = socket.onevent;
+    socket.onevent = function(packet) {
+      const args = packet.data || [];
+      console.log("Socket.IO received event:", args[0], args.slice(1));
+      originalOnEvent.call(this, packet);
+    };
+  }
+
   
   // On page load
   window.onload = async function() {
@@ -279,22 +304,24 @@
     // 1) Connect to Socket.IO
     socket = io.connect(location.origin, {
       path: '/socket.io',
-      transports: ['websocket', 'polling'], // Try both transports
+      transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000
     });
+
+    setupSocketDebugging(); // Add debugging
   
     // 2) Listen for partial tokens from the server
     socket.on("new_token", function(payload) {
+      console.log("Received token:", payload.token);
       handleNewToken(payload.token);
     });
   
     // 3) Listen for final "done" event
-    socket.on("done", (payload) => {
-      const fullText = payload.full_text;
-      console.log("Done streaming. Full text:", fullText);
-      finalizeAssistantMessage(fullText);
+    socket.on("done", function(payload) {
+      console.log("Done streaming. Full text:", payload.full_text);
+      finalizeAssistantMessage(payload.full_text);
     });
   
     // 4) Handle errors from server
@@ -327,9 +354,12 @@
     });
     
     socket.on("message", function(data) {
-      console.log("Client received message event:", data);
-      // Then update your DOM:
-      appendMessageToChat(data);
+      console.log("Received message event:", data);
+      const messageObj = {
+        sender: data.sender || "Nyx",
+        content: data.content || data.message || "No content"
+      };
+      appendMessage(messageObj, true);
     });
   };  // <-- Corrected closing for window.onload
 
