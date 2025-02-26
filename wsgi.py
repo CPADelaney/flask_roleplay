@@ -7,10 +7,11 @@ from flask import Flask
 from flask_socketio import SocketIO
 
 # Import the app creation function but don't run it yet
-from main import create_flask_app
+from main import create_flask_app, create_socketio
 
 # Create the Flask app
 app = create_flask_app()
+socketio = create_socketio(app)
 
 # Initialize SocketIO with the app
 socketio = SocketIO(app, 
