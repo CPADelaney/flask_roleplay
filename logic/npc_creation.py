@@ -1,3 +1,158 @@
+async def gpt_generate_physical_description(npc_data, environment_desc):
+    """
+    Generate a robust physical description for an NPC with multiple fallback methods.
+    Returns a string description tailored for mature/femdom themes, incorporating archetype elements.
+    """
+    npc_name = npc_data.get("npc_name", "Unknown NPC")
+    archetype_summary = npc_data.get("archetype_summary", "")
+    archetype_extras = npc_data.get("archetype_extras_summary", "")
+    dominance = npc_data.get("dominance", 50)
+    cruelty = npc_data.get("cruelty", 30)
+    intensity = npc_data.get("intensity", 40)
+    
+    prompt = f"""
+Generate a detailed physical description for {npc_name}, a female NPC in this femdom-themed environment:
+{environment_desc}
+
+IMPORTANT NPC DETAILS TO INCORPORATE:
+Archetype summary: {archetype_summary}
+Archetype extras: {archetype_extras}
+Stats: Dominance {dominance}/100, Cruelty {cruelty}/100, Intensity {intensity}/100
+Personality traits: {npc_data.get('personality_traits', [])}
+Likes: {npc_data.get('likes', [])}
+Dislikes: {npc_data.get('dislikes', [])}
+
+YOUR TASK:
+Create a detailed physical description that deeply integrates the archetype summary into the NPC's appearance. The archetype summary contains essential character information that should be physically manifested.
+
+The description must:
+1. Be 2-3 paragraphs with vivid, sensual details appropriate for a mature audience
+2. Directly translate key elements from the archetype summary into visible physical features
+3. Ensure clothing, accessories, and physical appearance reflect her specific archetype role
+4. Include distinctive physical features that immediately signal her archetype to observers
+5. Describe her characteristic expressions, posture, and mannerisms that reveal her personality
+6. Use sensory details beyond just visual (voice quality, scent, the feeling of her presence)
+7. Be written in third-person perspective with evocative, descriptive language
+8. Make sure to describe this character's curves in detail
+
+The description should allow someone to immediately understand the character's archetype and role from her appearance alone.
+
+Return a valid JSON object with the key "physical_description" containing the description as a string.
+"""
+    
+    client = get_openai_client()
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0.7,
+            response_format={"type": "json_object"}  # Force JSON output
+        )
+        
+        description_json = response.choices[0].message.content
+        data = safe_json_loads(description_json)
+        
+        if data and "physical_description" in data:
+            return data["physical_description"]
+        
+        # Fallback: Extract description using regex if JSON parsing failed
+        description = extract_field_from_text(description_json, "physical_description")
+        if description and len(description) > 50:
+            return description
+            
+    except Exception as e:
+        logging.error(f"Error generating physical description for {npc_name}: {e}")
+    
+    # Final fallback: Generate a basic description if all else fails
+    return f"{npc_name} has an appearance that matches their personality and role in this environment."
+
+async def gpt_generate_schedule(npc_data, environment_desc, day_names):
+    """
+    Generate a weekly schedule for an NPC with error handling and fallbacks.
+    Returns a dictionary mapping days to time periods.
+    """
+    npc_name = npc_data.get("npc_name", "Unknown NPC")
+    archetypes = npc_data.get("archetypes", [])
+    archetype_names = [a.get("name", "") for a in archetypes]
+    personality = npc_data.get("personality_traits", [])
+    hobbies = npc_data.get("hobbies", [])
+    
+    # Build a day example
+    example_day = {
+        "Morning": "Activity description",
+        "Afternoon": "Activity description",
+        "Evening": "Activity description",
+        "Night": "Activity description"
+    }
+    example_schedule = {day: example_day for day in day_names}
+    
+    prompt = f"""
+Generate a weekly schedule for {npc_name}, an NPC in this environment:
+{environment_desc}
+
+NPC Details:
+- Archetypes: {archetype_names}
+- Personality: {personality}
+- Hobbies: {hobbies}
+
+The schedule must include all these days: {day_names}
+Each day must have activities for: Morning, Afternoon, Evening, and Night
+
+Return a valid JSON object with a single "schedule" key containing the complete weekly schedule.
+Example format:
+{json.dumps({"schedule": example_schedule}, indent=2)}
+
+Activities should reflect the NPC's personality, archetypes, and the environment.
+"""
+    
+    client = get_openai_client()
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0.7,
+            response_format={"type": "json_object"}  # Force JSON output
+        )
+        
+        schedule_json = response.choices[0].message.content
+        data = safe_json_loads(schedule_json)
+        
+        if data and "schedule" in data and isinstance(data["schedule"], dict):
+            # Validate schedule has all required days and time periods
+            schedule = data["schedule"]
+            is_valid = True
+            
+            for day in day_names:
+                if day not in schedule:
+                    is_valid = False
+                    break
+                    
+                day_schedule = schedule[day]
+                if not isinstance(day_schedule, dict):
+                    is_valid = False
+                    break
+                    
+                for period in ["Morning", "Afternoon", "Evening", "Night"]:
+                    if period not in day_schedule:
+                        is_valid = False
+                        break
+            
+            if is_valid:
+                return schedule
+                
+    except Exception as e:
+        logging.error(f"Error generating schedule for {npc_name}: {e}")
+    
+    # Fallback: Generate a basic schedule
+    return {
+        day: {
+            "Morning": f"Free time or typical activities for {npc_name}",
+            "Afternoon": f"Activities related to {', '.join(hobbies[:2] if hobbies else ['their interests'])}",
+            "Evening": "Social interaction or personal time",
+            "Night": "Rest"
+        } for day in day_names
+    }
+
 async def gpt_generate_memories(npc_data, environment_desc, relationships):
     """
     Generate rich, detailed memories for an NPC that create a vivid shared history,
@@ -273,7 +428,6 @@ async def integrate_femdom_elements(npc_data):
             "subtle manipulator",
             "finds pleasure in control",
             "notices when others defer to her",
-            "careful observer of boundaries"
         ]
     elif is_medium_intensity:
         potential_traits += [
@@ -848,8 +1002,7 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         name_instruction = (
                 "Generate a creative, extremely unique, and varied feminine name for the NPC. "
                 "The name must be unmistakably feminine and should not be a common or overused name. "
-                "Do not use any names that are frequently repeated in this game (for example, do not use 'Seraphina', 'Veronica', or similar names). "
-                "Instead, invent a name that is entirely original, unexpected, and richly evocative of a fantastical, mythological, or diverse cultural background that makes sense for the setting and the character (Eg., Isis, Artemis, Megan, Thoth, Cassandra, Mizuki, etc.). "
+                "Ivent a name that is entirely original, unexpected, and richly evocative of a fantastical, mythological, or diverse cultural background that makes sense for the setting and the character (Eg., Isis, Artemis, Megan, Thoth, Cassandra, Mizuki, etc.). "
                 "Ensure that the name is unlike any generated previously in this playthrough. "
                 "Output strictly valid JSON with exactly one key: 'npc_name', whose value is the generated name as a string. "
                 "Do not include any extra commentary, formatting, or additional keys."
