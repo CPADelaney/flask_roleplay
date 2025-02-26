@@ -28,36 +28,42 @@ from db.connection import get_db_connection
 # Global socketio instance
 socketio = None
 
+from logic.chatgpt_integration import get_chatgpt_response
+from db.connection import get_db_connection
+
 def background_chat_task(conversation_id, user_input, universal_update):
     """
-    Process chat messages in a background task using ChatGPT,
-    stream the generated response token by token, store it in the DB,
-    and emit a 'done' event when finished.
+    Process chat messages in a background task using ChatGPT.
+    It builds the conversation history (using aggregator context),
+    calls the GPT API, and streams the generated narrative token by token.
     """
     try:
         logging.info(f"Starting GPT background chat task for conversation {conversation_id}")
         
-        # 1. Build the conversation history for context.
-        # You might pull messages from your DB and use build_message_history to format them.
-        history = build_message_history(conversation_id)
-        # Append the latest user message
-        history.append({"role": "user", "content": user_input})
-        logging.info(f"Built conversation history with {len(history)} messages")
+        # Retrieve aggregator_text.
+        # You can pass it along in universal_update or compute it from aggregator data.
+        # For now, we check if universal_update includes aggregator_text; if not, use a fallback.
+        aggregator_text = universal_update.get("aggregator_text", "")
         
-        # 2. Get the GPT response.
-        # get_chatgpt_response should take the conversation history and return a full response.
-        ai_response = get_chatgpt_response(history)
-        logging.info("Received GPT response")
+        # Call the GPT integration.
+        # get_chatgpt_response expects: conversation_id, aggregator_text, and user_input.
+        response_data = get_chatgpt_response(conversation_id, aggregator_text, user_input)
+        logging.info("Received GPT response from ChatGPT integration")
         
-        # 3. Stream the response token by token.
-        # Here we simulate token streaming by splitting the response text.
+        # Extract the narrative from the response.
+        if response_data["type"] == "function_call":
+            # When the response is a function call, extract the narrative field.
+            ai_response = response_data["function_args"].get("narrative", "")
+        else:
+            ai_response = response_data.get("response", "")
+        
+        # Stream the response token by token.
         for i in range(0, len(ai_response), 3):
             token = ai_response[i:i+3]
             socketio.emit('new_token', {'token': token}, room=conversation_id)
-            # Use a small sleep to simulate a natural token delay.
             socketio.sleep(0.05)
         
-        # 4. Store the complete GPT response in the database.
+        # Store the complete GPT response in the database.
         try:
             conn = get_db_connection()
             with conn:
@@ -71,13 +77,13 @@ def background_chat_task(conversation_id, user_input, universal_update):
         except Exception as db_error:
             logging.error(f"Database error storing GPT response: {str(db_error)}")
         
-        # 5. Emit the final 'done' event with the full GPT response.
+        # Emit the final 'done' event with the full text.
         socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
         logging.info(f"Completed streaming GPT response for conversation {conversation_id}")
-        
+    
     except Exception as e:
         logging.error(f"Error in background_chat_task: {str(e)}")
-        socketio.emit('error', {'error': f'Server error: {str(e)}'}, room=conversation_id)
+        socketio.emit('error', {'error': f"Server error: {str(e)}"}, room=conversation_id)
 
 def create_flask_app():
     """
