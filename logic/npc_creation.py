@@ -411,151 +411,273 @@ Return a valid JSON object with a single "memories" key containing an array of m
 
 async def gpt_generate_affiliations(user_id, conversation_id, npc_data, environment_desc):
     """
-    Generate a list of 3 to 5 distinct affiliation groups for the NPC.
-    
-    Uses the NPC's details—such as its name, archetype summary, personality traits,
-    likes/dislikes, and schedule—along with the current environment description.
-    
-    Returns a list of affiliation strings (or an empty list if GPT fails).
+    Generate affiliations for an NPC (clubs, teams, workplaces, social groups, etc.)
+    Returns a list of affiliation strings.
     """
     npc_name = npc_data.get("npc_name", "Unknown NPC")
     archetype_summary = npc_data.get("archetype_summary", "")
     personality_traits = npc_data.get("personality_traits", [])
-    likes = npc_data.get("likes", [])
-    dislikes = npc_data.get("dislikes", [])
-    schedule = npc_data.get("schedule", {})
-
+    hobbies = npc_data.get("hobbies", [])
+    existing_affiliations = npc_data.get("affiliations", [])
+    
     prompt = f"""
-You are to generate a list of 3 to 5 distinct affiliation groups (such as communities, factions, or clubs)
-that {npc_name} belongs to. Consider the following information:
-- NPC Name: {npc_name}
-- Archetype Summary: {archetype_summary}
-- Personality Traits: {personality_traits}
-- Likes: {likes}
-- Dislikes: {dislikes}
-- Schedule: {json.dumps(schedule)}
-- Environment Description: {environment_desc}
+Generate 3-5 affiliations for {npc_name}, an NPC in this environment:
+{environment_desc}
 
-Return strictly valid JSON with exactly one key:
-  "affiliations"
-The value must be an array of strings (each representing one affiliation).
-Do not include any extra commentary or keys.
-If you cannot comply, return an empty JSON object {{}}
+NPC Details:
+- Archetype: {archetype_summary}
+- Personality: {personality_traits}
+- Hobbies: {hobbies}
+- Any existing affiliations: {existing_affiliations}
+
+Affiliations should be specific organizations, groups, or institutions that this character is connected to.
+Examples include: schools, workplaces, clubs, teams, social circles, community organizations, political groups, etc.
+
+Each affiliation should:
+1. Be specific and named (e.g., "Oakwood High School Debate Team" not just "a debate team")
+2. Match the character's archetype and personality
+3. Reflect the environment setting
+4. Include at least one professional/work affiliation
+5. Include at least one social/hobby affiliation
+
+Return a valid JSON object with a single "affiliations" key containing an array of affiliation strings.
 """
-
+    
+    client = get_openai_client()
     try:
-        client = get_openai_client()
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "system", "content": prompt}],
             temperature=0.7,
-            max_tokens=200
+            response_format={"type": "json_object"}  # Force JSON output
         )
-        raw_text = response.choices[0].message.content.strip()
-        # Remove code fences if present
-        if raw_text.startswith("```"):
-            lines = raw_text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines.pop(0)
-            if lines and lines[-1].startswith("```"):
-                lines.pop()
-            raw_text = "\n".join(lines).strip()
-        data = safe_json_loads(raw_text)
+        
+        affiliations_json = response.choices[0].message.content
+        data = safe_json_loads(affiliations_json)
+        
         if data and "affiliations" in data and isinstance(data["affiliations"], list):
-            return data["affiliations"]
-        else:
-            logging.warning("[gpt_generate_affiliations] Invalid JSON structure. Returning empty list.")
-            return []
+            affiliations = data["affiliations"]
+            if affiliations and all(isinstance(a, str) for a in affiliations):
+                # Combine with existing affiliations, removing duplicates
+                combined = existing_affiliations.copy()
+                for affiliation in affiliations:
+                    if affiliation not in combined:
+                        combined.append(affiliation)
+                return combined
+                
     except Exception as e:
-        logging.error(f"[gpt_generate_affiliations] GPT error: {e}")
-        return []
+        logging.error(f"Error generating affiliations for {npc_name}: {e}")
+    
+    # Fallback: Generate basic affiliations
+    fallback_affiliations = [
+        f"The {environment_desc.split()[0]} Community Association",
+        f"Local Professional Network",
+        f"{npc_name}'s Social Circle"
+    ]
+    
+    # Combine with existing affiliations
+    combined = existing_affiliations.copy()
+    for affiliation in fallback_affiliations:
+        if affiliation not in combined:
+            combined.append(affiliation)
+            
+    return combined
 
 
-async def gpt_generate_relationship_specific_memories(user_id, conversation_id, npc_data, target_data, primary_rel, environment_desc):
+
+async def gpt_generate_relationship_specific_memories(user_id, conversation_id, npc_data, target_data, relationship_type, environment_desc):
     """
-    Generate 1 to 3 detailed, relationship-specific memories describing a significant interaction
-    between the NPC (npc_data) and a target (target_data), using the relationship label (primary_rel)
-    and environment context.
-
-    The memories should be specific events with concrete details (including dialogue when appropriate),
-    written in first-person from the NPC's perspective. Each memory must be at least 3 sentences long.
-    Additionally, the memory content should be influenced by the nature of the relationship:
-      - If primary_rel is "mother", include elements of nurturing, care, guidance, or even occasional
-        familial conflict.
-      - If primary_rel is "friend", emphasize mutual trust, camaraderie, shared experiences, or playful banter.
-      - For other relationship types, tailor the memory to reflect that specific dynamic.
-
-    Returns a list of memory strings (or an empty list if GPT fails).
+    Generate memories specific to a particular relationship between two characters.
+    This function generates memories tailored to the specific relationship type (mother, enemy, friend, etc.)
+    
+    Args:
+        npc_data: Dict containing data about the NPC whose memories we're generating
+        target_data: Dict containing data about the target (player or other NPC)
+        relationship_type: String describing the relationship (mother, friend, enemy, etc.)
+        environment_desc: String describing the environment
+        
+    Returns:
+        List of memory strings specific to this relationship
     """
     npc_name = npc_data.get("npc_name", "Unknown NPC")
-    # Determine target's name from target_data (it may be player or NPC data)
-    if target_data.get("player_name"):
-        target_name = target_data.get("player_name")
-    else:
-        target_name = target_data.get("npc_name", f"NPC_{target_data.get('npc_id', 'unknown')}")
+    target_name = target_data.get("npc_name", target_data.get("player_name", "Chase"))
+    target_type = "player" if "player_name" in target_data else "npc"
     
-    # Define relationship-specific instructions
-    rel_lower = primary_rel.lower()
-    if rel_lower == "mother":
-        rel_detail = (
-            "As a mother figure, include details that evoke nurturing care, guidance, and familial expectations. "
-            "The memory should describe moments of tenderness as well as potential conflicts or discipline typical "
-            "of a parental relationship."
-        )
-    elif rel_lower == "friend":
-        rel_detail = (
-            "As a friend, emphasize mutual trust, shared humor, and supportive experiences. "
-            "The memory should reflect moments of lighthearted banter, shared secrets, or instances of genuine camaraderie."
-        )
-    else:
-        rel_detail = f"Reflect the dynamics of a {primary_rel} relationship, highlighting aspects appropriate to that role."
+    # Get other relevant data about both characters
+    npc_archetype = npc_data.get("archetype_summary", "")
+    npc_dominance = npc_data.get("dominance", 50)
+    npc_personality = npc_data.get("personality_traits", [])
     
-    prompt = f"""
-You are to generate 1 to 3 detailed memories describing a significant interaction between {npc_name} and {target_name}.
-Consider these details:
-- Relationship Type: {primary_rel}
-- Relationship Nuance: {rel_detail}
-- Environment Description: {environment_desc}
-- {npc_name}'s Background: {npc_data.get("archetype_summary", "")} and personality traits: {npc_data.get("personality_traits", [])}
-- {target_name}'s Data: {target_data}
-
-Each memory must describe a specific event with concrete details, including dialogue snippets where appropriate.
-Write each memory in first-person perspective from {npc_name}'s viewpoint and ensure it is at least 3 sentences long.
-
-Return strictly valid JSON with exactly one key:
-  "memories"
-The value must be an array of strings (each string is one memory).
-Do not include any extra commentary or keys.
-If you cannot comply, return an empty JSON object {{}}
-"""
-
+    target_dominance = target_data.get("dominance", 30)  # Default lower for player
+    
+    # Get locations for context
+    locations = []
     try:
-        client = get_openai_client()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT location_name FROM Locations WHERE user_id=%s AND conversation_id=%s LIMIT 5",
+            (user_id, conversation_id)
+        )
+        for row in cursor.fetchall():
+            locations.append(row[0])
+        conn.close()
+    except:
+        locations = ["the mansion", "the garden", "the city center", "the academy", "the private quarters"]
+    
+    # Different dynamics based on relationship type
+    relationship_context = ""
+    memory_focus = ""
+    
+    # Family relationships
+    if relationship_type.lower() in ["mother", "stepmother", "aunt", "older sister", "maternal"]:
+        relationship_context = f"You are {target_name}'s {relationship_type}, with all the authority, care, and discipline that implies."
+        memory_focus = f"""
+- Focus on formative moments in {target_name}'s development
+- Include instances of discipline/rules and their enforcement
+- Show moments of both nurturing and setting boundaries
+- Include family dynamics and traditions you established
+- Show how you shaped {target_name}'s values and behavior"""
+    
+    # Antagonistic relationships
+    elif relationship_type.lower() in ["enemy", "rival", "adversary", "competitor"]:
+        relationship_context = f"You have a contentious {relationship_type} relationship with {target_name}."
+        memory_focus = f"""
+- Focus on competitions, confrontations, and challenges between you
+- Include moments where you outmaneuvered or were bested by {target_name}
+- Show the evolution of the rivalry and what sustains it
+- Include respect mixed with antagonism
+- Show moments of unexpected alliance despite the rivalry"""
+    
+    # Romantic/intimate relationships
+    elif relationship_type.lower() in ["lover", "ex-girlfriend", "ex-wife", "partner"]:
+        relationship_context = f"You have/had an intimate {relationship_type} relationship with {target_name}."
+        memory_focus = f"""
+- Focus on significant moments in your relationship
+- Include both positive emotional connections and conflicts
+- Show power dynamics within your relationship
+- Include instances where you influenced {target_name}'s decisions
+- Show how the relationship evolved or changed over time"""
+    
+    # Professional relationships
+    elif relationship_type.lower() in ["boss", "supervisor", "teacher", "principal", "mentor", "professor"]:
+        relationship_context = f"You are {target_name}'s {relationship_type}, with professional authority."
+        memory_focus = f"""
+- Focus on professional development and evaluations
+- Include instances of giving assignments/tasks and reviewing performance
+- Show moments of both praise and correction/critique
+- Include times you used your authority in consequential ways
+- Show how you influenced {target_name}'s career trajectory"""
+    
+    # Peer relationships
+    elif relationship_type.lower() in ["friend", "colleague", "classmate", "teammate", "neighbor"]:
+        relationship_context = f"You are {target_name}'s {relationship_type}, with a peer relationship."
+        memory_focus = f"""
+- Focus on shared experiences and activities
+- Include both moments of support and disagreement
+- Show subtle competitions or one-upmanship if appropriate
+- Include instances where your influence affected {target_name}'s choices
+- Show the balance of power in your supposedly equal relationship"""
+    
+    # Default/other relationships
+    else:
+        relationship_context = f"You have a {relationship_type} relationship with {target_name}."
+        memory_focus = f"""
+- Focus on defining moments in your relationship
+- Include instances that established the current dynamic between you
+- Show the power balance in your interactions
+- Include memories that reveal your true feelings about {target_name}
+- Show how your relationship has evolved"""
+    
+    # Special handling for NPC-NPC relationships where both might be dominants
+    if target_type == "npc" and target_dominance > 50 and npc_dominance > 50:
+        memory_focus += f"""
+- Include instances of power struggles between two dominant personalities
+- Show careful boundary negotiations between equals
+- Include moments of reluctant respect
+- Show territory/influence demarcation
+- Include complex alliance/rivalry dynamics
+- Show strategic cooperation despite competing interests"""
+    
+    # Now build the full prompt
+    prompt = f"""
+Generate 2-3 vivid, detailed memories for {npc_name} about their relationship with {target_name}.
+
+RELATIONSHIP CONTEXT:
+{relationship_context}
+
+ENVIRONMENT:
+{environment_desc}
+
+CHARACTER DETAILS:
+- {npc_name}: {npc_archetype}
+- Personality: {npc_personality}
+
+MEMORY REQUIREMENTS:
+1. Each memory must be a SPECIFIC EVENT with concrete details - not vague impressions
+2. Include sensory details and emotional responses
+3. Include dialogue with actual quoted speech
+4. Write in first-person perspective from {npc_name}'s viewpoint
+5. Set memories in specific locations: {', '.join(locations)}
+6. Each memory should be 3-5 sentences minimum with specific details
+
+MEMORY FOCUS FOR THIS RELATIONSHIP:
+{memory_focus}
+
+BALANCE REQUIREMENTS:
+- Include at least one positive and one challenging interaction
+- Include subtle power dynamics appropriate to your relationship
+- For any negative memories, include complex emotions rather than simple dislike
+
+Return a valid JSON object with a single "memories" key containing an array of memory strings.
+"""
+    
+    client = get_openai_client()
+    try:
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "system", "content": prompt}],
-            temperature=0.8,
-            max_tokens=500
+            temperature=0.8,  # Higher temperature for creative memories
+            response_format={"type": "json_object"}  # Force JSON output
         )
-        raw_text = response.choices[0].message.content.strip()
-        # Remove code fences if present
-        if raw_text.startswith("```"):
-            lines = raw_text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines.pop(0)
-            if lines and lines[-1].startswith("```"):
-                lines.pop()
-            raw_text = "\n".join(lines).strip()
-        data = safe_json_loads(raw_text)
+        
+        memories_json = response.choices[0].message.content
+        data = safe_json_loads(memories_json)
+        
         if data and "memories" in data and isinstance(data["memories"], list):
-            return data["memories"]
-        else:
-            logging.warning("[gpt_generate_relationship_specific_memories] Invalid JSON structure. Returning empty list.")
-            return []
+            memories = data["memories"]
+            if memories and all(isinstance(m, str) for m in memories):
+                return memories
+                
     except Exception as e:
-        logging.error(f"[gpt_generate_relationship_specific_memories] GPT error: {e}")
-        return []
-
+        logging.error(f"Error generating relationship-specific memories for {npc_name} and {target_name}: {e}")
+    
+    # Fallback: Generate basic relationship-specific memories
+    location = random.choice(locations) if locations else "this place"
+    
+    # Family relationship fallback
+    if relationship_type.lower() in ["mother", "stepmother", "aunt", "older sister"]:
+        return [
+            f"I remember when {target_name} was younger and had their first real failure at {location}. The disappointment was visible in their eyes, but I knew this was a teaching moment. 'Sometimes we need to fail to understand the value of success,' I told them, my hand firm but comforting on their shoulder. I could see the resistance at first—that stubborn set of the jaw they inherited from me—but slowly, understanding dawned. How they looked at me then, with a mixture of frustration and reluctant recognition, showed me they were growing in the way I had hoped.",
+            
+            f"There was that time {target_name} directly challenged my authority during the family gathering at {location}. The room fell silent as they questioned my decision in front of everyone. 'We'll discuss this privately,' I said, my voice quiet but leaving no room for argument. Later, behind closed doors, I explained that while I respected their perspective, certain boundaries existed for reasons beyond their understanding. 'Respect isn't blind obedience,' I told them, 'but there's a proper way to express disagreement.' The conversation ended with a new understanding between us—one that acknowledged their growing autonomy while reinforcing the hierarchy that remained."
+        ]
+    
+    # Antagonistic relationship fallback
+    elif relationship_type.lower() in ["enemy", "rival", "adversary"]:
+        return [
+            f"The competition at {location} last year still brings a smile to my face whenever I think of {target_name}'s expression when the results were announced. We'd been neck and neck throughout, neither giving an inch, the tension between us almost visible in the air. When my name was called instead of theirs, I made sure to catch their eye across the room. 'Better luck next time,' I mouthed, enjoying the flash of anger that crossed their face before they composed themselves. What {target_name} doesn't understand is that their opposition drives me to greater heights—I'd probably be half as accomplished without such a worthy adversary.",
+            
+            f"I didn't expect to find {target_name} at {location} during the crisis, much less working toward the same goal as me. 'Temporary alliance?' they suggested, extending their hand with obvious reluctance. Our eyes met, mutual distrust evident, but practicality won out. 'Until this is resolved,' I agreed, taking their hand briefly. Working side by side with my usual rival revealed surprising competencies I hadn't noticed before—they approached problems from angles I wouldn't consider. Not that I'd ever admit it to them, of course, but that day changed how I viewed our rivalry, adding a layer of respect beneath the competition."
+        ]
+    
+    # Default/generic fallback
+    else:
+        return [
+            f"I recall a particular conversation with {target_name} at {location} that revealed more than either of us had intended. The evening light was casting long shadows across the room as we discussed our views on obligation and choice. 'Some boundaries exist to be tested,' I suggested, watching their reaction carefully. Something flickered behind their eyes—recognition, perhaps, or wariness—before they offered a measured response about respecting certain lines. The subtle shift in their posture told me more than their words; they were revealing their limits while trying to appear unaffected. I filed away that information, knowing it might prove useful in understanding them better.",
+            
+            f"There was a misunderstanding between {target_name} and me at {location} that nearly fractured our {relationship_type} relationship. Tensions had been building for weeks over misaligned expectations, culminating in a heated exchange that left both of us saying things we might regret. 'That's not what I meant and you know it,' they insisted, frustration evident in their voice. I remember taking a deliberate breath before responding more calmly than I felt, choosing reconciliation over being right. The relief in their expression when I offered a compromise told me they valued our connection more than they'd been showing. Sometimes conflict reveals the true foundation of a relationship better than harmony ever could."
+        ]
 
 
 async def integrate_femdom_elements(npc_data):
