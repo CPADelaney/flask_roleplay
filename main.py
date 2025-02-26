@@ -170,52 +170,70 @@ def handle_join(data):
 
 @socketio.on('message')
 def handle_message(data):
-    logging.info(f"SocketIO: Received message: {data}")
-    user_input = data.get('user_input')
-    conversation_id = data.get('conversation_id')
-    universal_update = data.get('universal_update', {})
-    
-    if not user_input or not conversation_id:
-        emit('error', {'error': 'Missing required fields'})
-        return
-    
-    # Store the user message in the database
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-        (conversation_id, "user", user_input)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-    
-    # Make sure the client is in the conversation room
-    join_room(conversation_id)
-    
-    # Process the message (replace with your actual AI integration)
-    response = f"Echo from Nyx: {user_input}"
-    
-    # Stream the response token by token
-    for i in range(0, len(response), 2):
-        token = response[i:i+2]
-        socketio.emit('new_token', {'token': token}, room=conversation_id)
-        socketio.sleep(0.1)  # Small delay between tokens
-    
-    # Store the response in the database
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-        (conversation_id, "Nyx", response)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-    
-    # Send the done event with the full response
-    socketio.emit('done', {'full_text': response}, room=conversation_id)
-
+    try:
+        logging.info(f"SocketIO: Received message: {data}")
+        user_input = data.get('user_input')
+        conversation_id = data.get('conversation_id')
+        
+        if not user_input or not conversation_id:
+            emit('error', {'error': 'Missing required fields'})
+            return
+        
+        # Log that we're joining the room
+        logging.info(f"Joining room: {conversation_id}")
+        join_room(conversation_id)
+        
+        # Store user message in database
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                (conversation_id, "user", user_input)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            logging.info("User message stored in database")
+        except Exception as db_error:
+            logging.error(f"Database error: {str(db_error)}")
+            emit('error', {'error': 'Database error'}, room=conversation_id)
+            return
+        
+        # Generate response (for now just echo)
+        response = f"Echo: {user_input}"
+        logging.info(f"Generated response: {response}")
+        
+        # Stream tokens with explicit debugging
+        for i in range(0, len(response), 2):
+            token = response[i:i+2]
+            logging.info(f"Emitting token: {token}")
+            emit('new_token', {'token': token}, room=conversation_id)
+            socketio.sleep(0.1)
+        
+        # Store AI response
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                (conversation_id, "Nyx", response)
+            )
+            conn.commit()
+            cur.close()
+            conn.close()
+            logging.info("AI response stored in database")
+        except Exception as db_error:
+            logging.error(f"Database error storing AI response: {str(db_error)}")
+        
+        # Send done event
+        logging.info("Emitting done event")
+        emit('done', {'full_text': response}, room=conversation_id)
+        
+    except Exception as e:
+        logging.error(f"Error in handle_message: {str(e)}")
+        emit('error', {'error': f'Server error: {str(e)}'}, room=conversation_id)
+        
 @socketio.on('chat_started')
 def handle_chat_started(data):
     conversation_id = data.get('conversation_id')
