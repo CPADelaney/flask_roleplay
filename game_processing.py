@@ -140,7 +140,7 @@ Stat modifiers: {{stat_modifiers}}
 """
 
 
-_PROMPT = """
+NPC_PROMPT = """
 You are finalizing schedules for multiple NPCs in this environment:
 {environment_desc}
 
