@@ -18,7 +18,7 @@ from logic.gpt_utils import spaced_gpt_call, safe_int
 from logic.universal_updater import apply_universal_updates_async
 from logic.calendar import update_calendar_names
 from db.connection import get_db_connection
-from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc, init_chase_schedule
+from logic.npc_creation import spawn_multiple_npcs_enhanced, create_and_refine_npc, init_chase_schedule
 
 DB_DSN = os.getenv("DB_DSN") 
 
