@@ -343,6 +343,7 @@
       loadDarkModeFromStorage();
       await loadConversations();
     
+    
       // Connect to Socket.IO
       socket = io.connect(location.origin, {
           path: '/socket.io',
@@ -351,6 +352,7 @@
           reconnectionAttempts: 5,
           reconnectionDelay: 1000
       });
+
   
       // Set up all socket listeners
       setupSocketListeners();
