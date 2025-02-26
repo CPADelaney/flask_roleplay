@@ -950,13 +950,14 @@ def extract_field_from_text(text, field_name):
     if data and field_name in data:
         return data[field_name]
     
-    # Try regex patterns for field extraction
-    patterns = [
-        rf'"{field_name}"\s*:\s*"([^"]*)"',  # For string values: "field": "value"
-        rf'"{field_name}"\s*:\s*(\[[^\]]*\])',  # For array values: "field": [...]
-        rf'"{field_name}"\s*:\s*(\{[^}]*\})',  # For object values: "field": {...}
-        rf'{field_name}:\s*(.*?)(?:\n|$)',  # For plain text: field: value
-    ]
+# Try regex patterns for field extraction
+patterns = [
+    rf'"{field_name}"\s*:\s*"([^"]*)"',      # For string values: "field": "value"
+    rf'"{field_name}"\s*:\s*(\[[^\]]*\])',     # For array values: "field": [...]
+    rf'"{field_name}"\s*:\s*(\{{[^}}]*\}})',    # For object values: "field": {...}
+    rf'{field_name}:\s*(.*?)(?:\n|$)',          # For plain text: field: value
+]
+
     
     for pattern in patterns:
         match = re.search(pattern, text)
