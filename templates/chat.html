@@ -211,7 +211,7 @@
   const MESSAGES_PER_LOAD = 20;
   let isDarkMode = false;
 
-  // Example universal updates object (if you still need it)
+  // Universal updates object
   let pendingUniversalUpdates = {
     roleplay_updates: {},
     npc_creations: [],
@@ -233,14 +233,6 @@
     social_links: [],
     perk_unlocks: []
   };
-
-  function appendMessageToChat(data) {
-    const messageObj = {
-      sender: data.sender || "Nyx",
-      content: data.content || data.message
-    };
-    appendMessage(messageObj, true);
-  }
 
   function resetPendingUniversalUpdates() {
     pendingUniversalUpdates = {
@@ -269,53 +261,38 @@
   // Socket.IO reference
   let socket = null;
 
-  // Make sure these socket.io event handlers are set up correctly
+  // We accumulate the partial streamed content in a single bubble
+  let currentAssistantBubble = null;
+  let partialAssistantText = "";
+
+  // On page load
+  window.onload = async function() {
+    await checkLoggedIn();
+    attachEnterKey();
+    loadDarkModeFromStorage();
+    await loadConversations();
+    
+    // Connect to Socket.IO
+    socket = io.connect(location.origin, {
+      path: '/socket.io',
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000
+    });
+    
+    // Set up socket listeners
+    setupSocketListeners();
+  };
+
   function setupSocketListeners() {
-      // Debug listeners
-      socket.on("connect", () => {
-          console.log("Socket.IO connected with ID:", socket.id);
-          // Join current conversation room if there is one
-          if (currentConvId) {
-              socket.emit('join', { conversation_id: currentConvId });
-          }
-      });
-      
-      socket.on("disconnect", (reason) => {
-          console.log("Socket.IO disconnected:", reason);
-      });
-      
-      socket.on("connect_error", (error) => {
-          console.error("Socket.IO connection error:", error);
-      });
-      
-      // Streaming response handlers
-      socket.on("new_token", function(payload) {
-          console.log("Received token:", payload.token);
-          handleNewToken(payload.token);
-      });
-      
-      socket.on("done", function(payload) {
-          console.log("Done streaming. Full text:", payload.full_text);
-          finalizeAssistantMessage(payload.full_text);
-      });
-      
-      socket.on("error", (payload) => {
-          console.error("Server error:", payload.error);
-          handleNewToken("[Error: " + payload.error + "]");
-          finalizeAssistantMessage("");
-      });
-      
-      socket.on("joined", (data) => {
-          console.log("Joined room:", data.room);
-      });
-  }
-
-
-  // Add this to your JavaScript - helps debug socket.io connections
-  function setupSocketDebugging() {
-    // Debug listeners for socket events
+    // Connection events
     socket.on("connect", () => {
       console.log("Socket.IO connected with ID:", socket.id);
+      // Join current conversation room if there is one
+      if (currentConvId) {
+        socket.emit('join', { conversation_id: currentConvId });
+      }
     });
     
     socket.on("disconnect", (reason) => {
@@ -326,76 +303,26 @@
       console.error("Socket.IO connection error:", error);
     });
     
-    // Log all incoming socket events
-    const originalOnEvent = socket.onevent;
-    socket.onevent = function(packet) {
-      const args = packet.data || [];
-      console.log("Socket.IO received event:", args[0], args.slice(1));
-      originalOnEvent.call(this, packet);
-    };
-  }
-
-  
-  // On page load
-  window.onload = async function() {
-      await checkLoggedIn();
-      attachEnterKey();
-      loadDarkModeFromStorage();
-      await loadConversations();
+    // Room events
+    socket.on("joined", (data) => {
+      console.log("Joined room:", data.room);
+    });
     
-    
-      // Connect to Socket.IO
-      socket = io.connect(location.origin, {
-          path: '/socket.io',
-          transports: ['websocket', 'polling'],
-          reconnection: true,
-          reconnectionAttempts: 5,
-          reconnectionDelay: 1000
-      });
-
-  
-      // Set up all socket listeners
-      setupSocketListeners();
-  
-    // 2) Listen for partial tokens from the server
+    // Message streaming events
     socket.on("new_token", function(payload) {
       console.log("Received token:", payload.token);
       handleNewToken(payload.token);
     });
-  
-    // 3) Listen for final "done" event
+    
     socket.on("done", function(payload) {
       console.log("Done streaming. Full text:", payload.full_text);
       finalizeAssistantMessage(payload.full_text);
     });
-  
-    // 4) Handle errors from server
+    
     socket.on("error", (payload) => {
       console.error("Server error:", payload.error);
-      // Optionally show in the chat window
       handleNewToken("[Error: " + payload.error + "]");
       finalizeAssistantMessage("");
-    });
-  
-    // Add these event handlers after creating the socket connection
-    socket.on('connect', () => {
-      console.log('Socket connected!');
-      // Re-join the current conversation room if there is one
-      if (currentConvId) {
-        socket.emit('join', { conversation_id: currentConvId });
-      }
-    });
-    
-    socket.on('disconnect', () => {
-      console.log('Socket disconnected');
-    });
-    
-    socket.on('connect_error', (error) => {
-      console.error('Connection error:', error);
-    });
-    
-    socket.on("joined", (data) => {
-      console.log("Joined room:", data.room);
     });
     
     socket.on("message", function(data) {
@@ -406,37 +333,9 @@
       };
       appendMessage(messageObj, true);
     });
-  };  // <-- Corrected closing for window.onload
-
-  // We accumulate the partial streamed content in a single bubble
-  let currentAssistantBubble = null;
-  let partialAssistantText = "";
-
-  function appendMessage(messageObj, autoScroll = true) {
-    // Create a container for the message row
-    const row = document.createElement("div");
-    row.classList.add("message-row");
-    // Create the bubble element
-    const bubble = document.createElement("div");
-    bubble.classList.add("message-bubble");
-    // Set initial content (you can modify this as needed)
-    bubble.innerHTML = `<strong>${messageObj.sender}:</strong> ${messageObj.content}`;
-    // Append the bubble to the row
-    row.appendChild(bubble);
-    // Append the row to the chat window
-    document.getElementById("chatWindow").appendChild(row);
-    // Optionally auto-scroll
-    if (autoScroll) {
-      const chatWindow = document.getElementById("chatWindow");
-      chatWindow.scrollTop = chatWindow.scrollHeight;
-    }
-    return row;
   }
 
-
   function handleNewToken(token) {
-    console.log("Handling new token:", token);
-    
     if (!currentAssistantBubble) {
       console.log("Creating new assistant bubble");
       // Create a new message row for the assistant
@@ -469,8 +368,6 @@
   }
   
   function finalizeAssistantMessage(finalText) {
-    console.log("Finalizing message with text:", finalText);
-    
     if (!currentAssistantBubble) {
       console.warn("No assistant bubble to finalize");
       return;
@@ -488,20 +385,6 @@
     chatWindow.scrollTop = chatWindow.scrollHeight;
   }
 
-  function setupSocketDebugListeners() {
-    // Log all socket events
-    const events = [
-      'connect', 'disconnect', 'connect_error', 
-      'new_token', 'done', 'error', 'message'
-    ];
-    
-    events.forEach(event => {
-      socket.on(event, (data) => {
-        console.log(`Socket event '${event}' received:`, data);
-      });
-    });
-  }
-    
   // Basic login check
   async function checkLoggedIn() {
     try {
@@ -610,7 +493,6 @@
   
       await loadConversations();
       selectConversation(currentConvId);
-      // If your back-end sets up some "poll" or "status" route, you can do that here
     } catch (err) {
       console.error("startNewGame error:", err);
       alert("Failed to start new game!");
@@ -740,66 +622,62 @@
   }
 
   // Send a new message (streaming approach)
-  // Replace your current sendMessage function with this one
   async function sendMessage() {
-      const userInputElem = document.getElementById("userMsg");
-      const userText = userInputElem.value.trim();
-      
-      if (!userText || !currentConvId) return;
-      
-      // Clear input field
-      userInputElem.value = "";
-      
-      // Show the user's message right away
-      const userMsgObj = { sender: "user", content: userText };
-      appendMessage(userMsgObj, true);
-      
-      // Reset any partial message state
-      currentAssistantBubble = null;
-      partialAssistantText = "";
-      
-      console.log(`Sending message to server for conversation ${currentConvId}`, {
-          user_input: userText,
-          conversation_id: currentConvId
+    const userInputElem = document.getElementById("userMsg");
+    const userText = userInputElem.value.trim();
+    
+    if (!userText || !currentConvId) return;
+    
+    // Clear input field
+    userInputElem.value = "";
+    
+    // Show the user's message right away
+    const userMsgObj = { sender: "user", content: userText };
+    appendMessage(userMsgObj, true);
+    
+    // Reset any partial message state
+    currentAssistantBubble = null;
+    partialAssistantText = "";
+    
+    console.log(`Sending message to server for conversation ${currentConvId}`, {
+      user_input: userText,
+      conversation_id: currentConvId
+    });
+    
+    // Make sure socket is connected
+    if (!socket.connected) {
+      console.warn("Socket disconnected, attempting to reconnect...");
+      socket.connect();
+      // Wait for connection
+      await new Promise(resolve => {
+        const checkConnection = () => {
+          if (socket.connected) {
+            resolve();
+          } else {
+            setTimeout(checkConnection, 100);
+          }
+        };
+        checkConnection();
       });
-      
-      // Make sure socket is connected
-      if (!socket.connected) {
-          console.warn("Socket disconnected, attempting to reconnect...");
-          socket.connect();
-          // Wait for connection
-          await new Promise(resolve => {
-              const checkConnection = () => {
-                  if (socket.connected) {
-                      resolve();
-                  } else {
-                      setTimeout(checkConnection, 100);
-                  }
-              };
-              checkConnection();
-          });
-      }
-      
-      // Join the conversation room if not already joined
-      socket.emit('join', { conversation_id: currentConvId });
-      
-      // Send the message via socket.io
-      socket.emit("message", {
-          user_input: userText,
-          conversation_id: currentConvId,
-          universal_update: pendingUniversalUpdates
-      });
-      
-      console.log("Message sent, waiting for streaming response...");
-      
-      // Reset pending updates
-      resetPendingUniversalUpdates();
+    }
+    
+    // Join the conversation room if not already joined
+    socket.emit('join', { conversation_id: currentConvId });
+    
+    // Send the message via socket.io
+    socket.emit("message", {
+      user_input: userText,
+      conversation_id: currentConvId,
+      universal_update: pendingUniversalUpdates
+    });
+    
+    console.log("Message sent, waiting for streaming response...");
+    
+    // Reset pending updates
+    resetPendingUniversalUpdates();
   }
 
-
-  // =====================
   // Context Menu
-  // =====================
   const menuDiv = document.getElementById("contextMenu");
 
   function showContextMenu(x, y, convId) {
