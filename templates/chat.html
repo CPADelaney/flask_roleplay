@@ -695,7 +695,7 @@
   }
 
   // Send a new message (streaming approach)
-  async function sendMessage() {
+async function sendMessage() {
     const userInputElem = document.getElementById("userMsg");
     const userText = userInputElem.value.trim();
     userInputElem.value = "";
@@ -709,12 +709,33 @@
     currentAssistantBubble = null;
     partialAssistantText = "";
 
-    // Use socket.io to send the message instead of fetch
-    socket.emit("message", {
-        user_input: userText,
-        conversation_id: currentConvId,
-        universal_update: pendingUniversalUpdates
-    });
+    // Use the HTTP API endpoint instead of socket.io
+    try {
+        const response = await fetch('/start_chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                user_input: userText,
+                conversation_id: currentConvId,
+                universal_update: pendingUniversalUpdates
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Server responded with ${response.status}`);
+        }
+        
+        // The server will now start the background task and emit events
+        console.log("Message sent, waiting for streaming response...");
+        
+    } catch (error) {
+        console.error("Error sending message:", error);
+        // Show error in chat
+        const errorMsg = { sender: "System", content: "Error sending message: " + error.message };
+        appendMessage(errorMsg, true);
+    }
     
     // Reset pending updates
     resetPendingUniversalUpdates();
