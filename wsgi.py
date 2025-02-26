@@ -1,26 +1,24 @@
+# wsgi.py
+
 # Import eventlet first and monkey patch
 import eventlet
 eventlet.monkey_patch()
 
-# Now import Flask and create the app
-from flask import Flask
-from flask_socketio import SocketIO
+import logging
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# Import the app creation function but don't run it yet
+# Import the app creation functions
 from main import create_flask_app, create_socketio
 
 # Create the Flask app
 app = create_flask_app()
-socketio = create_socketio(app)
 
 # Initialize SocketIO with the app
-socketio = SocketIO(app, 
-                   cors_allowed_origins="*",
-                   async_mode='eventlet',
-                   logger=True,
-                   engineio_logger=True,
-                   ping_timeout=60)  # Increased ping timeout
+# Note: We're using the create_socketio function to maintain consistency
+socketio = create_socketio(app)
 
 # For local development
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=8080)
+    port = int(os.getenv("PORT", 8080))
+    socketio.run(app, host="0.0.0.0", port=port, debug=False)
