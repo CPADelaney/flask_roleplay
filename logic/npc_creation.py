@@ -391,6 +391,155 @@ Return a valid JSON object with a single "memories" key containing an array of m
     
     return all_memories
 
+async def gpt_generate_affiliations(npc_data, environment_desc):
+    """
+    Generate a list of 3 to 5 distinct affiliation groups for the NPC.
+    
+    Uses the NPC's details—such as its name, archetype summary, personality traits,
+    likes/dislikes, and schedule—along with the current environment description.
+    
+    Returns a list of affiliation strings (or an empty list if GPT fails).
+    """
+    npc_name = npc_data.get("npc_name", "Unknown NPC")
+    archetype_summary = npc_data.get("archetype_summary", "")
+    personality_traits = npc_data.get("personality_traits", [])
+    likes = npc_data.get("likes", [])
+    dislikes = npc_data.get("dislikes", [])
+    schedule = npc_data.get("schedule", {})
+
+    prompt = f"""
+You are to generate a list of 3 to 5 distinct affiliation groups (such as communities, factions, or clubs)
+that {npc_name} belongs to. Consider the following information:
+- NPC Name: {npc_name}
+- Archetype Summary: {archetype_summary}
+- Personality Traits: {personality_traits}
+- Likes: {likes}
+- Dislikes: {dislikes}
+- Schedule: {json.dumps(schedule)}
+- Environment Description: {environment_desc}
+
+Return strictly valid JSON with exactly one key:
+  "affiliations"
+The value must be an array of strings (each representing one affiliation).
+Do not include any extra commentary or keys.
+If you cannot comply, return an empty JSON object {{}}
+"""
+
+    try:
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0.7,
+            max_tokens=200
+        )
+        raw_text = response.choices[0].message.content.strip()
+        # Remove code fences if present
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines.pop(0)
+            if lines and lines[-1].startswith("```"):
+                lines.pop()
+            raw_text = "\n".join(lines).strip()
+        data = safe_json_loads(raw_text)
+        if data and "affiliations" in data and isinstance(data["affiliations"], list):
+            return data["affiliations"]
+        else:
+            logging.warning("[gpt_generate_affiliations] Invalid JSON structure. Returning empty list.")
+            return []
+    except Exception as e:
+        logging.error(f"[gpt_generate_affiliations] GPT error: {e}")
+        return []
+
+
+async def gpt_generate_relationship_specific_memories(npc_data, target_data, primary_rel, environment_desc):
+    """
+    Generate 1 to 3 detailed, relationship-specific memories describing a significant interaction
+    between the NPC (npc_data) and a target (target_data), using the relationship label (primary_rel)
+    and environment context.
+
+    The memories should be specific events with concrete details (including dialogue when appropriate),
+    written in first-person from the NPC's perspective. Each memory must be at least 3 sentences long.
+    Additionally, the memory content should be influenced by the nature of the relationship:
+      - If primary_rel is "mother", include elements of nurturing, care, guidance, or even occasional
+        familial conflict.
+      - If primary_rel is "friend", emphasize mutual trust, camaraderie, shared experiences, or playful banter.
+      - For other relationship types, tailor the memory to reflect that specific dynamic.
+
+    Returns a list of memory strings (or an empty list if GPT fails).
+    """
+    npc_name = npc_data.get("npc_name", "Unknown NPC")
+    # Determine target's name from target_data (it may be player or NPC data)
+    if target_data.get("player_name"):
+        target_name = target_data.get("player_name")
+    else:
+        target_name = target_data.get("npc_name", f"NPC_{target_data.get('npc_id', 'unknown')}")
+    
+    # Define relationship-specific instructions
+    rel_lower = primary_rel.lower()
+    if rel_lower == "mother":
+        rel_detail = (
+            "As a mother figure, include details that evoke nurturing care, guidance, and familial expectations. "
+            "The memory should describe moments of tenderness as well as potential conflicts or discipline typical "
+            "of a parental relationship."
+        )
+    elif rel_lower == "friend":
+        rel_detail = (
+            "As a friend, emphasize mutual trust, shared humor, and supportive experiences. "
+            "The memory should reflect moments of lighthearted banter, shared secrets, or instances of genuine camaraderie."
+        )
+    else:
+        rel_detail = f"Reflect the dynamics of a {primary_rel} relationship, highlighting aspects appropriate to that role."
+    
+    prompt = f"""
+You are to generate 1 to 3 detailed memories describing a significant interaction between {npc_name} and {target_name}.
+Consider these details:
+- Relationship Type: {primary_rel}
+- Relationship Nuance: {rel_detail}
+- Environment Description: {environment_desc}
+- {npc_name}'s Background: {npc_data.get("archetype_summary", "")} and personality traits: {npc_data.get("personality_traits", [])}
+- {target_name}'s Data: {target_data}
+
+Each memory must describe a specific event with concrete details, including dialogue snippets where appropriate.
+Write each memory in first-person perspective from {npc_name}'s viewpoint and ensure it is at least 3 sentences long.
+
+Return strictly valid JSON with exactly one key:
+  "memories"
+The value must be an array of strings (each string is one memory).
+Do not include any extra commentary or keys.
+If you cannot comply, return an empty JSON object {{}}
+"""
+
+    try:
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0.8,
+            max_tokens=500
+        )
+        raw_text = response.choices[0].message.content.strip()
+        # Remove code fences if present
+        if raw_text.startswith("```"):
+            lines = raw_text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines.pop(0)
+            if lines and lines[-1].startswith("```"):
+                lines.pop()
+            raw_text = "\n".join(lines).strip()
+        data = safe_json_loads(raw_text)
+        if data and "memories" in data and isinstance(data["memories"], list):
+            return data["memories"]
+        else:
+            logging.warning("[gpt_generate_relationship_specific_memories] Invalid JSON structure. Returning empty list.")
+            return []
+    except Exception as e:
+        logging.error(f"[gpt_generate_relationship_specific_memories] GPT error: {e}")
+        return []
+
+
+
 async def integrate_femdom_elements(npc_data):
     """
     Analyze NPC data and subtly integrate femdom elements based on dominance level.
