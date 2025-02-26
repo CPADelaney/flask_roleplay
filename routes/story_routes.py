@@ -478,73 +478,159 @@ async def next_storybeat():
 def gather_rule_knowledge():
     """
     Fetch short summaries from PlotTriggers, IntensityTiers, and Interactions.
+    Returns a dictionary with various rule knowledge components.
+    
+    Optimized for better error handling and performance.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    # 1) PlotTriggers
-    cursor.execute("""
-        SELECT trigger_name, stage_name, description, key_features, stat_dynamics, examples, triggers
-        FROM PlotTriggers
-    """)
-    trig_list = []
-    for row in cursor.fetchall():
-        (trig_name, stage, desc, kfeat, sdyn, ex, trigz) = row
-        trig_list.append({
-            "title": trig_name,
-            "stage": stage,
-            "description": desc,
-            "key_features": json.loads(kfeat) if kfeat else [],
-            "stat_dynamics": json.loads(sdyn) if sdyn else [],
-            "examples": json.loads(ex) if ex else [],
-            "triggers": json.loads(trigz) if trigz else {}
-        })
+        # Use a dictionary to store all rule data
+        rule_data = {
+            "plot_triggers": [],
+            "intensity_tiers": [],
+            "interactions": []
+        }
 
-    # 2) Intensity Tiers
-    cursor.execute("""
-        SELECT tier_name, key_features, activity_examples, permanent_effects
-        FROM IntensityTiers
-    """)
-    tier_list = []
-    for row in cursor.fetchall():
-        tname, kfeat, aex, peff = row
-        tier_list.append({
-            "tier_name": tname,
-            "key_features": json.loads(kfeat) if kfeat else [],
-            "activity_examples": json.loads(aex) if aex else [],
-            "permanent_effects": json.loads(peff) if peff else {}
-        })
+        # 1) PlotTriggers - fetch all in one go
+        cursor.execute("""
+            SELECT trigger_name, stage_name, description, key_features, stat_dynamics, examples, triggers
+            FROM PlotTriggers
+        """)
+        
+        for row in cursor.fetchall():
+            trig_name, stage, desc, kfeat, sdyn, ex, trigz = row
+            
+            # Safe JSON parsing with fallback to empty values
+            try:
+                key_features = json.loads(kfeat) if kfeat else []
+            except (json.JSONDecodeError, TypeError):
+                logging.warning(f"Error parsing key_features for trigger {trig_name}")
+                key_features = []
+                
+            try:
+                stat_dynamics = json.loads(sdyn) if sdyn else []
+            except (json.JSONDecodeError, TypeError):
+                logging.warning(f"Error parsing stat_dynamics for trigger {trig_name}")
+                stat_dynamics = []
+                
+            try:
+                examples = json.loads(ex) if ex else []
+            except (json.JSONDecodeError, TypeError):
+                logging.warning(f"Error parsing examples for trigger {trig_name}")
+                examples = []
+                
+            try:
+                triggers = json.loads(trigz) if trigz else {}
+            except (json.JSONDecodeError, TypeError):
+                logging.warning(f"Error parsing triggers for trigger {trig_name}")
+                triggers = {}
+            
+            rule_data["plot_triggers"].append({
+                "title": trig_name,
+                "stage": stage,
+                "description": desc,
+                "key_features": key_features,
+                "stat_dynamics": stat_dynamics,
+                "examples": examples,
+                "triggers": triggers
+            })
 
-    # 3) Interactions
-    cursor.execute("""
-        SELECT interaction_name, detailed_rules, task_examples, agency_overrides
-        FROM Interactions
-    """)
-    interactions_list = []
-    for row in cursor.fetchall():
-        iname, drules, tex, aov = row
-        interactions_list.append({
-            "interaction_name": iname,
-            "detailed_rules": json.loads(drules) if drules else {},
-            "task_examples": json.loads(tex) if tex else {},
-            "agency_overrides": json.loads(aov) if aov else {}
-        })
+        # 2) Intensity Tiers - fetch all in one go
+        cursor.execute("""
+            SELECT tier_name, key_features, activity_examples, permanent_effects
+            FROM IntensityTiers
+        """)
+        
+        for row in cursor.fetchall():
+            tname, kfeat, aex, peff = row
+            
+            # Safe JSON parsing with fallback to empty values
+            try:
+                key_features = json.loads(kfeat) if kfeat else []
+            except (json.JSONDecodeError, TypeError):
+                logging.warning(f"Error parsing key_features for tier {tname}")
+                key_features = []
+                
+            try:
+                activity_examples = json.loads(aex) if aex else []
+            except (json.JSONDecodeError, TypeError):
+                logging.warning(f"Error parsing activity_examples for tier {tname}")
+                activity_examples = []
+                
+            try:
+                permanent_effects = json.loads(peff) if peff else {}
+            except (json.JSONDecodeError, TypeError):
+                logging.warning(f"Error parsing permanent_effects for tier {tname}")
+                permanent_effects = {}
+            
+            rule_data["intensity_tiers"].append({
+                "tier_name": tname,
+                "key_features": key_features,
+                "activity_examples": activity_examples,
+                "permanent_effects": permanent_effects
+            })
 
-    conn.close()
+        # 3) Interactions - fetch all in one go
+        cursor.execute("""
+            SELECT interaction_name, detailed_rules, task_examples, agency_overrides
+            FROM Interactions
+        """)
+        
+        for row in cursor.fetchall():
+            iname, drules, tex, aov = row
+            
+            # Safe JSON parsing with fallback to empty values
+            try:
+                detailed_rules = json.loads(drules) if drules else {}
+            except (json.JSONDecodeError, TypeError):
+                logging.warning(f"Error parsing detailed_rules for interaction {iname}")
+                detailed_rules = {}
+                
+            try:
+                task_examples = json.loads(tex) if tex else {}
+            except (json.JSONDecodeError, TypeError):
+                logging.warning(f"Error parsing task_examples for interaction {iname}")
+                task_examples = {}
+                
+            try:
+                agency_overrides = json.loads(aov) if aov else {}
+            except (json.JSONDecodeError, TypeError):
+                logging.warning(f"Error parsing agency_overrides for interaction {iname}")
+                agency_overrides = {}
+            
+            rule_data["interactions"].append({
+                "interaction_name": iname,
+                "detailed_rules": detailed_rules,
+                "task_examples": task_examples,
+                "agency_overrides": agency_overrides
+            })
 
-    rule_enforcement_summary = (
-        "Conditions are parsed (e.g. 'Lust > 90 or Dependency > 80') and evaluated against stats. "
-        "If true, effects such as 'Locks Independent Choices' are applied, raising Obedience, triggering punishments, "
-        "or even ending the game."
-    )
-
-    return {
-        "rule_enforcement_summary": rule_enforcement_summary,
-        "plot_triggers": trig_list,
-        "intensity_tiers": tier_list,
-        "interactions": interactions_list
-    }
-
+        cursor.close()
+        
+        # Add the rule enforcement summary
+        rule_data["rule_enforcement_summary"] = (
+            "Conditions are parsed (e.g. 'Lust > 90 or Dependency > 80') and evaluated against stats. "
+            "If true, effects such as 'Locks Independent Choices' are applied, raising Obedience, triggering punishments, "
+            "or even ending the game."
+        )
+        
+        return rule_data
+    
+    except Exception as e:
+        logging.error(f"Error in gather_rule_knowledge: {str(e)}", exc_info=True)
+        # Return minimal data structure to avoid crashes
+        return {
+            "rule_enforcement_summary": "Error fetching rule data.",
+            "plot_triggers": [],
+            "intensity_tiers": [],
+            "interactions": []
+        }
+    finally:
+        if conn:
+            conn.close()
 
 def force_obedience_to_100(user_id, conversation_id, player_name):
     """
@@ -569,211 +655,314 @@ def force_obedience_to_100(user_id, conversation_id, player_name):
 def build_aggregator_text(aggregator_data, rule_knowledge=None):
     """
     Merge aggregator_data into a text summary for ChatGPT.
+    Optimized for better error handling, performance, and readability.
     """
+    # Initialize with a list and join once at the end instead of doing string concatenation
     lines = []
+    
+    # Get basic time data with defaults
     year = aggregator_data.get("year", 1)
     month = aggregator_data.get("month", 1)
     day = aggregator_data.get("day", 1)
     tod = aggregator_data.get("timeOfDay", "Morning")
-    lines.append(f"=== YEAR {year}, MONTH {month}, DAY {day}, {tod.upper()} ===")
     
-    lines.append("\n=== PLAYER STATS ===")
-    player_stats = aggregator_data.get("playerStats", {})
-    if player_stats:
-        lines.append(
-            f"Name: {player_stats.get('name','Unknown')}, "
-            f"Corruption: {player_stats.get('corruption',0)}, "
-            f"Confidence: {player_stats.get('confidence',0)}, "
-            f"Willpower: {player_stats.get('willpower',0)}, "
-            f"Obedience: {player_stats.get('obedience',0)}, "
-            f"Dependency: {player_stats.get('dependency',0)}, "
-            f"Lust: {player_stats.get('lust',0)}, "
-            f"MentalResilience: {player_stats.get('mental_resilience',0)}, "
-            f"PhysicalEndurance: {player_stats.get('physical_endurance',0)}"
-        )
-    else:
-        lines.append("No player stats found.")
-
-    lines.append("\n=== NPC STATS ===")
-    npc_stats = aggregator_data.get("npcStats", [])
-    introduced_npcs = [npc for npc in npc_stats if npc.get("introduced") is True]
-    if introduced_npcs:
-        for npc in introduced_npcs:
+    # Add main sections with error handling
+    try:
+        lines.append(f"=== YEAR {year}, MONTH {month}, DAY {day}, {tod.upper()} ===")
+        
+        # Player Stats Section
+        lines.append("\n=== PLAYER STATS ===")
+        player_stats = aggregator_data.get("playerStats", {})
+        if player_stats:
             lines.append(
-                f"NPC: {npc.get('npc_name','Unnamed')} | Sex={npc.get('sex','Unknown')} | "
-                f"Archetypes={npc.get('archetype_summary',[])} | Extras={npc.get('archetype_extras_summary',[])} | "
-                f"Dom={npc.get('dominance',0)}, Cru={npc.get('cruelty',0)}, "
-                f"Close={npc.get('closeness',0)}, Trust={npc.get('trust',0)}, "
-                f"Respect={npc.get('respect',0)}, Int={npc.get('intensity',0)}"
+                f"Name: {player_stats.get('name','Unknown')}, "
+                f"Corruption: {player_stats.get('corruption',0)}, "
+                f"Confidence: {player_stats.get('confidence',0)}, "
+                f"Willpower: {player_stats.get('willpower',0)}, "
+                f"Obedience: {player_stats.get('obedience',0)}, "
+                f"Dependency: {player_stats.get('dependency',0)}, "
+                f"Lust: {player_stats.get('lust',0)}, "
+                f"MentalResilience: {player_stats.get('mental_resilience',0)}, "
+                f"PhysicalEndurance: {player_stats.get('physical_endurance',0)}"
             )
-            hobbies = npc.get("hobbies", [])
-            personality = npc.get("personality_traits", [])
-            likes = npc.get("likes", [])
-            dislikes = npc.get("dislikes", [])
-            lines.append(f"  Hobbies: {', '.join(hobbies)}" if hobbies else "  Hobbies: None")
-            lines.append(f"  Personality: {', '.join(personality)}" if personality else "  Personality: None")
-            lines.append(f"  Likes: {', '.join(likes)} | Dislikes: {', '.join(dislikes)}")
-            npc_memory = npc.get("memory", [])
-            lines.append(f"  Memory: {npc_memory}" if npc_memory else "  Memory: (None)")
-            affiliations = npc.get("affiliations", [])
-            lines.append(f"  Affiliations: {', '.join(affiliations)}" if affiliations else "  Affiliations: None")
-            schedule = npc.get("schedule", {})
-            if schedule:
-                schedule_json = json.dumps(schedule, indent=2)
-                lines.append("  Schedule:")
-                for line in schedule_json.splitlines():
-                    lines.append("    " + line)
-            else:
-                lines.append("  Schedule: (None)")
-            current_loc = npc.get("current_location", "Unknown")
-            lines.append(f"  Current Location: {current_loc}\n")
-    else:
-        lines.append("(No NPCs found)")
-
-    lines.append("\n=== CURRENT ROLEPLAY ===")
-    current_rp = aggregator_data.get("currentRoleplay", {})
-    if current_rp:
-        for k, v in current_rp.items():
-            lines.append(f"{k}: {v}")
-    else:
-        lines.append("(No current roleplay data)")
-
-    if "activitySuggestions" in aggregator_data:
-        lines.append("\n=== NPC POTENTIAL ACTIVITIES ===")
-        for suggestion in aggregator_data["activitySuggestions"]:
-            lines.append(f"- {suggestion}")
-        lines.append("NPCs can adopt, combine, or ignore these ideas.\n")
-
-    lines.append("\n=== SOCIAL LINKS ===")
-    social_links = aggregator_data.get("socialLinks", [])
-    if social_links:
-        for link in social_links:
-            lines.append(
-                f"Link {link['link_id']}: {link['entity1_type']}({link['entity1_id']}) <-> "
-                f"{link['entity2_type']}({link['entity2_id']}); Type={link['link_type']}, Level={link['link_level']}"
-            )
-            history = link.get("link_history", [])
-            if history:
-                lines.append(f"  History: {history}")
-    else:
-        lines.append("(No social links found)")
-
-    lines.append("\n=== PLAYER PERKS ===")
-    player_perks = aggregator_data.get("playerPerks", [])
-    if player_perks:
-        for perk in player_perks:
-            lines.append(
-                f"Perk: {perk['perk_name']} | Desc: {perk['perk_description']} | Effect: {perk['perk_effect']}"
-            )
-    else:
-        lines.append("(No perks found)")
-
-    lines.append("\n=== INVENTORY ===")
-    inventory = aggregator_data.get("inventory", [])
-    if inventory:
-        for item in inventory:
-            lines.append(
-                f"{item['player_name']}'s Item: {item['item_name']} (x{item['quantity']}) - "
-                f"{item.get('item_description','No desc')} [Effect: {item.get('item_effect','none')}], "
-                f"Category: {item.get('category','misc')}"
-            )
-    else:
-        lines.append("(No inventory items found)")
-
-    lines.append("\n=== EVENTS ===")
-    events_list = aggregator_data.get("events", [])
-    if events_list:
-        for ev in events_list:
-            lines.append(
-                f"Event #{ev['event_id']}: {ev['event_name']} on {ev.get('year',1)}/{ev.get('month',1)}/{ev.get('day',1)} "
-                f"{ev.get('time_of_day','Morning')} @ {ev['location']}, {ev['start_time']}-{ev['end_time']} | {ev['description']}"
-            )
-    else:
-        lines.append("(No events found)")
-
-    lines.append("\n=== PLANNED EVENTS ===")
-    planned_events_list = aggregator_data.get("plannedEvents", [])
-    if planned_events_list:
-        for pev in planned_events_list:
-            lines.append(
-                f"PlannedEvent #{pev['event_id']}: NPC {pev['npc_id']} on {pev.get('year',1)}/{pev.get('month',1)}/{pev['day']} "
-                f"{pev['time_of_day']} @ {pev['override_location']}"
-            )
-    else:
-        lines.append("(No planned events found)")
-
-    lines.append("\n=== QUESTS ===")
-    quests_list = aggregator_data.get("quests", [])
-    if quests_list:
-        for q in quests_list:
-            lines.append(
-                f"Quest #{q['quest_id']}: {q['quest_name']} [Status: {q['status']}] - {q['progress_detail']}. "
-                f"Giver={q['quest_giver']}, Reward={q['reward']}"
-            )
-    else:
-        lines.append("(No quests found)")
-
-    lines.append("\n=== GAME RULES ===")
-    game_rules_list = aggregator_data.get("gameRules", [])
-    if game_rules_list:
-        for gr in game_rules_list:
-            lines.append(f"Rule: {gr['rule_name']} => If({gr['condition']}), then({gr['effect']})")
-    else:
-        lines.append("(No game rules found)")
-
-    lines.append("\n=== STAT DEFINITIONS ===")
-    stat_definitions_list = aggregator_data.get("statDefinitions", [])
-    if stat_definitions_list:
-        for sd in stat_definitions_list:
-            lines.append(
-                f"{sd['stat_name']} [{sd['range_min']}..{sd['range_max']}]: {sd['definition']}; "
-                f"Effects={sd['effects']}; Triggers={sd['progression_triggers']}"
-            )
-    else:
-        lines.append("(No stat definitions found)")
-
-    if rule_knowledge:
-        lines.append("\n=== ADVANCED RULE ENFORCEMENT & KNOWLEDGE ===")
-        lines.append("\nRule Enforcement Summary:")
-        lines.append(rule_knowledge.get("rule_enforcement_summary", "(No info)"))
-
-        plot_trigs = rule_knowledge.get("plot_triggers", [])
-        if plot_trigs:
-            lines.append("\n-- PLOT TRIGGERS --")
-            for trig in plot_trigs:
-                lines.append(f"Trigger Name: {trig['title']}")
-                lines.append(f"Stage: {trig['stage']}")
-                lines.append(f"Description: {trig['description']}")
-                lines.append(f"Key Features: {trig['key_features']}")
-                lines.append(f"Stat Dynamics: {trig['stat_dynamics']}")
-                if trig.get("examples"):
-                    lines.append(f"  Examples: {json.dumps(trig['examples'])}")
-                if trig.get("triggers"):
-                    lines.append(f"  Additional Triggers: {json.dumps(trig['triggers'])}")
-                lines.append("")
         else:
-            lines.append("No plot triggers found.")
-
-        tiers = rule_knowledge.get("intensity_tiers", [])
-        if tiers:
-            lines.append("\n-- INTENSITY TIERS --")
-            for tier in tiers:
-                lines.append(f"{tier['tier_name']}")
-                lines.append(f"  Key Features: {json.dumps(tier['key_features'])}")
-                lines.append(f"  Activities: {json.dumps(tier['activity_examples'])}")
-                lines.append(f"  Permanent Effects: {json.dumps(tier['permanent_effects'])}\n")
+            lines.append("No player stats found.")
+        
+        # NPC Stats Section - Process in batches for efficiency
+        lines.append("\n=== NPC STATS ===")
+        
+        # Get introduced NPCs, checking array and introduced flag explicitly
+        npc_stats = aggregator_data.get("introducedNPCs", [])
+        if not npc_stats and "npcStats" in aggregator_data:
+            # Fallback to filtering from npcStats if introducedNPCs isn't available
+            npc_stats = [npc for npc in aggregator_data.get("npcStats", []) 
+                         if npc.get("introduced") is True]
+            
+        if npc_stats:
+            for npc in npc_stats:
+                try:
+                    # Basic NPC info line
+                    npc_name = npc.get('npc_name', 'Unnamed')
+                    sex = npc.get('sex', 'Unknown')
+                    dom = npc.get('dominance', 0)
+                    cru = npc.get('cruelty', 0)
+                    clos = npc.get('closeness', 0)
+                    trust = npc.get('trust', 0)
+                    resp = npc.get('respect', 0)
+                    inten = npc.get('intensity', 0)
+                    
+                    # Format archetype info
+                    arch_summary = str(npc.get('archetype_summary', []))
+                    extras_summary = str(npc.get('archetype_extras_summary', []))
+                    
+                    lines.append(
+                        f"NPC: {npc_name} | Sex={sex} | "
+                        f"Archetypes={arch_summary} | Extras={extras_summary} | "
+                        f"Dom={dom}, Cru={cru}, Close={clos}, Trust={trust}, "
+                        f"Respect={resp}, Int={inten}"
+                    )
+                    
+                    # Add detailed trait information
+                    hobbies = npc.get("hobbies", [])
+                    personality = npc.get("personality_traits", [])
+                    likes = npc.get("likes", [])
+                    dislikes = npc.get("dislikes", [])
+                    
+                    # Safe joins with explicit string conversion
+                    hobbies_str = ", ".join(str(h) for h in hobbies) if hobbies else "None"
+                    personality_str = ", ".join(str(p) for p in personality) if personality else "None"
+                    likes_str = ", ".join(str(l) for l in likes) if likes else "None"
+                    dislikes_str = ", ".join(str(d) for d in dislikes) if dislikes else "None"
+                    
+                    lines.append(f"  Hobbies: {hobbies_str}")
+                    lines.append(f"  Personality: {personality_str}")
+                    lines.append(f"  Likes: {likes_str} | Dislikes: {dislikes_str}")
+                    
+                    # Memory
+                    memory = npc.get("memory", [])
+                    mem_str = str(memory) if memory else "(None)"
+                    lines.append(f"  Memory: {mem_str}")
+                    
+                    # Affiliations
+                    affiliations = npc.get("affiliations", [])
+                    affil_str = ", ".join(str(a) for a in affiliations) if affiliations else "None"
+                    lines.append(f"  Affiliations: {affil_str}")
+                    
+                    # Schedule - use compact formatting
+                    schedule = npc.get("schedule", {})
+                    if schedule:
+                        # Use more compact single-line format for schedules
+                        schedule_summary = []
+                        for day, times in schedule.items():
+                            day_summary = f"{day}: "
+                            time_parts = []
+                            for time_period, activity in times.items():
+                                if activity:
+                                    time_parts.append(f"{time_period}={activity}")
+                            day_summary += ", ".join(time_parts)
+                            schedule_summary.append(day_summary)
+                        
+                        lines.append("  Schedule: " + "; ".join(schedule_summary))
+                    else:
+                        lines.append("  Schedule: (None)")
+                    
+                    # Current location
+                    current_loc = npc.get("current_location", "Unknown")
+                    lines.append(f"  Current Location: {current_loc}\n")
+                
+                except Exception as e:
+                    logging.warning(f"Error formatting NPC {npc.get('npc_name', 'unknown')}: {str(e)}")
+                    lines.append(f"  [Error processing NPC data: {str(e)}]")
         else:
-            lines.append("No intensity tiers found.")
-
-        interactions = rule_knowledge.get("interactions", [])
-        if interactions:
-            lines.append("\n-- INTERACTIONS --")
-            for intr in interactions:
-                lines.append(f"Interaction Name: {intr['interaction_name']}")
-                lines.append(f"Detailed Rules: {json.dumps(intr['detailed_rules'])}")
-                lines.append(f"Task Examples: {json.dumps(intr['task_examples'])}")
-                lines.append(f"Agency Overrides: {json.dumps(intr['agency_overrides'])}\n")
+            lines.append("(No NPCs found)")
+        
+        # Current Roleplay Section
+        lines.append("\n=== CURRENT ROLEPLAY ===")
+        current_rp = aggregator_data.get("currentRoleplay", {})
+        if current_rp:
+            # Only include key currentRoleplay entries that fit in the context window
+            important_keys = [
+                "EnvironmentDesc", "CurrentSetting", "PlayerRole", "MainQuest", 
+                "CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"
+            ]
+            
+            # First add important keys
+            for key in important_keys:
+                if key in current_rp:
+                    lines.append(f"{key}: {current_rp[key]}")
+            
+            # Then add other keys (excluding very large or less important ones)
+            exclude_keys = important_keys + ["ChaseSchedule", "MegaSettingModifiers", "CalendarNames", "GlobalSummary"]
+            for key, value in current_rp.items():
+                if key not in exclude_keys:
+                    # Truncate very long values
+                    if isinstance(value, str) and len(value) > 500:
+                        lines.append(f"{key}: {value[:500]}... [truncated]")
+                    else:
+                        lines.append(f"{key}: {value}")
+            
+            # Add Chase schedule in a condensed format
+            if "ChaseSchedule" in current_rp:
+                chase_schedule = current_rp["ChaseSchedule"]
+                if chase_schedule:
+                    lines.append("\n--- Chase Schedule ---")
+                    for day, activities in chase_schedule.items():
+                        day_line = f"{day}: "
+                        time_activities = []
+                        for time_slot, activity in activities.items():
+                            time_activities.append(f"{time_slot}={activity}")
+                        day_line += ", ".join(time_activities)
+                        lines.append(day_line)
         else:
-            lines.append("No interactions data found.")
+            lines.append("(No current roleplay data)")
+        
+        # Activity Suggestions
+        if "activitySuggestions" in aggregator_data and aggregator_data["activitySuggestions"]:
+            lines.append("\n=== NPC POTENTIAL ACTIVITIES ===")
+            for suggestion in aggregator_data["activitySuggestions"]:
+                lines.append(f"- {suggestion}")
+            lines.append("NPCs can adopt, combine, or ignore these ideas.\n")
+        
+        # Social Links Section
+        lines.append("\n=== SOCIAL LINKS ===")
+        social_links = aggregator_data.get("socialLinks", [])
+        if social_links:
+            for link in social_links:
+                lines.append(
+                    f"Link {link.get('link_id', '?')}: "
+                    f"{link.get('entity1_type', '?')}({link.get('entity1_id', '?')}) <-> "
+                    f"{link.get('entity2_type', '?')}({link.get('entity2_id', '?')}); "
+                    f"Type={link.get('link_type', '?')}, Level={link.get('link_level', '?')}"
+                )
+                history = link.get("link_history", [])
+                if history:
+                    lines.append(f"  History: {history}")
+        else:
+            lines.append("(No social links found)")
+        
+        # Other sections - keep these briefer for better token efficiency
+        # Player Perks
+        lines.append("\n=== PLAYER PERKS ===")
+        player_perks = aggregator_data.get("playerPerks", [])
+        if player_perks:
+            for perk in player_perks:
+                lines.append(
+                    f"Perk: {perk.get('perk_name', '?')} | "
+                    f"Desc: {perk.get('perk_description', '?')} | "
+                    f"Effect: {perk.get('perk_effect', '?')}"
+                )
+        else:
+            lines.append("(No perks found)")
+        
+        # Inventory - only show important details
+        lines.append("\n=== INVENTORY ===")
+        inventory = aggregator_data.get("inventory", [])
+        if inventory:
+            for item in inventory:
+                lines.append(
+                    f"{item.get('player_name', 'Unknown')}'s Item: {item.get('item_name', 'Unknown')} "
+                    f"(x{item.get('quantity', 1)}) - {item.get('item_description', 'No desc')}"
+                )
+        else:
+            lines.append("(No inventory items found)")
+        
+        # Events - keep concise
+        lines.append("\n=== EVENTS ===")
+        events_list = aggregator_data.get("events", [])
+        if events_list:
+            # Only show the 5 most relevant events
+            for ev in events_list[:5]:
+                lines.append(
+                    f"Event #{ev.get('event_id', '?')}: {ev.get('event_name', 'Unknown')} on "
+                    f"{ev.get('year', 1)}/{ev.get('month', 1)}/{ev.get('day', 1)} "
+                    f"{ev.get('time_of_day', 'Morning')} @ {ev.get('location', 'Unknown')}"
+                )
+        else:
+            lines.append("(No events found)")
+        
+        # Planned Events - keep concise
+        lines.append("\n=== PLANNED EVENTS ===")
+        planned_events_list = aggregator_data.get("plannedEvents", [])
+        if planned_events_list:
+            for pev in planned_events_list[:5]:  # Only show up to 5
+                lines.append(
+                    f"PlannedEvent #{pev.get('event_id', '?')}: NPC {pev.get('npc_id', '?')} on "
+                    f"{pev.get('year', 1)}/{pev.get('month', 1)}/{pev.get('day', 1)} "
+                    f"{pev.get('time_of_day', 'Morning')} @ {pev.get('override_location', 'Unknown')}"
+                )
+        else:
+            lines.append("(No planned events found)")
+        
+        # Quests
+        lines.append("\n=== QUESTS ===")
+        quests_list = aggregator_data.get("quests", [])
+        if quests_list:
+            for q in quests_list:
+                lines.append(
+                    f"Quest #{q.get('quest_id', '?')}: {q.get('quest_name', 'Unknown')} "
+                    f"[Status: {q.get('status', 'Unknown')}] - {q.get('progress_detail', '')}"
+                )
+        else:
+            lines.append("(No quests found)")
+        
+        # Game Rules - more concise
+        lines.append("\n=== GAME RULES ===")
+        game_rules_list = aggregator_data.get("gameRules", [])
+        if game_rules_list:
+            for gr in game_rules_list[:10]:  # Limit to 10 most important rules
+                lines.append(f"Rule: {gr.get('rule_name', '?')} => If({gr.get('condition', '?')}), then({gr.get('effect', '?')})")
+        else:
+            lines.append("(No game rules found)")
+        
+        # Stat Definitions - brief summary
+        lines.append("\n=== STAT DEFINITIONS ===")
+        stat_definitions_list = aggregator_data.get("statDefinitions", [])
+        if stat_definitions_list:
+            for sd in stat_definitions_list[:8]:  # Only include most relevant stats
+                lines.append(
+                    f"{sd.get('stat_name', '?')} [{sd.get('range_min', 0)}..{sd.get('range_max', 100)}]: "
+                    f"{sd.get('definition', 'No definition')}"
+                )
+        else:
+            lines.append("(No stat definitions found)")
+        
+        # Add rule knowledge if provided
+        if rule_knowledge:
+            lines.append("\n=== ADVANCED RULE ENFORCEMENT & KNOWLEDGE ===")
+            lines.append("\nRule Enforcement Summary:")
+            lines.append(rule_knowledge.get("rule_enforcement_summary", "(No info)"))
+            
+            # Add plot triggers - limited to most important ones
+            plot_trigs = rule_knowledge.get("plot_triggers", [])
+            if plot_trigs:
+                lines.append("\n-- PLOT TRIGGERS --")
+                for trig in plot_trigs[:3]:  # Only include top 3 triggers
+                    lines.append(f"Trigger: {trig.get('title', '?')} - {trig.get('description', '?')}")
+            
+            # Add intensity tiers - summarized
+            tiers = rule_knowledge.get("intensity_tiers", [])
+            if tiers:
+                lines.append("\n-- INTENSITY TIERS --")
+                for tier in tiers:
+                    lines.append(f"{tier.get('tier_name', '?')}: {', '.join(tier.get('key_features', []))[:150]}")
+            
+            # Add interactions - summarized
+            interactions = rule_knowledge.get("interactions", [])
+            if interactions:
+                lines.append("\n-- INTERACTIONS --")
+                for intr in interactions[:3]:  # Only include top 3
+                    lines.append(f"Interaction: {intr.get('interaction_name', '?')}")
+    
+    except Exception as e:
+        logging.error(f"Error building aggregator text: {str(e)}", exc_info=True)
+        # Add error information to prevent complete failure
+        lines.append(f"\n[Error occurred while building context: {str(e)}]")
+        # Make sure we still return basic information
+        if not lines:
+            lines = [
+                "=== BASIC CONTEXT ===",
+                f"Year: {year}, Month: {month}, Day: {day}, Time: {tod}",
+                "Error occurred while building full context."
+            ]
 
     return "\n".join(lines)

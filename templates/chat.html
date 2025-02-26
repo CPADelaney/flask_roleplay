@@ -168,6 +168,7 @@
   </div>
   <div>
     <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
+    <button id="advanceTimeBtn" onclick="advanceTime()">Advance Time</button>
   </div>
 </div>
 
@@ -333,9 +334,27 @@
       };
       appendMessage(messageObj, true);
     });
+    
+    // Add storybeat-specific listeners
+    socket.on("processing", function(data) {
+      console.log("Server is processing the storybeat:", data.message);
+      // Optionally show a loading indicator here
+      const chatWindow = document.getElementById("chatWindow");
+      const processingDiv = document.createElement("div");
+      processingDiv.id = "processingIndicator";
+      processingDiv.innerHTML = '<div style="text-align: center; padding: 10px; font-style: italic; color: #888;">Processing your request...</div>';
+      chatWindow.appendChild(processingDiv);
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    });
   }
 
   function handleNewToken(token) {
+    // Remove processing indicator if present
+    const processingIndicator = document.getElementById("processingIndicator");
+    if (processingIndicator) {
+      processingIndicator.remove();
+    }
+    
     if (!currentAssistantBubble) {
       console.log("Creating new assistant bubble");
       // Create a new message row for the assistant
@@ -621,7 +640,7 @@
     return row;
   }
 
-  // Send a new message (streaming approach)
+  // Send a new message using the advanced storybeat functionality
   async function sendMessage() {
     const userInputElem = document.getElementById("userMsg");
     const userText = userInputElem.value.trim();
@@ -639,10 +658,7 @@
     currentAssistantBubble = null;
     partialAssistantText = "";
     
-    console.log(`Sending message to server for conversation ${currentConvId}`, {
-      user_input: userText,
-      conversation_id: currentConvId
-    });
+    console.log(`Sending storybeat to server for conversation ${currentConvId}`);
     
     // Make sure socket is connected
     if (!socket.connected) {
@@ -664,14 +680,49 @@
     // Join the conversation room if not already joined
     socket.emit('join', { conversation_id: currentConvId });
     
-    // Send the message via socket.io
-    socket.emit("message", {
+    // Send the storybeat event
+    socket.emit("storybeat", {
       user_input: userText,
       conversation_id: currentConvId,
+      player_name: "Chase",
+      advance_time: false,
       universal_update: pendingUniversalUpdates
     });
     
-    console.log("Message sent, waiting for streaming response...");
+    console.log("Storybeat sent, waiting for streaming response...");
+    
+    // Reset pending updates
+    resetPendingUniversalUpdates();
+  }
+
+  // Function to advance time in the game
+  function advanceTime() {
+    if (!currentConvId) {
+      alert("Please select a conversation first");
+      return;
+    }
+    
+    // Show a message from the user about advancing time
+    const userMsg = { 
+      sender: "user", 
+      content: "Let's advance to the next time period." 
+    };
+    appendMessage(userMsg, true);
+    
+    // Reset any partial message state
+    currentAssistantBubble = null;
+    partialAssistantText = "";
+    
+    // Send the storybeat with advance_time=true
+    socket.emit("storybeat", {
+      user_input: "Let's advance to the next time period.",
+      conversation_id: currentConvId,
+      player_name: "Chase",
+      advance_time: true,
+      universal_update: pendingUniversalUpdates
+    });
+    
+    console.log("Time advancement requested");
     
     // Reset pending updates
     resetPendingUniversalUpdates();
