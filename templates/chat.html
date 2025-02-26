@@ -388,30 +388,75 @@
     return row;
   }
 
+
   function handleNewToken(token) {
+    console.log("Handling new token:", token);
+    
     if (!currentAssistantBubble) {
       console.log("Creating new assistant bubble");
-      const newMsg = { sender: "Nyx", content: "" };
-      const newRow = appendMessage(newMsg, true);
-      // Grab the inner bubble element that you'll update
-      currentAssistantBubble = newRow.querySelector(".message-bubble");
-      partialAssistantText = "";
+      // Create a new message row for the assistant
+      const row = document.createElement("div");
+      row.classList.add("message-row", "gpt-row");
+      
+      // Create the bubble element
+      const bubble = document.createElement("div");
+      bubble.classList.add("message-bubble");
+      
+      // Add initial content
+      bubble.innerHTML = `<strong>Nyx:</strong> ${token}`;
+      
+      // Add to DOM
+      row.appendChild(bubble);
+      document.getElementById("chatWindow").appendChild(row);
+      
+      // Save reference to the bubble
+      currentAssistantBubble = bubble;
+      partialAssistantText = token;
+    } else {
+      // Append to existing bubble
+      partialAssistantText += token;
+      currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(partialAssistantText)}`;
     }
-    partialAssistantText += token;
-    console.log("Updated bubble content:", partialAssistantText);
-    // Use your markdown sanitizer/render function
-    currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(partialAssistantText)}`;
+    
+    // Auto-scroll
     const chatWindow = document.getElementById("chatWindow");
     chatWindow.scrollTop = chatWindow.scrollHeight;
   }
   
   function finalizeAssistantMessage(finalText) {
-    if (!currentAssistantBubble) return;
+    console.log("Finalizing message with text:", finalText);
+    
+    if (!currentAssistantBubble) {
+      console.warn("No assistant bubble to finalize");
+      return;
+    }
+    
+    // Update with final content
     currentAssistantBubble.innerHTML = `<strong>Nyx:</strong> ${sanitizeAndRenderMarkdown(finalText)}`;
+    
+    // Reset for next message
     currentAssistantBubble = null;
     partialAssistantText = "";
+    
+    // Auto-scroll one more time
+    const chatWindow = document.getElementById("chatWindow");
+    chatWindow.scrollTop = chatWindow.scrollHeight;
   }
-  
+
+  function setupSocketDebugListeners() {
+    // Log all socket events
+    const events = [
+      'connect', 'disconnect', 'connect_error', 
+      'new_token', 'done', 'error', 'message'
+    ];
+    
+    events.forEach(event => {
+      socket.on(event, (data) => {
+        console.log(`Socket event '${event}' received:`, data);
+      });
+    });
+  }
+    
   // Basic login check
   async function checkLoggedIn() {
     try {
