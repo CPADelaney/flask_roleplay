@@ -954,7 +954,7 @@ def extract_field_from_text(text, field_name):
     patterns = [
         rf'"{field_name}"\s*:\s*"([^"]*)"',      # For string values: "field": "value"
         rf'"{field_name}"\s*:\s*(\[[^\]]*\])',     # For array values: "field": [...]
-        rf'"{field_name}"\s*:\s*(\{{[^]}*\})',    # For object values: "field": {...}
+        rf'"{field_name}"\s*:\s*(\{{[^}}]*\}})',  # For object values: "field": {...}
         rf'{field_name}:\s*(.*?)(?:\n|$)',          # For plain text: field: value
     ]
 
