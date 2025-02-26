@@ -823,8 +823,8 @@ async def create_and_refine_npc(user_id, conversation_id, environment_desc, day_
     propagate_shared_memories(
         user_id=user_id,
         conversation_id=conversation_id,
-        npc_id=npc_id,
-        npc_name=partial_npc["npc_name"],
+        source_npc_id=npc_id,
+        source_npc_name=partial_npc["npc_name"],
         memories=memories
     )
     
