@@ -34,36 +34,86 @@ from db.connection import get_db_connection
 def background_chat_task(conversation_id, user_input, universal_update):
     """
     Process chat messages in a background task using ChatGPT.
-    It builds the conversation history (using aggregator context),
-    calls the GPT API, and streams the generated narrative token by token.
+    Uses the sophisticated context generator from story_routes.py.
     """
     try:
         logging.info(f"Starting GPT background chat task for conversation {conversation_id}")
         
-        # Retrieve aggregator_text.
-        # You can pass it along in universal_update or compute it from aggregator data.
-        # For now, we check if universal_update includes aggregator_text; if not, use a fallback.
-        aggregator_text = universal_update.get("aggregator_text", "")
+        # Retrieve the user_id for this conversation
+        conn = get_db_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id FROM conversations WHERE id = %s", (conversation_id,))
+                result = cur.fetchone()
+                if not result:
+                    logging.error(f"Conversation {conversation_id} not found")
+                    socketio.emit('error', {'error': f"Conversation not found"}, room=conversation_id)
+                    return
+                user_id = result[0]
+            
+        # Get player name (defaulting to "Chase")
+        player_name = "Chase"  # Default value
         
-        # Call the GPT integration.
-        # get_chatgpt_response expects: conversation_id, aggregator_text, and user_input.
+        # Use the advanced context generator from story_routes.py
+        # First, get the aggregated context using the aggregator
+        from logic.aggregator import get_aggregated_roleplay_context
+        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
+        
+        # Then, use build_aggregator_text to convert it to a text representation
+        from routes.story_routes import build_aggregator_text, gather_rule_knowledge
+        
+        # Optionally include rule knowledge for deeper context
+        rule_knowledge = gather_rule_knowledge()
+        
+        # Build the full context with rules
+        aggregator_text = build_aggregator_text(aggregator_data, rule_knowledge)
+        logging.info(f"Built advanced context for conversation {conversation_id}")
+        
+        # Call the GPT integration with the enhanced context
         response_data = get_chatgpt_response(conversation_id, aggregator_text, user_input)
         logging.info("Received GPT response from ChatGPT integration")
         
-        # Extract the narrative from the response.
+        # Extract the narrative from the response
         if response_data["type"] == "function_call":
-            # When the response is a function call, extract the narrative field.
+            # When the response is a function call, extract the narrative field
             ai_response = response_data["function_args"].get("narrative", "")
+            
+            # Process any universal updates received
+            try:
+                # Only apply updates if we received function call with args
+                if response_data["function_args"]:
+                    import asyncio
+                    import asyncpg
+                    from logic.universal_updater import apply_universal_updates_async
+                    
+                    async def apply_updates():
+                        dsn = os.getenv("DB_DSN")
+                        conn = await asyncpg.connect(dsn=dsn, statement_cache_size=0)
+                        try:
+                            await apply_universal_updates_async(
+                                user_id, 
+                                conversation_id, 
+                                response_data["function_args"], 
+                                conn
+                            )
+                        finally:
+                            await conn.close()
+                    
+                    # Run the async function
+                    asyncio.run(apply_updates())
+                    logging.info(f"Applied universal updates for conversation {conversation_id}")
+            except Exception as update_error:
+                logging.error(f"Error applying universal updates: {str(update_error)}")
         else:
             ai_response = response_data.get("response", "")
         
-        # Stream the response token by token.
+        # Stream the response token by token
         for i in range(0, len(ai_response), 3):
             token = ai_response[i:i+3]
             socketio.emit('new_token', {'token': token}, room=conversation_id)
             socketio.sleep(0.05)
         
-        # Store the complete GPT response in the database.
+        # Store the complete GPT response in the database
         try:
             conn = get_db_connection()
             with conn:
@@ -77,7 +127,7 @@ def background_chat_task(conversation_id, user_input, universal_update):
         except Exception as db_error:
             logging.error(f"Database error storing GPT response: {str(db_error)}")
         
-        # Emit the final 'done' event with the full text.
+        # Emit the final 'done' event with the full text
         socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
         logging.info(f"Completed streaming GPT response for conversation {conversation_id}")
     
@@ -138,7 +188,7 @@ def create_flask_app():
             logging.error(f"Database error: {str(e)}")
             return jsonify({"error": "Database error"}), 500
     
-        # Start the background chat task
+        # Start the background chat task (now using enhanced context)
         socketio.start_background_task(background_chat_task, conversation_id, user_input, universal_update)
     
         return jsonify({"status": "success", "message": "Chat started"})
@@ -278,6 +328,7 @@ def create_socketio(app):
                 return
             
             # Start the background task for message processing
+            # This now uses the enhanced context generator from story_routes.py
             socketio.start_background_task(
                 background_chat_task, 
                 conversation_id, 
@@ -288,9 +339,7 @@ def create_socketio(app):
         except Exception as e:
             logging.error(f"Error in handle_message: {str(e)}")
             emit('error', {'error': f'Server error: {str(e)}'}, room=conversation_id)
-    
-    return socketio
-    
+        
 # Optional ASGI wrapper for ASGI servers
 asgi_app = None
 
