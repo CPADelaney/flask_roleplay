@@ -369,36 +369,68 @@ def create_socketio(app):
             # Join the room for this conversation
             join_room(conversation_id)
             
-            # Store user message in database
-            conn = get_db_connection()
-            try:
-                with conn:
-                    with conn.cursor() as cur:
-                        # Validate conversation ownership
-                        cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conversation_id,))
-                        row = cur.fetchone()
-                        if not row:
-                            emit('error', {'error': f"Conversation {conversation_id} not found"})
-                            return
-                        if row[0] != user_id:
-                            emit('error', {'error': f"Conversation {conversation_id} not owned by this user"})
-                            return
+            # Emit an acknowledgment that processing has begun
+            emit('processing', {'message': 'Processing your request...'})
+            
+            # Function to do the heavy processing in background
+            def process_message_background():
+                conn = None
+                try:
+                    # Create database connection
+                    conn = get_db_connection()
+                    
+                    # Validate conversation ownership
+                    with conn:
+                        with conn.cursor() as cur:
+                            cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conversation_id,))
+                            row = cur.fetchone()
+                            if not row:
+                                socketio.emit('error', {'error': f"Conversation {conversation_id} not found"}, room=conversation_id)
+                                return
+                            if row[0] != user_id:
+                                socketio.emit('error', {'error': f"Conversation {conversation_id} not owned by this user"}, room=conversation_id)
+                                return
+                            
+                            # Store user message
+                            cur.execute(
+                                "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                                (conversation_id, "user", user_input)
+                            )
+                            conn.commit()
+                    
+                    # Process universal updates if provided
+                    if universal_update:
+                        def apply_universal_updates_thread():
+                            import asyncio
+                            import os
+                            import asyncpg
+                            from logic.universal_updater import apply_universal_updates_async
+                            
+                            universal_update["user_id"] = user_id
+                            universal_update["conversation_id"] = conversation_id
+                            
+                            async def run_updates():
+                                dsn = os.getenv("DB_DSN")
+                                async_conn = await asyncpg.connect(dsn=dsn)
+                                try:
+                                    return await apply_universal_updates_async(
+                                        user_id, conversation_id, universal_update, async_conn
+                                    )
+                                finally:
+                                    await async_conn.close()
+                            
+                            result = asyncio.run(run_updates())
+                            logging.info(f"Universal update result: {result}")
                         
-                        # Store user message
-                        cur.execute(
-                            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-                            (conversation_id, "user", user_input)
-                        )
-                        conn.commit()
-                        
-                # Check unintroduced NPC count; spawn more if needed (async)
-                def check_and_spawn_npcs():
+                        # Apply updates before generating response
+                        apply_universal_updates_thread()
+                    
+                    # Check and spawn NPCs if needed
                     from logic.aggregator import get_aggregated_roleplay_context
                     from logic.npc_creation import spawn_multiple_npcs
                     import asyncio
                     
-                    # Get current NPC count
-                    conn = get_db_connection()
+                    # Check NPC count
                     with conn:
                         with conn.cursor() as cur:
                             cur.execute("""
@@ -410,13 +442,13 @@ def create_socketio(app):
                     # If too few NPCs, spawn more
                     if count < 2:
                         logging.info("Only %d unintroduced NPC(s) found; generating 3 more.", count)
-                        # Get environment info
+                        # Get aggregator data for environment context
                         aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
                         env_desc = aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", 
-                                                                                "A default environment description.")
+                                                                               "A default environment description.")
                         calendar = aggregator_data.get("calendar", {})
                         day_names = calendar.get("days", 
-                                              ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
+                                             ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
                         
                         # Spawn NPCs using asyncio
                         async def spawn_npcs_async():
@@ -424,163 +456,128 @@ def create_socketio(app):
                         
                         npc_ids = asyncio.run(spawn_npcs_async())
                         logging.info(f"Generated new NPCs: {npc_ids}")
-                
-                # Run NPC check/spawn in a separate thread to not block
-                socketio.start_background_task(check_and_spawn_npcs)
-                
-                # Process any universal updates provided
-                if universal_update:
-                    def apply_universal_updates_thread():
-                        import asyncio
-                        import os
-                        import asyncpg
-                        from logic.universal_updater import apply_universal_updates_async
-                        
-                        universal_update["user_id"] = user_id
-                        universal_update["conversation_id"] = conversation_id
-                        
-                        async def run_updates():
-                            dsn = os.getenv("DB_DSN")
-                            async_conn = await asyncpg.connect(dsn=dsn)
-                            try:
-                                return await apply_universal_updates_async(
-                                    user_id, conversation_id, universal_update, async_conn
-                                )
-                            finally:
-                                await async_conn.close()
-                        
-                        result = asyncio.run(run_updates())
-                        logging.info(f"Universal update result: {result}")
                     
-                    # Run updates in background
-                    socketio.start_background_task(apply_universal_updates_thread)
-                
-                # Advance time if requested
-                from logic.time_cycle import advance_time_and_update
-                from logic.aggregator import get_aggregated_roleplay_context
-                
-                if advance_time:
-                    new_year, new_month, new_day, new_phase = advance_time_and_update(
-                        user_id, conversation_id, increment=1
-                    )
-                    logging.info(f"Advanced time to Y{new_year} M{new_month} D{new_day} {new_phase}")
+                    # Advance time if requested
+                    from logic.time_cycle import advance_time_and_update
                     
-                # Get the latest aggregated context
-                aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
-                
-                # Append additional NPC context
-                npc_context_summary = ""
-                with conn:
-                    with conn.cursor() as cur:
-                        cur.execute("""
-                            SELECT npc_name, memory, archetype_extras_summary
-                            FROM NPCStats
-                            WHERE user_id=%s AND conversation_id=%s AND introduced=TRUE
-                        """, (user_id, conversation_id))
-                        
-                        for row in cur.fetchall():
-                            npc_name, memory_json, extras_summary = row
-                            mem_text = ""
-                            if memory_json:
-                                try:
-                                    mem_list = json.loads(memory_json)
-                                    mem_text = " ".join(mem_list)
-                                except Exception:
-                                    mem_text = str(memory_json)
-                            extra_text = extras_summary if extras_summary else ""
-                            npc_context_summary += f"{npc_name}: {mem_text} {extra_text}\n"
-                
-                # Build the complete context
-                from routes.story_routes import build_aggregator_text, gather_rule_knowledge
-                rule_knowledge = gather_rule_knowledge()
-                aggregator_text = build_aggregator_text(aggregator_data, rule_knowledge)
-                
-                if npc_context_summary:
-                    aggregator_text += "\nNPC Context:\n" + npc_context_summary
-                
-                # Now process with GPT and stream the response
-                def process_and_stream_response():
-                    # Variables for building the assistant response
-                    current_assistant_bubble = None
-                    partial_assistant_text = ""
+                    if advance_time:
+                        new_year, new_month, new_day, new_phase = advance_time_and_update(
+                            user_id, conversation_id, increment=1
+                        )
+                        logging.info(f"Advanced time to Y{new_year} M{new_month} D{new_day} {new_phase}")
                     
-                    try:
-                        # Get response from GPT
-                        from logic.chatgpt_integration import get_chatgpt_response
-                        response_data = get_chatgpt_response(conversation_id, aggregator_text, user_input)
-                        
-                        # Extract narrative
-                        if response_data["type"] == "function_call":
-                            ai_response = response_data["function_args"].get("narrative", "")
+                    # Get the latest aggregated context (after time advance and NPC creation)
+                    aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
+                    
+                    # Append additional NPC context
+                    npc_context_summary = ""
+                    with conn:
+                        with conn.cursor() as cur:
+                            cur.execute("""
+                                SELECT npc_name, memory, archetype_extras_summary
+                                FROM NPCStats
+                                WHERE user_id=%s AND conversation_id=%s AND introduced=TRUE
+                            """, (user_id, conversation_id))
                             
-                            # Process universal updates if available
-                            if response_data["function_args"]:
-                                try:
-                                    import asyncio
-                                    import asyncpg
-                                    from logic.universal_updater import apply_universal_updates_async
-                                    
-                                    async def apply_updates():
-                                        dsn = os.getenv("DB_DSN")
-                                        conn = await asyncpg.connect(dsn=dsn, statement_cache_size=0)
+                            for row in cur.fetchall():
+                                npc_name, memory_json, extras_summary = row
+                                mem_text = ""
+                                if memory_json:
+                                    # Handle the case where memory_json might already be a list
+                                    if isinstance(memory_json, list):
+                                        mem_list = memory_json
+                                    else:
                                         try:
-                                            return await apply_universal_updates_async(
-                                                user_id, 
-                                                conversation_id, 
-                                                response_data["function_args"],
-                                                conn
-                                            )
-                                        finally:
-                                            await conn.close()
+                                            mem_list = json.loads(memory_json)
+                                        except Exception as e:
+                                            logging.warning(f"Error parsing memory JSON for NPC {npc_name}: {e}")
+                                            mem_list = []
                                     
-                                    update_result = asyncio.run(apply_updates())
-                                    logging.info(f"Applied universal updates: {update_result}")
-                                except Exception as update_error:
-                                    logging.error(f"Error applying universal updates: {str(update_error)}")
-                        else:
-                            ai_response = response_data.get("response", "")
+                                    # Convert the memory list to a string
+                                    if isinstance(mem_list, list):
+                                        mem_text = " ".join(str(item) for item in mem_list)
+                                    else:
+                                        mem_text = str(mem_list)
+                                
+                                extra_text = extras_summary if extras_summary else ""
+                                npc_context_summary += f"{npc_name}: {mem_text} {extra_text}\n"
+                    
+                    # Build the complete context
+                    from routes.story_routes import build_aggregator_text, gather_rule_knowledge
+                    rule_knowledge = gather_rule_knowledge()
+                    aggregator_text = build_aggregator_text(aggregator_data, rule_knowledge)
+                    
+                    if npc_context_summary:
+                        aggregator_text += "\nNPC Context:\n" + npc_context_summary
+                    
+                    # Get response from GPT
+                    from logic.chatgpt_integration import get_chatgpt_response
+                    response_data = get_chatgpt_response(conversation_id, aggregator_text, user_input)
+                    
+                    # Extract narrative
+                    if response_data["type"] == "function_call":
+                        ai_response = response_data["function_args"].get("narrative", "")
                         
-                        # Stream the response token by token
-                        for i in range(0, len(ai_response), 3):
-                            token = ai_response[i:i+3]
-                            socketio.emit('new_token', {'token': token}, room=conversation_id)
-                            socketio.sleep(0.05)
-                        
-                        # Store the complete GPT response in the database
-                        try:
-                            conn = get_db_connection()
-                            with conn:
-                                with conn.cursor() as cur:
-                                    cur.execute(
-                                        "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-                                        (conversation_id, "Nyx", ai_response)
-                                    )
-                                    conn.commit()
-                        except Exception as db_error:
-                            logging.error(f"Database error storing GPT response: {str(db_error)}")
-                        
-                        # Emit the final 'done' event with the full text
-                        socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
-                        
-                    except Exception as e:
-                        logging.error(f"Error processing GPT response: {str(e)}")
-                        socketio.emit('error', {'error': f"Server error: {str(e)}"}, room=conversation_id)
-                
-                # Start the streaming process in the background
-                socketio.start_background_task(process_and_stream_response)
-                
-                # Emit an acknowledgment that processing has begun
-                emit('processing', {'message': 'Processing your request...'})
-                
-            except Exception as e:
-                logging.error(f"Error in handle_storybeat: {str(e)}")
-                emit('error', {'error': f"Server error: {str(e)}"})
-            finally:
-                if conn:
-                    conn.close()
+                        # Process universal updates from GPT response
+                        if response_data["function_args"]:
+                            try:
+                                import asyncio
+                                import asyncpg
+                                from logic.universal_updater import apply_universal_updates_async
+                                
+                                async def apply_updates():
+                                    dsn = os.getenv("DB_DSN")
+                                    conn = await asyncpg.connect(dsn=dsn, statement_cache_size=0)
+                                    try:
+                                        return await apply_universal_updates_async(
+                                            user_id, 
+                                            conversation_id, 
+                                            response_data["function_args"],
+                                            conn
+                                        )
+                                    finally:
+                                        await conn.close()
+                                
+                                update_result = asyncio.run(apply_updates())
+                                logging.info(f"Applied universal updates from GPT: {update_result}")
+                            except Exception as update_error:
+                                logging.error(f"Error applying universal updates from GPT: {str(update_error)}")
+                    else:
+                        ai_response = response_data.get("response", "")
+                    
+                    # Stream the response token by token
+                    for i in range(0, len(ai_response), 3):
+                        token = ai_response[i:i+3]
+                        socketio.emit('new_token', {'token': token}, room=conversation_id)
+                        socketio.sleep(0.05)
+                    
+                    # Store the complete GPT response in the database
+                    try:
+                        with conn:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                                    (conversation_id, "Nyx", ai_response)
+                                )
+                                conn.commit()
+                    except Exception as db_error:
+                        logging.error(f"Database error storing GPT response: {str(db_error)}")
+                    
+                    # Emit the final 'done' event with the full text
+                    socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
+                    
+                except Exception as e:
+                    logging.error(f"Error in background processing: {str(e)}", exc_info=True)
+                    socketio.emit('error', {'error': f"Server error: {str(e)}"}, room=conversation_id)
+                finally:
+                    if conn:
+                        conn.close()
+            
+            # Start the background processing task
+            socketio.start_background_task(process_message_background)
                     
         except Exception as e:
-            logging.error(f"Unexpected error in handle_storybeat: {str(e)}")
+            logging.error(f"Unexpected error in handle_storybeat: {str(e)}", exc_info=True)
             emit('error', {'error': f"Unexpected server error: {str(e)}"})
     
     return socketio
