@@ -29,23 +29,34 @@ socketio = None
 
 def background_chat_task(conversation_id, user_input, universal_update):
     """
-    Process chat messages in a background task and stream responses
+    Process chat messages in a background task using ChatGPT,
+    stream the generated response token by token, store it in the DB,
+    and emit a 'done' event when finished.
     """
     try:
-        logging.info(f"Starting background chat task for conversation {conversation_id}")
+        logging.info(f"Starting GPT background chat task for conversation {conversation_id}")
         
-        # Here you would typically call your AI/NLP service to generate a response
-        # For testing, we'll use a simple sample response
-        ai_response = f"This is a response to: '{user_input}'. Generated at {time.strftime('%H:%M:%S')}"
+        # 1. Build the conversation history for context.
+        # You might pull messages from your DB and use build_message_history to format them.
+        history = build_message_history(conversation_id)
+        # Append the latest user message
+        history.append({"role": "user", "content": user_input})
+        logging.info(f"Built conversation history with {len(history)} messages")
         
-        # Stream the response token by token
+        # 2. Get the GPT response.
+        # get_chatgpt_response should take the conversation history and return a full response.
+        ai_response = get_chatgpt_response(history)
+        logging.info("Received GPT response")
+        
+        # 3. Stream the response token by token.
+        # Here we simulate token streaming by splitting the response text.
         for i in range(0, len(ai_response), 3):
             token = ai_response[i:i+3]
             socketio.emit('new_token', {'token': token}, room=conversation_id)
-            # Add a small delay to simulate streaming
+            # Use a small sleep to simulate a natural token delay.
             socketio.sleep(0.05)
         
-        # Store the complete response in the database
+        # 4. Store the complete GPT response in the database.
         try:
             conn = get_db_connection()
             with conn:
@@ -55,13 +66,13 @@ def background_chat_task(conversation_id, user_input, universal_update):
                         (conversation_id, "Nyx", ai_response)
                     )
                     conn.commit()
-            logging.info(f"AI response stored in database for conversation {conversation_id}")
+            logging.info(f"GPT response stored in database for conversation {conversation_id}")
         except Exception as db_error:
-            logging.error(f"Database error storing AI response: {str(db_error)}")
+            logging.error(f"Database error storing GPT response: {str(db_error)}")
         
-        # Send the done event with the full text
+        # 5. Emit the final 'done' event with the full GPT response.
         socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
-        logging.info(f"Completed streaming response for conversation {conversation_id}")
+        logging.info(f"Completed streaming GPT response for conversation {conversation_id}")
         
     except Exception as e:
         logging.error(f"Error in background_chat_task: {str(e)}")
