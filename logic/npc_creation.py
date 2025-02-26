@@ -898,8 +898,6 @@ async def init_chase_schedule(user_id, conversation_id, combined_env, day_names)
     conn.close()
     
     return default_schedule
-# logic/npc_creation.py
-
 # -------------------------------------------------------------------------
 # HELPERS FOR ROBUST JSON PARSING
 # -------------------------------------------------------------------------
