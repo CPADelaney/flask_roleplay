@@ -173,19 +173,48 @@ def handle_message(data):
     logging.info(f"SocketIO: Received message: {data}")
     user_input = data.get('user_input')
     conversation_id = data.get('conversation_id')
+    universal_update = data.get('universal_update', {})
     
     if not user_input or not conversation_id:
         emit('error', {'error': 'Missing required fields'})
         return
     
+    # Store the user message in the database
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+        (conversation_id, "user", user_input)
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    # Make sure the client is in the conversation room
     join_room(conversation_id)
-    # Simulate a response (replace with actual GPT integration)
-    response = f"Echo: {user_input}"
+    
+    # Process the message (replace with your actual AI integration)
+    response = f"Echo from Nyx: {user_input}"
+    
+    # Stream the response token by token
     for i in range(0, len(response), 2):
         token = response[i:i+2]
-        emit('new_token', {'token': token}, room=conversation_id)
-        socketio.sleep(0.1)
-    emit('done', {'full_text': response}, room=conversation_id)
+        socketio.emit('new_token', {'token': token}, room=conversation_id)
+        socketio.sleep(0.1)  # Small delay between tokens
+    
+    # Store the response in the database
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+        (conversation_id, "Nyx", response)
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    # Send the done event with the full response
+    socketio.emit('done', {'full_text': response}, room=conversation_id)
 
 @socketio.on('chat_started')
 def handle_chat_started(data):
