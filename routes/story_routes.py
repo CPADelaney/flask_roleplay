@@ -478,6 +478,7 @@ async def next_storybeat():
 def gather_rule_knowledge():
     """
     Fetch short summaries from PlotTriggers, IntensityTiers, and Interactions.
+    Returns a dictionary with various rule knowledge components.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -530,6 +531,7 @@ def gather_rule_knowledge():
             "agency_overrides": json.loads(aov) if aov else {}
         })
 
+    cursor.close()
     conn.close()
 
     rule_enforcement_summary = (
