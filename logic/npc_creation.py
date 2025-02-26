@@ -1156,10 +1156,8 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         name_instruction = (
                 "Generate a creative, extremely unique, and varied feminine name for the NPC. "
                 "The name must be unmistakably feminine and should not be a common or overused name. "
-                "Ivent a name that is entirely original, unexpected, and richly evocative of a fantastical, mythological, or diverse cultural background that makes sense for the setting and the character (Eg., Isis, Artemis, Megan, Thoth, Cassandra, Mizuki, etc.). "
+                "Invent a name that is entirely original, unexpected, and richly evocative of a fantastical, mythological, or diverse cultural background that makes sense for the setting and the character (Eg., Isis, Artemis, Megan, Thoth, Cassandra, Mizuki, etc.). "
                 "Ensure that the name is unlike any generated previously in this playthrough. "
-                "Output strictly valid JSON with exactly one key: 'npc_name', whose value is the generated name as a string. "
-                "Do not include any extra commentary, formatting, or additional keys."
         )
 
     system_prompt = (
@@ -1178,8 +1176,7 @@ def get_archetype_synergy_description(archetypes_list, provided_npc_name=None):
         resp = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "system", "content": system_prompt}],
-            temperature=0.7,
-            max_tokens=300
+            temperature=0.7
         )
         synergy_raw = resp.choices[0].message.content.strip()
         logging.info(f"[get_archetype_synergy_description] Raw synergy GPT output => {synergy_raw!r}")
