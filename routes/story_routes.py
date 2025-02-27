@@ -26,10 +26,10 @@ from routes.settings_routes import generate_mega_setting_logic
 # Import new enhanced modules
 from logic.enhanced_stats import get_player_current_tier, check_for_combination_triggers, apply_stat_change, apply_activity_effects
 
-from logic.npc_evolution import process_daily_npc_activities, check_for_mask_slippage, detect_relationship_stage_changes
+from logic.npc_creation import process_daily_npc_activities, check_for_mask_slippage, detect_relationship_stage_changes
 from logic.narrative_progression import get_current_narrative_stage, check_for_personal_revelations, check_for_narrative_moments,check_for_npc_revelations, add_dream_sequence, add_moment_of_clarity
-from logic.enhanced_social_links import get_relationship_dynamic_level, update_relationship_dynamic, check_for_relationship_crossroads, check_for_relationship_ritual, get_relationship_summary
-from logic.enhanced_time_cycle import ActivityManager, should_advance_time, advance_time_with_events
+from logic.social_links import get_relationship_dynamic_level, update_relationship_dynamic, check_for_relationship_crossroads, check_for_relationship_ritual, get_relationship_summary
+from logic.time_cycle import ActivityManager, should_advance_time, advance_time_with_events
 from logic.addiction_system import check_addiction_levels, update_addiction_level, process_addiction_effects, get_addiction_status, get_addiction_label
 
 story_bp = Blueprint("story_bp", __name__)
