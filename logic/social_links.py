@@ -2662,23 +2662,44 @@ class MultiNPCInteractionManager:
                 if reveal_true_nature:
                     # Revealing true manipulative nature
                     if player_info["corruption"] > 50 or player_info["obedience"] > 50:
-                        conversation_parts.append(f"{speaker1['npc_name']}: \"I'm pleased with how Chase is progressing. {player_info['obedience'] > 60 and 'The obedience training is taking hold nicely.' or 'Their resistance is weakening considerably.'}")
-                        conversation_parts.append(f'{speaker2["npc_name"]}: "Yes, I\'ve noticed too. {player_info["dependency"] > 50 and "The dependency we\'ve fostered is quite effective." or "They\'re starting to crave our approval in a way that\'s... useful."}"')
+                        conversation_parts.append(
+                            f'{speaker1["npc_name"]}: "I\'m pleased with how Chase is progressing. {player_info["obedience"] > 60 and "The obedience training is taking hold nicely." or "Their resistance is weakening considerably."}"'
+                        )
+                        conversation_parts.append(
+                            f'{speaker2["npc_name"]}: "Yes, I\'ve noticed too. {player_info["dependency"] > 50 and "The dependency we\'ve fostered is quite effective." or "They\'re starting to crave our approval in a way that\'s... useful."}"'
+                        )
                     else:
-                        conversation_parts.append(f"{speaker1['npc_name']}: \"Chase is proving more resilient than expected. We may need to adjust our approach.\"")
-                        conversation_parts.append(f"{speaker2['npc_name']}: \"Agreed. Perhaps more subtle conditioning would be effective. They still maintain too much independence.\"")
+                        conversation_parts.append(
+                            f'{speaker1["npc_name"]}: "Chase is proving more resilient than expected. We may need to adjust our approach."'
+                        )
+                        conversation_parts.append(
+                            f'{speaker2["npc_name"]}: "Agreed. Perhaps more subtle conditioning would be effective. They still maintain too much independence."'
+                        )
                 else:
                     # More subtle conversation still revealing intentions
-                    conversation_parts.append(f"{speaker1['npc_name']}: \"How do you think Chase is adapting to everything?\"")
-                    conversation_parts.append(f"{speaker2['npc_name']}: \"Quite well, considering. Though I think they still don't fully understand their... position.\"")
+                    conversation_parts.append(
+                        f'{speaker1["npc_name"]}: "How do you think Chase is adapting to everything?"'
+                    )
+                    conversation_parts.append(
+                        f'{speaker2["npc_name"]}: "Quite well, considering. Though I think they still don\'t fully understand their... position."'
+                    )
             else:
                 # General revealing conversation
                 if reveal_true_nature:
-                    conversation_parts.append(f"{speaker1['npc_name']}: \"The facade becomes tiresome sometimes, doesn't it? Having to pretend we're not in control.\"")
-                    conversation_parts.append(f"{speaker2['npc_name']}: \"A necessary performance. People prefer the illusion of freedom while their choices are quietly... guided.\"")
+                    conversation_parts.append(
+                        f'{speaker1["npc_name"]}: "The facade becomes tiresome sometimes, doesn\'t it? Having to pretend we\'re not in control."'
+                    )
+                    conversation_parts.append(
+                        f'{speaker2["npc_name"]}: "A necessary performance. People prefer the illusion of freedom while their choices are quietly... guided."'
+                    )
                 else:
-                    conversation_parts.append(f"{speaker1['npc_name']}: \"Have you noticed how people respond to subtle direction when they don't realize it's happening?\"")
-                    conversation_parts.append(f"{speaker2['npc_name']}: \"It's fascinating, isn't it? The right word at the right moment can change someone's entire course.\"")
+                    conversation_parts.append(
+                        f'{speaker1["npc_name"]}: "Have you noticed how people respond to subtle direction when they don\'t realize it\'s happening?"'
+                    )
+                    conversation_parts.append(
+                        f'{speaker2["npc_name"]}: "It\'s fascinating, isn\'t it? The right word at the right moment can change someone\'s entire course."'
+                    )
+
             
             # Additional exchange
             if about_player:
