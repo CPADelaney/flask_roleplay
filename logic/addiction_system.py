@@ -1,7 +1,9 @@
 # logic/addiction_system.py
 
 """
-Module for managing player addictions to various stimuli.
+Module for managing player addictions to various stimuli in an extreme femdom roleplay setting.
+This version supports enhanced thematic messaging, bidirectional addiction changes,
+additional addiction types (e.g., humiliation, submission), and integrated stat penalties.
 """
 
 import logging
@@ -19,18 +21,148 @@ ADDICTION_LEVELS = {
     4: "Extreme"
 }
 
+# ------------------------------------------------------------------------------
+# Helper Functions for Thematic Addiction Effects
+# ------------------------------------------------------------------------------
+
+def process_socks_addiction(level):
+    messages = []
+    if level >= 1:
+        messages.append("You occasionally steal glances at sumptuous stockings.")
+    if level >= 2:
+        messages.append("A subtle craving for the delicate feel of silk emerges within you.")
+    if level >= 3:
+        messages.append("The allure of sensuous socks overwhelms your thoughts.")
+    if level >= 4:
+        messages.append("Under your Mistress’s commanding presence, your obsession with exquisite socks leaves you trembling in servile adoration.")
+    return messages
+
+def process_feet_addiction(level):
+    messages = []
+    if level >= 1:
+        messages.append("Your eyes frequently wander to the graceful arch of bare feet.")
+    if level >= 2:
+        messages.append("A surge of forbidden excitement courses through you at the mere glimpse of uncovered toes.")
+    if level >= 3:
+        messages.append("Distracted by the sight of enticing feet, you find it difficult to focus on anything else.")
+    if level >= 4:
+        messages.append("In the presence of your dominant Mistress, your fixation on every tantalizing curve of feet renders you utterly submissive.")
+    return messages
+
+def process_sweat_addiction(level):
+    messages = []
+    if level >= 1:
+        messages.append("The scent of perspiration begins to evoke an unspoken thrill within you.")
+    if level >= 2:
+        messages.append("Each drop of sweat stokes a simmering desire you dare not fully acknowledge.")
+    if level >= 3:
+        messages.append("Your senses heighten as the aroma of exertion casts a spell over your inhibitions.")
+    if level >= 4:
+        messages.append("Overwhelmed by the intoxicating allure of sweat, you are compelled to seek it out under your Mistress’s relentless command.")
+    return messages
+
+def process_ass_addiction(level):
+    messages = []
+    if level >= 1:
+        messages.append("Your gaze lingers a little longer on the curves of a well-shaped rear.")
+    if level >= 2:
+        messages.append("A subtle, forbidden thrill courses through you at the sight of a pert backside.")
+    if level >= 3:
+        messages.append("You find yourself fixated on every tantalizing detail of exposed derrieres, your mind wandering into submissive fantasies.")
+    if level >= 4:
+        messages.append("Under your Mistress’s unwavering control, your obsession with perfectly sculpted rear ends drives you to desperate submission.")
+    return messages
+
+def process_scent_addiction(level):
+    messages = []
+    if level >= 1:
+        messages.append("You become acutely aware of natural pheromones and subtle scents around you.")
+    if level >= 2:
+        messages.append("Every hint of an enticing aroma sends a shiver down your spine, awakening deep desires.")
+    if level >= 3:
+        messages.append("You begin to collect memories of scents, each evoking a surge of submissive longing.")
+    if level >= 4:
+        messages.append("In the grip of your extreme addiction, the mere whiff of a scent under your Mistress’s watchful eye reduces you to euphoric submission.")
+    return messages
+
+def process_humiliation_addiction(level):
+    messages = []
+    if level >= 1:
+        messages.append("The sting of humiliation sparks a curious thrill in your submissive heart.")
+    if level >= 2:
+        messages.append("You find yourself yearning for more degrading scenarios as your pride withers under each slight.")
+    if level >= 3:
+        messages.append("Every act of public embarrassment intensifies your craving to be dominated and humiliated.")
+    if level >= 4:
+        messages.append("In the presence of your ruthless Mistress, the exquisite agony of humiliation consumes you, binding your will entirely to her desires.")
+    return messages
+
+def process_submission_addiction(level):
+    messages = []
+    if level >= 1:
+        messages.append("The taste of obedience becomes subtly intoxicating as you seek her approval in every glance.")
+    if level >= 2:
+        messages.append("Your need to surrender grows, craving the reassurance that only your Mistress can provide.")
+    if level >= 3:
+        messages.append("In every command, you find a deeper satisfaction in your subjugated state, yearning to be molded by her hand.")
+    if level >= 4:
+        messages.append("Your identity dissolves in the overwhelming tide of submission, as your Mistress’s word becomes the sole law governing your existence.")
+    return messages
+
+# Mapping of addiction types to their effect processors
+EFFECT_PROCESSORS = {
+    "socks": process_socks_addiction,
+    "feet": process_feet_addiction,
+    "sweat": process_sweat_addiction,
+    "ass": process_ass_addiction,
+    "scent": process_scent_addiction,
+    "humiliation": process_humiliation_addiction,
+    "submission": process_submission_addiction,
+}
+
+# ------------------------------------------------------------------------------
+# Helper Function for Stat Penalties
+# ------------------------------------------------------------------------------
+
+def apply_stat_penalty(user_id, conversation_id, player_name, stat="willpower", penalty=5):
+    """
+    Apply a penalty to a player's stat (e.g., willpower) in the PlayerStats table.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Note: Using string formatting for the stat name is acceptable if the stat names are controlled.
+        query = f"""
+            UPDATE PlayerStats
+            SET {stat} = GREATEST({stat} - %s, 0)
+            WHERE user_id = %s AND conversation_id = %s AND player_name = %s
+        """
+        cursor.execute(query, (penalty, user_id, conversation_id, player_name))
+        conn.commit()
+        logging.info(f"Applied {penalty} penalty to {stat} for player {player_name}")
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Error applying {stat} penalty: {str(e)}")
+    finally:
+        cursor.close()
+        conn.close()
+
+# ------------------------------------------------------------------------------
+# Database Operations and Addiction Management
+# ------------------------------------------------------------------------------
+
 async def check_addiction_levels(user_id, conversation_id, player_name):
     """
     Check current addiction levels for all addiction types.
     
     Returns:
-        dict: Dictionary of addiction types and their current levels
+        dict: Dictionary of addiction types and their current levels, plus NPC-specific addictions.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
     
     try:
-        # Check if addiction table exists, if not create it
+        # Ensure the addiction table exists
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS PlayerAddictions (
                 id SERIAL PRIMARY KEY,
@@ -46,7 +178,7 @@ async def check_addiction_levels(user_id, conversation_id, player_name):
         """)
         conn.commit()
         
-        # Get all addiction levels for player
+        # Get all addiction levels for the player
         cursor.execute("""
             SELECT addiction_type, level, target_npc_id
             FROM PlayerAddictions
@@ -60,16 +192,13 @@ async def check_addiction_levels(user_id, conversation_id, player_name):
             addiction_type, level, target_npc_id = row
             
             if target_npc_id is None:
-                # General addiction
                 addiction_data[addiction_type] = level
             else:
-                # NPC-specific addiction
-                # Get NPC name
+                # For NPC-specific addictions, fetch the NPC's name for better messaging
                 cursor.execute("""
                     SELECT npc_name FROM NPCStats
                     WHERE user_id = %s AND conversation_id = %s AND npc_id = %s
                 """, (user_id, conversation_id, target_npc_id))
-                
                 npc_row = cursor.fetchone()
                 if npc_row:
                     npc_name = npc_row[0]
@@ -98,7 +227,9 @@ async def check_addiction_levels(user_id, conversation_id, player_name):
         cursor.close()
         conn.close()
 
-async def update_addiction_level(user_id, conversation_id, player_name, addiction_type, progression_chance=0.2, target_npc_id=None):
+async def update_addiction_level(user_id, conversation_id, player_name, addiction_type,
+                                 progression_chance=0.2, progression_multiplier=1.0,
+                                 regression_chance=0.1, target_npc_id=None):
     """
     Update addiction level with a chance of progression or regression.
     
@@ -106,12 +237,14 @@ async def update_addiction_level(user_id, conversation_id, player_name, addictio
         user_id: User ID
         conversation_id: Conversation ID
         player_name: Player name
-        addiction_type: Type of addiction (socks, feet, sweat, ass, scent)
-        progression_chance: Chance of addiction progressing (0.0-1.0)
+        addiction_type: Type of addiction (e.g., socks, feet, sweat, ass, scent, humiliation, submission)
+        progression_chance: Base chance of progression (0.0-1.0)
+        progression_multiplier: Multiplier to adjust progression chance (e.g., for intense scenes)
+        regression_chance: Chance of regression (0.0-1.0)
         target_npc_id: Optional NPC ID for NPC-specific addictions
         
     Returns:
-        dict: Updated addiction data
+        dict: Updated addiction info.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -134,17 +267,20 @@ async def update_addiction_level(user_id, conversation_id, player_name, addictio
         row = cursor.fetchone()
         current_level = row[0] if row else 0
         
-        # Determine if addiction progresses
         roll = random.random()
         new_level = current_level
         
-        if roll < progression_chance:
-            # Progress addiction unless already at max
-            if current_level < 4:  # Max level is 4 (Extreme)
+        # Attempt progression
+        if roll < progression_chance * progression_multiplier:
+            if current_level < 4:
                 new_level = current_level + 1
-                logging.info(f"Addiction {addiction_type} progressing from {current_level} to {new_level}")
+                logging.info(f"Addiction '{addiction_type}' progressing from {current_level} to {new_level}")
+        # Otherwise, check for regression
+        elif roll > (1 - regression_chance) and current_level > 0:
+            new_level = current_level - 1
+            logging.info(f"Addiction '{addiction_type}' regressing from {current_level} to {new_level}")
         
-        # Update addiction level in database with UPSERT
+        # Update the addiction level using UPSERT
         if target_npc_id is None:
             cursor.execute("""
                 INSERT INTO PlayerAddictions 
@@ -164,29 +300,27 @@ async def update_addiction_level(user_id, conversation_id, player_name, addictio
         
         conn.commit()
         
-        # Return updated addiction info
         return {
             "addiction_type": addiction_type,
             "previous_level": current_level,
             "new_level": new_level,
             "level_name": ADDICTION_LEVELS[new_level],
             "progressed": new_level > current_level,
+            "regressed": new_level < current_level,
             "target_npc_id": target_npc_id
         }
         
     except Exception as e:
         conn.rollback()
-        logging.error(f"Error updating addiction level: {str(e)}")
-        return {
-            "error": str(e)
-        }
+        logging.error(f"Error updating addiction level for '{addiction_type}': {str(e)}")
+        return {"error": str(e)}
     finally:
         cursor.close()
         conn.close()
 
 async def process_addiction_effects(user_id, conversation_id, player_name, addiction_status):
     """
-    Process effects based on current addiction levels.
+    Process effects based on current addiction levels and generate thematic messages.
     
     Args:
         user_id: User ID
@@ -195,100 +329,41 @@ async def process_addiction_effects(user_id, conversation_id, player_name, addic
         addiction_status: Dictionary of current addiction levels
         
     Returns:
-        dict: Effects generated by addictions
+        dict: Effects generated by addictions.
     """
     effects = []
     addiction_levels = addiction_status.get("addiction_levels", {})
     npc_specific = addiction_status.get("npc_specific_addictions", [])
     
-    # Process general addiction effects
+    # Process general (player) addictions using the modular processors
     for addiction_type, level in addiction_levels.items():
         if level <= 0:
             continue
-            
-        # Add effects based on addiction type and level
-        if addiction_type == "socks":
-            if level >= 1:
-                effects.append(f"You find yourself occasionally glancing at people's socks")
-            if level >= 2:
-                effects.append(f"You feel a mild urge to touch or smell socks")
-            if level >= 3:
-                effects.append(f"You become distracted when seeing socks and have intrusive thoughts about them")
-            if level >= 4:
-                effects.append(f"You feel an overwhelming need to engage with socks - collecting, smelling, or touching them")
-                
-        elif addiction_type == "feet":
-            if level >= 1:
-                effects.append(f"You notice yourself looking at people's feet more often")
-            if level >= 2:
-                effects.append(f"You feel a rush of excitement when someone removes their shoes")
-            if level >= 3:
-                effects.append(f"You struggle to focus on conversations when bare feet are visible")
-            if level >= 4:
-                effects.append(f"You're consumed by thoughts about feet and look for any opportunity to see, touch, or smell them")
-                
-        elif addiction_type == "sweat":
-            if level >= 1:
-                effects.append(f"You notice the scent of sweat more than before")
-            if level >= 2:
-                effects.append(f"You feel a subtle excitement when detecting someone's sweat")
-            if level >= 3:
-                effects.append(f"You find yourself drawn to people after they've exercised")
-            if level >= 4:
-                effects.append(f"The smell of sweat is intoxicating to you, and you seek it out constantly")
-                
-        elif addiction_type == "ass":
-            if level >= 1:
-                effects.append(f"You catch yourself looking at people's rear ends more often")
-            if level >= 2:
-                effects.append(f"You have frequent thoughts about touching or smelling people's behinds")
-            if level >= 3:
-                effects.append(f"You struggle to focus when someone's behind is prominently displayed")
-            if level >= 4:
-                effects.append(f"You're obsessed with rear ends and will do almost anything to get closer to them")
-                
-        elif addiction_type == "scent":
-            if level >= 1:
-                effects.append(f"You're more aware of people's natural scents")
-            if level >= 2:
-                effects.append(f"You find yourself leaning in closer to people to catch their scent")
-            if level >= 3:
-                effects.append(f"You've begun collecting items with people's scents on them")
-            if level >= 4:
-                effects.append(f"You're constantly thinking about capturing and experiencing people's scents")
+        processor = EFFECT_PROCESSORS.get(addiction_type)
+        if processor:
+            messages = processor(level)
+            effects.extend(messages)
+        else:
+            effects.append(f"Your addiction to {addiction_type} is at level {level}.")
+        
+        # Apply stat penalty if at extreme level
+        if level == 4:
+            logging.info(f"Extreme '{addiction_type}' addiction detected; applying willpower penalty.")
+            apply_stat_penalty(user_id, conversation_id, player_name, stat="willpower", penalty=5)
     
-    # Process NPC-specific addiction effects
+    # Process NPC-specific addictions with additional messaging
     for npc_addiction in npc_specific:
         npc_name = npc_addiction.get("npc_name", "Someone")
         addiction_type = npc_addiction.get("addiction_type", "")
         level = npc_addiction.get("level", 0)
         
-        if level >= 3:  # Only show effects for significant NPC addictions
-            effects.append(f"You have a powerful {ADDICTION_LEVELS[level].lower()} addiction to {npc_name}'s {addiction_type}")
-            
-            # Add specific effects based on the combination
+        if level >= 3:
+            effects.append(f"You have a powerful {ADDICTION_LEVELS[level].lower()} addiction to {npc_name}'s {addiction_type}.")
             if level >= 4:
-                effects.append(f"When {npc_name} is around, you can barely control your impulses related to their {addiction_type}")
-                
-                # Apply stat penalties when extremely addicted
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                try:
-                    # Reduce willpower when extremely addicted
-                    cursor.execute("""
-                        UPDATE PlayerStats
-                        SET willpower = GREATEST(willpower - 5, 0)
-                        WHERE user_id = %s AND conversation_id = %s AND player_name = %s
-                    """, (user_id, conversation_id, player_name))
-                    conn.commit()
-                except Exception as e:
-                    conn.rollback()
-                    logging.error(f"Error applying addiction stat penalty: {str(e)}")
-                finally:
-                    cursor.close()
-                    conn.close()
+                effects.append(f"When {npc_name} is near, your submission intensifies—you can barely control your impulses regarding their {addiction_type}.")
+                logging.info(f"Extreme NPC-specific addiction for '{addiction_type}' with {npc_name}; applying willpower penalty.")
+                apply_stat_penalty(user_id, conversation_id, player_name, stat="willpower", penalty=5)
     
-    # Return addiction effects
     return {
         "effects": effects,
         "has_effects": len(effects) > 0
@@ -297,10 +372,10 @@ async def process_addiction_effects(user_id, conversation_id, player_name, addic
 async def get_addiction_status(user_id, conversation_id, player_name):
     """
     Get current addiction status for a player.
-    This is just a wrapper for check_addiction_levels.
+    This is a wrapper for check_addiction_levels.
     """
     return await check_addiction_levels(user_id, conversation_id, player_name)
 
 def get_addiction_label(level):
-    """Helper function to get text label for addiction level"""
+    """Helper function to get the textual label for an addiction level."""
     return ADDICTION_LEVELS.get(level, "Unknown")
