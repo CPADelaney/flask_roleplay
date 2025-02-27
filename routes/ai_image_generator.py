@@ -1,7 +1,5 @@
 # routes/ai_image_generator.py
 
-# routes/ai_image_generator.py
-
 import os
 import json
 import hashlib
