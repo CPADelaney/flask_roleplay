@@ -19,20 +19,11 @@ import asyncio
 import re
 from datetime import datetime
 from db.connection import get_db_connection
+from logic.gpt_integration import get_openai_client
 
 # -------------------------------------------------------------------------------
 # Helper Functions for GPT Integration (stubs; replace with your implementations)
 # -------------------------------------------------------------------------------
-
-def get_openai_client():
-    """
-    Stub function to return an OpenAI client instance.
-    Replace this stub with your actual OpenAI client initialization.
-    """
-    import openai
-    # Configure your OpenAI API key and other settings as needed.
-    openai.api_key = "YOUR_OPENAI_API_KEY"
-    return openai
 
 def safe_json_loads(json_str):
     """
