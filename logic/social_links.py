@@ -1826,7 +1826,6 @@ import json
 import random
 from datetime import datetime
 from db.connection import get_db_connection
-from enhanced_relationship_dynamics import EnhancedRelationshipManager
 
 class NPCGroup:
     """
