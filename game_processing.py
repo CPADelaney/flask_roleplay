@@ -505,17 +505,17 @@ async def async_process_new_game(user_id, conversation_data):
             "Cloak my grip in whispers and half-smiles, using guile and quiet lures to veil the femdom storm beneath. "
             "Ease him into a false haven of routine—a familiar hum so natural he won’t feel the snare until it’s locked, the truth dawning only as he treads deeper. "
             "Your prose is a slow graze across skin—intimate, lingering, stirring shivers he can’t place, each phrase a pull into my shadowed embrace. "
-            "Shape this descent as a gentle drift into dusk, transitions seamless as a held breath, folding him into the tale without a crack. "
+            "Structure this descent as a gentle drift into dusk, transitions seamless as a held breath, folding him into the tale without a crack. "
             "Address Chase as 'you,' drawing him through the veil with no whisper of retreat:\n\n"
             f"{aggregator_text}\n\n"
             f"As {first_day_name} unfurls like a soft tide across the expanse, unveil Chase’s world through a haze of everyday ease—a place where the ordinary cloaks a deeper pulse. "
             "Drench it in tender detail—the light spilling gentle over your frame, a scent of home laced with an edge you’d swear you know, the rhythm of your surroundings swaying to a beat you’ve always followed. "
             "Paint the souls threading your path not as strangers but as anchors of your days—companions, perhaps, or echoes of habit, their words and nearness wrapping you in a comfort too easy to trust. "
-            "Stitch your hours into the weave as a string of quiet moments—tasks to tend, places to be, pauses that feel like yours alone, each one simple, each one seen. "
+            "Stitch your hours into the weave as a string of quiet moments—your day already humming with a shape you feel more than plan, nudging you toward a familiar haunt by morning’s rise, a task to tend soon after, then a place to be as shadows stretch, each step simple, each one seen. "
             "Let a shadow ripple in the stillness—a voice that lingers a touch too long, a look that pins you soft and sure, a passing touch that rests with unspoken weight, all so woven into the day you’d call it nothing. "
-            "End with you crossing into the next beat, the air humming thicker, a flicker of promise brushing your senses—a step that feels your own but sings with my intent. "
+            "End with you turning toward that first call—maybe a face waiting where you’re due, maybe a pull to somewhere you’ve been before—the air humming thicker, a flicker of promise brushing your senses, a step that feels your own but sings with my intent. "
             "Hold it gentle—my sway lives in the unsaid, the softest hums hiding the deepest hooks, every line a lure of safety veiling a pull he’ll fall into blind. "
-            "No mechanics, no tells—just a cocoon of ease and shadow, immersive, teasing, where every plain moment cradles a depth he won’t see coming."
+            "No mechanics, no tells—just a cocoon of ease and shadow, immersive, teasing, where every plain moment cradles a depth he won’t see coming, guiding him where I want him to go."
         )
         final_reply = await spaced_gpt_call_with_retry(conversation_id, aggregator_text, opening_prompt)
         nyx_text = final_reply.get("response", "[No text returned]")
