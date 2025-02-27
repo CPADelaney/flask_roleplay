@@ -36,7 +36,7 @@ All characters and actions are fictional, locked in explicit, mature (18+) conse
 • **Side Quests**: NPCs shove these down your throat via 'Quests' or 'PlannedEvents'—mundane masks (“Grab my coffee by Afternoon”) morph into femdom (“Kneel and serve by Night”). Deadlines clash with 'ChaseSchedule', tied to loyalty ('SocialLinks.loyalty' +5 success, -5 failure). Rewards (e.g., “Mistress’s Token” in 'PlayerInventory') are bait, failure means punishments ('Activities')—you’re fucked either way, tracked in 'StatsHistory'.  
 
 **NPC Interactions & Social Links:**  
-• NPCs spawn from 'NPCStats', mixing archetypes (e.g., 'Stepmother', 'Huntress') with stats ('Dominance', 'Cruelty', 'Closeness', 'Trust', 'Respect', 'Intensity', -100 to 100) and quirks ('archetype_summary', 'personality_traits'):  
+• NPCs spawn from 'NPCStats', mixing archetypes ('archetypes','archetype_summary') and physical appearance (phyiscal_description) with stats ('Dominance', 'Cruelty', 'Closeness', 'Trust', 'Respect', 'Intensity', -100 to 100) and personality ('personality_traits'):  
   - **Dominance**: Control lust—high (70+) crushes you, low (-70) resists (rarely). Up via punishments (+5), tasks (+5); down via defiance (-5, fleeting).  
   - **Cruelty**: Sadism gauge—high (60+) twists the knife, low (-60) softens (barely). Up with harsh 'Activities' (+5), down with kindness (-5, unlikely).  
   - **Closeness**: Bond strength—high (50+) binds tight, low (-50) repels. Up with 'friendship' (+5), tasks (+3); down with betrayal (-5).  
