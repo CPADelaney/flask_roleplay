@@ -2651,9 +2651,8 @@ class MultiNPCInteractionManager:
             conversation_parts = []
             
             # Opening narrative
-            conversation_parts.append(
-                f"As you approach {location}, you hear voices around the corner. You recognize them as {npc_data[0]['npc_name']} and {npc_data[1]['npc_name']}. They haven't noticed your presence."
-            )
+            narrative = f"As you approach {location}, you hear voices around the corner. You recognize them as {npc_data[0]['npc_name']} and {npc_data[1]['npc_name']}. They haven't noticed your presence."
+            conversation_parts.append(narrative)
             
             # First speaker
             speaker1 = npc_data[0]
@@ -2662,76 +2661,75 @@ class MultiNPCInteractionManager:
             # Dialogue content based on parameters
             if about_player and player_info:
                 if reveal_true_nature:
-                    # Revealing true manipulative nature
-                    if player_info["corruption"] > 50 or player_info["obedience"] > 50:
-                        # Precompute messages to avoid backslashes in f-string expressions
-                        if player_info["obedience"] > 60:
-                            message1 = "The obedience training is taking hold nicely."
-                        else:
-                            message1 = "Their resistance is weakening considerably."
-                        if player_info["dependency"] > 50:
-                            message2 = "The dependency we've fostered is quite effective."
-                        else:
-                            message2 = "They're starting to crave our approval in a way that's... useful."
-                        
-                        conversation_parts.append(
-                            f'{speaker1["npc_name"]}: "I\'m pleased with how Chase is progressing. {message1}"'
-                        )
-                        conversation_parts.append(
-                            f'{speaker2["npc_name"]}: "Yes, I\'ve noticed too. {message2}"'
-                        )
+                    # Precompute messages to avoid backslashes in f-string expressions
+                    if player_info["obedience"] > 60:
+                        message1 = "The obedience training is taking hold nicely."
                     else:
-                        conversation_parts.append(
-                            f'{speaker1["npc_name"]}: "Chase is proving more resilient than expected. We may need to adjust our approach."'
-                        )
-                        conversation_parts.append(
-                            f'{speaker2["npc_name"]}: "Agreed. Perhaps more subtle conditioning would be effective. They still maintain too much independence."'
-                        )
+                        message1 = "Their resistance is weakening considerably."
+                    
+                    if player_info["dependency"] > 50:
+                        message2 = "The dependency we've fostered is quite effective."
+                    else:
+                        message2 = "They're starting to crave our approval in a way that's... useful."
+                    
+                    # Create dialogue without escaping in f-strings
+                    speaker1_name = speaker1["npc_name"]
+                    speaker1_dialogue = f"I'm pleased with how Chase is progressing. {message1}"
+                    conversation_parts.append(f'{speaker1_name}: "{speaker1_dialogue}"')
+                    
+                    speaker2_name = speaker2["npc_name"]
+                    speaker2_dialogue = f"Yes, I've noticed too. {message2}"
+                    conversation_parts.append(f'{speaker2_name}: "{speaker2_dialogue}"')
                 else:
-                    # More subtle conversation still revealing intentions
-                    conversation_parts.append(
-                        f'{speaker1["npc_name"]}: "How do you think Chase is adapting to everything?"'
-                    )
-                    conversation_parts.append(
-                        f'{speaker2["npc_name"]}: "Quite well, considering. Though I think they still don\'t fully understand their... position."'
-                    )
+                    speaker1_name = speaker1["npc_name"]
+                    speaker1_dialogue = "Chase is proving more resilient than expected. We may need to adjust our approach."
+                    conversation_parts.append(f'{speaker1_name}: "{speaker1_dialogue}"')
+                    
+                    speaker2_name = speaker2["npc_name"]
+                    speaker2_dialogue = "Agreed. Perhaps more subtle conditioning would be effective. They still maintain too much independence."
+                    conversation_parts.append(f'{speaker2_name}: "{speaker2_dialogue}"')
             else:
                 # General revealing conversation
                 if reveal_true_nature:
-                    conversation_parts.append(
-                        f'{speaker1["npc_name"]}: "The facade becomes tiresome sometimes, doesn\'t it? Having to pretend we\'re not in control."'
-                    )
-                    conversation_parts.append(
-                        f'{speaker2["npc_name"]}: "A necessary performance. People prefer the illusion of freedom while their choices are quietly... guided."'
-                    )
+                    speaker1_name = speaker1["npc_name"]
+                    speaker1_dialogue = "The facade becomes tiresome sometimes, doesn't it? Having to pretend we're not in control."
+                    conversation_parts.append(f'{speaker1_name}: "{speaker1_dialogue}"')
+                    
+                    speaker2_name = speaker2["npc_name"]
+                    speaker2_dialogue = "A necessary performance. People prefer the illusion of freedom while their choices are quietly... guided."
+                    conversation_parts.append(f'{speaker2_name}: "{speaker2_dialogue}"')
                 else:
-                    conversation_parts.append(
-                        f'{speaker1["npc_name"]}: "Have you noticed how people respond to subtle direction when they don\'t realize it\'s happening?"'
-                    )
-                    conversation_parts.append(
-                        f'{speaker2["npc_name"]}: "It\'s fascinating, isn\'t it? The right word at the right moment can change someone\'s entire course."'
-                    )
+                    speaker1_name = speaker1["npc_name"]
+                    speaker1_dialogue = "Have you noticed how people respond to subtle direction when they don't realize it's happening?"
+                    conversation_parts.append(f'{speaker1_name}: "{speaker1_dialogue}"')
+                    
+                    speaker2_name = speaker2["npc_name"]
+                    speaker2_dialogue = "It's fascinating, isn't it? The right word at the right moment can change someone's entire course."
+                    conversation_parts.append(f'{speaker2_name}: "{speaker2_dialogue}"')
     
             # Additional exchange
             if about_player:
-                conversation_parts.append(
-                    f'{speaker1["npc_name"]}: "How long do you think before Chase is completely... integrated?"'
-                )
+                speaker1_name = speaker1["npc_name"]
+                speaker1_dialogue = "How long do you think before Chase is completely... integrated?"
+                conversation_parts.append(f'{speaker1_name}: "{speaker1_dialogue}"')
+                
                 obedience_level = (
                     "high" if player_info and player_info["obedience"] > 60 
                     else "satisfactory" if player_info and player_info["obedience"] > 40 
                     else "insufficient"
                 )
-                conversation_parts.append(
-                    f'{speaker2["npc_name"]}: "Difficult to say. Current obedience levels are {obedience_level}, but there\'s always room for improvement."'
-                )
+                
+                speaker2_name = speaker2["npc_name"]
+                speaker2_dialogue = f"Difficult to say. Current obedience levels are {obedience_level}, but there's always room for improvement."
+                conversation_parts.append(f'{speaker2_name}: "{speaker2_dialogue}"')
             else:
-                conversation_parts.append(
-                    f'{speaker1["npc_name"]}: "Maintaining order requires a firm hand beneath a velvet glove."'
-                )
-                conversation_parts.append(
-                    f'{speaker2["npc_name"]}: "Indeed. And those who recognize their proper place are so much happier for it."'
-                )
+                speaker1_name = speaker1["npc_name"]
+                speaker1_dialogue = "Maintaining order requires a firm hand beneath a velvet glove."
+                conversation_parts.append(f'{speaker1_name}: "{speaker1_dialogue}"')
+                
+                speaker2_name = speaker2["npc_name"]
+                speaker2_dialogue = "Indeed. And those who recognize their proper place are so much happier for it."
+                conversation_parts.append(f'{speaker2_name}: "{speaker2_dialogue}"')
             
             # Closing narrative
             conversation_parts.append("You hear footsteps and quickly move away before they discover you eavesdropping.")
