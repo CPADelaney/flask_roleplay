@@ -7,7 +7,7 @@ import json
 import logging
 from datetime import datetime
 from db.connection import get_db_connection
-from logic.npc_evolution import (
+from logic.npc_creation import (
     process_daily_npc_activities,
     check_for_mask_slippage,
     detect_relationship_stage_changes
