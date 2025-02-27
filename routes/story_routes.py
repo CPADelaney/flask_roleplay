@@ -59,7 +59,8 @@ from logic.addiction_system import (
     check_addiction_levels,
     update_addiction_level,
     process_addiction_effects,
-    get_addiction_status
+    get_addiction_status,
+    get_addiction_label
 )
 
 story_bp = Blueprint("story_bp", __name__)
