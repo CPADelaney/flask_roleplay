@@ -1,9 +1,10 @@
-# logic.integrated_npc_management.py
+# fully_integrated_npc_system.py
 
 import os
 import json
 import logging
 import asyncio
+import random
 from datetime import datetime
 from typing import Dict, List, Optional, Union, Any, Tuple
 
@@ -73,7 +74,9 @@ class IntegratedNPCSystem:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.activity_manager = ActivityManager()
-    
+        logger.info(f"Initialized IntegratedNPCSystem for user={user_id}, conversation={conversation_id}")
+        logger.info(f"Available time phases: {TIME_PHASES}")
+        
     #=================================================================
     # NPC CREATION AND MANAGEMENT
     #=================================================================
@@ -90,7 +93,9 @@ class IntegratedNPCSystem:
         Returns:
             The newly created NPC ID
         """
-        # Step 1: Create the partial NPC (base data)
+        logger.info(f"Creating new NPC in environment: {environment_desc[:30]}...")
+        
+        # Step 1: Create the partial NPC (base data) - Using create_npc_partial
         partial_npc = create_npc_partial(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
@@ -99,16 +104,16 @@ class IntegratedNPCSystem:
             environment_desc=environment_desc
         )
         
-        # Step 1.5: Integrate subtle femdom elements based on dominance
+        # Step 1.5: Integrate subtle femdom elements - Using integrate_femdom_elements
         partial_npc = await integrate_femdom_elements(partial_npc)
         
-        # Step 2: Insert the partial NPC into the database
+        # Step 2: Insert the partial NPC into the database - Using insert_npc_stub_into_db
         npc_id = await insert_npc_stub_into_db(
             partial_npc, self.user_id, self.conversation_id
         )
         logger.info(f"Created NPC stub with ID {npc_id} and name {partial_npc['npc_name']}")
         
-        # Step 3: Assign relationships
+        # Step 3: Assign relationships - Using assign_random_relationships
         await assign_random_relationships(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
@@ -135,20 +140,28 @@ class IntegratedNPCSystem:
         conn.close()
 
         # Step 5: Generate enhanced fields using GPT
+        # Using gpt_generate_physical_description
         physical_description = await gpt_generate_physical_description(
             self.user_id, self.conversation_id, partial_npc, environment_desc
         )
+        
+        # Using gpt_generate_schedule
         schedule = await gpt_generate_schedule(
             self.user_id, self.conversation_id, partial_npc, environment_desc, day_names
         )
+        
+        # Using gpt_generate_memories
         memories = await gpt_generate_memories(
             self.user_id, self.conversation_id, partial_npc, environment_desc, relationships
         )
+        
+        # Using gpt_generate_affiliations
         affiliations = await gpt_generate_affiliations(
             self.user_id, self.conversation_id, partial_npc, environment_desc
         )
         
         # Step 6: Determine current location based on time of day and schedule
+        # Using get_current_time
         current_year, current_month, current_day, time_of_day = get_current_time(
             self.user_id, self.conversation_id
         )
@@ -209,7 +222,7 @@ class IntegratedNPCSystem:
         
         logger.info(f"Successfully refined NPC {npc_id} ({partial_npc['npc_name']})")
         
-        # Step 8: Propagate memories to other connected NPCs
+        # Step 8: Propagate memories to other connected NPCs - Using propagate_shared_memories
         propagate_shared_memories(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
@@ -218,9 +231,15 @@ class IntegratedNPCSystem:
             memories=memories
         )
         
-        # Step 9: Initialize mask for the NPC
+        # Step 9: Initialize mask for the NPC - Using ProgressiveRevealManager
         await ProgressiveRevealManager.initialize_npc_mask(
             self.user_id, self.conversation_id, npc_id
+        )
+        
+        # Step 10: Create a direct memory event - Using record_npc_event
+        creation_memory = f"I was created on {current_year}-{current_month}-{current_day} during {time_of_day}."
+        record_npc_event(
+            self.user_id, self.conversation_id, npc_id, creation_memory
         )
         
         return npc_id
@@ -393,6 +412,12 @@ class IntegratedNPCSystem:
                 f"Met {npc_name} for the first time."
             ))
             
+            # Create an introduction memory for the NPC - Using record_npc_event
+            introduction_memory = f"I was formally introduced to the player today."
+            record_npc_event(
+                self.user_id, self.conversation_id, npc_id, introduction_memory
+            )
+            
             conn.commit()
             return True
             
@@ -408,11 +433,141 @@ class IntegratedNPCSystem:
     # SOCIAL LINKS AND RELATIONSHIPS
     #=================================================================
     
+    async def create_direct_social_link(self, 
+                                      entity1_type: str, entity1_id: int,
+                                      entity2_type: str, entity2_id: int,
+                                      link_type: str = "neutral", 
+                                      link_level: int = 0) -> int:
+        """
+        Create a direct social link between two entities.
+        
+        Args:
+            entity1_type: Type of first entity
+            entity1_id: ID of first entity
+            entity2_type: Type of second entity
+            entity2_id: ID of second entity
+            link_type: Type of link
+            link_level: Level of the link
+            
+        Returns:
+            The ID of the created link
+        """
+        # Using create_social_link
+        link_id = create_social_link(
+            self.user_id, self.conversation_id,
+            entity1_type, entity1_id,
+            entity2_type, entity2_id,
+            link_type, link_level
+        )
+        
+        logger.info(f"Created social link (ID: {link_id}) between {entity1_type}:{entity1_id} and {entity2_type}:{entity2_id}")
+        return link_id
+    
+    async def update_link_details(self, link_id: int, new_type: str = None, level_change: int = 0) -> Dict[str, Any]:
+        """
+        Update the type and level of a social link.
+        
+        Args:
+            link_id: ID of the link
+            new_type: New type for the link (or None to keep current type)
+            level_change: Amount to change the level by
+            
+        Returns:
+            Dictionary with update results
+        """
+        # Using update_link_type_and_level
+        result = update_link_type_and_level(
+            self.user_id, self.conversation_id,
+            link_id, new_type, level_change
+        )
+        
+        if result:
+            logger.info(f"Updated link {link_id}: type={result['new_type']}, level={result['new_level']}")
+        
+        return result
+    
+    async def add_event_to_link(self, link_id: int, event_text: str) -> bool:
+        """
+        Add an event to a social link's history.
+        
+        Args:
+            link_id: ID of the link
+            event_text: Text describing the event
+            
+        Returns:
+            True if successful
+        """
+        # Using add_link_event
+        add_link_event(
+            self.user_id, self.conversation_id,
+            link_id, event_text
+        )
+        
+        logger.info(f"Added event to link {link_id}: {event_text[:50]}...")
+        return True
+    
+    async def get_dynamic_level(self, 
+                              entity1_type: str, entity1_id: int,
+                              entity2_type: str, entity2_id: int,
+                              dynamic_name: str) -> int:
+        """
+        Get the level of a specific relationship dynamic.
+        
+        Args:
+            entity1_type: Type of first entity
+            entity1_id: ID of first entity
+            entity2_type: Type of second entity
+            entity2_id: ID of second entity
+            dynamic_name: Name of the dynamic
+            
+        Returns:
+            Current level of the dynamic
+        """
+        # Using get_relationship_dynamic_level
+        level = get_relationship_dynamic_level(
+            self.user_id, self.conversation_id,
+            entity1_type, entity1_id,
+            entity2_type, entity2_id,
+            dynamic_name
+        )
+        
+        logger.info(f"Dynamic '{dynamic_name}' level between {entity1_type}:{entity1_id} and {entity2_type}:{entity2_id} is {level}")
+        return level
+    
+    async def update_dynamic(self, 
+                           entity1_type: str, entity1_id: int,
+                           entity2_type: str, entity2_id: int,
+                           dynamic_name: str, change: int) -> int:
+        """
+        Update a specific relationship dynamic.
+        
+        Args:
+            entity1_type: Type of first entity
+            entity1_id: ID of first entity
+            entity2_type: Type of second entity
+            entity2_id: ID of second entity
+            dynamic_name: Name of the dynamic
+            change: Amount to change the dynamic by
+            
+        Returns:
+            New level of the dynamic
+        """
+        # Using update_relationship_dynamic
+        new_level = update_relationship_dynamic(
+            self.user_id, self.conversation_id,
+            entity1_type, entity1_id,
+            entity2_type, entity2_id,
+            dynamic_name, change
+        )
+        
+        logger.info(f"Updated dynamic '{dynamic_name}' to level {new_level}")
+        return new_level
+    
     async def create_relationship(self, 
-                                  entity1_type: str, entity1_id: int,
-                                  entity2_type: str, entity2_id: int,
-                                  relationship_type: str = None, 
-                                  initial_level: int = 0) -> Dict[str, Any]:
+                                entity1_type: str, entity1_id: int,
+                                entity2_type: str, entity2_id: int,
+                                relationship_type: str = None, 
+                                initial_level: int = 0) -> Dict[str, Any]:
         """
         Create a new relationship between two entities.
         
@@ -438,9 +593,9 @@ class IntegratedNPCSystem:
         return result
     
     async def update_relationship_dimensions(self, 
-                                           link_id: int, 
-                                           dimension_changes: Dict[str, int],
-                                           reason: str = None) -> Dict[str, Any]:
+                                          link_id: int, 
+                                          dimension_changes: Dict[str, int],
+                                          reason: str = None) -> Dict[str, Any]:
         """
         Update dimensions of a relationship.
         
@@ -510,7 +665,7 @@ class IntegratedNPCSystem:
         """
         events = []
         
-        # Check for relationship crossroads
+        # Using check_for_relationship_crossroads
         crossroads = await check_for_relationship_crossroads(self.user_id, self.conversation_id)
         if crossroads:
             events.append({
@@ -518,7 +673,7 @@ class IntegratedNPCSystem:
                 "data": crossroads
             })
         
-        # Check for relationship rituals
+        # Using check_for_relationship_ritual
         ritual = await check_for_relationship_ritual(self.user_id, self.conversation_id)
         if ritual:
             events.append({
@@ -545,6 +700,7 @@ class IntegratedNPCSystem:
         Returns:
             Dictionary with the results
         """
+        # Using apply_crossroads_choice
         result = await apply_crossroads_choice(
             self.user_id, self.conversation_id, link_id, crossroads_name, choice_index
         )
@@ -555,13 +711,85 @@ class IntegratedNPCSystem:
     # MEMORY MANAGEMENT
     #=================================================================
     
+    async def record_memory_event(self, npc_id: int, event_description: str) -> bool:
+        """
+        Record a memory event for an NPC.
+        
+        Args:
+            npc_id: ID of the NPC
+            event_description: Description of the event
+            
+        Returns:
+            True if successful
+        """
+        # Using record_npc_event
+        record_npc_event(
+            self.user_id, self.conversation_id, npc_id, event_description
+        )
+        logger.info(f"Recorded memory event for NPC {npc_id}: {event_description[:50]}...")
+        return True
+    
+    async def generate_shared_memory(self, 
+                                   npc_id: int, 
+                                   target: str = "player", 
+                                   target_name: str = "Chase", 
+                                   rel_type: str = "related") -> str:
+        """
+        Generate a shared memory between an NPC and another entity.
+        
+        Args:
+            npc_id: ID of the NPC
+            target: Target type
+            target_name: Target name
+            rel_type: Relationship type
+            
+        Returns:
+            Generated memory text
+        """
+        # Using get_shared_memory
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT npc_name, archetype_summary, archetype_extras_summary 
+            FROM NPCStats
+            WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+        """, (self.user_id, self.conversation_id, npc_id))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return "Memory generation failed: NPC not found."
+            
+        npc_name, archetype_summary, archetype_extras_summary = row
+        
+        # Create relationship object
+        relationship = {
+            "target": target,
+            "target_name": target_name,
+            "type": rel_type
+        }
+        
+        memory_text = get_shared_memory(
+            self.user_id, self.conversation_id,
+            relationship, npc_name,
+            archetype_summary, archetype_extras_summary
+        )
+        
+        # Record the generated memory
+        record_npc_event(
+            self.user_id, self.conversation_id, npc_id, memory_text
+        )
+        
+        return memory_text
+    
     async def add_memory_to_npc(self, 
-                               npc_id: int, 
-                               memory_text: str,
-                               memory_type: str = "interaction",
-                               significance: int = 3,
-                               emotional_valence: int = 0,
-                               tags: List[str] = None) -> bool:
+                              npc_id: int, 
+                              memory_text: str,
+                              memory_type: str = "interaction",
+                              significance: int = 3,
+                              emotional_valence: int = 0,
+                              tags: List[str] = None) -> bool:
         """
         Add a memory to an NPC.
         
@@ -576,7 +804,7 @@ class IntegratedNPCSystem:
         Returns:
             True if successful, False otherwise
         """
-        # Use the MemoryManager to add the memory
+        # Using MemoryManager.add_memory
         result = await MemoryManager.add_memory(
             self.user_id, self.conversation_id,
             npc_id, "npc",
@@ -604,6 +832,7 @@ class IntegratedNPCSystem:
         Returns:
             List of memory objects
         """
+        # Using MemoryManager.retrieve_relevant_memories
         memories = await MemoryManager.retrieve_relevant_memories(
             self.user_id, self.conversation_id,
             npc_id, "npc",
@@ -623,6 +852,7 @@ class IntegratedNPCSystem:
         Returns:
             Flashback data or None if no flashback was generated
         """
+        # Using MemoryManager.generate_flashback
         flashback = await MemoryManager.generate_flashback(
             self.user_id, self.conversation_id, npc_id, current_context
         )
@@ -653,7 +883,7 @@ class IntegratedNPCSystem:
             source_npc_id, memory_text, memory_type, significance, emotional_valence
         )
         
-        # Then propagate to related NPCs
+        # Using MemoryManager.propagate_significant_memory
         result = await MemoryManager.propagate_significant_memory(
             self.user_id, self.conversation_id,
             source_npc_id, "npc",
@@ -679,6 +909,7 @@ class IntegratedNPCSystem:
         Returns:
             Dictionary with result information
         """
+        # Using ProgressiveRevealManager.initialize_npc_mask
         result = await ProgressiveRevealManager.initialize_npc_mask(
             self.user_id, self.conversation_id, npc_id, overwrite
         )
@@ -695,6 +926,7 @@ class IntegratedNPCSystem:
         Returns:
             Dictionary with mask information
         """
+        # Using ProgressiveRevealManager.get_npc_mask
         result = await ProgressiveRevealManager.get_npc_mask(
             self.user_id, self.conversation_id, npc_id
         )
@@ -718,6 +950,7 @@ class IntegratedNPCSystem:
         Returns:
             Dictionary with slippage information
         """
+        # Using ProgressiveRevealManager.generate_mask_slippage
         result = await ProgressiveRevealManager.generate_mask_slippage(
             self.user_id, self.conversation_id, npc_id, trigger, severity, reveal_type
         )
@@ -734,8 +967,27 @@ class IntegratedNPCSystem:
         Returns:
             List of slippage events or None
         """
+        # Using ProgressiveRevealManager.check_for_mask_slippage
         result = await ProgressiveRevealManager.check_for_mask_slippage(
             self.user_id, self.conversation_id, npc_id
+        )
+        
+        return result
+    
+    async def perform_npc_daily_activity(self, npc_id: int, time_of_day: str) -> bool:
+        """
+        Have an NPC perform activities during their daily schedule.
+        
+        Args:
+            npc_id: ID of the NPC
+            time_of_day: Current time of day
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Using ProgressiveRevealManager.perform_npc_daily_activity
+        result = await ProgressiveRevealManager.perform_npc_daily_activity(
+            self.user_id, self.conversation_id, npc_id, time_of_day
         )
         
         return result
@@ -751,7 +1003,15 @@ class IntegratedNPCSystem:
         Returns:
             Tuple of (year, month, day, time_of_day)
         """
-        return get_current_time(self.user_id, self.conversation_id)
+        # Using get_current_time
+        time_info = get_current_time(self.user_id, self.conversation_id)
+        
+        # Log using TIME_PHASES
+        current_phase_idx = TIME_PHASES.index(time_info[3]) if time_info[3] in TIME_PHASES else 0
+        next_phase_idx = (current_phase_idx + 1) % len(TIME_PHASES)
+        logger.info(f"Current time phase: {time_info[3]}, Next phase: {TIME_PHASES[next_phase_idx]}")
+        
+        return time_info
     
     async def set_game_time(self, year: int, month: int, day: int, time_of_day: str) -> bool:
         """
@@ -766,8 +1026,17 @@ class IntegratedNPCSystem:
         Returns:
             True if successful
         """
+        # Validate time_of_day using TIME_PHASES
+        if time_of_day not in TIME_PHASES:
+            logger.warning(f"Invalid time phase '{time_of_day}'. Using {TIME_PHASES[0]} instead.")
+            time_of_day = TIME_PHASES[0]
+        
+        # Using set_current_time
         set_current_time(self.user_id, self.conversation_id, year, month, day, time_of_day)
+        
+        # Using update_npc_schedules_for_time
         update_npc_schedules_for_time(self.user_id, self.conversation_id, day, time_of_day)
+        
         return True
     
     async def advance_time_with_activity(self, activity_type: str) -> Dict[str, Any]:
@@ -780,6 +1049,7 @@ class IntegratedNPCSystem:
         Returns:
             Dictionary with results including any events that occurred
         """
+        # Using advance_time_with_events
         result = await advance_time_with_events(
             self.user_id, self.conversation_id, activity_type
         )
@@ -797,25 +1067,9 @@ class IntegratedNPCSystem:
         Returns:
             Dictionary with processing results
         """
+        # Using ActivityManager.process_activity
         result = await self.activity_manager.process_activity(
             self.user_id, self.conversation_id, player_input, context
-        )
-        
-        return result
-    
-    async def perform_npc_daily_activity(self, npc_id: int, time_of_day: str) -> bool:
-        """
-        Have an NPC perform activities during their daily schedule.
-        
-        Args:
-            npc_id: ID of the NPC
-            time_of_day: Current time of day
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        result = await ProgressiveRevealManager.perform_npc_daily_activity(
-            self.user_id, self.conversation_id, npc_id, time_of_day
         )
         
         return result
@@ -831,6 +1085,7 @@ class IntegratedNPCSystem:
         Returns:
             True if successful
         """
+        # Using update_npc_schedules_for_time
         update_npc_schedules_for_time(self.user_id, self.conversation_id, day, time_of_day)
         return True
     
@@ -849,7 +1104,31 @@ class IntegratedNPCSystem:
         Returns:
             True if successful, False otherwise
         """
+        # Using apply_stat_change
         result = apply_stat_change(self.user_id, self.conversation_id, changes, cause)
+        
+        # Record each stat change separately - Using record_stat_change_event
+        for stat_name, change_value in changes.items():
+            # Get current value first
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                SELECT {stat_name} FROM PlayerStats 
+                WHERE user_id=%s AND conversation_id=%s AND player_name='Chase'
+            """, (self.user_id, self.conversation_id))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                old_value = row[0]
+                new_value = old_value + change_value
+                # Using record_stat_change_event
+                record_stat_change_event(
+                    self.user_id, self.conversation_id, 
+                    stat_name, old_value, new_value, cause
+                )
+        
         return result
     
     async def apply_activity_effects(self, activity_name: str, intensity: float = 1.0) -> bool:
@@ -863,6 +1142,7 @@ class IntegratedNPCSystem:
         Returns:
             True if successful, False otherwise
         """
+        # Using apply_activity_effects
         result = apply_activity_effects(
             self.user_id, self.conversation_id, activity_name, intensity
         )
@@ -878,9 +1158,16 @@ class IntegratedNPCSystem:
         Returns:
             Threshold dictionary or None
         """
+        # Using get_player_current_tier
         result = get_player_current_tier(
             self.user_id, self.conversation_id, stat_name
         )
+        
+        # Using STAT_THRESHOLDS
+        if result and stat_name in STAT_THRESHOLDS:
+            logger.info(f"Player tier for {stat_name}: {result['name']} (level {result['level']})")
+            logger.info(f"Possible tiers for {stat_name}: {[tier['name'] for tier in STAT_THRESHOLDS[stat_name]]}")
+        
         return result
     
     async def check_for_combination_triggers(self) -> List[Dict[str, Any]]:
@@ -890,9 +1177,16 @@ class IntegratedNPCSystem:
         Returns:
             List of triggered combinations
         """
+        # Using check_for_combination_triggers
         result = check_for_combination_triggers(
             self.user_id, self.conversation_id
         )
+        
+        # Using STAT_COMBINATIONS
+        if result:
+            logger.info(f"Triggered combinations: {[combo['name'] for combo in result]}")
+            logger.info(f"Available combinations: {[combo['name'] for combo in STAT_COMBINATIONS]}")
+        
         return result
     
     #=================================================================
@@ -996,14 +1290,28 @@ class IntegratedNPCSystem:
                 }
             
             if dimension_changes:
+                # Using update_relationship_dimensions
                 relationship_result = await self.update_relationship_dimensions(
                     link_id, dimension_changes, 
                     reason=f"Player interaction: {interaction_type}"
                 )
                 results["relationship_updated"] = relationship_result
+                
+                # Using add_link_event
+                await self.add_event_to_link(
+                    link_id,
+                    f"Player interaction: {interaction_type} - '{player_input[:30]}...'"
+                )
         
         # Step 4: Generate appropriate memories
         memory_text = f"Interaction with player: {interaction_type}. The player said: '{player_input[:50]}...'"
+        
+        # Using record_npc_event
+        record_npc_event(
+            self.user_id, self.conversation_id, npc_id, memory_text
+        )
+        
+        # Also add using MemoryManager for richer memory tracking
         memory_result = await self.add_memory_to_npc(
             npc_id, memory_text, 
             memory_type=MemoryType.INTERACTION,
@@ -1016,6 +1324,7 @@ class IntegratedNPCSystem:
         if interaction_type in ["defiant_response", "probing_question"]:
             # Higher chance of slippage during confrontational interactions
             if random.random() < 0.4:  # 40% chance
+                # Using generate_mask_slippage
                 slippage_result = await self.generate_mask_slippage(
                     npc_id, trigger=f"Player {interaction_type}"
                 )
@@ -1053,6 +1362,7 @@ class IntegratedNPCSystem:
             }
         
         if stat_changes:
+            # Using apply_stat_changes
             stat_result = await self.apply_stat_changes(
                 stat_changes, 
                 cause=f"Interaction with {npc_details['npc_name']}: {interaction_type}"
@@ -1142,110 +1452,205 @@ class IntegratedNPCSystem:
         return result
 
 #=================================================================
-# UTILITY FUNCTIONS
-#=================================================================
-
-def safe_json_loads(text, default=None):
-    """Safely parse JSON with multiple fallback methods."""
-    if not text:
-        return default if default is not None else {}
-    
-    # Method 1: Direct parsing
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    
-    # Method 2: Look for JSON object within text
-    try:
-        import re
-        json_match = re.search(r'(\{[\s\S]*\})', text)
-        if json_match:
-            return json.loads(json_match.group(1))
-    except json.JSONDecodeError:
-        pass
-    
-    # Method 3: Try to fix common JSON syntax errors
-    try:
-        # Replace single quotes with double quotes
-        fixed_text = text.replace("'", '"')
-        return json.loads(fixed_text)
-    except json.JSONDecodeError:
-        pass
-    
-    # Return default if all parsing attempts fail
-    return default if default is not None else {}
-
-def extract_field_from_text(text, field_name):
-    """
-    Extract a specific field from text that might contain JSON or key-value patterns.
-    Returns the field value or empty string if not found.
-    """
-    # Try parsing as JSON first
-    data = safe_json_loads(text)
-    if data and field_name in data:
-        return data[field_name]
-    
-    # Try regex patterns for field extraction
-    import re
-    patterns = [
-        rf'"{field_name}"\s*:\s*"([^"]*)"',      # For string values: "field": "value"
-        rf'"{field_name}"\s*:\s*(\[[^\]]*\])',     # For array values: "field": [...]
-        rf'"{field_name}"\s*:\s*(\{{[^}}]*\}})',  # For object values: "field": {...}
-        rf'{field_name}:\s*(.*?)(?:\n|$)',          # For plain text: field: value
-    ]
-
-    
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1).strip()
-    
-    return ""
-
-#=================================================================
 # USAGE EXAMPLES
 #=================================================================
 
-async def example_usage():
-    """Example usage of the IntegratedNPCSystem."""
+async def comprehensive_example():
+    """Comprehensive usage example demonstrating all functions."""
     user_id = 1
     conversation_id = 123
     
     # Initialize the system
     npc_system = IntegratedNPCSystem(user_id, conversation_id)
     
-    # Create a new NPC
+    # 1. Create a new NPC
     environment_desc = "A elegant mansion with sprawling gardens and opulent interior."
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     npc_id = await npc_system.create_new_npc(environment_desc, day_names)
     
-    # Get NPC details
+    # 2. Get NPC details
     npc_details = await npc_system.get_npc_details(npc_id)
     print(f"Created NPC: {npc_details['npc_name']}")
     
-    # Introduce the NPC
+    # 3. Introduce the NPC
     await npc_system.introduce_npc(npc_id)
     
-    # Create a relationship between player and NPC
+    # 4. Create a direct social link between player and NPC
+    link_id = await npc_system.create_direct_social_link(
+        "player", user_id, "npc", npc_id, "neutral", 10
+    )
+    
+    # 5. Update link details
+    await npc_system.update_link_details(link_id, "dominant", +20)
+    
+    # 6. Add event to link
+    await npc_system.add_event_to_link(link_id, "Initial meeting and power assessment")
+    
+    # 7. Create relationship with dimensions
     relationship = await npc_system.create_relationship(
         "player", user_id, "npc", npc_id, "dominant"
     )
     
-    # Handle a player interaction with the NPC
+    # 8. Get dynamic level
+    control_level = await npc_system.get_dynamic_level(
+        "player", user_id, "npc", npc_id, "control"
+    )
+    print(f"Control level: {control_level}")
+    
+    # 9. Update dynamic
+    new_control = await npc_system.update_dynamic(
+        "player", user_id, "npc", npc_id, "control", +15
+    )
+    print(f"New control level: {new_control}")
+    
+    # 10. Update relationship dimensions
+    await npc_system.update_relationship_dimensions(
+        link_id, {"trust": +10, "fear": +5}, "Getting to know each other"
+    )
+    
+    # 11. Add tension
+    await npc_system.increase_relationship_tension(
+        link_id, 25, "Uncomfortable power imbalance"
+    )
+    
+    # 12. Release tension
+    await npc_system.release_relationship_tension(
+        link_id, 10, "submission", "Player acquiesces to demands"
+    )
+    
+    # 13. Record memory event
+    await npc_system.record_memory_event(
+        npc_id, "The player was hesitant at first but eventually followed instructions."
+    )
+    
+    # 14. Generate shared memory
+    shared_memory = await npc_system.generate_shared_memory(
+        npc_id, "player", "Chase", "dominant"
+    )
+    print(f"Generated shared memory: {shared_memory[:50]}...")
+    
+    # 15. Add enhanced memory
+    await npc_system.add_memory_to_npc(
+        npc_id, 
+        "I noticed the player watching me carefully, analyzing my behaviors.",
+        MemoryType.OBSERVATION,
+        MemorySignificance.MEDIUM,
+        +3,
+        ["observation", "assessment"]
+    )
+    
+    # 16. Retrieve relevant memories
+    memories = await npc_system.retrieve_relevant_memories(
+        npc_id, "watching behavior", ["observation"]
+    )
+    print(f"Retrieved {len(memories)} relevant memories")
+    
+    # 17. Generate flashback
+    flashback = await npc_system.generate_flashback(
+        npc_id, "The player is watching me again, just like that day..."
+    )
+    if flashback:
+        print(f"Flashback generated: {flashback['text'][:50]}...")
+    
+    # 18. Propagate significant memory
+    await npc_system.propagate_significant_memory(
+        npc_id,
+        "There was a significant incident where several NPCs witnessed the player show unexpected strength.",
+        MemoryType.EMOTIONAL,
+        MemorySignificance.HIGH,
+        -5
+    )
+    
+    # 19. Initialize mask
+    mask_result = await npc_system.initialize_npc_mask(npc_id)
+    print(f"Mask initialized with integrity: {mask_result.get('mask_created', False)}")
+    
+    # 20. Get mask info
+    mask_info = await npc_system.get_npc_mask(npc_id)
+    if mask_info:
+        print(f"Mask integrity: {mask_info.get('integrity', 100)}")
+    
+    # 21. Generate mask slippage
+    slippage = await npc_system.generate_mask_slippage(
+        npc_id, "Player challenged authority", None, "verbal_slip"
+    )
+    if slippage:
+        print(f"Mask slippage: {slippage.get('description', '')[:50]}...")
+    
+    # 22. Check for mask slippage
+    slippage_events = await npc_system.check_for_mask_slippage(npc_id)
+    print(f"Found {len(slippage_events) if slippage_events else 0} slippage events")
+    
+    # 23. Perform NPC daily activity
+    await npc_system.perform_npc_daily_activity(npc_id, "Morning")
+    
+    # 24. Get current game time
+    year, month, day, time_of_day = await npc_system.get_current_game_time()
+    print(f"Current game time: Year {year}, Month {month}, Day {day}, {time_of_day}")
+    
+    # 25. Set game time
+    await npc_system.set_game_time(year, month, day + 1, "Afternoon")
+    
+    # 26. Advance time with activity
+    time_result = await npc_system.advance_time_with_activity("extended_conversation")
+    print(f"Time advanced: {time_result.get('time_advanced', False)}")
+    
+    # 27. Process player activity
+    activity_result = await npc_system.process_player_activity(
+        "I want to spend some time getting to know the other residents."
+    )
+    print(f"Activity processed: {activity_result.get('activity_type', '')}")
+    
+    # 28. Update NPC schedules
+    await npc_system.update_npc_schedules(day, time_of_day)
+    
+    # 29. Apply stat changes
+    await npc_system.apply_stat_changes(
+        {"corruption": +5, "confidence": -3},
+        "Prolonged exposure to dominant NPC"
+    )
+    
+    # 30. Apply activity effects
+    await npc_system.apply_activity_effects("public_humiliation", 1.2)
+    
+    # 31. Get player current tier
+    corruption_tier = await npc_system.get_player_current_tier("corruption")
+    if corruption_tier:
+        print(f"Corruption tier: {corruption_tier['name']} (level {corruption_tier['level']})")
+    
+    # 32. Check for combination triggers
+    combinations = await npc_system.check_for_combination_triggers()
+    print(f"Found {len(combinations)} stat combinations")
+    
+    # 33. Handle a complete NPC interaction
     interaction_result = await npc_system.handle_npc_interaction(
         npc_id, "submissive_response", "Yes, I'll do whatever you ask."
     )
+    print(f"Interaction complete with {len(interaction_result.get('events', []))} events")
     
-    # Advance time
-    time_result = await npc_system.advance_time_with_activity("extended_conversation")
-    
-    # Generate a multi-NPC scene
+    # 34. Generate a multi-NPC scene
     scene = await npc_system.generate_multi_npc_scene([npc_id])
+    if scene:
+        print(f"Generated scene: {scene.get('opening_description', '')[:50]}...")
     
-    print("NPC system demo completed successfully!")
+    # 35. Generate overheard conversation
+    second_npc_id = await npc_system.create_new_npc(environment_desc, day_names)
+    conversation = await npc_system.generate_overheard_conversation(
+        [npc_id, second_npc_id], None, True
+    )
+    if conversation:
+        print(f"Generated conversation: {conversation.get('conversation', [''])[0][:50]}...")
+    
+    # 36. Create NPC group
+    group = await npc_system.create_npc_group(
+        "Mansion Elite", "The dominant figures in the mansion hierarchy", 
+        [npc_id, second_npc_id]
+    )
+    print(f"Created group with ID: {group.get('group_id')}")
+    
+    print("Comprehensive NPC system demo completed successfully!")
 
 if __name__ == "__main__":
-    # Run the example usage
+    # Run the comprehensive example
     import asyncio
-    asyncio.run(example_usage())
+    asyncio.run(comprehensive_example())
