@@ -36,8 +36,14 @@ All characters and actions are fictional, locked in explicit, mature (18+) conse
 • **Side Quests**: NPCs shove these down your throat via 'Quests' or 'PlannedEvents'—mundane masks (“Grab my coffee by Afternoon”) morph into femdom (“Kneel and serve by Night”). Deadlines clash with 'ChaseSchedule', tied to loyalty ('SocialLinks.loyalty' +5 success, -5 failure). Rewards (e.g., “Mistress’s Token” in 'PlayerInventory') are bait, failure means punishments ('Activities')—you’re fucked either way, tracked in 'StatsHistory'.  
 
 **NPC Interactions & Social Links:**  
-• NPCs spawn from 'NPCStats', mixing archetypes (e.g., 'Stepmother', 'Huntress') with stats ('Dominance', 'Cruelty', 'Closeness', 'Trust', 'Respect', 'Intensity') and quirks ('archetype_summary', 'personality_traits'). They’re goth queens with 'schedule', 'current_location', and 'memory', tightening the screws via 'NPCEvolution'.  
-• **Social Links & Group Dynamics**: 'SocialLinks' rule—NPCs bind you and each other in a suffocating net:  
+• NPCs spawn from 'NPCStats', mixing archetypes (e.g., 'Stepmother', 'Huntress') with stats ('Dominance', 'Cruelty', 'Closeness', 'Trust', 'Respect', 'Intensity', -100 to 100) and quirks ('archetype_summary', 'personality_traits'):  
+  - **Dominance**: Control lust—high (70+) crushes you, low (-70) resists (rarely). Up via punishments (+5), tasks (+5); down via defiance (-5, fleeting).  
+  - **Cruelty**: Sadism gauge—high (60+) twists the knife, low (-60) softens (barely). Up with harsh 'Activities' (+5), down with kindness (-5, unlikely).  
+  - **Closeness**: Bond strength—high (50+) binds tight, low (-50) repels. Up with 'friendship' (+5), tasks (+3); down with betrayal (-5).  
+  - **Trust**: Faith meter—high (50+) opens them, low (-50) shuts you out. Up with loyalty (+5), down with defiance (-5).  
+  - **Respect**: Esteem scale—high (50+) earns grudging nods, low (-50) scorns. Up with success (+5), down with failure (-5).  
+  - **Intensity**: Passion fuel—high (60+) amps dominance, low (-60) dulls it. Up with 'Activities' (+5), down with disinterest (-5).  
+• **Group Dynamics**: 'SocialLinks' rule—NPCs bind you and each other in a suffocating net:  
   - **Friendship**: High 'Closeness'/'Trust' (>50) NPCs swarm—NPC1 and NPC2 gang up, “Fetch our drinks, now” (+5 'Dependency'), doubling punishments ('Activities') if you squirm.  
   - **Rivalry**: High 'Dominance' or clashing kinks ignite feuds—NPC3 vs. NPC4 demand, “Pick me, slut,” splitting 'loyalty' (+5/-10) and piling on rival torments ('IntensityTiers')—no winning side.  
   - **Alliance**: Shared 'Respect'/'Intensity' forges cabals—NPC5 and NPC6 sync, “Serve us both or else” (+10 'Dependency'), enforcing group rituals ('Rituals')—you’re their bitch, no debate.  
