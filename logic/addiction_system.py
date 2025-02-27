@@ -519,3 +519,8 @@ class AddictionManager:
 def get_addiction_label(level):
     """Return the textual label for an addiction level."""
     return ADDICTION_LEVELS.get(level, "Unknown")
+
+check_addiction_levels = AddictionManager.check_addiction_levels
+update_addiction_level = AddictionManager.update_addiction_level
+process_addiction_effects = AddictionManager.process_addiction_effects
+get_addiction_status = AddictionManager.get_addiction_status
