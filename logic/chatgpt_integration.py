@@ -418,8 +418,33 @@ def retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, excepti
 
 @retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,))
 def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input: str) -> dict:
+    """Get a response from OpenAI with image-aware prompting."""
+    # First, get the user_id from the conversation_id
+    conn = get_db_connection()
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id FROM conversations WHERE id = %s", (conversation_id,))
+            result = cur.fetchone()
+            if not result:
+                logging.error(f"Conversation {conversation_id} not found")
+                return {"type": "text", "response": "Error: Conversation not found", "tokens_used": 0}
+            user_id = result[0]
+    
+    # Get image-aware system prompt
+    from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
+    system_prompt = get_system_prompt_with_image_guidance(user_id, conversation_id)
+    
+    # Create OpenAI client
     client = get_openai_client()
-    messages = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
+    
+    # Build message history, but prepend the system prompt
+    raw_messages = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
+    
+    # Add the system prompt as the first message
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(raw_messages)
+    
+    # Make the API call
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=messages,
@@ -429,12 +454,16 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
         functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
         function_call={"name": "apply_universal_update"}
     )
+    
+    # Process the response
     msg = response.choices[0].message
     tokens_used = response.usage.total_tokens
-
+    
     if msg.function_call is not None:
         fn_name = msg.function_call.name
         fn_args_str = msg.function_call.arguments or "{}"
+        
+        # Clean up markdown in args if present
         logging.debug("Raw function call arguments: %s", fn_args_str)
         if fn_args_str.startswith("```"):
             lines = fn_args_str.splitlines()
@@ -444,6 +473,8 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
                 lines = lines[:-1]
             fn_args_str = "\n".join(lines).strip()
             logging.debug("Arguments after stripping markdown: %s", fn_args_str)
+        
+        # Handle empty or malformed args
         if not fn_args_str.strip():
             fn_args_str = "{}"
         if not fn_args_str.endswith("}"):
@@ -451,11 +482,42 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
             if last_brace_index != -1:
                 logging.warning("Function call arguments appear truncated. Truncating string at index %s", last_brace_index)
                 fn_args_str = fn_args_str[:last_brace_index+1]
+        
         try:
             parsed_args = safe_json_loads(fn_args_str)
+            
+            # Ensure scene_data is included for image generation
+            if "scene_data" not in parsed_args:
+                # Try to construct basic scene data
+                parsed_args["scene_data"] = {
+                    "npc_names": [],  # Extract from narrative if possible
+                    "setting": "",     # Extract from narrative if possible
+                    "actions": [],     # Extract from narrative if possible
+                    "mood": "",        # Extract from narrative if possible
+                    "expressions": {},
+                    "npc_positions": {},
+                    "visibility_triggers": {
+                        "character_introduction": False,
+                        "significant_location": False,
+                        "emotional_intensity": 0,
+                        "intimacy_level": 0,
+                        "appearance_change": False
+                    }
+                }
+                
+                # Optionally add explicit image generation field
+                parsed_args["image_generation"] = {
+                    "generate": False,  # Default to false
+                    "priority": "low",
+                    "focus": "balanced",
+                    "framing": "medium_shot",
+                    "reason": ""
+                }
+            
         except Exception:
             logging.exception("Error parsing function call arguments")
             parsed_args = {}
+        
         return {
             "type": "function_call",
             "function_name": fn_name,
