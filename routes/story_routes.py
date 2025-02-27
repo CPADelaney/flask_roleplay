@@ -24,7 +24,7 @@ from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, b
 from routes.settings_routes import generate_mega_setting_logic
 
 # Import new enhanced modules
-from logic.enhanced_stats import get_player_current_tier, check_for_combination_triggers, apply_stat_change, apply_activity_effects
+from logic.stats_logic import get_player_current_tier, check_for_combination_triggers, apply_stat_change, apply_activity_effects
 
 from logic.npc_creation import process_daily_npc_activities, check_for_mask_slippage, detect_relationship_stage_changes
 from logic.narrative_progression import get_current_narrative_stage, check_for_personal_revelations, check_for_narrative_moments,check_for_npc_revelations, add_dream_sequence, add_moment_of_clarity
