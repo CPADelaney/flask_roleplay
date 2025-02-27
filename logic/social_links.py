@@ -2663,7 +2663,7 @@ class MultiNPCInteractionManager:
                     # Revealing true manipulative nature
                     if player_info["corruption"] > 50 or player_info["obedience"] > 50:
                         conversation_parts.append(f"{speaker1['npc_name']}: \"I'm pleased with how Chase is progressing. {player_info['obedience'] > 60 and 'The obedience training is taking hold nicely.' or 'Their resistance is weakening considerably.'}")
-                        conversation_parts.append(f"{speaker2['npc_name']}: \"Yes, I've noticed too. {player_info['dependency'] > 50 and 'The dependency we've fostered is quite effective.' or 'They're starting to crave our approval in a way that's... useful.'}")
+                        conversation_parts.append(f'{speaker2["npc_name"]}: "Yes, I\'ve noticed too. {player_info["dependency"] > 50 and "The dependency we\'ve fostered is quite effective." or "They\'re starting to crave our approval in a way that\'s... useful."}"')
                     else:
                         conversation_parts.append(f"{speaker1['npc_name']}: \"Chase is proving more resilient than expected. We may need to adjust our approach.\"")
                         conversation_parts.append(f"{speaker2['npc_name']}: \"Agreed. Perhaps more subtle conditioning would be effective. They still maintain too much independence.\"")
