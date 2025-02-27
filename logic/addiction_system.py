@@ -19,7 +19,7 @@ import asyncio
 import re
 from datetime import datetime
 from db.connection import get_db_connection
-from logic.gpt_integration import get_openai_client
+from logic.chatgpt_integration import get_openai_client
 
 # -------------------------------------------------------------------------------
 # Helper Functions for GPT Integration (stubs; replace with your implementations)
