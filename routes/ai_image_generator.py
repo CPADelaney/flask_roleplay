@@ -123,6 +123,21 @@ def setup_database():
     GROUP BY 
         user_id, npc_name
     """)
+
+    # Add ImageGenerations table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS ImageGenerations (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        conversation_id INTEGER NOT NULL,
+        image_path TEXT NOT NULL,
+        prompt_used TEXT,
+        generation_reason TEXT,
+        generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    )
+    """)
     
     conn.commit()
     cursor.close()
