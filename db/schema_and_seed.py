@@ -383,6 +383,14 @@ def create_all_tables():
         );
     ''')
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ImageGenerations (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            # ... fields ...
+        )
+    """)
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Interactions (
             id SERIAL PRIMARY KEY,
