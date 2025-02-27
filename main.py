@@ -21,6 +21,10 @@ from routes.debug import debug_bp
 from routes.universal_update import universal_bp
 from routes.multiuser_routes import multiuser_bp
 from logic.chatgpt_integration import build_message_history
+from routes.ai_image_generator import init_app as init_image_routes
+from routes.chatgpt_routes import init_app as init_chat_routes
+from logic.gpt_image_decision import should_generate_image_for_response
+from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
 
 # DB connection helper
 from db.connection import get_db_connection
@@ -127,13 +131,41 @@ def background_chat_task(conversation_id, user_input, universal_update):
         except Exception as db_error:
             logging.error(f"Database error storing GPT response: {str(db_error)}")
         
+        # Check if we should generate an image - moved OUTSIDE the database exception handling
+        should_generate, reason = should_generate_image_for_response(
+            user_id, 
+            conversation_id, 
+            response_data["function_args"]
+        )
+        
+        # Process image generation if needed
+        image_result = None
+        if should_generate:
+            logging.info(f"Generating image for scene: {reason}")
+            from routes.ai_image_generator import generate_roleplay_image_from_gpt
+            image_result = generate_roleplay_image_from_gpt(
+                response_data["function_args"], 
+                user_id, 
+                conversation_id
+            )
+            
+            # Emit image to the client
+            if image_result and "image_urls" in image_result and image_result["image_urls"]:
+                socketio.emit('image', {
+                    'image_url': image_result["image_urls"][0],
+                    'prompt_used': image_result.get('prompt_used', ''),
+                    'reason': reason
+                }, room=conversation_id)
+                logging.info(f"Image emitted to client: {image_result['image_urls'][0]}")
+        
+        # Stream the response token by token (KEEP ONLY ONE of these blocks)
+        for i in range(0, len(ai_response), 3):
+            token = ai_response[i:i+3]
+            socketio.emit('new_token', {'token': token}, room=conversation_id)
+            socketio.sleep(0.05)
+        
         # Emit the final 'done' event with the full text
         socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
-        logging.info(f"Completed streaming GPT response for conversation {conversation_id}")
-    
-    except Exception as e:
-        logging.error(f"Error in background_chat_task: {str(e)}")
-        socketio.emit('error', {'error': f"Server error: {str(e)}"}, room=conversation_id)
 
 def create_flask_app():
     """
@@ -156,6 +188,9 @@ def create_flask_app():
     app.register_blueprint(debug_bp, url_prefix="/debug")
     app.register_blueprint(universal_bp, url_prefix="/universal")
     app.register_blueprint(multiuser_bp, url_prefix="/multiuser")
+    
+    init_image_routes(app)
+    init_chat_routes(app)
     
     # HTTP routes
     @app.route("/chat")
