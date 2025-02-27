@@ -2559,7 +2559,7 @@ class MultiNPCInteractionManager:
     
     @staticmethod
     async def generate_overheard_conversation(user_id, conversation_id, npc_ids, 
-                                            topic=None, about_player=False):
+                                                topic=None, about_player=False):
         """
         Generate a conversation that the player can overhear between NPCs,
         potentially revealing hidden aspects of their personalities or plans
@@ -2651,7 +2651,9 @@ class MultiNPCInteractionManager:
             conversation_parts = []
             
             # Opening narrative
-            conversation_parts.append(f"As you approach {location}, you hear voices around the corner. You recognize them as {npc_data[0]['npc_name']} and {npc_data[1]['npc_name']}. They haven't noticed your presence.")
+            conversation_parts.append(
+                f"As you approach {location}, you hear voices around the corner. You recognize them as {npc_data[0]['npc_name']} and {npc_data[1]['npc_name']}. They haven't noticed your presence."
+            )
             
             # First speaker
             speaker1 = npc_data[0]
@@ -2662,11 +2664,21 @@ class MultiNPCInteractionManager:
                 if reveal_true_nature:
                     # Revealing true manipulative nature
                     if player_info["corruption"] > 50 or player_info["obedience"] > 50:
+                        # Precompute messages to avoid backslashes in f-string expressions
+                        if player_info["obedience"] > 60:
+                            message1 = "The obedience training is taking hold nicely."
+                        else:
+                            message1 = "Their resistance is weakening considerably."
+                        if player_info["dependency"] > 50:
+                            message2 = "The dependency we've fostered is quite effective."
+                        else:
+                            message2 = "They're starting to crave our approval in a way that's... useful."
+                        
                         conversation_parts.append(
-                            f'{speaker1["npc_name"]}: "I\'m pleased with how Chase is progressing. {player_info["obedience"] > 60 and "The obedience training is taking hold nicely." or "Their resistance is weakening considerably."}"'
+                            f'{speaker1["npc_name"]}: "I\'m pleased with how Chase is progressing. {message1}"'
                         )
                         conversation_parts.append(
-                            f'{speaker2["npc_name"]}: "Yes, I\'ve noticed too. {player_info["dependency"] > 50 and "The dependency we\'ve fostered is quite effective." or "They\'re starting to crave our approval in a way that\'s... useful."}"'
+                            f'{speaker2["npc_name"]}: "Yes, I\'ve noticed too. {message2}"'
                         )
                     else:
                         conversation_parts.append(
@@ -2699,16 +2711,27 @@ class MultiNPCInteractionManager:
                     conversation_parts.append(
                         f'{speaker2["npc_name"]}: "It\'s fascinating, isn\'t it? The right word at the right moment can change someone\'s entire course."'
                     )
-
-            
+    
             # Additional exchange
             if about_player:
-                conversation_parts.append(f"{speaker1['npc_name']}: \"How long do you think before Chase is completely... integrated?\"")
-                obedience_level = "high" if player_info and player_info["obedience"] > 60 else "satisfactory" if player_info and player_info["obedience"] > 40 else "insufficient"
-                conversation_parts.append(f"{speaker2['npc_name']}: \"Difficult to say. Current obedience levels are {obedience_level}, but there's always room for improvement.\"")
+                conversation_parts.append(
+                    f'{speaker1["npc_name"]}: "How long do you think before Chase is completely... integrated?"'
+                )
+                obedience_level = (
+                    "high" if player_info and player_info["obedience"] > 60 
+                    else "satisfactory" if player_info and player_info["obedience"] > 40 
+                    else "insufficient"
+                )
+                conversation_parts.append(
+                    f'{speaker2["npc_name"]}: "Difficult to say. Current obedience levels are {obedience_level}, but there\'s always room for improvement."'
+                )
             else:
-                conversation_parts.append(f"{speaker1['npc_name']}: \"Maintaining order requires a firm hand beneath a velvet glove.\"")
-                conversation_parts.append(f"{speaker2['npc_name']}: \"Indeed. And those who recognize their proper place are so much happier for it.\"")
+                conversation_parts.append(
+                    f'{speaker1["npc_name"]}: "Maintaining order requires a firm hand beneath a velvet glove."'
+                )
+                conversation_parts.append(
+                    f'{speaker2["npc_name"]}: "Indeed. And those who recognize their proper place are so much happier for it."'
+                )
             
             # Closing narrative
             conversation_parts.append("You hear footsteps and quickly move away before they discover you eavesdropping.")
