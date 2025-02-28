@@ -21,10 +21,10 @@ load_dotenv()
 
 # API KEYS
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-STABILITY_API_KEY = os.environ.get("STABILITY_API_KEY")
+SINKIN_ACCESS_TOKEN = os.environ.get("SD_Access")  # from your GitHub secret
 
 # API URLs
-STABILITY_API_URL = "https://api.stability.ai/v2beta/stable-image/generate/sd3"
+SINKIN_API_URL = "https://sinkin.ai/api/inference"
 GPT4O_API_URL = "https://api.openai.com/v1/chat/completions"
 
 # Image Caching Directory
@@ -583,43 +583,63 @@ def save_image_to_cache(image_data, prompt, variation_id=0):
 # ======================================================
 # 7️⃣ GENERATE AI IMAGE
 # ======================================================
-def generate_ai_image(prompt, negative_prompt=None, seed=None, style="anime"):
-    if not negative_prompt:
-        negative_prompt = "deformed, distorted, disfigured, poorly drawn, bad anatomy, extra limbs, blurry, watermark"
-    style_presets = {
-        "anime": "anime",
-        "realistic": "photographic",
-        "painting": "digital-art",
-        "sketch": "line-art"
-    }
-    style_preset = style_presets.get(style, "anime")
-    
-    headers = {
-        "Authorization": f"Bearer {STABILITY_API_KEY}",
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
+def generate_ai_image(
+    prompt,
+    negative_prompt="low quality, blurry, distorted face, bad anatomy, watermark",
+    model_id="nGyN44N", 
+    width=512,
+    height=768,
+    steps=30,
+    scale=7.5,
+    seed=-1,
+    num_images=1,
+    scheduler="DPMSolverMultistep",
+    use_default_neg="true",
+    lcm="false"
+):
+    """
+    Calls SinkIn's text2img using the given prompt and optional parameters.
+    Returns a list of image URLs or None on failure.
+    """
+
+    # Prepare the data payload (multipart/form-data).
+    # Note: We do NOT need to pass JSON as the body; we'll rely on 'data' and 'files'.
     payload = {
-        "text_prompts": [
-            {"text": prompt, "weight": 1.0},
-            {"text": negative_prompt, "weight": -1.0}
-        ],
-        "cfg_scale": 7.0,
-        "height": 768,
-        "width": 512,
-        "steps": 30,
-        "seed": seed,
-        "style_preset": style_preset
+        "access_token": SINKIN_ACCESS_TOKEN,
+        "model_id": model_id,
+        "prompt": prompt,
+        "width": str(width),             # must be strings if passing via 'data'
+        "height": str(height),
+        "steps": str(steps),
+        "scale": str(scale),
+        "num_images": str(num_images),
+        "scheduler": scheduler,
+        "seed": str(seed),
+        "negative_prompt": negative_prompt,
+        "use_default_neg": use_default_neg,
+        "lcm": lcm,
     }
+
+    # If you do NOT need img2img, you won’t pass any files.
+    # If you *do* want img2img, see below for an example.
+
     try:
-        response = requests.post(STABILITY_API_URL, headers=headers, json=payload)
+        response = requests.post(
+            SINKIN_API_URL, 
+            data=payload,
+            # no files here for text2img
+        )
         response.raise_for_status()
         data = response.json()
-        if "artifacts" in data and len(data["artifacts"]) > 0:
-            return f"data:image/png;base64,{data['artifacts'][0]['base64']}"
-        logger.error(f"No artifacts in Stability API response: {data}")
+
+        if data.get("error_code") == 0:
+            # Return the image URLs
+            return data.get("images", [])
+        else:
+            logger.error(f"SinkIn error: {data.get('message')}")
     except Exception as e:
-        logger.error(f"Error generating image: {e}")
+        logger.error(f"SinkIn request failed: {e}")
+
     return None
 
 def generate_nyx_fallback_image():
@@ -655,12 +675,13 @@ async def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_i
     if not scene_data or not scene_data.get("npcs"):
         logger.warning("No NPCs found—using Nyx fallback image prompt.")
         
-        # 1. Grab the fallback prompt
+        # fallback block
+        logger.warning("No NPCs found—using Nyx fallback image prompt.")
+        
         fallback_data = generate_nyx_fallback_image()
         fallback_prompt = fallback_data["image_prompt"]
         fallback_negative = fallback_data["negative_prompt"]
         
-        # 2. Try to see if we have a cached version (optional)
         cached_images = get_cached_images(fallback_prompt)
         if cached_images:
             return {
@@ -669,17 +690,20 @@ async def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_i
                 "prompt_used": fallback_prompt
             }
         
-        # 3. Otherwise, generate the fallback image
-        #    We can do just 1 or 3 variations. Let's do 1 for the fallback:
-        fallback_image_data = generate_ai_image(fallback_prompt, fallback_negative)
-        if not fallback_image_data:
+        # Call generate_ai_image -> returns a list of URLs or None
+        fallback_urls = generate_ai_image(fallback_prompt, fallback_negative, num_images=1)
+        
+        if not fallback_urls or len(fallback_urls) == 0:
             return {"error": "Failed to generate fallback Nyx image"}
-
-        # Save to cache
-        saved_image = save_image_to_cache(fallback_image_data, fallback_prompt, variation_id=0)
-
+        
+        # Save each URL
+        saved_image_paths = []
+        for idx, url in enumerate(fallback_urls):
+            path = save_image_to_cache(url, fallback_prompt, idx)
+            saved_image_paths.append(path or url)
+        
         return {
-            "image_urls": [saved_image or fallback_image_data],
+            "image_urls": saved_image_paths,
             "cached": False,
             "prompt_used": fallback_prompt,
             "negative_prompt": fallback_negative,
@@ -694,50 +718,59 @@ async def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_i
     cached_images = get_cached_images(optimized_prompt)
     if cached_images:
         return {"image_urls": cached_images, "cached": True, "prompt_used": optimized_prompt}
-
+    
     generated_images = []
     updated_visual_attrs = {}
     
-    # For variety, generate 3 images with slight variations
     for variation_id in range(3):
+        # optional seed calculation
         seed = None
         if scene_data["npcs"]:
-            # Use the first NPC's visual_seed for determinism
             npc_seed_text = scene_data["npcs"][0]["visual_seed"]
-            # Convert the hex to a bounded integer for the stability API
             seed = int(hashlib.md5(npc_seed_text.encode()).hexdigest(), 16) % (2**32)
-
-        # Generate the image
-        image_data = generate_ai_image(optimized_prompt, negative_prompt, seed)
-        if image_data:
-            cached_path = save_image_to_cache(image_data, optimized_prompt, variation_id)
-            generated_images.append(cached_path or image_data)
-            
-            # Update visual attributes for each NPC
+    
+        # generate_ai_image will return a LIST of URLs
+        image_urls = generate_ai_image(
+            optimized_prompt, 
+            negative_prompt=negative_prompt, 
+            seed=seed, 
+            num_images=1  # or 3 if you want 3 at once
+        )
+    
+        if not image_urls:
+            continue  # skip if no images returned
+    
+        # For each returned URL (likely just 1 if num_images=1)
+        for single_url in image_urls:
+            cached_path = save_image_to_cache(single_url, optimized_prompt, variation_id)
+            generated_images.append(cached_path or single_url)
+    
+            # Now update NPC attributes for each NPC
             for npc in scene_data["npcs"]:
                 npc_id = npc.get("id")
                 if npc_id:
                     new_attrs, current_state = update_npc_visual_attributes(
-                        user_id, conversation_id, npc_id, optimized_prompt, cached_path
+                        user_id, conversation_id, npc_id, 
+                        prompt_data=optimized_prompt, 
+                        image_path=cached_path
                     )
-                    # If any relevant attribute changed, track in NPCVisualEvolution
+    
+                    # track changes
                     if any(
                         current_state.get(k) != new_attrs.get(k)
-                        for k in new_attrs if new_attrs.get(k)
+                        for k in new_attrs
                     ):
                         track_visual_evolution(
-                            npc_id,
-                            user_id,
-                            conversation_id,
+                            npc_id, user_id, conversation_id,
                             "appearance_change",
                             "Updated visual appearance in scene",
-                            current_state,
-                            new_attrs,
-                            optimized_prompt,
-                            cached_path
+                            previous=current_state,
+                            current=new_attrs,
+                            scene=optimized_prompt,
+                            image_path=cached_path
                         )
                     updated_visual_attrs[npc["name"]] = new_attrs
-
+    
     return {
         "image_urls": generated_images,
         "cached": False,
@@ -745,7 +778,6 @@ async def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_i
         "negative_prompt": negative_prompt,
         "updated_visual_attrs": updated_visual_attrs
     }
-
 
 # ======================================================
 # 9️⃣ API ROUTES
