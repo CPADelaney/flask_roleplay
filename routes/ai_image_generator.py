@@ -549,15 +549,71 @@ def generate_ai_image(prompt, negative_prompt=None, seed=None, style="anime"):
         logger.error(f"Error generating image: {e}")
     return None
 
+def generate_nyx_fallback_image():
+    """
+    Returns a stable fallback image prompt for Nyx,
+    referencing her 'cruel goth mommy domme' persona.
+    """
+    # A simple prompt referencing the system description. 
+    # Tailor this to your style/NSFW needs.
+    fallback_prompt = (
+        "A dark gothic chamber where Nyx, a cruel goth mommy domme, stands "
+        "radiating sadistic charm and ironclad confidence. Pale skin, black lipstick, "
+        "tattoos, piercings, high-heeled boots, exuding an aura of twisted power. "
+        "Shot in a stylized anime aesthetic, high contrast and sultry shadows."
+    )
+    negative_prompt = (
+        "low quality, blurry, disfigured, poorly drawn, bad anatomy, extra limbs, watermark"
+    )
+    return {
+        "image_prompt": fallback_prompt,
+        "negative_prompt": negative_prompt
+    }
+
+
 
 # ======================================================
 # 8️⃣ GENERATE ROLEPLAY IMAGE
 # ======================================================
 def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id):
     scene_data = process_gpt_scene_data(gpt_response, user_id, conversation_id)
-    if not scene_data:
-        return {"error": "No valid scene data found in GPT response"}
+    
+    # If there's no scene_data or no NPCs, fallback to generating an image of Nyx
+    if not scene_data or not scene_data.get("npcs"):
+        logger.warning("No NPCs found—using Nyx fallback image prompt.")
+        
+        # 1. Grab the fallback prompt
+        fallback_data = generate_nyx_fallback_image()
+        fallback_prompt = fallback_data["image_prompt"]
+        fallback_negative = fallback_data["negative_prompt"]
+        
+        # 2. Try to see if we have a cached version (optional)
+        cached_images = get_cached_images(fallback_prompt)
+        if cached_images:
+            return {
+                "image_urls": cached_images,
+                "cached": True,
+                "prompt_used": fallback_prompt
+            }
+        
+        # 3. Otherwise, generate the fallback image
+        #    We can do just 1 or 3 variations. Let's do 1 for the fallback:
+        fallback_image_data = generate_ai_image(fallback_prompt, fallback_negative)
+        if not fallback_image_data:
+            return {"error": "Failed to generate fallback Nyx image"}
 
+        # Save to cache
+        saved_image = save_image_to_cache(fallback_image_data, fallback_prompt, variation_id=0)
+
+        return {
+            "image_urls": [saved_image or fallback_image_data],
+            "cached": False,
+            "prompt_used": fallback_prompt,
+            "negative_prompt": fallback_negative,
+            "updated_visual_attrs": {}
+        }
+
+    # Otherwise, we proceed with your usual logic
     prompt_data = generate_image_prompt(scene_data)
     optimized_prompt = prompt_data["image_prompt"]
     negative_prompt = prompt_data.get("negative_prompt", "")
