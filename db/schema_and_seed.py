@@ -490,7 +490,7 @@ def create_all_tables():
         CREATE TABLE IF NOT EXISTS ImageFeedback (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
+            conversation_id TEXT NOT NULL,
             image_path TEXT NOT NULL,
             original_prompt TEXT NOT NULL,
             npc_names JSONB NOT NULL,
@@ -507,7 +507,7 @@ def create_all_tables():
             id SERIAL PRIMARY KEY,
             npc_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
+            conversation_id TEXT NOT NULL,
             event_type TEXT CHECK (event_type IN ('outfit_change', 'appearance_change', 'location_change', 'mood_change')),
             event_description TEXT,
             previous_state JSONB,
@@ -540,7 +540,7 @@ def create_all_tables():
     conn.commit()
     conn.close()
 
-def seed_initial_data():
+def seed_initial_data(user_id, conversation_id):
     insert_or_update_game_rules()
     insert_stat_definitions()
     insert_missing_settings()
@@ -549,10 +549,10 @@ def seed_initial_data():
     create_and_seed_intensity_tiers()
     create_and_seed_plot_triggers()
     create_and_seed_interactions()
-    insert_default_player_stats_chase()
+    insert_default_player_stats_chase(user_id, conversation_id)
     print("All default data seeded successfully.")
 
 def initialize_all_data():
     create_all_tables()
-    seed_initial_data()
+    seed_initial_data(user_id, conversation_id)
     print("All tables created & default data seeded successfully!")
