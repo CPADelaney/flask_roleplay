@@ -19,6 +19,8 @@ from logic.universal_updater import apply_universal_updates_async
 from logic.calendar import update_calendar_names
 from db.connection import get_db_connection
 from logic.npc_creation import spawn_multiple_npcs_enhanced, create_and_refine_npc, init_chase_schedule
+from logic.gpt_image_decision import should_generate_image_for_response
+from routes.ai_image_generator import generate_roleplay_image_from_gpt
 
 DB_DSN = os.getenv("DB_DSN") 
 
@@ -533,18 +535,61 @@ async def async_process_new_game(user_id, conversation_data):
             WHERE id=$2 AND user_id=$3
         """, scenario_name, conversation_id, user_id)
 
-        success_msg = (
-            f"New game started. environment={setting_name}, conversation_id={conversation_id}"
-        )
-        logging.info(success_msg)
-        return {
-            "message": success_msg,
-            "scenario_name": scenario_name,
-            "environment_name": setting_name,
-            "environment_desc": combined_env,
-            "calendar_names": calendar_data,
-            "conversation_id": conversation_id
+        scene_data = {
+            "scene_data": {
+                "npc_names": [], # Get NPC names from the database if needed
+                "setting": setting_name,
+                "actions": ["introduction", "welcome"],
+                "mood": "atmospheric",
+                "expressions": {},
+                "npc_positions": {},
+                "visibility_triggers": {
+                    "character_introduction": True,
+                    "significant_location": True,
+                    "emotional_intensity": 50,
+                    "intimacy_level": 20,
+                    "appearance_change": False
+                }
+            },
+            "image_generation": {
+                "generate": True,
+                "priority": "high",
+                "focus": "setting",
+                "framing": "wide_shot",
+                "reason": "Initial scene visualization"
+            }
         }
+        
+        # Generate the image
+        image_result = generate_roleplay_image_from_gpt(scene_data, user_id, conversation_id)
+        
+        # Store the image URL in the database if generated successfully
+        welcome_image_url = None
+        if image_result and "image_urls" in image_result and image_result["image_urls"]:
+            welcome_image_url = image_result["image_urls"][0]
+            
+            # Store the image URL in CurrentRoleplay for reference
+            await conn.execute("""
+                INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                VALUES($1,$2,'WelcomeImageUrl',$3)
+                ON CONFLICT (user_id, conversation_id, key)
+                DO UPDATE SET value=EXCLUDED.value
+            """, user_id, conversation_id, welcome_image_url)
+            
+            # Add the image to the response
+            success_msg = (
+                f"New game started. environment={setting_name}, conversation_id={conversation_id}"
+            )
+            logging.info(success_msg)
+            return {
+                "message": success_msg,
+                "scenario_name": scenario_name,
+                "environment_name": setting_name,
+                "environment_desc": combined_env,
+                "calendar_names": calendar_data,
+                "conversation_id": conversation_id,
+                "welcome_image_url": welcome_image_url  # Add the image URL to the response
+            }
 
     except Exception as e:
         logging.exception("Error in async_process_new_game:")
