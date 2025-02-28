@@ -425,6 +425,7 @@ Create a concise (max 150 words), anime-style CG prompt:
 6. Favor high-rated traits ({json.dumps(scene_data['user_preferences'])}).
 7. Incorporate setting and journal hints (e.g., past scenes).
 8. Vivid, sensual for NSFW; soft, atmospheric otherwise.
+9. Ensure the player is featured (generic, nondescript, faceless brown-haired male, like how VNs tend to do it)
 
 Return JSON with 'image_prompt' and 'negative_prompt' (e.g., 'low quality, blurry')."""
     
