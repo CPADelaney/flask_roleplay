@@ -753,7 +753,7 @@ async def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_i
 image_bp = Blueprint("image_bp", __name__)
 
 @image_bp.route("/generate_gpt_image", methods=["POST"])
-def generate_gpt_image():
+async def generate_gpt_image():
     user_id = session.get("user_id")
     if not user_id:
         return jsonify({"error": "Not logged in"}), 401
