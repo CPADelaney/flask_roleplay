@@ -1,7 +1,5 @@
 import json
 from db.connection import get_db_connection
-
-# If you have these modules:
 from routes.activities import insert_missing_activities
 from routes.archetypes import insert_missing_archetypes
 from routes.settings_routes import insert_missing_settings
@@ -17,11 +15,12 @@ from logic.stats_logic import (
 def create_all_tables():
     """
     Creates all core tables with user_id, conversation_id columns from the start,
-    so we don't need separate ALTER TABLE statements later.
+    adjusted for fantastical punishments and image generation.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    # StateUpdates
     cursor.execute('''    
         CREATE TABLE IF NOT EXISTS StateUpdates (
             user_id INTEGER NOT NULL,
@@ -32,8 +31,7 @@ def create_all_tables():
         );
     ''')
 
-
-    # 1) Settings (Global or not? If truly global, omit user_id/conversation_id here)
+    # Global Tables (unchanged except where noted)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Settings (
             id SERIAL PRIMARY KEY,
@@ -45,53 +43,50 @@ def create_all_tables():
         );
     ''')
 
-    # 2) StatDefinitions (global, no user/conversation)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS StatDefinitions (
-          id SERIAL PRIMARY KEY,
-          scope TEXT NOT NULL,
-          stat_name TEXT UNIQUE NOT NULL,
-          range_min INT NOT NULL,
-          range_max INT NOT NULL,
-          definition TEXT NOT NULL,
-          effects TEXT NOT NULL,
-          progression_triggers TEXT NOT NULL
+            id SERIAL PRIMARY KEY,
+            scope TEXT NOT NULL,
+            stat_name TEXT UNIQUE NOT NULL,
+            range_min INT NOT NULL,
+            range_max INT NOT NULL,
+            definition TEXT NOT NULL,
+            effects TEXT NOT NULL,
+            progression_triggers TEXT NOT NULL
         );
     ''')
 
-    # 3) GameRules (global as well)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS GameRules (
-          id SERIAL PRIMARY KEY,
-          rule_name TEXT UNIQUE NOT NULL,
-          condition TEXT NOT NULL,
-          effect TEXT NOT NULL
+            id SERIAL PRIMARY KEY,
+            rule_name TEXT UNIQUE NOT NULL,
+            condition TEXT NOT NULL,
+            effect TEXT NOT NULL
         );
     ''')
 
-    # 4) users (so we can reference user_id below)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-          id SERIAL PRIMARY KEY,
-          username VARCHAR(50) NOT NULL UNIQUE,
-          password_hash TEXT NOT NULL,
-          created_at TIMESTAMP DEFAULT NOW()
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(50) NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
         );
     ''')
 
-    # 5) conversations (belongs to a user)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS conversations (
-          id SERIAL PRIMARY KEY,
-          user_id INTEGER NOT NULL,
-          conversation_name VARCHAR(100) NOT NULL,
-          status VARCHAR(20) NOT NULL DEFAULT 'processing',
-          created_at TIMESTAMP DEFAULT NOW(),
-          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_name VARCHAR(100) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'processing',
+            created_at TIMESTAMP DEFAULT NOW(),
+            folder_id INTEGER,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
         );
     ''')
 
-    # 6) CurrentRoleplay (each user+conversation can store distinct keys)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS CurrentRoleplay (
             user_id INTEGER NOT NULL,
@@ -99,31 +94,23 @@ def create_all_tables():
             key TEXT NOT NULL,
             value TEXT NOT NULL,
             PRIMARY KEY (user_id, conversation_id, key),
-            FOREIGN KEY (user_id)
-                REFERENCES users(id)
-                ON DELETE CASCADE,
-            FOREIGN KEY (conversation_id)
-                REFERENCES conversations(id)
-                ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    # 7) messages (belongs to a conversation)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS messages (
-          id SERIAL PRIMARY KEY,
-          conversation_id INTEGER NOT NULL,
-          sender VARCHAR(50) NOT NULL,
-          content TEXT NOT NULL,
-          created_at TIMESTAMP DEFAULT NOW(),
-          structured_content JSONB,
-          FOREIGN KEY (conversation_id)
-              REFERENCES conversations(id)
-              ON DELETE CASCADE
+            id SERIAL PRIMARY KEY,
+            conversation_id INTEGER NOT NULL,
+            sender VARCHAR(50) NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            structured_content JSONB,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    # 8) folders (optional)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS folders (
             id SERIAL PRIMARY KEY,
@@ -134,38 +121,7 @@ def create_all_tables():
         );
     ''')
 
-    # Add folder_id to conversations
-    cursor.execute('''
-        ALTER TABLE conversations
-        ADD COLUMN IF NOT EXISTS folder_id INTEGER;
-    ''')
-    # Add a foreign key for folder_id
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE conversations DROP CONSTRAINT IF EXISTS fk_conversations_folder;
-        EXCEPTION WHEN undefined_object THEN
-        END;
-        $$;
-    ''')
-    cursor.execute('''
-        DO $$
-        BEGIN
-            ALTER TABLE conversations
-            ADD CONSTRAINT fk_conversations_folder
-            FOREIGN KEY (folder_id)
-            REFERENCES folders(id)
-            ON DELETE CASCADE;
-        EXCEPTION WHEN duplicate_object THEN
-        END;
-        $$;
-    ''')
-
-    # ----------------------------------------------------------------
-    # Now define the per-user, per-conversation tables
-    # ----------------------------------------------------------------
-
-    # 9) NPCStats
+    # Per-User/Conversation Tables
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCStats (
             npc_id SERIAL PRIMARY KEY,
@@ -180,7 +136,7 @@ def create_all_tables():
             relationships JSONB,
             dominance INT CHECK (dominance BETWEEN -100 AND 100),
             cruelty INT CHECK (cruelty BETWEEN -100 AND 100),
-            closeness INT CHECK (closeness BETWEEN 100 AND 100),
+            closeness INT CHECK (closeness BETWEEN -100 AND 100),  -- Fixed typo
             trust INT CHECK (trust BETWEEN -100 AND 100),
             respect INT CHECK (respect BETWEEN -100 AND 100),
             intensity INT CHECK (intensity BETWEEN -100 AND 100),
@@ -202,27 +158,25 @@ def create_all_tables():
         );
     ''')
 
-    # 10) PlayerStats
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerStats (
-           id SERIAL PRIMARY KEY,
-           user_id INTEGER NOT NULL,
-           conversation_id INTEGER NOT NULL,
-           player_name TEXT NOT NULL,
-           corruption INT CHECK (corruption BETWEEN 0 AND 100),
-           confidence INT CHECK (confidence BETWEEN 0 AND 100),
-           willpower INT CHECK (willpower BETWEEN 0 AND 100),
-           obedience INT CHECK (obedience BETWEEN 0 AND 100),
-           dependency INT CHECK (dependency BETWEEN 0 AND 100),
-           lust INT CHECK (lust BETWEEN 0 AND 100),
-           mental_resilience INT CHECK (mental_resilience BETWEEN 0 AND 100),
-           physical_endurance INT CHECK (physical_endurance BETWEEN 0 AND 100),
-           FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-           FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name TEXT NOT NULL,
+            corruption INT CHECK (corruption BETWEEN 0 AND 100),
+            confidence INT CHECK (confidence BETWEEN 0 AND 100),
+            willpower INT CHECK (willpower BETWEEN 0 AND 100),
+            obedience INT CHECK (obedience BETWEEN 0 AND 100),
+            dependency INT CHECK (dependency BETWEEN 0 AND 100),
+            lust INT CHECK (lust BETWEEN 0 AND 100),
+            mental_resilience INT CHECK (mental_resilience BETWEEN 0 AND 100),
+            physical_endurance INT CHECK (physical_endurance BETWEEN 0 AND 100),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    # 11) Archetypes (global, no user/conversation)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Archetypes (
             id SERIAL PRIMARY KEY,
@@ -234,19 +188,18 @@ def create_all_tables():
         );
     ''')
 
-    # 12) Activities (global, no user/conversation)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Activities (
-          id SERIAL PRIMARY KEY,
-          name TEXT UNIQUE NOT NULL,
-          purpose JSONB NOT NULL,
-          stat_integration JSONB,
-          intensity_tiers JSONB,
-          setting_variants JSONB
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            purpose JSONB NOT NULL,
+            stat_integration JSONB,
+            intensity_tiers JSONB,
+            setting_variants JSONB,
+            fantasy_level TEXT DEFAULT 'realistic' CHECK (fantasy_level IN ('realistic', 'fantastical', 'surreal'))  -- Added for surreal punishments
         );
     ''')
 
-    # 13) PlayerInventory
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerInventory (
             id SERIAL PRIMARY KEY,
@@ -264,7 +217,6 @@ def create_all_tables():
         );
     ''')
 
-    # 14) Locations
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Locations (
             id SERIAL PRIMARY KEY,
@@ -278,7 +230,6 @@ def create_all_tables():
         );
     ''')
 
-    # 15) Events (updated to include full in-game date/time)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Events (
             id SERIAL PRIMARY KEY,
@@ -298,7 +249,6 @@ def create_all_tables():
         );
     ''')
 
-    # 16) Quests
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Quests (
             quest_id SERIAL PRIMARY KEY,
@@ -314,25 +264,23 @@ def create_all_tables():
         );
     ''')
 
-    # 17) PlannedEvents (updated to include full in-game date/time)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlannedEvents (
-          event_id SERIAL PRIMARY KEY,
-          user_id INTEGER NOT NULL,
-          conversation_id INTEGER NOT NULL,
-          npc_id INT REFERENCES NPCStats(npc_id),
-          year INT DEFAULT 1,
-          month INT DEFAULT 1,
-          day INT NOT NULL,
-          time_of_day TEXT NOT NULL,
-          override_location TEXT NOT NULL,
-          UNIQUE(npc_id, year, month, day, time_of_day),
-          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-          FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            event_id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            npc_id INT REFERENCES NPCStats(npc_id),
+            year INT DEFAULT 1,
+            month INT DEFAULT 1,
+            day INT NOT NULL,
+            time_of_day TEXT NOT NULL,
+            override_location TEXT NOT NULL,
+            UNIQUE(npc_id, year, month, day, time_of_day),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    # 18) SocialLinks - with enhanced relationship columns
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS SocialLinks (
             link_id SERIAL PRIMARY KEY,
@@ -349,13 +297,13 @@ def create_all_tables():
             experienced_crossroads JSONB,
             experienced_rituals JSONB,
             relationship_stage TEXT,
+            group_interaction TEXT,  -- Added for group dynamics in punishments
             UNIQUE (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    # 19) PlayerPerks
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerPerks (
             id SERIAL PRIMARY KEY,
@@ -373,31 +321,27 @@ def create_all_tables():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS IntensityTiers (
             id SERIAL PRIMARY KEY,
-            tier_name TEXT NOT NULL,        
-            range_min INT NOT NULL,         
-            range_max INT NOT NULL,         
-            description TEXT NOT NULL,      
-            key_features JSONB NOT NULL,    
-            activity_examples JSONB,        
-            permanent_effects JSONB         
+            tier_name TEXT NOT NULL,
+            range_min INT NOT NULL,
+            range_max INT NOT NULL,
+            description TEXT NOT NULL,
+            key_features JSONB NOT NULL,
+            activity_examples JSONB,
+            permanent_effects JSONB,
+            fantasy_level TEXT DEFAULT 'realistic' CHECK (fantasy_level IN ('realistic', 'fantastical', 'surreal'))  -- Added for surreal punishments
         );
     ''')
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS ImageGenerations (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            # ... fields ...
-        )
-    """)
+    # Removed incomplete ImageGenerations in favor of full image tables below
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Interactions (
             id SERIAL PRIMARY KEY,
-            interaction_name TEXT UNIQUE NOT NULL,   
-            detailed_rules JSONB NOT NULL,          
-            task_examples JSONB,                    
-            agency_overrides JSONB                  
+            interaction_name TEXT UNIQUE NOT NULL,
+            detailed_rules JSONB NOT NULL,
+            task_examples JSONB,
+            agency_overrides JSONB,
+            fantasy_level TEXT DEFAULT 'realistic' CHECK (fantasy_level IN ('realistic', 'fantastical', 'surreal'))  -- Added for surreal interactions
         );
     ''')
 
@@ -414,11 +358,7 @@ def create_all_tables():
         );
     ''')
 
-    # ----------------------------------------------------------------
-    # New tables for enhanced systems
-    # ----------------------------------------------------------------
-
-    # PlayerJournal - For personal revelations, narrative moments, dreams, etc.
+    # Enhanced Systems
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerJournal (
             id SERIAL PRIMARY KEY,
@@ -428,13 +368,14 @@ def create_all_tables():
             entry_text TEXT NOT NULL,
             revelation_types TEXT,
             narrative_moment TEXT,
+            fantasy_flag BOOLEAN DEFAULT FALSE,  -- Flags surreal events
+            intensity_level INT CHECK (intensity_level BETWEEN 0 AND 4),  -- Ties to IntensityTiers
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    # NPCEvolution - To track mask slippage events and evolution history
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCEvolution (
             id SERIAL PRIMARY KEY,
@@ -450,7 +391,6 @@ def create_all_tables():
         );
     ''')
 
-    # NPCRevelations - To track NPC revelations at different narrative stages
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCRevelations (
             id SERIAL PRIMARY KEY,
@@ -466,7 +406,6 @@ def create_all_tables():
         );
     ''')
 
-    # StatsHistory - To track significant stat changes
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS StatsHistory (
             id SERIAL PRIMARY KEY,
@@ -483,21 +422,100 @@ def create_all_tables():
         );
     ''')
 
+    # Image Generation Tables (from ai_image_generator.py)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NPCVisualAttributes (
+            id SERIAL PRIMARY KEY,
+            npc_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            conversation_id TEXT NOT NULL,
+            hair_color TEXT,
+            hair_style TEXT,
+            eye_color TEXT,
+            skin_tone TEXT,
+            body_type TEXT,
+            height TEXT,
+            age_appearance TEXT,
+            default_outfit TEXT,
+            outfit_variations JSONB,
+            makeup_style TEXT,
+            accessories JSONB,
+            expressions JSONB,
+            poses JSONB,
+            visual_seed TEXT,
+            last_generated_image TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ImageFeedback (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id TEXT NOT NULL,
+            image_path TEXT NOT NULL,
+            original_prompt TEXT NOT NULL,
+            npc_names JSONB NOT NULL,
+            rating INTEGER CHECK (rating BETWEEN 1 AND 5),
+            feedback_text TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NPCVisualEvolution (
+            id SERIAL PRIMARY KEY,
+            npc_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            conversation_id TEXT NOT NULL,
+            event_type TEXT CHECK (event_type IN ('outfit_change', 'appearance_change', 'location_change', 'mood_change')),
+            event_description TEXT,
+            previous_state JSONB,
+            current_state JSONB,
+            scene_context TEXT,
+            image_generated TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE OR REPLACE VIEW UserVisualPreferences AS
+        SELECT 
+            user_id,
+            npc_name,
+            AVG(rating) as avg_rating,
+            COUNT(*) as feedback_count
+        FROM 
+            ImageFeedback,
+            jsonb_array_elements_text(npc_names) as npc_name
+        WHERE 
+            rating >= 4
+        GROUP BY 
+            user_id, npc_name
+    ''')
+
     conn.commit()
     conn.close()
 
 def seed_initial_data():
-    """
-    Inserts default data (stat definitions, game rules, settings, activities, archetypes, etc.).
-    """
     insert_or_update_game_rules()
     insert_stat_definitions()
-    insert_missing_settings() 
+    insert_missing_settings()
     insert_missing_activities()
     insert_missing_archetypes()
     create_and_seed_intensity_tiers()
-    create_and_seed_plot_triggers()     
+    create_and_seed_plot_triggers()
     create_and_seed_interactions()
+    insert_default_player_stats_chase()
     print("All default data seeded successfully.")
 
 def initialize_all_data():
