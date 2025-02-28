@@ -584,7 +584,7 @@ async def next_storybeat():
             image_result = None
             if should_generate:
                 logging.info(f"Generating image for scene: {reason}")
-                image_result = generate_roleplay_image_from_gpt(
+                image_result = await generate_roleplay_image_from_gpt(
                     response_data["function_args"], 
                     user_id, 
                     conv_id
