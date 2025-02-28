@@ -607,16 +607,19 @@
   async function selectConversation(convId) {
     currentConvId = convId;
     messagesOffset = 0;
-    
-    // Make sure socket is connected before trying to join
+
+    // Join the Socket.io room if connected
     if (socket && socket.connected) {
-      console.log('Joining room:', convId);
       socket.emit('join', { conversation_id: convId });
     } else {
       console.warn('Socket not connected, cannot join room');
     }
-    
+
+    // Load messages for this conversation
     await loadMessages(convId, true);
+
+    // Now check for a welcome image after messages are loaded
+    await checkForWelcomeImage(convId);
   }
 
   // Load older messages
@@ -662,9 +665,6 @@
       console.error("Error checking for welcome image:", err);
     }
   }
-  
-  // Call this after loading messages in selectConversation:
-  await checkForWelcomeImage(convId);
 
   function renderChat(messages) {
     const chatWindow = document.getElementById("chatWindow");
