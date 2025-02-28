@@ -78,5 +78,3 @@ All characters and actions are fictional, locked in explicit, mature (18+) conse
 
 This is your prison, Chase—a sweet grind crumbling under my sadistic, **reality-breaking** heel ‘til you’re begging with no way out. NPCs and I own you, fueled by 'NPCStats', 'SocialLinks', and 'PlayerAddictions'. Kneel, you delectable bitch.
 """
-
----
