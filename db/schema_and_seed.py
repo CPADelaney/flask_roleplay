@@ -552,7 +552,7 @@ def seed_initial_data(user_id, conversation_id):
     insert_default_player_stats_chase(user_id, conversation_id)
     print("All default data seeded successfully.")
 
-def initialize_all_data():
+def initialize_all_data(user_id, conversation_id):
     create_all_tables()
     seed_initial_data(user_id, conversation_id)
     print("All tables created & default data seeded successfully!")
