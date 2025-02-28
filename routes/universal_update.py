@@ -36,3 +36,30 @@ async def universal_update():
         return jsonify({"error": str(e)}), 500
     finally:
         await conn.close()
+
+@universal_bp.route("/get_roleplay_value", methods=["GET"])
+def get_roleplay_value():
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"error": "Not authenticated"}), 401
+        
+    conversation_id = request.args.get("conversation_id")
+    key = request.args.get("key")
+    
+    if not conversation_id or not key:
+        return jsonify({"error": "Missing required parameters"}), 400
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT value FROM CurrentRoleplay
+        WHERE user_id=%s AND conversation_id=%s AND key=%s
+    """, (user_id, conversation_id, key))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    if row:
+        return jsonify({"value": row[0]})
+    else:
+        return jsonify({"value": None})
