@@ -22,6 +22,8 @@ from logic.time_cycle import advance_time_and_update
 from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
 from routes.settings_routes import generate_mega_setting_logic
+from logic.gpt_image_decision import should_generate_image_for_response
+from routes.ai_image_generator import generate_roleplay_image_from_gpt
 
 # Import new enhanced modules
 from logic.stats_logic import get_player_current_tier, check_for_combination_triggers, apply_stat_change, apply_activity_effects
@@ -571,6 +573,22 @@ async def next_storybeat():
                     logging.info(f"Applied universal updates for conversation {conv_id}")
             except Exception as update_error:
                 logging.error(f"Error applying universal updates: {str(update_error)}")
+
+            should_generate, reason = should_generate_image_for_response(
+                user_id, 
+                conv_id, 
+                response_data["function_args"]
+            )
+            
+            # Process image generation if needed
+            image_result = None
+            if should_generate:
+                logging.info(f"Generating image for scene: {reason}")
+                image_result = generate_roleplay_image_from_gpt(
+                    response_data["function_args"], 
+                    user_id, 
+                    conv_id
+                )
         else:
             ai_response = response_data.get("response", "")
         
@@ -591,6 +609,13 @@ async def next_storybeat():
             "addiction_effects": addiction_effects,
             "narrative_stage": narrative_stage.name if narrative_stage else None
         }
+    
+        if image_result and "image_urls" in image_result and image_result["image_urls"]:
+            response["image"] = {
+                "image_url": image_result["image_urls"][0],
+                "prompt_used": image_result.get("prompt_used", ""),
+                "reason": reason
+            }
         
         if crossroads_event:
             response["crossroads_event"] = crossroads_event
