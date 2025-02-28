@@ -12,20 +12,17 @@ from logic.json_helpers import safe_json_loads
 # Use your full schema, but add a "narrative" field at the top.
 UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
     "name": "apply_universal_update",
-    "description": "Insert or update various roleplay elements in the database (NPCs, locations, events, etc.), and return a narrative.",
+    "description": "Insert or update roleplay elements (NPCs, locations, events, etc.), including fantastical punishments and image generation, returning a narrative.",
     "parameters": {
         "type": "object",
         "properties": {
             "narrative": {
                 "type": "string",
-                "description": "The narrative text to be displayed to the player."
+                "description": "The narrative text to display, potentially describing surreal punishments or events."
             },
             "roleplay_updates": {
                 "type": "object",
-                "description": (
-                    "Updates to the CurrentRoleplay table, arbitrary key-value pairs. "
-                    "For time updates, use keys 'CurrentYear', 'CurrentMonth', 'CurrentDay', and 'TimeOfDay'."
-                ),
+                "description": "Updates to CurrentRoleplay with arbitrary key-value pairs (e.g., 'CurrentYear', 'TimeOfDay' for time).",
                 "properties": {
                     "CurrentYear": {"type": "number"},
                     "CurrentMonth": {"type": "number"},
@@ -50,19 +47,19 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                     }
                 },
                 "additionalProperties": False,
-                "description": "The detailed weekly schedule for Chase, with keys for each day of the week and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
+                "description": "Chase’s detailed weekly schedule."
             },
             "MainQuest": {
                 "type": "string",
-                "description": "A short, intriguing summary of the main quest that Chase is about to undertake."
+                "description": "Summary of Chase’s main quest."
             },
             "PlayerRole": {
                 "type": "string",
-                "description": "A concise description of Chase's typical day (his role, career, and daily routine) in this environment."
+                "description": "Chase’s typical day/role in this environment."
             },
             "npc_creations": {
                 "type": "array",
-                "description": "Create new NPCs with stats/hobbies/affiliations, etc.",
+                "description": "Create new NPCs with stats and traits.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -94,26 +91,23 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "dislikes": {"type": "array", "items": {"type": "string"}},
                         "affiliations": {"type": "array", "items": {"type": "string"}},
                         "schedule": {
-                          "type": "object",
-                          "description": "Weekly schedule, supports any custom day names. Each day is an object containing Morning, Afternoon, Evening, Night.",
-                          "patternProperties": {
-                            "^[A-Z][a-zA-Z]*$": {
-                              "type": "object",
-                              "properties": {
-                                "Morning": {"type": "string"},
-                                "Afternoon": {"type": "string"},
-                                "Evening": {"type": "string"},
-                                "Night": {"type": "string"}
-                              },
-                              "required": ["Morning", "Afternoon", "Evening", "Night"],
-                              "additionalProperties": False
-                            }
-                          },
-                          "additionalProperties": False,
-                          "description": "The detailed weekly schedule for this NPC, formatted as a JSON object with keys for each day and nested keys for 'Morning', 'Afternoon', 'Evening', and 'Night'."
+                            "type": "object",
+                            "patternProperties": {
+                                "^[A-Z][a-zA-Z]*$": {
+                                    "type": "object",
+                                    "properties": {
+                                        "Morning": {"type": "string"},
+                                        "Afternoon": {"type": "string"},
+                                        "Evening": {"type": "string"},
+                                        "Night": {"type": "string"}
+                                    },
+                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
+                                    "additionalProperties": False
+                                }
+                            },
+                            "additionalProperties": False
                         },
                         "memory": {
-                            "description": "NPC memory can be a string or an array of strings.",
                             "anyOf": [
                                 {"type": "string"},
                                 {"type": "array", "items": {"type": "string"}}
@@ -125,8 +119,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "birthdate": {"type": "string", "format": "date"}
                     },
                     "required": ["npc_name"]
-                },
-                "description": "Create new NPCs with stats/hobbies/affiliations, etc."
+                }
             },
             "npc_updates": {
                 "type": "array",
@@ -152,38 +145,34 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "dislikes": {"type": "array", "items": {"type": "string"}},
                         "sex": {"type": "string"},
                         "memory": {
-                            "description": "NPC memory can be a string or an array of strings.",
                             "anyOf": [
                                 {"type": "string"},
                                 {"type": "array", "items": {"type": "string"}}
                             ]
                         },
                         "schedule": {
-                          "type": "object",
-                          "description": "Weekly schedule, supports any custom day names. Each day is an object containing Morning, Afternoon, Evening, Night.",
-                          "patternProperties": {
-                            "^[A-Z][a-zA-Z]*$": {
-                              "type": "object",
-                              "properties": {
-                                "Morning": {"type": "string"},
-                                "Afternoon": {"type": "string"},
-                                "Evening": {"type": "string"},
-                                "Night": {"type": "string"}
-                              },
-                              "required": ["Morning", "Afternoon", "Evening", "Night"],
-                              "additionalProperties": False
-                            }
-                          },
-                          "additionalProperties": False,
-                          "description": "The detailed weekly schedule for this NPC."
+                            "type": "object",
+                            "patternProperties": {
+                                "^[A-Z][a-zA-Z]*$": {
+                                    "type": "object",
+                                    "properties": {
+                                        "Morning": {"type": "string"},
+                                        "Afternoon": {"type": "string"},
+                                        "Evening": {"type": "string"},
+                                        "Night": {"type": "string"}
+                                    },
+                                    "required": ["Morning", "Afternoon", "Evening", "Night"],
+                                    "additionalProperties": False
+                                }
+                            },
+                            "additionalProperties": False
                         },
                         "schedule_updates": {"type": "object"},
                         "affiliations": {"type": "array", "items": {"type": "string"}},
                         "current_location": {"type": "string"}
                     },
                     "required": ["npc_id"]
-                },
-                "description": "Update existing NPCs by npc_id."
+                }
             },
             "character_stat_updates": {
                 "type": "object",
@@ -202,8 +191,7 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                             "physical_endurance": {"type": "number"}
                         }
                     }
-                },
-                "description": "Update the player's stats in PlayerStats."
+                }
             },
             "relationship_updates": {
                 "type": "array",
@@ -232,14 +220,10 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                     "properties": {
                         "location_name": {"type": "string"},
                         "description": {"type": "string"},
-                        "open_hours": {
-                            "type": "array",
-                            "items": {"type": "string"}
-                        }
+                        "open_hours": {"type": "array", "items": {"type": "string"}}
                     },
                     "required": ["location_name"]
-                },
-                "description": "Create new locations in the world."
+                }
             },
             "event_list_updates": {
                 "type": "array",
@@ -256,15 +240,20 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "month": {"type": "number"},
                         "day": {"type": "number"},
                         "time_of_day": {"type": "string"},
-                        "override_location": {"type": "string"}
+                        "override_location": {"type": "string"},
+                        "fantasy_level": {  # Added for surreal events
+                            "type": "string",
+                            "enum": ["realistic", "fantastical", "surreal"],
+                            "default": "realistic",
+                            "description": "Indicates if the event involves reality-breaking elements."
+                        }
                     }
-                },
-                "description": "Create or update normal Events or PlannedEvents."
+                }
             },
             "inventory_updates": {
                 "type": "object",
                 "properties": {
-                    "player_name": {"type": "string"},
+                    "player_name": {"type": "string", "default": "Chase"},
                     "added_items": {
                         "type": "array",
                         "items": {
@@ -287,17 +276,11 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "items": {
                             "oneOf": [
                                 {"type": "string"},
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "item_name": {"type": "string"}
-                                    }
-                                }
+                                {"type": "object", "properties": {"item_name": {"type": "string"}}}
                             ]
                         }
                     }
-                },
-                "description": "Add or remove items from the player's inventory."
+                }
             },
             "quest_updates": {
                 "type": "array",
@@ -324,10 +307,13 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "entity2_id": {"type": "number"},
                         "link_type": {"type": "string"},
                         "level_change": {"type": "number"},
-                        "new_event": {"type": "string"}
+                        "new_event": {"type": "string"},
+                        "group_context": {  # Added for group dynamics
+                            "type": "string",
+                            "description": "Describes multi-NPC interactions (e.g., 'NPC2 and five others gang up')."
+                        }
                     }
-                },
-                "description": "NPC<->NPC or Player<->NPC relationships."
+                }
             },
             "perk_unlocks": {
                 "type": "array",
@@ -340,6 +326,56 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
                         "perk_effect": {"type": "string"}
                     }
                 }
+            },
+            "activity_updates": {  # Added for punishment tracking
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "activity_name": {"type": "string"},
+                        "purpose": {
+                            "type": "object",
+                            "properties": {
+                                "description": {"type": "string"},
+                                "fantasy_level": {
+                                    "type": "string",
+                                    "enum": ["realistic", "fantastical", "surreal"],
+                                    "default": "realistic"
+                                }
+                            }
+                        },
+                        "stat_integration": {"type": "object"},
+                        "intensity_tier": {"type": "number", "minimum": 0, "maximum": 4},
+                        "setting_variant": {"type": "string"}
+                    },
+                    "required": ["activity_name"]
+                },
+                "description": "Create or update Activities for punishments, including surreal elements."
+            },
+            "journal_updates": {  # Added for PlayerJournal
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "entry_type": {"type": "string", "enum": ["revelation", "moment", "dream"]},
+                        "entry_text": {"type": "string"},
+                        "fantasy_flag": {"type": "boolean", "default": False},
+                        "intensity_level": {"type": "number", "minimum": 0, "maximum": 4}
+                    },
+                    "required": ["entry_type", "entry_text"]
+                },
+                "description": "Log narrative events or punishments in PlayerJournal, including surreal ones."
+            },
+            "image_generation": {  # Added for explicit image triggering
+                "type": "object",
+                "properties": {
+                    "generate": {"type": "boolean", "default": False},
+                    "priority": {"type": "string", "enum": ["low", "medium", "high"], "default": "low"},
+                    "focus": {"type": "string", "enum": ["character", "scene", "action", "balanced"], "default": "balanced"},
+                    "framing": {"type": "string", "enum": ["close_up", "medium_shot", "wide_shot"], "default": "medium_shot"},
+                    "reason": {"type": "string", "description": "Why this image is generated (e.g., 'surreal punishment')."}
+                },
+                "description": "Trigger and configure image generation for the scene."
             }
         },
         "required": [
@@ -358,7 +394,10 @@ UNIVERSAL_UPDATE_FUNCTION_SCHEMA = {
             "inventory_updates",
             "quest_updates",
             "social_links",
-            "perk_unlocks"
+            "perk_unlocks",
+            "activity_updates",
+            "journal_updates",
+            "image_generation"
         ]
     }
 }
