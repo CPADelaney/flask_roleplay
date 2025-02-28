@@ -153,6 +153,29 @@
       background-color: #e5e5e5;
       color: #333333;
     }
+    
+    /* NEW: Image styles */
+    .image-bubble {
+      max-width: 80% !important;
+      padding: 8px !important;
+    }
+    
+    .image-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    
+    .image-caption {
+      font-size: 0.8em;
+      color: #666;
+      margin-top: 5px;
+      font-style: italic;
+    }
+    
+    .dark-mode .image-caption {
+      color: #aaa !important;
+    }
   </style>
 
   <!-- MARKDOWN + DOMPurify Libraries -->
@@ -335,6 +358,12 @@
       appendMessage(messageObj, true);
     });
     
+    // NEW: Image event listener
+    socket.on("image", function(payload) {
+      console.log("Received image:", payload);
+      appendImageToChat(payload.image_url, payload.reason);
+    });
+    
     // Add storybeat-specific listeners
     socket.on("processing", function(data) {
       console.log("Server is processing the storybeat:", data.message);
@@ -346,6 +375,36 @@
       chatWindow.appendChild(processingDiv);
       chatWindow.scrollTop = chatWindow.scrollHeight;
     });
+  }
+
+  // NEW: Function to append images to chat
+  function appendImageToChat(imageUrl, reason) {
+    const chatWindow = document.getElementById("chatWindow");
+    
+    // Create a row for the image
+    const imageRow = document.createElement("div");
+    imageRow.classList.add("message-row", "gpt-row");
+    
+    // Create the bubble element
+    const imageBubble = document.createElement("div");
+    imageBubble.classList.add("message-bubble", "image-bubble");
+    
+    // Add the image with a caption
+    imageBubble.innerHTML = `
+      <div class="image-container">
+        <img src="${imageUrl}" alt="Generated scene" style="max-width: 100%; border-radius: 5px;" />
+        <div class="image-caption">
+          ${reason || "AI-generated scene visualization"}
+        </div>
+      </div>
+    `;
+    
+    // Add to DOM
+    imageRow.appendChild(imageBubble);
+    chatWindow.appendChild(imageRow);
+    
+    // Auto-scroll
+    chatWindow.scrollTop = chatWindow.scrollHeight;
   }
 
   function handleNewToken(token) {
