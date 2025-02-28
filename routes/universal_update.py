@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify, session
 import asyncio
 import asyncpg
 import os
+from db.connection import get_db_connection
 from logic.universal_updater import apply_universal_updates_async
 
 DB_DSN = os.getenv("DB_DSN")
