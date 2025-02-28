@@ -554,7 +554,7 @@ async def async_process_new_game(user_id, conversation_data):
         }
         
         # Generate the image
-        image_result = generate_roleplay_image_from_gpt(scene_data, user_id, conversation_id)
+        image_result = await generate_roleplay_image_from_gpt(scene_data, user_id, conversation_id)
         
         # Store the image URL in the database if generated successfully
         welcome_image_url = None
