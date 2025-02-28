@@ -130,15 +130,15 @@ def background_chat_task(conversation_id, user_input, universal_update):
             logging.info(f"GPT response stored in database for conversation {conversation_id}")
         except Exception as db_error:
             logging.error(f"Database error storing GPT response: {str(db_error)}")
-        
-        # Check if we should generate an image - moved OUTSIDE the database exception handling
+
+        # Check if we should generate an image
         should_generate, reason = should_generate_image_for_response(
             user_id, 
             conversation_id, 
             response_data["function_args"]
         )
         
-        # Process image generation if needed
+        # Image generation code
         image_result = None
         if should_generate:
             logging.info(f"Generating image for scene: {reason}")
@@ -158,7 +158,7 @@ def background_chat_task(conversation_id, user_input, universal_update):
                 }, room=conversation_id)
                 logging.info(f"Image emitted to client: {image_result['image_urls'][0]}")
         
-        # Stream the response token by token (KEEP ONLY ONE of these blocks)
+        # Stream the response token by token
         for i in range(0, len(ai_response), 3):
             token = ai_response[i:i+3]
             socketio.emit('new_token', {'token': token}, room=conversation_id)
@@ -166,6 +166,11 @@ def background_chat_task(conversation_id, user_input, universal_update):
         
         # Emit the final 'done' event with the full text
         socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
+        logging.info(f"Completed streaming GPT response for conversation {conversation_id}")
+    
+    except Exception as e:
+        logging.error(f"Error in background_chat_task: {str(e)}")
+        socketio.emit('error', {'error': f"Server error: {str(e)}"}, room=conversation_id)
 
 def create_flask_app():
     """
