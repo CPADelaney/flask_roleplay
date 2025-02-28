@@ -39,58 +39,107 @@ logger = logging.getLogger(__name__)
 # 1️⃣ FETCH ROLEPLAY DATA & NPC DETAILS
 # ======================================================
 def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, player_name="Chase"):
-    """Fetch detailed NPCStats, NPCVisualAttributes, PlayerStats, SocialLinks, and PlayerJournal."""
+    """
+    Fetch detailed NPCStats, NPCVisualAttributes, PlayerStats, SocialLinks, and PlayerJournal.
+    Safely handles empty npc_names to avoid an 'IN ()' syntax error and omits `visual_seed`
+    if it's not actually a column in the NPCStats table.
+    """
+    # 1. If npc_names is empty, immediately return empty results
+    if not npc_names:
+        # Provide some default player stats in case there's no NPC yet
+        default_player_stats = {
+            "obedience": 50,
+            "corruption": 0,
+            "willpower": 50,
+            "shame": 0,
+            "dependency": 0,
+            "lust": 0,
+            "mental_resilience": 50
+        }
+        return {}, default_player_stats, {}, []
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Fetch NPC data
+    # 2. Fetch NPC data
+    # Omit the visual_seed column if it doesn't exist in your table:
     cursor.execute("""
-        SELECT n.id, n.npc_name, n.physical_description, n.dominance, n.cruelty, n.intensity, 
-               n.archetype_summary, n.archetype_extras_summary, n.personality_traits, 
-               n.likes, n.dislikes, n.current_location, n.visual_seed
+        SELECT n.id, 
+               n.npc_name,
+               n.physical_description, 
+               n.dominance, 
+               n.cruelty, 
+               n.intensity,
+               n.archetype_summary, 
+               n.archetype_extras_summary, 
+               n.personality_traits, 
+               n.likes,
+               n.dislikes, 
+               n.current_location
         FROM NPCStats n
-        WHERE n.user_id=%s AND n.conversation_id=%s AND n.npc_name IN %s
+        WHERE n.user_id=%s 
+          AND n.conversation_id=%s 
+          AND n.npc_name IN %s
     """, (user_id, conversation_id, tuple(npc_names)))
-    
+
     npc_rows = cursor.fetchall()
     detailed_npcs = {}
-    
+
     for row in npc_rows:
         npc_id = row[0]
         npc_name = row[1]
-        
-        # Fetch Visual Attributes
+
+        # 3. Fetch Visual Attributes
         cursor.execute("""
-            SELECT hair_color, hair_style, eye_color, skin_tone, body_type, 
-                   height, age_appearance, default_outfit, outfit_variations,
-                   makeup_style, accessories, expressions, poses, visual_seed,
+            SELECT hair_color, 
+                   hair_style, 
+                   eye_color, 
+                   skin_tone, 
+                   body_type, 
+                   height, 
+                   age_appearance, 
+                   default_outfit, 
+                   outfit_variations,
+                   makeup_style, 
+                   accessories, 
+                   expressions, 
+                   poses, 
+                   visual_seed,
                    last_generated_image
             FROM NPCVisualAttributes
-            WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+            WHERE npc_id=%s 
+              AND user_id=%s 
+              AND conversation_id=%s
         """, (npc_id, user_id, conversation_id))
         visual_attrs = cursor.fetchone()
 
-        # Fetch Previous Images
+        # 4. Fetch Previous Images
         cursor.execute("""
             SELECT image_generated
             FROM NPCVisualEvolution
-            WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+            WHERE npc_id=%s 
+              AND user_id=%s 
+              AND conversation_id=%s
             ORDER BY timestamp DESC
             LIMIT 5
         """, (npc_id, user_id, conversation_id))
         previous_images = [img[0] for img in cursor.fetchall() if img[0]]
 
-        # Fetch Social Links for this NPC
+        # 5. Fetch Social Links for this NPC
         cursor.execute("""
             SELECT link_type, link_level, dynamics
             FROM SocialLinks
-            WHERE user_id=%s AND conversation_id=%s AND 
-                  (entity1_type='npc' AND entity1_id=%s AND entity2_type='player') OR 
-                  (entity2_type='npc' AND entity2_id=%s AND entity1_type='player')
+            WHERE user_id=%s 
+              AND conversation_id=%s 
+              AND (
+                   (entity1_type='npc' AND entity1_id=%s AND entity2_type='player') 
+                OR (entity2_type='npc' AND entity2_id=%s AND entity1_type='player')
+              )
             LIMIT 1
         """, (user_id, conversation_id, npc_id, npc_id))
         social_link = cursor.fetchone()
 
+        # 6. Build the NPC dictionary
         detailed_npcs[npc_name] = {
             "id": npc_id,
             "physical_description": row[2] or "A figure shaped by her role",
@@ -103,7 +152,6 @@ def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, player_nam
             "likes": json.loads(row[9] or "[]"),
             "dislikes": json.loads(row[10] or "[]"),
             "current_location": row[11],
-            "visual_seed": row[12] or hashlib.md5(f"{row[1]}{row[6]}".encode()).hexdigest(),
             "previous_images": previous_images,
             "social_link": {
                 "link_type": social_link[0] if social_link else None,
@@ -111,8 +159,10 @@ def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, player_nam
                 "dynamics": json.loads(social_link[2] or "{}") if social_link else {}
             }
         }
-        
+
+        # Merge Visual Attributes if present
         if visual_attrs:
+            # notice we keep visual_seed from NPCVisualAttributes, if that’s valid
             detailed_npcs[npc_name].update({
                 "hair_color": visual_attrs[0],
                 "hair_style": visual_attrs[1],
@@ -127,39 +177,62 @@ def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, player_nam
                 "accessories": json.loads(visual_attrs[10] or "[]"),
                 "expressions": json.loads(visual_attrs[11] or "{}"),
                 "poses": json.loads(visual_attrs[12] or "[]"),
+                "visual_seed": visual_attrs[13],  # Or remove if not needed
                 "last_generated_image": visual_attrs[14]
             })
 
-    # Fetch PlayerStats
+    # 7. Fetch PlayerStats
     cursor.execute("""
         SELECT obedience, corruption, willpower, shame, dependency, lust, mental_resilience
         FROM PlayerStats 
-        WHERE user_id=%s AND conversation_id=%s AND player_name=%s
+        WHERE user_id=%s 
+          AND conversation_id=%s 
+          AND player_name=%s
         LIMIT 1
     """, (user_id, conversation_id, player_name))
     player_row = cursor.fetchone()
-    player_stats = {k: v for k, v in zip(
-        ["obedience", "corruption", "willpower", "shame", "dependency", "lust", "mental_resilience"],
-        player_row if player_row else [50, 0, 50, 0, 0, 0, 50]
-    )}
+    if player_row:
+        player_stats = dict(zip(
+            ["obedience", "corruption", "willpower", "shame", "dependency", "lust", "mental_resilience"],
+            player_row
+        ))
+    else:
+        # Default stats if none found
+        player_stats = {
+            "obedience": 50,
+            "corruption": 0,
+            "willpower": 50,
+            "shame": 0,
+            "dependency": 0,
+            "lust": 0,
+            "mental_resilience": 50
+        }
 
-    # Fetch recent PlayerJournal entries
+    # 8. Fetch recent PlayerJournal entries
     cursor.execute("""
         SELECT entry_text, entry_type
         FROM PlayerJournal
-        WHERE user_id=%s AND conversation_id=%s
+        WHERE user_id=%s 
+          AND conversation_id=%s
         ORDER BY timestamp DESC
         LIMIT 3
     """, (user_id, conversation_id))
-    journal_entries = [{"text": row[0], "type": row[1]} for row in cursor.fetchall()]
+    journal_entries = [
+        {"text": row[0], "type": row[1]}
+        for row in cursor.fetchall()
+    ]
 
-    # Fetch UserVisualPreferences
+    # 9. Fetch UserVisualPreferences
     cursor.execute("""
         SELECT npc_name, avg_rating
         FROM UserVisualPreferences
-        WHERE user_id=%s AND npc_name IN %s
+        WHERE user_id=%s 
+          AND npc_name IN %s
     """, (user_id, tuple(npc_names)))
-    user_preferences = {row[0]: {"avg_rating": row[1]} for row in cursor.fetchall()}
+    user_preferences = {
+        row[0]: {"avg_rating": row[1]}
+        for row in cursor.fetchall()
+    }
 
     cursor.close()
     conn.close()
