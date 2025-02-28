@@ -462,7 +462,7 @@ def create_all_tables():
             id SERIAL PRIMARY KEY,
             npc_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
+            conversation_id TEXT NOT NULL,
             hair_color TEXT,
             hair_style TEXT,
             eye_color TEXT,
@@ -540,7 +540,7 @@ def create_all_tables():
     conn.commit()
     conn.close()
 
-def seed_initial_data(user_id, conversation_id):
+def seed_initial_data():
     insert_or_update_game_rules()
     insert_stat_definitions()
     insert_missing_settings()
@@ -549,10 +549,10 @@ def seed_initial_data(user_id, conversation_id):
     create_and_seed_intensity_tiers()
     create_and_seed_plot_triggers()
     create_and_seed_interactions()
-    insert_default_player_stats_chase(user_id, conversation_id)
+    insert_default_player_stats_chase()
     print("All default data seeded successfully.")
 
-def initialize_all_data(user_id, conversation_id):
+def initialize_all_data():
     create_all_tables()
-    seed_initial_data(user_id, conversation_id)
+    seed_initial_data()
     print("All tables created & default data seeded successfully!")
