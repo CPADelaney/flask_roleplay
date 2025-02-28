@@ -35,118 +35,9 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================================
-# DATABASE SETUP
-# ================================
-def setup_database():
-    """Setup necessary database tables if they don't exist."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # NPCVisualAttributes table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS NPCVisualAttributes (
-        id SERIAL PRIMARY KEY,
-        npc_id INTEGER,
-        user_id INTEGER,
-        conversation_id TEXT,
-        hair_color TEXT,
-        hair_style TEXT,
-        eye_color TEXT,
-        skin_tone TEXT,
-        body_type TEXT,
-        height TEXT,
-        age_appearance TEXT,
-        default_outfit TEXT,
-        outfit_variations JSONB,
-        makeup_style TEXT,
-        accessories JSONB,
-        expressions JSONB,
-        poses JSONB,
-        visual_seed TEXT,
-        last_generated_image TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (npc_id) REFERENCES NPCStats(id),
-        FOREIGN KEY (user_id) REFERENCES Users(id)
-    )
-    """)
-    
-    # ImageFeedback table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS ImageFeedback (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER,
-        conversation_id TEXT,
-        image_path TEXT,
-        original_prompt TEXT,
-        npc_names JSONB,
-        rating INTEGER CHECK (rating BETWEEN 1 AND 5),
-        feedback_text TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES Users(id)
-    )
-    """)
-    
-    # NPCVisualEvolution table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS NPCVisualEvolution (
-        id SERIAL PRIMARY KEY,
-        npc_id INTEGER,
-        user_id INTEGER,
-        conversation_id TEXT,
-        event_type TEXT CHECK (event_type IN ('outfit_change', 'appearance_change', 'location_change', 'mood_change')),
-        event_description TEXT,
-        previous_state JSONB,
-        current_state JSONB,
-        scene_context TEXT,
-        image_generated TEXT,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (npc_id) REFERENCES NPCStats(id),
-        FOREIGN KEY (user_id) REFERENCES Users(id)
-    )
-    """)
-    
-    # UserVisualPreferences view
-    cursor.execute("""
-    CREATE OR REPLACE VIEW UserVisualPreferences AS
-    SELECT 
-        user_id,
-        npc_name,
-        AVG(rating) as avg_rating,
-        COUNT(*) as feedback_count
-    FROM 
-        ImageFeedback,
-        jsonb_array_elements_text(npc_names) as npc_name
-    WHERE 
-        rating >= 4
-    GROUP BY 
-        user_id, npc_name
-    """)
-
-    # Add ImageGenerations table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS ImageGenerations (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL,
-        conversation_id INTEGER NOT NULL,
-        image_path TEXT NOT NULL,
-        prompt_used TEXT,
-        generation_reason TEXT,
-        generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-    )
-    """)
-    
-    conn.commit()
-    cursor.close()
-    conn.close()
-    logger.info("Database tables setup complete")
-
-# ================================
+# ======================================================
 # 1️⃣ FETCH ROLEPLAY DATA & NPC DETAILS
-# ================================
+# ======================================================
 def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, player_name="Chase"):
     """Fetch detailed NPCStats, NPCVisualAttributes, PlayerStats, SocialLinks, and PlayerJournal."""
     conn = get_db_connection()
@@ -274,9 +165,10 @@ def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, player_nam
     conn.close()
     return detailed_npcs, player_stats, user_preferences, journal_entries
 
-# ================================
+
+# ======================================================
 # 2️⃣ PROCESS GPT RESPONSE & MERGE WITH NPCStats
-# ================================
+# ======================================================
 def process_gpt_scene_data(gpt_response, user_id, conversation_id):
     """Extract scene data from GPT, enriched with NPCStats, PlayerStats, SocialLinks, and PlayerJournal."""
     if not gpt_response or "scene_data" not in gpt_response:
@@ -335,9 +227,10 @@ def process_gpt_scene_data(gpt_response, user_id, conversation_id):
         "journal_entries": journal_entries
     }
 
-# ================================
+
+# ======================================================
 # 3️⃣ UPDATE VISUAL ATTRIBUTES VIA GPT-4o
-# ================================
+# ======================================================
 def update_npc_visual_attributes(user_id, conversation_id, npc_id, prompt_data, image_path=None):
     """Use GPT-4o to extract and update visual attributes from the image prompt."""
     conn = get_db_connection()
@@ -390,9 +283,15 @@ Return a JSON object with these keys, using 'unknown' if not specified."""
         response_format={"type": "json_object"}
     )
     new_attrs = safe_json_loads(response.choices[0].message.content) or {
-        "hair_color": "unknown", "hair_style": "unknown", "eye_color": "unknown",
-        "skin_tone": "unknown", "body_type": "unknown", "height": "unknown",
-        "age_appearance": "unknown", "default_outfit": "unknown", "makeup_style": "unknown",
+        "hair_color": "unknown",
+        "hair_style": "unknown",
+        "eye_color": "unknown",
+        "skin_tone": "unknown",
+        "body_type": "unknown",
+        "height": "unknown",
+        "age_appearance": "unknown",
+        "default_outfit": "unknown",
+        "makeup_style": "unknown",
         "accessories": []
     }
 
@@ -404,10 +303,22 @@ Return a JSON object with these keys, using 'unknown' if not specified."""
                 height=%s, age_appearance=%s, default_outfit=%s, makeup_style=%s, 
                 accessories=%s, last_generated_image=%s, updated_at=CURRENT_TIMESTAMP
             WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-        """, (new_attrs["hair_color"], new_attrs["hair_style"], new_attrs["eye_color"],
-              new_attrs["skin_tone"], new_attrs["body_type"], new_attrs["height"],
-              new_attrs["age_appearance"], new_attrs["default_outfit"], new_attrs["makeup_style"],
-              json.dumps(new_attrs["accessories"]), image_path, npc_id, user_id, conversation_id))
+        """, (
+            new_attrs["hair_color"],
+            new_attrs["hair_style"],
+            new_attrs["eye_color"],
+            new_attrs["skin_tone"],
+            new_attrs["body_type"],
+            new_attrs["height"],
+            new_attrs["age_appearance"],
+            new_attrs["default_outfit"],
+            new_attrs["makeup_style"],
+            json.dumps(new_attrs["accessories"]),
+            image_path,
+            npc_id,
+            user_id,
+            conversation_id
+        ))
     else:
         cursor.execute("""
             INSERT INTO NPCVisualAttributes
@@ -415,20 +326,33 @@ Return a JSON object with these keys, using 'unknown' if not specified."""
              skin_tone, body_type, height, age_appearance, default_outfit, makeup_style, 
              accessories, visual_seed, last_generated_image)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (npc_id, user_id, conversation_id, new_attrs["hair_color"], new_attrs["hair_style"],
-              new_attrs["eye_color"], new_attrs["skin_tone"], new_attrs["body_type"],
-              new_attrs["height"], new_attrs["age_appearance"], new_attrs["default_outfit"],
-              new_attrs["makeup_style"], json.dumps(new_attrs["accessories"]),
-              hashlib.md5(f"{npc_id}".encode()).hexdigest(), image_path))
+        """, (
+            npc_id,
+            user_id,
+            conversation_id,
+            new_attrs["hair_color"],
+            new_attrs["hair_style"],
+            new_attrs["eye_color"],
+            new_attrs["skin_tone"],
+            new_attrs["body_type"],
+            new_attrs["height"],
+            new_attrs["age_appearance"],
+            new_attrs["default_outfit"],
+            new_attrs["makeup_style"],
+            json.dumps(new_attrs["accessories"]),
+            hashlib.md5(f"{npc_id}".encode()).hexdigest(),
+            image_path
+        ))
 
     conn.commit()
     cursor.close()
     conn.close()
     return new_attrs, current_state
 
-# ================================
+
+# ======================================================
 # 4️⃣ GENERATE IMAGE-OPTIMIZED PROMPT VIA GPT-4o
-# ================================
+# ======================================================
 def generate_image_prompt(scene_data):
     """Use GPT-4o to summarize NPCStats, scene context, SocialLinks, and PlayerJournal into an image-optimized prompt."""
     if not scene_data:
@@ -449,14 +373,20 @@ def generate_image_prompt(scene_data):
             f"Name: {npc['name']}\n"
             f"Physical Description: {npc['physical_description']}\n"
             f"Visual Attributes: {', '.join(visual_attrs)}\n"
-            f"Dominance: {npc['dominance']}\nCruelty: {npc['cruelty']}\nIntensity: {npc['intensity']}\n"
-            f"Archetype: {npc['archetype_summary']}\nExtras: {npc['archetype_extras_summary'][:50]}...\n"
-            f"Expression: {npc['expression']}\nTraits: {', '.join(npc['personality_traits'])}\n"
-            f"Seed: {npc['visual_seed']}\nLocation: {npc['current_location']}\n"
-            f"Social Link: Type: {social_link['link_type'] or 'none'}, Level: {social_link['link_level']}, "
+            f"Dominance: {npc['dominance']}\n"
+            f"Cruelty: {npc['cruelty']}\n"
+            f"Intensity: {npc['intensity']}\n"
+            f"Archetype: {npc['archetype_summary']}\n"
+            f"Extras: {npc['archetype_extras_summary'][:50]}...\n"
+            f"Expression: {npc['expression']}\n"
+            f"Traits: {', '.join(npc['personality_traits'])}\n"
+            f"Seed: {npc['visual_seed']}\n"
+            f"Location: {npc['current_location']}\n"
+            f"Social Link: Type: {social_link['link_type'] or 'none'}, "
+            f"Level: {social_link['link_level']}, "
             f"Dynamics: {json.dumps(social_link['dynamics'])}\n"
-            f"Previous Images: {', '.join(npc['previous_images'][:2]) or 'None'}"
-            f"\nUser Rating: {scene_data['user_preferences'].get(npc['name'], {}).get('avg_rating', 'N/A')}"
+            f"Previous Images: {', '.join(npc['previous_images'][:2]) or 'None'}\n"
+            f"User Rating: {scene_data['user_preferences'].get(npc['name'], {}).get('avg_rating', 'N/A')}"
         )
     npc_details_text = "\n\n".join(npc_details)
 
@@ -469,12 +399,12 @@ def generate_image_prompt(scene_data):
         f"Player Stats: Lust {scene_data['player_stats']['lust']}, "
         f"Dependency {scene_data['player_stats']['dependency']}\n"
         f"Addictions: {json.dumps(scene_data['addiction_status']['addiction_levels'])}\n"
-        # Concatenate the journal portion to avoid nested quote issues
         "Recent Journal: "
-        + "; ".join([f"{entry['type']}: {entry['text'][:50]}..."
-                     for entry in scene_data['journal_entries']])
+        + "; ".join([
+            f"{entry['type']}: {entry['text'][:50]}..."
+            for entry in scene_data['journal_entries']
+        ])
     )
-
 
     prompt = f"""
 Given NPC details and scene context from a femdom visual novel, generate an image-optimized prompt for Stability AI:
@@ -511,9 +441,10 @@ Return JSON with 'image_prompt' and 'negative_prompt' (e.g., 'low quality, blurr
         "negative_prompt": "low quality, blurry, distorted face, extra limbs"
     }
 
-# ================================
+
+# ======================================================
 # 5️⃣ TRACK VISUAL EVOLUTION
-# ================================
+# ======================================================
 def track_visual_evolution(npc_id, user_id, conversation_id, event_type, description, previous, current, scene, image_path):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -522,16 +453,26 @@ def track_visual_evolution(npc_id, user_id, conversation_id, event_type, descrip
         (npc_id, user_id, conversation_id, event_type, event_description, 
          previous_state, current_state, scene_context, image_generated)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (npc_id, user_id, conversation_id, event_type, description,
-          json.dumps(previous), json.dumps(current), scene, image_path))
+    """, (
+        npc_id,
+        user_id,
+        conversation_id,
+        event_type,
+        description,
+        json.dumps(previous),
+        json.dumps(current),
+        scene,
+        image_path
+    ))
     conn.commit()
     cursor.close()
     conn.close()
     return True
 
-# ================================
+
+# ======================================================
 # 6️⃣ IMAGE CACHING SYSTEM
-# ================================
+# ======================================================
 def get_cached_images(prompt):
     prompt_hash = hashlib.md5(prompt.encode()).hexdigest()
     cached_files = []
@@ -564,13 +505,19 @@ def save_image_to_cache(image_data, prompt, variation_id=0):
             return file_path
     return None
 
-# ================================
+
+# ======================================================
 # 7️⃣ GENERATE AI IMAGE
-# ================================
+# ======================================================
 def generate_ai_image(prompt, negative_prompt=None, seed=None, style="anime"):
     if not negative_prompt:
         negative_prompt = "deformed, distorted, disfigured, poorly drawn, bad anatomy, extra limbs, blurry, watermark"
-    style_presets = {"anime": "anime", "realistic": "photographic", "painting": "digital-art", "sketch": "line-art"}
+    style_presets = {
+        "anime": "anime",
+        "realistic": "photographic",
+        "painting": "digital-art",
+        "sketch": "line-art"
+    }
     style_preset = style_presets.get(style, "anime")
     
     headers = {
@@ -587,7 +534,7 @@ def generate_ai_image(prompt, negative_prompt=None, seed=None, style="anime"):
         "height": 768,
         "width": 512,
         "steps": 30,
-        "seed": seed,  # Now NPC-specific
+        "seed": seed,
         "style_preset": style_preset
     }
     try:
@@ -601,9 +548,10 @@ def generate_ai_image(prompt, negative_prompt=None, seed=None, style="anime"):
         logger.error(f"Error generating image: {e}")
     return None
 
-# ================================
+
+# ======================================================
 # 8️⃣ GENERATE ROLEPLAY IMAGE
-# ================================
+# ======================================================
 def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id):
     scene_data = process_gpt_scene_data(gpt_response, user_id, conversation_id)
     if not scene_data:
@@ -620,8 +568,16 @@ def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id):
     generated_images = []
     updated_visual_attrs = {}
     
-    for variation_id in range(3):  # 3 variations for angles/lighting
-        seed = int(hashlib.md5(scene_data["npcs"][0]["visual_seed"].encode()).hexdigest(), 16) % (2**32) if scene_data["npcs"] else None
+    # For variety, generate 3 images with slight variations
+    for variation_id in range(3):
+        seed = None
+        if scene_data["npcs"]:
+            # Use the first NPC's visual_seed for determinism
+            npc_seed_text = scene_data["npcs"][0]["visual_seed"]
+            # Convert the hex to a bounded integer for the stability API
+            seed = int(hashlib.md5(npc_seed_text.encode()).hexdigest(), 16) % (2**32)
+
+        # Generate the image
         image_data = generate_ai_image(optimized_prompt, negative_prompt, seed)
         if image_data:
             cached_path = save_image_to_cache(image_data, optimized_prompt, variation_id)
@@ -629,15 +585,26 @@ def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id):
             
             # Update visual attributes for each NPC
             for npc in scene_data["npcs"]:
-                if "id" in npc and npc["id"]:
+                npc_id = npc.get("id")
+                if npc_id:
                     new_attrs, current_state = update_npc_visual_attributes(
-                        user_id, conversation_id, npc["id"], optimized_prompt, cached_path
+                        user_id, conversation_id, npc_id, optimized_prompt, cached_path
                     )
-                    if any(current_state.get(k) != new_attrs.get(k) for k in new_attrs if new_attrs.get(k)):
+                    # If any relevant attribute changed, track in NPCVisualEvolution
+                    if any(
+                        current_state.get(k) != new_attrs.get(k)
+                        for k in new_attrs if new_attrs.get(k)
+                    ):
                         track_visual_evolution(
-                            npc["id"], user_id, conversation_id, "appearance_change",
-                            f"Updated visual appearance in scene", current_state, new_attrs,
-                            optimized_prompt, cached_path
+                            npc_id,
+                            user_id,
+                            conversation_id,
+                            "appearance_change",
+                            "Updated visual appearance in scene",
+                            current_state,
+                            new_attrs,
+                            optimized_prompt,
+                            cached_path
                         )
                     updated_visual_attrs[npc["name"]] = new_attrs
 
@@ -649,9 +616,10 @@ def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id):
         "updated_visual_attrs": updated_visual_attrs
     }
 
-# ================================
+
+# ======================================================
 # 9️⃣ API ROUTES
-# ================================
+# ======================================================
 image_bp = Blueprint("image_bp", __name__)
 
 @image_bp.route("/generate_gpt_image", methods=["POST"])
@@ -667,13 +635,14 @@ def generate_gpt_image():
     result = generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id)
     return jsonify(result)
 
-# [Unchanged routes: /image_feedback, /npc_images/<npc_id>]
 
-# ================================
+# ======================================================
 # 10️⃣ INITIALIZATION
-# ================================
+# ======================================================
 def init_app(app):
-    with app.app_context():
-        setup_database()
+    """
+    Initialize this blueprint. 
+    The main table creation now happens elsewhere, so we do not create or alter tables here.
+    """
     app.register_blueprint(image_bp, url_prefix="/api/image")
     logger.info("AI Image Generator initialized")
