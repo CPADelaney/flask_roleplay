@@ -466,10 +466,15 @@ def generate_image_prompt(scene_data):
         f"Actions: {', '.join(scene_data['actions'])}\n"
         f"NPC Positions: {json.dumps(scene_data['npc_positions'])}\n"
         f"Mood: {scene_data['mood']}\n"
-        f"Player Stats: Lust {scene_data['player_stats']['lust']}, Dependency {scene_data['player_stats']['dependency']}\n"
+        f"Player Stats: Lust {scene_data['player_stats']['lust']}, "
+        f"Dependency {scene_data['player_stats']['dependency']}\n"
         f"Addictions: {json.dumps(scene_data['addiction_status']['addiction_levels'])}\n"
-        f"Recent Journal: {'; '.join([f'{entry['type']}: {entry['text'][:50]}...' for entry in scene_data['journal_entries']])}"
+        # Concatenate the journal portion to avoid nested quote issues
+        "Recent Journal: "
+        + "; ".join([f"{entry['type']}: {entry['text'][:50]}..."
+                     for entry in scene_data['journal_entries']])
     )
+
 
     prompt = f"""
 Given NPC details and scene context from a femdom visual novel, generate an image-optimized prompt for Stability AI:
