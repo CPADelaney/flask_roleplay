@@ -279,7 +279,6 @@ async def async_process_new_game(user_id, conversation_data):
             """, conversation_id, user_id)
             if not row:
                 raise Exception(f"Conversation {conversation_id} not found or unauthorized")
-            initialize_all_data(user_id, conversation_id)
 
         # 2) Clear old data
         tables = [
