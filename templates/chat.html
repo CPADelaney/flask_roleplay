@@ -644,6 +644,28 @@
     }
   }
 
+  async function checkForWelcomeImage(convId) {
+    try {
+      const res = await fetch(`/universal/get_roleplay_value?conversation_id=${convId}&key=WelcomeImageUrl`, {
+        method: "GET",
+        credentials: "include"
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        if (data.value) {
+          // Found a welcome image, display it
+          appendImageToChat(data.value, "Welcome to this new world");
+        }
+      }
+    } catch (err) {
+      console.error("Error checking for welcome image:", err);
+    }
+  }
+  
+  // Call this after loading messages in selectConversation:
+  await checkForWelcomeImage(convId);
+
   function renderChat(messages) {
     const chatWindow = document.getElementById("chatWindow");
     chatWindow.innerHTML = `<span id="loadMore" onclick="loadPreviousMessages()" style="display:none;">Load older messages...</span>`;
