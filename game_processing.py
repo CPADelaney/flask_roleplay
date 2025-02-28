@@ -96,21 +96,21 @@ def _sync_gpt_request(conversation_id, context, prompt):
 # -------------------------------------------------------------------------
 
 ENV_PROMPT = f"""
-You are setting up a new femdom daily-life sim environment.
+You are setting up a new daily-life sim environment with subtle, hidden layers of femdom and intrigue.
 
-Below is a merged environment concept that combines multiple settings:
+Below is a merged environment concept blending multiple settings:
 Mega Setting Name: {{mega_name}}
 Mega Description:
 {{mega_desc}}
 
-Using this merged concept as inspiration, produce a strictly valid JSON object with the **exact** keys shown below (nothing else!). Each key’s purpose is described in parentheses:
+Using this as inspiration, produce a strictly valid JSON object with the **exact** keys below (no extras). Each key’s purpose is described:
 
-1. "setting_name" (string; a short, creative name referencing the merged environment)
-2. "environment_desc" (string; 1–3 paragraphs describing the overall environment’s look, feel, day-to-day atmosphere, culture, and any interesting details. Be sure to elaborate on the society's general culture, since this is a daily-life sim.)
-3. "environment_history" (string; a short paragraph detailing any relevant historical background or pivotal events)
-4. "events" (array; each entry is an object with these fields):
+1. "setting_name" (string; a short, creative name evoking the merged environment)
+2. "environment_desc" (string; 1–3 paragraphs painting a vivid, cozy daily-life setting—its look, feel, routines, and culture. Focus on a mundane yet charming atmosphere with faint, unsettling undertones of structure or influence, avoiding overt dominance or kink. Highlight society’s norms subtly hinting at control.)
+3. "environment_history" (string; a short paragraph on past events shaping the setting, with a neutral tone and vague echoes of power shifts)
+4. "events" (array; objects with):
       - "name"
-      - "description"
+      - "description" (keep festive, community-focused, with subtle hints of obligation)
       - "start_time"
       - "end_time"
       - "location"
@@ -118,57 +118,50 @@ Using this merged concept as inspiration, produce a strictly valid JSON object w
       - "month"
       - "day"
       - "time_of_day"
-   (Include enough interesting and creative festivals or holidays to fill a single calendar year.)
-5. "locations" (array; each entry is an object with):
+   (Fill a year with creative, slice-of-life festivals—avoid explicit femdom themes.)
+5. "locations" (array; objects with):
       - "location_name"
-      - "description"
+      - "description" (everyday spots with a touch of charm or oddity, no overt control)
       - "open_hours"
-   (Generate at least 10 distinct locations.)
-6. "scenario_name" (string; the title or name of this overall scenario)
-7. "quest_data" (object with exactly these keys):
-      - "quest_name" (make the main quest interesting, engaging, and unique)
-      - "quest_description"
+   (At least 10 distinct locations.)
+6. "scenario_name" (string; a catchy, neutral title for this setup)
+7. "quest_data" (object with):
+      - "quest_name" (engaging, mysterious, no femdom cues)
+      - "quest_description" (intriguing hook with subtle unease)
 
-No additional keys or text outside of the JSON. Do not wrap the JSON in code fences. Produce only the JSON object.
+Output only the JSON object, no additional text.
 
-For reference, here are additional environment details you can incorporate:
-
-Environment components:
-{{env_components}}
-
+Reference these details if provided:
+Environment components: {{env_components}}
 Enhanced features: {{enhanced_features}}
-
 Stat modifiers: {{stat_modifiers}}
 """
 
 
-NPC_PROMPT = """
-You are finalizing schedules for multiple NPCs in this environment:
-{environment_desc}
+NPC_PROMPT = f"""
+You are crafting schedules for NPCs and the player "Chase" in this daily-life sim environment:
+{{environment_desc}}
 
-Here is each NPC’s fully refined data (but schedule is missing):
-{refined_npc_data}
-
-We also need a schedule for the player "Chase."
-
-Ensure NPC and player schedules are immersive and make sense within the current setting, as well as with the character's role.
+Here’s each NPC’s refined data (schedules missing):
+{{refined_npc_data}}
 
 Return exactly one JSON with keys:
   "npc_creations": [ {{ ... }}, ... ],
   "ChaseSchedule": {{}}
 
-Where each NPC in "npc_creations" has:
-  - "npc_name" (same as in refined_npc_data)
+For each NPC in "npc_creations":
+  - "npc_name" (from refined_npc_data)
   - "likes", "dislikes", "hobbies", "affiliations"
-  - "schedule": with day-based subkeys (Morning, Afternoon, Evening, Night) 
-     for these days: {day_names}
+  - "schedule": day-based subkeys (Morning, Afternoon, Evening, Night) for: {{day_names}}
+
+For "ChaseSchedule": day-based subkeys (Morning, Afternoon, Evening, Night) for: {{day_names}}
 
 Constraints:
-- The schedules must reflect each NPC’s existing archetypes/likes/dislikes/hobbies/etc.
-- Example: an NPC with a 'student' archetype is likely to have class most of the week.
-- Output only JSON, no extra commentary.
+- Schedules must fit the setting’s cozy, mundane vibe, reflecting each NPC’s archetypes/likes/dislikes/hobbies/etc., with subtle hints of influence (e.g., a 'student' NPC attends class but lingers oddly long).
+- NPCs wear friendly, charming masks—hide any dominance or control behind routine tasks (e.g., 'coffee run' masking a power play).
+- Chase’s schedule feels normal yet guided, overlapping with NPCs subtly.
+- Output only JSON, no commentary.
 """
-
 print("DEBUG NPC_PROMPT ->", repr(NPC_PROMPT))
 
 
