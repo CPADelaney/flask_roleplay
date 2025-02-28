@@ -462,7 +462,7 @@ def create_all_tables():
             id SERIAL PRIMARY KEY,
             npc_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
-            conversation_id TEXT NOT NULL,
+            conversation_id INTEGER NOT NULL,
             hair_color TEXT,
             hair_style TEXT,
             eye_color TEXT,
