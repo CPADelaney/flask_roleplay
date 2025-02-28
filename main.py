@@ -25,6 +25,7 @@ from routes.ai_image_generator import init_app as init_image_routes
 from routes.chatgpt_routes import init_app as init_chat_routes
 from logic.gpt_image_decision import should_generate_image_for_response
 from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
+from routes.ai_image_generator import generate_roleplay_image_from_gpt
 
 # DB connection helper
 from db.connection import get_db_connection
@@ -582,6 +583,31 @@ def create_socketio(app):
                                 logging.info(f"Applied universal updates from GPT: {update_result}")
                             except Exception as update_error:
                                 logging.error(f"Error applying universal updates from GPT: {str(update_error)}")
+                                
+                        should_generate, reason = should_generate_image_for_response(
+                            user_id, 
+                            conversation_id, 
+                            response_data["function_args"]
+                        )
+                        
+                        # Process image generation if needed
+                        if should_generate:
+                            logging.info(f"Generating image for scene: {reason}")
+                            image_result = generate_roleplay_image_from_gpt(
+                                response_data["function_args"], 
+                                user_id, 
+                                conversation_id
+                            )
+                            
+                            # Emit image to the client
+                            if image_result and "image_urls" in image_result and image_result["image_urls"]:
+                                socketio.emit('image', {
+                                    'image_url': image_result["image_urls"][0],
+                                    'prompt_used': image_result.get('prompt_used', ''),
+                                    'reason': reason
+                                }, room=conversation_id)
+                                logging.info(f"Image emitted to client: {image_result['image_urls'][0]}")
+                                
                     else:
                         ai_response = response_data.get("response", "")
                     
