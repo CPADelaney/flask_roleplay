@@ -3,7 +3,7 @@
 import json
 import time
 from flask import Blueprint, request, jsonify, session
-from logic.chatgpt_integration import get_gpt_response
+from logic.chatgpt_integration import get_chatgpt_response
 from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from db.connection import get_db_connection
