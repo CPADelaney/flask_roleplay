@@ -648,8 +648,8 @@ def generate_nyx_fallback_image():
 # ======================================================
 # 8️⃣ GENERATE ROLEPLAY IMAGE
 # ======================================================
-def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id):
-    scene_data = process_gpt_scene_data(gpt_response, user_id, conversation_id)
+async def generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id):
+    scene_data = await process_gpt_scene_data(gpt_response, user_id, conversation_id)
     
     # If there's no scene_data or no NPCs, fallback to generating an image of Nyx
     if not scene_data or not scene_data.get("npcs"):
@@ -762,7 +762,7 @@ def generate_gpt_image():
     conversation_id = data.get("conversation_id")
     if not gpt_response or not conversation_id:
         return jsonify({"error": "Missing GPT response or conversation_id"}), 400
-    result = generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id)
+    result = await generate_roleplay_image_from_gpt(gpt_response, user_id, conversation_id)
     return jsonify(result)
 
 
