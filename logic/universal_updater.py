@@ -17,7 +17,7 @@ from logic.social_links import (
 
 # If needed (shared_memory handling & image gen):
 from logic.memory_logic import get_shared_memory
-from logic.ai_image_generator import generate_roleplay_image_from_gpt
+from routes.ai_image_generator import generate_roleplay_image_from_gpt
 
 #############################
 # Helper: normalize curly quotes
