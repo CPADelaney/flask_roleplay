@@ -242,7 +242,7 @@ def get_npc_and_roleplay_context(user_id, conversation_id, npc_names, player_nam
 # ======================================================
 # 2️⃣ PROCESS GPT RESPONSE & MERGE WITH NPCStats
 # ======================================================
-def process_gpt_scene_data(gpt_response, user_id, conversation_id):
+async def process_gpt_scene_data(gpt_response, user_id, conversation_id):
     """Extract scene data from GPT, enriched with NPCStats, PlayerStats, SocialLinks, and PlayerJournal."""
     if not gpt_response or "scene_data" not in gpt_response:
         return None
@@ -252,7 +252,7 @@ def process_gpt_scene_data(gpt_response, user_id, conversation_id):
     detailed_npcs, player_stats, user_preferences, journal_entries = get_npc_and_roleplay_context(
         user_id, conversation_id, npc_names
     )
-    addiction_status = get_addiction_status(user_id, conversation_id, "Chase")
+    addiction_status = await get_addiction_status(user_id, conversation_id, "Chase")
 
     npcs = []
     for name in npc_names:
