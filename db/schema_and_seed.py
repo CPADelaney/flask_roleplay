@@ -136,7 +136,7 @@ def create_all_tables():
             relationships JSONB,
             dominance INT CHECK (dominance BETWEEN -100 AND 100),
             cruelty INT CHECK (cruelty BETWEEN -100 AND 100),
-            closeness INT CHECK (closeness BETWEEN -100 AND 100),  -- Fixed typo
+            closeness INT CHECK (closeness BETWEEN -100 AND 100), 
             trust INT CHECK (trust BETWEEN -100 AND 100),
             respect INT CHECK (respect BETWEEN -100 AND 100),
             intensity INT CHECK (intensity BETWEEN -100 AND 100),
@@ -419,6 +419,40 @@ def create_all_tables():
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS UserKinkProfile (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            kink_type TEXT NOT NULL,           -- e.g., "ass", "feet", "shrink_ray"
+            level INTEGER CHECK (level BETWEEN 0 AND 4) DEFAULT 0,
+            discovery_source TEXT,             -- e.g., "user_input", "narrative_response", "action_analysis"
+            first_discovered TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            frequency INTEGER DEFAULT 0,       -- Times used across games
+            intensity_preference INTEGER CHECK (intensity_preference BETWEEN 0 AND 4) DEFAULT 0,
+            trigger_context JSONB,             -- e.g., {"location": "arcade", "npc": "Lila", "action": "staring"}
+            confidence_score FLOAT DEFAULT 0.5, -- 0-1, how sure Nyx is of this kink (updates with evidence)
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE (user_id, kink_type)
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS KinkTeaseHistory (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            kink_id INTEGER NOT NULL,
+            tease_text TEXT NOT NULL,          -- e.g., "Face near her ass again, huh?"
+            tease_type TEXT CHECK (tease_type IN ('narrative', 'meta_commentary', 'punishment')),
+            narrative_context TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+            FOREIGN KEY (kink_id) REFERENCES UserKinkProfile(id) ON DELETE CASCADE
         );
     ''')
 
