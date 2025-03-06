@@ -25,6 +25,8 @@ from logic.social_links import (
     check_for_relationship_ritual
 )
 
+from logic.npc_agents.memory_manager import EnhancedMemoryManager  # <--- NEW IMPORT
+
 # Define constants
 DAYS_PER_MONTH = 30
 MONTHS_PER_YEAR = 12  # Adjust if needed
@@ -643,3 +645,42 @@ class ActivityManager:
             result["activity_description"] = OPTIONAL_ACTIVITIES[activity_type]["description"]
         
         return result
+
+# ----------------------------------------------------------------
+# NIGHTLY MAINTENANCE: Memory Fading, Summarizing, etc.
+# ----------------------------------------------------------------
+
+async def nightly_maintenance(user_id: int, conversation_id: int):
+    """
+    For each NPC in the conversation, run memory fade, summarization, 
+    or other cleanup tasks that simulate a nightly 'brain housekeeping'.
+    Typically called after advancing to the next day.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Gather all NPCs for this user+conversation
+        cursor.execute("""
+            SELECT npc_id
+            FROM NPCStats
+            WHERE user_id=%s AND conversation_id=%s
+        """, (user_id, conversation_id))
+        npc_ids = [row[0] for row in cursor.fetchall()]
+    finally:
+        cursor.close()
+        conn.close()
+    
+    # For each NPC, create a memory manager and do fade steps
+    for nid in npc_ids:
+        mem_mgr = EnhancedMemoryManager(nid, user_id, conversation_id)
+        
+        # 1) Prune older trivial memories
+        await mem_mgr.prune_old_memories(age_days=14, significance_threshold=3, intensity_threshold=15)
+        
+        # 2) Decay older but still relevant memories
+        await mem_mgr.apply_memory_decay(age_days=30, decay_rate=0.2)
+        
+        # 3) Summarize repetitive ones
+        await mem_mgr.summarize_repetitive_memories(lookback_days=7, min_count=3)
+
+    logging.info(f"[nightly_maintenance] Completed for user={user_id}, conversation={conversation_id}")
