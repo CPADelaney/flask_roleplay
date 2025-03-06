@@ -603,6 +603,46 @@ ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS is_consolidated BOOLEAN DEFAULT
         );
     ''')
 
+# Memories for Nyx, the DM
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NyxMemories (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            memory_text TEXT NOT NULL,
+            timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        
+            embedding VECTOR(1536),
+        
+            significance INT NOT NULL DEFAULT 3,
+            times_recalled INT NOT NULL DEFAULT 0,
+            last_recalled TIMESTAMP,
+            memory_type TEXT DEFAULT 'reflection',  
+            is_archived BOOLEAN DEFAULT FALSE,
+        
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
+
+# Thought process for Nyx
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NyxAgentState (
+            user_id INT NOT NULL,
+            conversation_id INT NOT NULL,
+            current_goals JSONB,        
+            predicted_futures JSONB,     
+            reflection_notes TEXT,      
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        
+            PRIMARY KEY (user_id, conversation_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
+
     conn.commit()
     conn.close()
 
