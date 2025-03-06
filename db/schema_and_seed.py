@@ -225,15 +225,21 @@ def create_all_tables():
             npc_id INT NOT NULL,
             memory_text TEXT NOT NULL,
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            tags TEXT[],                       
-            emotional_intensity INT DEFAULT 0, 
+        
+            tags TEXT[],
+            emotional_intensity INT DEFAULT 0,   -- 0..100 for the final intensity
             times_recalled INT DEFAULT 0,
             last_recalled TIMESTAMP,
             embedding VECTOR(1536),
-            
-            -- NEW columns:
-            significance INT DEFAULT 3,     
-            status VARCHAR(20) NOT NULL DEFAULT 'active',
+        
+            -- Additional columns from your original code
+            memory_type TEXT DEFAULT 'observation',
+            associated_entities JSONB DEFAULT '{}'::jsonb,
+            is_consolidated BOOLEAN NOT NULL DEFAULT FALSE,
+        
+            -- NEW columns for advanced memory lifecycle
+            significance INT NOT NULL DEFAULT 3,          -- 1..10 or 1..100, your choice
+            status VARCHAR(20) NOT NULL DEFAULT 'active', -- 'active','summarized','archived'
         
             FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
         );
