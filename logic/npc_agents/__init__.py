@@ -1,3 +1,5 @@
+# logic/npc_agents/__init__.py
+
 from .memory_manager import NPCMemoryManager
 from .npc_agent import NPCAgent
 from .decision_engine import NPCDecisionEngine
