@@ -417,28 +417,6 @@ async def next_storybeat():
             if row[0] != user_id:
                 conn.close()
                 return jsonify({"error": f"Conversation {conv_id} not owned by this user"}), 403
-                
-        npc_system = NPCAgentSystem(user_id, conv_id)
-        
-        player_action = {
-            "type": "talk" if "talk" in user_input.lower() else "action",
-            "description": user_input,
-            "target_location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation")
-        }
-        
-        npc_responses = await npc_system.handle_player_action(player_action, context)
-        
-        # Format NPC responses for GPT or your aggregator
-        npc_response_text = ""
-        for response in npc_responses.get("npc_responses", []):
-            npc_id = response.get("npc_id")
-            npc_name = await npc_system.get_npc_name(npc_id)
-            action = response.get("action", {}).get("description", "does something")
-            result = response.get("result", {}).get("outcome", "")
-            npc_response_text += f"{npc_name} {action}. {result}\n"
-        
-        # Add NPC responses to aggregator text
-        aggregator_text += f"\n\nNPC RESPONSES:\n{npc_response_text}"
 
         # 1.5) Check unintroduced NPC count; spawn more if needed.
         cur.execute("""
@@ -446,10 +424,18 @@ async def next_storybeat():
             WHERE user_id=%s AND conversation_id=%s AND introduced=FALSE
         """, (user_id, conv_id))
         count = cur.fetchone()[0]
+        
+        # Get aggregated context data
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
         env_desc = aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", "A default environment description.")
         calendar = aggregator_data.get("calendar", {})
         day_names = calendar.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
+        
+        # Set up context for NPCs and other logic
+        context = {
+            "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
+            "time_of_day": aggregator_data.get("timeOfDay", "Morning")
+        }
         
         if count < 2:
             logging.info("Only %d unintroduced NPC(s) found; generating 3 more.", count)
@@ -479,13 +465,29 @@ async def next_storybeat():
                 cur.close()
                 conn.close()
                 return jsonify(update_result), 500
-
-        # 4) Analyze input for time advancement and special events
-        context = {
-            "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
-            "time_of_day": aggregator_data.get("timeOfDay", "Morning")
+        
+        # 4) Initialize NPC agent system and process player action
+        npc_system = NPCAgentSystem(user_id, conv_id)
+        
+        player_action = {
+            "type": "talk" if "talk" in user_input.lower() else "action",
+            "description": user_input,
+            "target_location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation")
         }
         
+        # Get NPC responses
+        npc_responses = await npc_system.handle_player_action(player_action, context)
+        
+        # Format NPC responses for GPT
+        npc_response_text = ""
+        for response in npc_responses.get("npc_responses", []):
+            npc_id = response.get("npc_id")
+            npc_name = await npc_system.get_npc_name(npc_id)
+            action = response.get("action", {}).get("description", "does something")
+            result = response.get("result", {}).get("outcome", "")
+            npc_response_text += f"{npc_name} {action}. {result}\n"
+
+        # 5) Analyze input for time advancement and special events
         # If an activity type was explicitly requested, use it, otherwise determine from input
         activity_type = requested_activity or ActivityManager.get_activity_type(user_input, context)
         
@@ -510,7 +512,6 @@ async def next_storybeat():
                     if "exposed_to_" + addiction_type in data:
                         progression_chance = 0.2  # 20% chance
                         await update_addiction_level(user_id, conv_id, player_name, addiction_type, progression_chance)
-        
         else:
             # Just return information about what the time advancement would be for confirmation
             time_result = {
@@ -521,7 +522,7 @@ async def next_storybeat():
                 "confirm_needed": should_time_advance["should_advance"]
             }
 
-        # 5) Check for relationship crossroads if appropriate
+        # 6) Check for relationship crossroads if appropriate
         crossroads_event = None
         if data.get("check_crossroads", False):
             crossroads_event = await check_for_relationship_crossroads(user_id, conv_id)
@@ -542,26 +543,28 @@ async def next_storybeat():
                         "outcome": choice_result["outcome_text"]
                     }
         
-        # 6) Gather aggregated context and produce response
-        # Get updated aggregator data after all state changes
-        aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
+        # 7) Build the aggregator text with NPC responses
         aggregator_text = build_aggregator_text(aggregator_data)
         
+        # Add NPC responses to aggregator text
+        if npc_response_text:
+            aggregator_text += f"\n\n=== NPC RESPONSES ===\n{npc_response_text}"
+        
         # Add addiction context to aggregator_text
-        if addiction_status and addiction_status["has_addictions"]:
+        if addiction_status and addiction_status.get("has_addictions"):
             addiction_context = "\n\n=== ADDICTION STATUS ===\n"
-            for addiction_type, level in addiction_status["addiction_levels"].items():
+            for addiction_type, level in addiction_status.get("addiction_levels", {}).items():
                 if level > 0:
                     addiction_context += f"{addiction_type.capitalize()}: {get_addiction_label(level)}\n"
             
-            if addiction_status["npc_specific_addictions"]:
+            if addiction_status.get("npc_specific_addictions"):
                 addiction_context += "\nNPC-Specific Addictions:\n"
-                for npc_addiction in addiction_status["npc_specific_addictions"]:
+                for npc_addiction in addiction_status.get("npc_specific_addictions", []):
                     addiction_context += f"{npc_addiction['npc_name']}'s {npc_addiction['addiction_type']}: {get_addiction_label(npc_addiction['level'])}\n"
             
             aggregator_text += addiction_context
         
-        # Generate response from GPT
+        # 8) Generate response from GPT
         response_data = get_chatgpt_response(conv_id, aggregator_text, user_input)
         
         # Extract narrative
@@ -623,13 +626,21 @@ async def next_storybeat():
         cur.close()
         conn.close()
         
-        # Prepare and return the final response
+        # 9) Prepare and return the final response
         response = {
             "message": ai_response,
             "time_result": time_result,
             "confirm_needed": should_time_advance["should_advance"] and not data.get("confirm_time_advance", False),
             "addiction_effects": addiction_effects,
-            "narrative_stage": narrative_stage.name if narrative_stage else None
+            "narrative_stage": narrative_stage.name if narrative_stage else None,
+            "npc_responses": [
+                {
+                    "npc_id": resp.get("npc_id"),
+                    "npc_name": await npc_system.get_npc_name(resp.get("npc_id")),
+                    "action": resp.get("action", {}).get("description", ""),
+                    "result": resp.get("result", {}).get("outcome", "")
+                } for resp in npc_responses.get("npc_responses", [])
+            ]
         }
     
         if image_result and "image_urls" in image_result and image_result["image_urls"]:
@@ -646,30 +657,6 @@ async def next_storybeat():
             response["crossroads_result"] = crossroads_result
             
         return jsonify(response)
-
-        npc_system = NPCAgentSystem(user_id, conv_id)
-    
-    # Process player action
-    player_action = {
-        "type": "talk" if "talk" in user_input.lower() else "action",
-        "description": user_input,
-        "target_location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation")
-    }
-    
-    # Get NPC responses
-    npc_responses = await npc_system.handle_player_action(player_action, context)
-    
-    # Include NPC responses in GPT context
-    npc_response_text = ""
-    for response in npc_responses.get("npc_responses", []):
-        npc_id = response.get("npc_id")
-        npc_name = await get_npc_name(user_id, conv_id, npc_id)
-        action = response.get("action", {}).get("description", "does something")
-        result = response.get("result", {}).get("outcome", "")
-        npc_response_text += f"{npc_name} {action}. {result}\n"
-    
-    # Add NPC responses to aggregator text
-    aggregator_text += f"\n\nNPC RESPONSES:\n{npc_response_text}"
 
     except Exception as e:
         logging.exception("[next_storybeat] Error")
