@@ -1,3 +1,5 @@
+# db/schema_and_seed.py
+
 import json
 from db.connection import get_db_connection
 from routes.activities import insert_missing_activities
