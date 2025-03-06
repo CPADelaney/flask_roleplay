@@ -155,7 +155,11 @@ def update_npc_memory():
     from logic.memory import get_shared_memory
     memory_text = get_shared_memory(user_id, conversation_id, relationship, npc_name, archetype_summary or "", archetype_extras_summary or "")
     try:
-        record_npc_event(user_id, conversation_id, npc_id, memory_text)
+        await add_npc_memory_with_embedding(
+            npc_id=npc_id,
+            memory_text=memory_text,
+            tags=["some_tag"]  # optional
+        )    
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -219,7 +223,11 @@ def propagate_shared_memories(user_id, conversation_id, source_npc_id, source_np
             if other_npc_name_lower in mem_text_lower:
                 # We found a reference => replicate memory
                 # Use your existing record_npc_event
-                record_npc_event(user_id, conversation_id, other_npc_id, mem_text)
+                await add_npc_memory_with_embedding(
+                    npc_id=npc_id,
+                    memory_text=memory_text,
+                    tags=["some_tag"]  # optional
+                )
 
 def fetch_formatted_locations(user_id, conversation_id):
     """
