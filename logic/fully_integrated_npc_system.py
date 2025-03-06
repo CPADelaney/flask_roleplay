@@ -1,4 +1,4 @@
-# fully_integrated_npc_system.py
+# logic/fully_integrated_npc_system.py
 
 import os
 import json
