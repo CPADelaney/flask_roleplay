@@ -216,6 +216,20 @@ def create_all_tables():
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NPCMemories (
+            id SERIAL PRIMARY KEY,
+            npc_id INT NOT NULL,
+            memory_text TEXT NOT NULL,
+            timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            tags TEXT[],                       -- optional array of keywords
+            emotional_intensity INT DEFAULT 0, -- 0-100 or -100~+100
+            times_recalled INT DEFAULT 0,
+            last_recalled TIMESTAMP,
+            FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
+        );
+    ''')            
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Locations (
