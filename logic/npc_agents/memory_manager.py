@@ -1,96 +1,94 @@
-# logic/memory_manager.py - New module based on advice
+# logic/memory_manager.py
 
 import json
 import logging
-import random
+import os
+import asyncpg
+import openai
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-from db.connection import get_db_connection
-import asyncpg
-import openai  # Make sure openai is imported for embeddings
+DB_DSN = os.getenv("DB_DSN", "postgresql://user:pass@localhost:5432/yourdb")
 
 class EnhancedMemoryManager:
     """Manages memories for an individual NPC with advanced features"""
-    
-    def __init__(self, npc_id, user_id, conversation_id):
+
+    def __init__(self, npc_id: int, user_id: int, conversation_id: int):
         self.npc_id = npc_id
         self.user_id = user_id
         self.conversation_id = conversation_id
-    
-    async def add_memory(self, memory_text, memory_type="observation", 
-                         significance=3, emotional_valence=0, tags=None):
-        """Add memory with rich metadata and auto-tagging"""
+
+    async def add_memory(self,
+                         memory_text: str,
+                         memory_type: str = "observation",
+                         significance: int = 3,
+                         emotional_valence: int = 0,
+                         tags: Optional[List[str]] = None) -> Optional[int]:
+        """Add memory with metadata & optional embedding."""
         tags = tags or []
-        
-        # Extract additional tags from content analysis
         content_tags = await self.analyze_memory_content(memory_text)
         tags.extend(content_tags)
-        
-        # Calculate emotional intensity
-        emotional_intensity = await self.calculate_emotional_intensity(
-            memory_text, emotional_valence)
-        
-        # Store memory with embedding
-        dsn = os.getenv("DB_DSN")
-        conn = await asyncpg.connect(dsn=dsn)
+        emotional_intensity = await self.calculate_emotional_intensity(memory_text, emotional_valence)
+
+        embedding_data = None
         try:
-            # Generate embedding
-            try:
-                response = await openai.AsyncOpenAI().embeddings.create(
-                    model="text-embedding-ada-002",
-                    input=memory_text
-                )
-                embedding_data = response.data[0].embedding
-            except Exception as e:
-                logging.error(f"Error generating embedding: {e}")
-                embedding_data = None
-            
-            # Insert memory
+            # Use async OpenAI call
+            response = await openai.Embedding.acreate(
+                model="text-embedding-ada-002",
+                input=memory_text
+            )
+            embedding_data = response["data"][0]["embedding"]
+        except Exception as e:
+            logging.error(f"[EnhancedMemoryManager] Error generating embedding: {e}")
+
+        conn = None
+        try:
+            conn = await asyncpg.connect(dsn=DB_DSN)
             memory_id = await conn.fetchval("""
                 INSERT INTO NPCMemories (
-                    npc_id, memory_text, memory_type, tags, 
+                    npc_id, memory_text, memory_type, tags,
                     emotional_intensity, significance, embedding,
                     associated_entities, is_consolidated
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                VALUES ($1, $2, $3, $4,
+                        $5, $6, $7,
+                        $8, $9)
                 RETURNING id
-            """, 
-                self.npc_id, memory_text, memory_type, tags,
-                emotional_intensity, significance, embedding_data,
-                json.dumps({}), False
+            """,
+                self.npc_id,
+                memory_text,
+                memory_type,
+                tags,
+                emotional_intensity,
+                significance,
+                embedding_data,
+                json.dumps({}),
+                False
             )
-            
-            # Propagate significant memories to related NPCs
             if significance >= 4:
                 await self.propagate_memory(memory_text, tags, significance, emotional_intensity)
-            
             return memory_id
-            
         except Exception as e:
-            logging.error(f"Error adding memory: {e}")
+            logging.error(f"[EnhancedMemoryManager] add_memory error: {e}")
             return None
         finally:
-            await conn.close()
-            
-    async def retrieve_relevant_memories(self, context, limit=5):
-        """Get memories relevant to current context with enhanced recall"""
+            if conn:
+                await conn.close()
+
+    async def retrieve_relevant_memories(self, context: Any, limit: int = 5) -> List[dict]:
+        """Retrieve relevant memories, using embeddings or fallback keyword search."""
         query_text = context if isinstance(context, str) else context.get("description", "")
-        
-        dsn = os.getenv("DB_DSN")
-        conn = await asyncpg.connect(dsn=dsn)
+        conn = None
         try:
-            # Generate embedding for query
+            conn = await asyncpg.connect(dsn=DB_DSN)
             try:
-                response = await openai.AsyncOpenAI().embeddings.create(
+                response = await openai.Embedding.acreate(
                     model="text-embedding-ada-002",
                     input=query_text
                 )
-                query_vector = response.data[0].embedding
-                
-                # Vector search
+                query_vector = response["data"][0]["embedding"]
                 rows = await conn.fetch("""
-                    SELECT id, memory_text, memory_type, tags, 
+                    SELECT id, memory_text, memory_type, tags,
                            emotional_intensity, significance,
                            times_recalled, timestamp
                     FROM NPCMemories
@@ -98,26 +96,24 @@ class EnhancedMemoryManager:
                     ORDER BY embedding <-> $2
                     LIMIT $3
                 """, self.npc_id, query_vector, limit)
-                
             except Exception as e:
-                logging.error(f"Error generating embedding for query: {e}")
-                
-                # Fallback to simple keyword matching
+                logging.error(f"[EnhancedMemoryManager] Embedding error for query: {e}")
+                # Fallback to keyword
                 words = query_text.lower().split()
-                query = " OR ".join([f"LOWER(memory_text) LIKE '%' || $" + str(i+2) + " || '%'" for i in range(len(words))])
+                conditions = " OR ".join([f"LOWER(memory_text) LIKE '%'||${i+2}||'%'" for i in range(len(words))])
                 params = [self.npc_id] + words + [limit]
-                
-                rows = await conn.fetch(f"""
-                    SELECT id, memory_text, memory_type, tags, 
+                q = f"""
+                    SELECT id, memory_text, memory_type, tags,
                            emotional_intensity, significance,
                            times_recalled, timestamp
                     FROM NPCMemories
                     WHERE npc_id = $1
-                    AND ({query})
+                    AND ({conditions})
                     ORDER BY timestamp DESC
                     LIMIT ${len(params)}
-                """, *params)
-            
+                """
+                rows = await conn.fetch(q, *params)
+
             memories = []
             for row in rows:
                 memories.append({
@@ -129,166 +125,139 @@ class EnhancedMemoryManager:
                     "significance": row["significance"],
                     "times_recalled": row["times_recalled"],
                     "timestamp": row["timestamp"],
-                    "relevance_score": 0  # Will be filled in with recency and emotional biases
+                    "relevance_score": 0
                 })
-            
-            # Apply recency bias
             memories = await self.apply_recency_bias(memories)
-            
-            # Apply emotional bias
             memories = await self.apply_emotional_bias(memories)
-            
-            # Update recall stats
-            memory_ids = [m["id"] for m in memories]
-            await self.update_memory_retrieval_stats(memory_ids)
-            
+
+            await self.update_memory_retrieval_stats([m["id"] for m in memories])
             return memories
-            
         except Exception as e:
-            logging.error(f"Error retrieving memories: {e}")
+            logging.error(f"[EnhancedMemoryManager] retrieve_relevant_memories error: {e}")
             return []
         finally:
-            await conn.close()
-    
-    async def update_memory_retrieval_stats(self, memory_ids):
-        """Update recall statistics for retrieved memories"""
+            if conn:
+                await conn.close()
+
+    async def update_memory_retrieval_stats(self, memory_ids: List[int]):
         if not memory_ids:
             return
-        
-        dsn = os.getenv("DB_DSN")
-        conn = await asyncpg.connect(dsn=dsn)
+        conn = None
         try:
-            # Update times_recalled and last_recalled for all memories in one query
+            conn = await asyncpg.connect(dsn=DB_DSN)
             await conn.execute("""
                 UPDATE NPCMemories
                 SET times_recalled = times_recalled + 1,
-                    last_recalled = CURRENT_TIMESTAMP
+                    last_recalled = NOW()
                 WHERE id = ANY($1)
             """, memory_ids)
-            
         except Exception as e:
-            logging.error(f"Error updating memory retrieval stats: {e}")
+            logging.error(f"[EnhancedMemoryManager] update_memory_retrieval_stats error: {e}")
         finally:
-            await conn.close()
-    
-    async def analyze_memory_content(self, memory_text):
-        """Extract meaningful tags from memory content"""
+            if conn:
+                await conn.close()
+
+    async def analyze_memory_content(self, memory_text: str) -> List[str]:
         tags = []
-        
-        # Simple keyword extraction
-        if "angry" in memory_text.lower() or "upset" in memory_text.lower():
+        # Example naive approach
+        text_lower = memory_text.lower()
+        if "angry" in text_lower or "upset" in text_lower:
             tags.append("negative_emotion")
-        if "happy" in memory_text.lower() or "pleased" in memory_text.lower():
+        if "happy" in text_lower or "pleased" in text_lower:
             tags.append("positive_emotion")
-        if "player" in memory_text.lower() or "chase" in memory_text.lower():
+        if "player" in text_lower or "chase" in text_lower:
             tags.append("player_related")
-            
         return tags
-    
-    async def calculate_emotional_intensity(self, memory_text, base_valence):
-        """Calculate emotional intensity based on text and base valence"""
-        # Simple implementation - could be enhanced with sentiment analysis
-        intensity = abs(base_valence) * 10  # Scale from -10...+10 to 0...100
-        
-        # Boost intensity based on emotional keywords
+
+    async def calculate_emotional_intensity(self, memory_text: str, base_valence: float) -> float:
+        intensity = abs(base_valence)*10
+        # Optionally add logic for keywords
         emotion_words = {
             "furious": 20, "ecstatic": 20, "devastated": 20, "thrilled": 20,
             "angry": 15, "delighted": 15, "sad": 15, "happy": 15,
             "annoyed": 10, "pleased": 10, "upset": 10, "glad": 10,
             "concerned": 5, "fine": 5, "worried": 5, "okay": 5
         }
-        
+        lw = memory_text.lower()
         for word, boost in emotion_words.items():
-            if word in memory_text.lower():
+            if word in lw:
                 intensity += boost
-                break  # Only apply the highest matching boost
-                
-        return min(100, intensity)  # Cap at 100
-    
-    async def apply_recency_bias(self, memories):
-        """Boost relevance of recent memories"""
-        for memory in memories:
-            timestamp = memory.get("timestamp", datetime.now())
-            if isinstance(timestamp, str):
+                break
+        return float(min(100, intensity))
+
+    async def apply_recency_bias(self, memories: List[dict]) -> List[dict]:
+        now = datetime.now()
+        for mem in memories:
+            ts = mem.get("timestamp")
+            if ts and isinstance(ts, datetime):
+                days_ago = (now - ts).days
+            elif ts and isinstance(ts, str):
                 try:
-                    timestamp = datetime.fromisoformat(timestamp)
-                except ValueError:
-                    timestamp = datetime.now()
-            
-            days_ago = (datetime.now() - timestamp).days
-            recency_factor = max(0, 30 - days_ago) / 30  # 0.0 to 1.0
-            memory["relevance_score"] = memory.get("relevance_score", 0) + (recency_factor * 5)
-        
-        # Sort by relevance score
-        memories.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+                    dt = datetime.fromisoformat(ts)
+                    days_ago = (now - dt).days
+                except:
+                    days_ago = 30
+            else:
+                days_ago = 30
+            recency_factor = max(0, 30 - days_ago)/30
+            mem["relevance_score"] += recency_factor*5
+        # Re-sort
+        memories.sort(key=lambda x: x["relevance_score"], reverse=True)
         return memories
-    
-    async def apply_emotional_bias(self, memories):
-        """Boost relevance of emotionally charged memories"""
-        for memory in memories:
-            emotional_intensity = memory.get("emotional_intensity", 0)
-            significance = memory.get("significance", 0)
-            
-            # Calculate emotion factor (0.0 to 1.0)
-            emotion_factor = emotional_intensity / 100
-            
-            # Calculate significance factor (0.0 to 1.0)
-            signif_factor = significance / 10
-            
-            # Combine for emotional bias
-            emotion_bias = (emotion_factor * 3) + (signif_factor * 2)
-            
-            memory["relevance_score"] = memory.get("relevance_score", 0) + emotion_bias
-        
-        # Sort by relevance score
-        memories.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+
+    async def apply_emotional_bias(self, memories: List[dict]) -> List[dict]:
+        for mem in memories:
+            emo_int = mem.get("emotional_intensity", 0)
+            sig = mem.get("significance", 0)
+            emotion_factor = emo_int/100
+            signif_factor = sig/10
+            mem["relevance_score"] += (emotion_factor*3 + signif_factor*2)
+        memories.sort(key=lambda x: x["relevance_score"], reverse=True)
         return memories
-    
-    async def propagate_memory(self, memory_text, tags, significance, emotional_intensity):
-        """Propagate significant memories to related NPCs"""
-        dsn = os.getenv("DB_DSN")
-        conn = await asyncpg.connect(dsn=dsn)
+
+    async def propagate_memory(self, memory_text: str, tags: List[str], significance: int, emotional_intensity: float):
+        conn = None
         try:
-            # Find NPCs with relationships to this NPC
-            rows = await conn.fetch("""
-                SELECT entity2_id 
+            conn = await asyncpg.connect(dsn=DB_DSN)
+            rel_rows = await conn.fetch("""
+                SELECT entity2_id
                 FROM SocialLinks
                 WHERE user_id=$1 AND conversation_id=$2
-                AND entity1_type='npc' AND entity1_id=$3
-                AND entity2_type='npc'
+                  AND entity1_type='npc' AND entity1_id=$3
+                  AND entity2_type='npc'
             """, self.user_id, self.conversation_id, self.npc_id)
-            
-            related_npc_ids = [row["entity2_id"] for row in rows]
-            
-            # Get the current NPC's name
-            row = await conn.fetchrow("""
-                SELECT npc_name FROM NPCStats
-                WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+            related_npcs = [r["entity2_id"] for r in rel_rows]
+            npc_row = await conn.fetchrow("""
+                SELECT npc_name
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2
+                  AND npc_id=$3
             """, self.user_id, self.conversation_id, self.npc_id)
-            
-            if not row:
+            if not npc_row:
                 return
-                
-            npc_name = row["npc_name"]
-            
-            # Create a secondhand memory for each related NPC
-            for related_npc_id in related_npc_ids:
-                secondhand_memory = f"I heard that {npc_name} {memory_text}"
-                secondhand_tags = tags + ["secondhand"]
-                
-                # Reduce significance and emotional intensity for secondhand memories
-                secondhand_significance = max(1, significance - 2)
-                secondhand_intensity = max(0, emotional_intensity - 20)
-                
-                # Create a new MemoryManager for this NPC
-                related_memory_manager = EnhancedMemoryManager(related_npc_id, self.user_id, self.conversation_id)
-                await related_memory_manager.add_memory(
-                    secondhand_memory,
-                    memory_type="secondhand",
-                    significance=secondhand_significance,
-                    emotional_valence=secondhand_intensity / 10,  # Convert back to -10...+10 scale
-                    tags=secondhand_tags
-                )
+            npc_name = npc_row["npc_name"]
+        except Exception as e:
+            logging.error(f"[EnhancedMemoryManager] propagate_memory fetch error: {e}")
+            return
+        finally:
+            if conn:
+                await conn.close()
+
+        # For each related NPC, create secondhand memory
+        for rid in related_npcs:
+            secondhand = f"I heard that {npc_name} {memory_text}"
+            secondhand_tags = tags + ["secondhand"]
+            secondhand_signif = max(1, significance-2)
+            secondhand_intensity = max(0, emotional_intensity-20)
+            # Re-use manager
+            related_mem_mgr = EnhancedMemoryManager(rid, self.user_id, self.conversation_id)
+            await related_mem_mgr.add_memory(
+                secondhand,
+                memory_type="secondhand",
+                significance=secondhand_signif,
+                emotional_valence=secondhand_intensity/10,
+                tags=secondhand_tags
+            )
                 
         except Exception as e:
             logging.error(f"Error propagating memory: {e}")
