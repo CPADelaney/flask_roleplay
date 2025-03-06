@@ -84,6 +84,92 @@ Return a valid JSON object with the key "physical_description" containing the de
     # Final fallback: Generate a basic description if all else fails
     return f"{npc_name} has an appearance that matches their personality and role in this environment."
 
+async def add_npc_memory_with_embedding(
+    npc_id: int,
+    memory_text: str,
+    tags: list[str] = None,
+    emotional_intensity: int = 0
+):
+    """
+    Inserts a single memory row into NPCMemories for the given npc_id.
+    Also generates and stores the embedding vector for semantic search.
+    """
+    if tags is None:
+        tags = []
+
+    # 1) Generate embedding
+    try:
+        # Make sure you've set openai.api_key earlier
+        response = openai.Embedding.create(
+            model="text-embedding-ada-002",
+            input=memory_text
+        )
+        embedding_data = response["data"][0]["embedding"]  # a list of floats
+    except Exception as e:
+        logging.error(f"Error generating embedding: {e}")
+        embedding_data = None
+    
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO NPCMemories (npc_id, memory_text, embedding, tags, emotional_intensity)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (
+            npc_id,
+            memory_text,
+            embedding_data,  # This must be a Python list of floats
+            tags,
+            emotional_intensity
+        ))
+    conn.commit()
+    conn.close()
+
+async def get_relevant_memories_by_vector(npc_id: int, query_text: str, top_k: int = 5):
+    """
+    1. Generate an embedding of the 'query_text'
+    2. Find the top_k memories (by vector distance) that are most semantically similar.
+    3. Return them as a list of rows: [{ "id":..., "memory_text":..., ...}, ...]
+    """
+    # 1) embed the query
+    try:
+        response = openai.Embedding.create(
+            model="text-embedding-ada-002",
+            input=query_text
+        )
+        query_vector = response["data"][0]["embedding"]
+    except Exception as e:
+        logging.error(f"Error generating embedding for query: {e}")
+        return []
+
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        # 2) do a similarity search using <-> operator for distance
+        # NOTE: 'embedding <-> %s' is the pgvector distance operator
+        # Lower distance => more similar, so we ORDER BY (embedding <-> query_vector) ASC
+        cur.execute(f"""
+            SELECT id, memory_text, tags, emotional_intensity, times_recalled
+            FROM NPCMemories
+            WHERE npc_id = %s
+            ORDER BY embedding <-> %s
+            LIMIT %s
+        """, (npc_id, query_vector, top_k))
+        
+        rows = cur.fetchall()
+
+    conn.close()
+    
+    results = []
+    for row in rows:
+        mem_id, text, tags, intensity, recalled = row
+        results.append({
+            "id": mem_id,
+            "memory_text": text,
+            "tags": tags or [],
+            "emotional_intensity": intensity,
+            "times_recalled": recalled
+        })
+    return results
+
 async def gpt_generate_schedule(user_id, conversation_id, npc_data, environment_desc, day_names):
     """
     Generate a weekly schedule for an NPC with error handling and fallbacks.
@@ -2020,7 +2106,11 @@ async def assign_random_relationships(user_id, conversation_id, new_npc_id, new_
     # Finally, create these relationships in the database and generate associated memories.
     for rel in relationships:
         memory_text = get_shared_memory(user_id, conversation_id, rel, new_npc_name)
-        record_npc_event(user_id, conversation_id, new_npc_id, memory_text)
+        await add_npc_memory_with_embedding(
+            npc_id=npc_id,
+            memory_text=memory_text,
+            tags=["some_tag"]  # optional
+        )
 
         from logic.social_links import create_social_link
         from logic.npc_creation import dynamic_reciprocal_relationship
