@@ -474,6 +474,23 @@ def get_aggregated_roleplay_context(user_id, conversation_id, player_name):
                 aggregator_text += f"- {k}: {v}\n"
         except Exception:
             aggregator_text += "(Could not parse MegaSettingModifiers)\n"
+
+    cursor.execute("""
+        SELECT npc_id, current_state, last_decision
+        FROM NPCAgentState
+        WHERE user_id=%s AND conversation_id=%s
+    """, (user_id, conversation_id))
+    
+    npc_agent_states = {}
+    for row in cursor.fetchall():
+        npc_id, current_state, last_decision = row
+        npc_agent_states[npc_id] = {
+            "current_state": current_state,
+            "last_decision": last_decision
+        }
+    
+    # Add agent state to aggregated data
+    aggregated["npcAgentStates"] = npc_agent_states
     
     aggregated["aggregator_text"] = aggregator_text
 
