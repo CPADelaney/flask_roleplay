@@ -417,6 +417,28 @@ async def next_storybeat():
             if row[0] != user_id:
                 conn.close()
                 return jsonify({"error": f"Conversation {conv_id} not owned by this user"}), 403
+                
+        npc_system = NPCAgentSystem(user_id, conv_id)
+        
+        player_action = {
+            "type": "talk" if "talk" in user_input.lower() else "action",
+            "description": user_input,
+            "target_location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation")
+        }
+        
+        npc_responses = await npc_system.handle_player_action(player_action, context)
+        
+        # Format NPC responses for GPT or your aggregator
+        npc_response_text = ""
+        for response in npc_responses.get("npc_responses", []):
+            npc_id = response.get("npc_id")
+            npc_name = await npc_system.get_npc_name(npc_id)
+            action = response.get("action", {}).get("description", "does something")
+            result = response.get("result", {}).get("outcome", "")
+            npc_response_text += f"{npc_name} {action}. {result}\n"
+        
+        # Add NPC responses to aggregator text
+        aggregator_text += f"\n\nNPC RESPONSES:\n{npc_response_text}"
 
         # 1.5) Check unintroduced NPC count; spawn more if needed.
         cur.execute("""
