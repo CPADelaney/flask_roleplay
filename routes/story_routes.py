@@ -18,7 +18,7 @@ from db.connection import get_db_connection
 from logic.universal_updater import apply_universal_updates  # async function
 from logic.npc_creation import spawn_multiple_npcs_enhanced, create_and_refine_npc
 from logic.aggregator import get_aggregated_roleplay_context
-from logic.time_cycle import advance_time_and_update
+from logic.time_cycle import advance_time_and_update, nightly_maintenance
 from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
 from routes.settings_routes import generate_mega_setting_logic
@@ -426,34 +426,35 @@ async def next_storybeat():
         """, (user_id, conv_id))
         count = cur.fetchone()[0]
         
-        # Get aggregated context data
+        # 2) Gather aggregator context
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
         env_desc = aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", "A default environment description.")
         calendar = aggregator_data.get("calendar", {})
         day_names = calendar.get("days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
         
-        # Set up context for NPCs and other logic
         context = {
             "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
             "time_of_day": aggregator_data.get("timeOfDay", "Morning")
         }
         
+        # Possibly spawn new NPCs if too few are introduced
         if count < 2:
             logging.info("Only %d unintroduced NPC(s) found; generating 3 more.", count)
             await spawn_multiple_npcs_enhanced(user_id, conv_id, env_desc, day_names, count=3)
 
-        # 2) Insert user message.
+        # Insert user message
         cur.execute(
             "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
             (conv_id, "user", user_input)
         )
         conn.commit()
 
-        # 3) Process any universal updates provided.
+        # 3) Process universal updates if any
         universal_data = data.get("universal_update", {})
         if universal_data:
             universal_data["user_id"] = user_id
             universal_data["conversation_id"] = conv_id
+
             async def run_univ_update():
                 import asyncpg
                 dsn = os.getenv("DB_DSN")
@@ -461,207 +462,189 @@ async def next_storybeat():
                 result = await apply_universal_updates(user_id, conv_id, universal_data, async_conn)
                 await async_conn.close()
                 return result
+
             update_result = await run_univ_update()
             if "error" in update_result:
                 cur.close()
                 conn.close()
                 return jsonify(update_result), 500
-        
-        # 4) Initialize NPC agent system and process player action
+
+        # 4) Initialize NPC agent system and process the player's action
         npc_system = NPCAgentSystem(user_id, conv_id)
-        
         player_action = {
             "type": "talk" if "talk" in user_input.lower() else "action",
             "description": user_input,
-            "target_location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation")
+            "target_location": context["location"]
         }
         
-        # Get NPC responses
         npc_responses = await npc_system.handle_player_action(player_action, context)
         
-        # Format NPC responses for GPT
+        # Format NPC responses
         npc_response_text = ""
-        for response in npc_responses.get("npc_responses", []):
-            npc_id = response.get("npc_id")
+        for resp in npc_responses.get("npc_responses", []):
+            npc_id = resp.get("npc_id")
             npc_name = await npc_system.get_npc_name(npc_id)
-            action = response.get("action", {}).get("description", "does something")
-            result = response.get("result", {}).get("outcome", "")
-            npc_response_text += f"{npc_name} {action}. {result}\n"
+            action = resp.get("action", {}).get("description", "does something")
+            outcome = resp.get("result", {}).get("outcome", "")
+            npc_response_text += f"{npc_name} {action}. {outcome}\n"
 
-        # 5) Analyze input for time advancement and special events
-        # If an activity type was explicitly requested, use it, otherwise determine from input
+        # 5) Check for time advancement
         activity_type = requested_activity or ActivityManager.get_activity_type(user_input, context)
-        
-        # Process addiction effects based on current addiction levels
+
+        # We must read the *current day* before possibly advancing time
+        current_year, current_month, current_day, current_phase = get_current_time(user_id, conv_id)
+
+        # 6) Handle addiction
         addiction_status = await get_addiction_status(user_id, conv_id, player_name)
         addiction_effects = await process_addiction_effects(user_id, conv_id, player_name, addiction_status)
-        
-        # Get current narrative stage
-        narrative_stage = await get_current_narrative_stage(user_id, conv_id)
-        
-        # Check if we need to confirm time advancement with the player
-        should_time_advance = should_advance_time(activity_type, context.get("time_of_day"))
-        
-        # If player asked for time confirmation, process time advancement
-        if data.get("confirm_time_advance", False):
-            time_result = await advance_time_with_events(user_id, conv_id, activity_type)
-            
-            # Process addiction progression chance when time advances
-            if time_result["time_advanced"]:
-                for addiction_type in ["socks", "feet", "sweat", "ass", "scent"]:
-                    # Random chance for addiction to progress based on exposure
-                    if "exposed_to_" + addiction_type in data:
-                        progression_chance = 0.2  # 20% chance
-                        await update_addiction_level(user_id, conv_id, player_name, addiction_type, progression_chance)
-        else:
-            # Just return information about what the time advancement would be for confirmation
-            time_result = {
-                "time_advanced": False,
-                "would_advance": should_time_advance["should_advance"],
-                "periods": should_time_advance["periods"],
-                "current_time": context.get("time_of_day"),
-                "confirm_needed": should_time_advance["should_advance"]
-            }
 
-        # 6) Check for relationship crossroads if appropriate
+        # 7) Possibly get narrative stage
+        narrative_stage = await get_current_narrative_stage(user_id, conv_id)
+
+        # Decide if we need to confirm time advancement
+        from logic.time_cycle import should_advance_time, advance_time_with_events, nightly_maintenance
+        should_info = should_advance_time(activity_type, current_phase)
+
+        if data.get("confirm_time_advance", False):
+            # The user confirmed we *should* advance time
+            time_result = await advance_time_with_events(user_id, conv_id, activity_type)
+
+            # If time advanced, check if day has rolled over
+            if time_result["time_advanced"]:
+                if time_result["new_time"] == "Morning" and time_result["new_day"] > current_day:
+                    # We effectively ended the day => call nightly maintenance
+                    await nightly_maintenance(user_id, conv_id)
+
+                # Also handle addiction progression if requested
+                for addiction_type in ["socks","feet","sweat","ass","scent"]:
+                    if "exposed_to_" + addiction_type in data:
+                        chance = 0.2
+                        await update_addiction_level(user_id, conv_id, player_name, addiction_type, chance)
+
+        else:
+            # We haven't advanced time yet; just show if it *would* advance
+            if should_info["should_advance"]:
+                time_result = {
+                    "time_advanced": False,
+                    "would_advance": True,
+                    "periods": should_info["periods"],
+                    "current_time": current_phase,
+                    "confirm_needed": True
+                }
+            else:
+                time_result = {
+                    "time_advanced": False,
+                    "would_advance": False,
+                    "periods": 0,
+                    "current_time": current_phase,
+                    "confirm_needed": False
+                }
+
+        # 8) Relationship crossroads check
         crossroads_event = None
+        crossroads_result = {}
         if data.get("check_crossroads", False):
             crossroads_event = await check_for_relationship_crossroads(user_id, conv_id)
-            
-            # If a crossroads choice was made, apply it
             if data.get("crossroads_choice") is not None and data.get("crossroads_name") and data.get("link_id"):
                 choice_result = await apply_crossroads_choice(
-                    user_id, conv_id, 
-                    data["link_id"], 
-                    data["crossroads_name"], 
+                    user_id, conv_id,
+                    data["link_id"],
+                    data["crossroads_name"],
                     data["crossroads_choice"]
                 )
                 if "error" in choice_result:
                     crossroads_result = {"error": choice_result["error"]}
                 else:
-                    crossroads_result = {
-                        "choice_applied": True,
-                        "outcome": choice_result["outcome_text"]
-                    }
-        
-        # 7) Build the aggregator text with NPC responses
+                    crossroads_result = {"choice_applied": True, "outcome": choice_result["outcome_text"]}
+
+        # 9) Build aggregator text
         aggregator_text = build_aggregator_text(aggregator_data)
-        
-        # Add NPC responses to aggregator text
         if npc_response_text:
             aggregator_text += f"\n\n=== NPC RESPONSES ===\n{npc_response_text}"
-        
-        # Add addiction context to aggregator_text
+
+        # Also add addiction info if needed
         if addiction_status and addiction_status.get("has_addictions"):
+            from logic.addiction_system import get_addiction_label
             addiction_context = "\n\n=== ADDICTION STATUS ===\n"
-            for addiction_type, level in addiction_status.get("addiction_levels", {}).items():
-                if level > 0:
-                    addiction_context += f"{addiction_type.capitalize()}: {get_addiction_label(level)}\n"
-            
-            if addiction_status.get("npc_specific_addictions"):
-                addiction_context += "\nNPC-Specific Addictions:\n"
-                for npc_addiction in addiction_status.get("npc_specific_addictions", []):
-                    addiction_context += f"{npc_addiction['npc_name']}'s {npc_addiction['addiction_type']}: {get_addiction_label(npc_addiction['level'])}\n"
-            
+            for adtype, lvl in addiction_status.get("addiction_levels", {}).items():
+                if lvl > 0:
+                    addiction_context += f"{adtype.capitalize()}: {get_addiction_label(lvl)}\n"
             aggregator_text += addiction_context
-        
-        # 8) Generate response from GPT
+
+        # 10) Generate GPT response
         response_data = get_chatgpt_response(conv_id, aggregator_text, user_input)
-        
-        # Extract narrative
+
+        # If function call, handle universal updates again
+        image_result = None
         if response_data["type"] == "function_call":
-            # When the response is a function call, extract the narrative field
             ai_response = response_data["function_args"].get("narrative", "")
-            
-            # Process any universal updates received
+            # Possibly apply updates...
             try:
-                # Only apply updates if we received function call with args
                 if response_data["function_args"]:
                     import asyncio
                     import asyncpg
                     from logic.universal_updater import apply_universal_updates_async
-                    
                     async def apply_updates():
                         dsn = os.getenv("DB_DSN")
-                        conn = await asyncpg.connect(dsn=dsn, statement_cache_size=0)
+                        con2 = await asyncpg.connect(dsn=dsn, statement_cache_size=0)
                         try:
-                            await apply_universal_updates_async(
-                                user_id, 
-                                conv_id, 
-                                response_data["function_args"], 
-                                conn
-                            )
+                            await apply_universal_updates_async(user_id, conv_id, response_data["function_args"], con2)
                         finally:
-                            await conn.close()
-                    
-                    # Run the async function
+                            await con2.close()
                     await apply_updates()
                     logging.info(f"Applied universal updates for conversation {conv_id}")
-            except Exception as update_error:
-                logging.error(f"Error applying universal updates: {str(update_error)}")
+            except Exception as ex:
+                logging.error(f"Error applying universal updates: {ex}")
 
-            should_generate, reason = should_generate_image_for_response(
-                user_id, 
-                conv_id, 
-                response_data["function_args"]
-            )
-            
-            # Process image generation if needed
-            image_result = None
-            if should_generate:
-                logging.info(f"Generating image for scene: {reason}")
-                image_result = generate_roleplay_image_from_gpt(
-                    response_data["function_args"], 
-                    user_id, 
-                    conv_id
-                )
+            should_gen, reason = should_generate_image_for_response(user_id, conv_id, response_data["function_args"])
+            if should_gen:
+                image_result = generate_roleplay_image_from_gpt(response_data["function_args"], user_id, conv_id)
         else:
-            ai_response = response_data.get("response", "")
-        
-        # Store the GPT response
-        cur.execute(
-            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-            (conv_id, "Nyx", ai_response)
-        )
+            ai_response = response_data.get("response","")
+
+        # Store GPT response
+        cur.execute("""
+            INSERT INTO messages (conversation_id, sender, content) 
+            VALUES (%s, %s, %s)
+        """, (conv_id, "Nyx", ai_response))
         conn.commit()
         cur.close()
         conn.close()
-        
-        # 9) Prepare and return the final response
-        response = {
+
+        # 11) Build final JSON
+        result_json = {
             "message": ai_response,
             "time_result": time_result,
-            "confirm_needed": should_time_advance["should_advance"] and not data.get("confirm_time_advance", False),
+            "confirm_needed": (should_info["should_advance"] and not data.get("confirm_time_advance", False)),
             "addiction_effects": addiction_effects,
             "narrative_stage": narrative_stage.name if narrative_stage else None,
             "npc_responses": [
                 {
-                    "npc_id": resp.get("npc_id"),
-                    "npc_name": await npc_system.get_npc_name(resp.get("npc_id")),
-                    "action": resp.get("action", {}).get("description", ""),
-                    "result": resp.get("result", {}).get("outcome", "")
-                } for resp in npc_responses.get("npc_responses", [])
+                    "npc_id": r.get("npc_id"),
+                    "npc_name": await npc_system.get_npc_name(r.get("npc_id")),
+                    "action": r.get("action",{}).get("description",""),
+                    "result": r.get("result",{}).get("outcome","")
+                } for r in npc_responses.get("npc_responses", [])
             ]
         }
-    
+
         if image_result and "image_urls" in image_result and image_result["image_urls"]:
-            response["image"] = {
+            result_json["image"] = {
                 "image_url": image_result["image_urls"][0],
-                "prompt_used": image_result.get("prompt_used", ""),
+                "prompt_used": image_result.get("prompt_used",""),
                 "reason": reason
             }
-        
         if crossroads_event:
-            response["crossroads_event"] = crossroads_event
-            
+            result_json["crossroads_event"] = crossroads_event
         if data.get("crossroads_choice") is not None:
-            response["crossroads_result"] = crossroads_result
-            
-        return jsonify(response)
+            result_json["crossroads_result"] = crossroads_result
+
+        return jsonify(result_json)
 
     except Exception as e:
         logging.exception("[next_storybeat] Error")
         return jsonify({"error": str(e)}), 500
+
 
 @story_bp.route("/relationship_summary", methods=["GET"])
 def get_relationship_details():
@@ -1235,3 +1218,30 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
             ]
 
     return "\n".join(lines)
+
+@story_bp.route("/end_of_day", methods=["POST"])
+async def end_of_day():
+    """
+    Example route that the front-end calls when 
+    the player chooses to finish the day or go to sleep. 
+    This triggers our nightly_maintenance across all NPCs.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+        
+        data = request.get_json() or {}
+        conv_id = data.get("conversation_id")
+        if not conv_id:
+            return jsonify({"error": "Missing conversation_id"}), 400
+
+        # Optionally confirm we are actually at 'Night' time before continuing, etc.
+        
+        # Call nightly maintenance for memory fading, summarizing
+        await nightly_maintenance(user_id, conv_id)
+
+        return jsonify({"status": "Nightly maintenance complete"})
+    except Exception as e:
+        logging.exception("Error in end_of_day route")
+        return jsonify({"error": str(e)}), 500
