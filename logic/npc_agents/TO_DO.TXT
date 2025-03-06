@@ -1,4 +1,69 @@
 ====================================================
+MEMORY LIFECYCLE & PERFORMANCE NOTES
+====================================================
+
+1) DATA LIFECYCLE / MEMORY STORAGE
+----------------------------------
+If your system stores large amounts of NPC memory logs (e.g., JSON arrays in the DB), this can escalate quickly in an active environment:
+ - **Archiving / Trimming**:
+   * Consider periodically migrating older or lower-priority memories to an archive table (or S3, or offline storage).
+   * Alternatively, set a max memory count (e.g., each NPC can only keep 50 “recent” events), discarding or compressing older logs.
+ - **Active vs. Passive Memories**:
+   * In real life, we don't recall every minor event; memories fade or get “triggered” only by context.
+   * Implement a system that only retains “core” or “high-significance” memories in the primary array. 
+   * Lower-significance or older “passive” memories either:
+     1) Migrate to a secondary storage or 
+     2) Get pruned unless a new event triggers a recall.
+   * Example: If an NPC had 200 minor social interactions, keep only the last 5–10 with moderate or high significance. 
+ - **Memory Decay**:
+   * Let memories gradually fade in detail or degrade. 
+   * For example, each memory could have a “decay timer”; once it expires, either reduce it to a short summary or remove it entirely.
+   * This approach keeps DB sizes smaller and simulates real forgetfulness.
+
+2) PERFORMANCE PROFILING & SCALABILITY
+--------------------------------------
+When dozens (or hundreds) of NPCs each update memory, relationships, or schedules:
+ - **Measure Query Times**:
+   * Instrument your code so you can see how long each major DB call takes. 
+   * Keep an eye out for hotspots (like repeated large JSON loads/saves).
+ - **Batch or Bulk Operations**:
+   * If each NPC is doing multiple small updates, consider a batched approach. 
+   * Write a single update for many NPCs, rather than one transaction per agent each time.
+ - **Async DB Drivers or Offloading**:
+   * If you’re blocking on DB I/O in a high-traffic environment, switch to an async driver or offload blocking calls to a worker thread pool.
+ - **Indexing & Table Design**:
+   * Ensure the columns you frequently filter by (npc_id, conversation_id, etc.) are properly indexed.
+   * For memory or schedule data, consider splitting out large unstructured JSON from the main table if it’s rarely queried in full.
+
+3) MAKING NPC MEMORY MORE “HUMAN”
+---------------------------------
+Real people don't recall every detail from the past—some events are “stickier” because of emotion, repetition, or significance:
+ - **Emotional Tagging**:
+   * If a memory has a strong positive or negative emotional_valence, keep it longer or put it in a “core memories” list.
+   * Mild or neutral memories fade out quickly.
+ - **Context Triggering**:
+   * NPC only recalls or references a memory if something in the present environment/interaction triggers it (location, key phrases, etc.).
+   * This saves overhead from constantly rummaging through old memories and avoids unrealistic total recall.
+ - **Consolidating Over Time**:
+   * If many repetitive events occur (e.g., “the player greeted me politely every morning for a week”), merge them into a single “summary memory” after some time: “The player consistently greeted me politely last week.”
+   * This reduces memory clutter and simulates how humans compress repeated experiences.
+
+4) EXAMPLES OF MEMORY HANDLING
+------------------------------
+ - **Short-Term (ephemeral)**:
+   * Store only for a few in-game days, or until overshadowed by new events.
+   * Quick ephemeral notes, e.g., “We chatted about the weather today.”
+ - **Medium-Term (semi-significant)**:
+   * Lasts longer, typically includes moderate emotional impact or meaningful interactions.
+   * Subject to fade if unreferenced.
+ - **Core / Significant**:
+   * Strong emotional or plot impact—rarely discarded unless truly overshadowed by major events. 
+   * Examples: A traumatic betrayal, pivotal story event, or an extremely positive bonding moment.
+
+By **combining** these strategies—fading, archiving, context-based recall, and overall memory-lifetime management—you’ll keep database usage under control **and** create more realistic, human-like NPC memory behavior.
+
+
+====================================================
 RELATIONSHIP IDEAS & FUTURE EXPANSION
 ====================================================
 
