@@ -227,6 +227,7 @@ def create_all_tables():
             emotional_intensity INT DEFAULT 0, -- 0-100 or -100~+100
             times_recalled INT DEFAULT 0,
             last_recalled TIMESTAMP,
+            embedding VECTOR(1536),
             FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
         );
     ''')            
