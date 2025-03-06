@@ -24,6 +24,7 @@ from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, b
 from routes.settings_routes import generate_mega_setting_logic
 from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
+from logic.npc_agents import NPCAgentSystem
 
 # Import new enhanced modules
 from logic.stats_logic import get_player_current_tier, check_for_combination_triggers, apply_stat_change, apply_activity_effects
