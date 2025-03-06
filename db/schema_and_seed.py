@@ -554,6 +554,39 @@ def create_all_tables():
             user_id, npc_name
     ''')
 
+-- Add columns to NPCMemories table for enhanced features
+ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS memory_type TEXT DEFAULT 'observation';
+ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS associated_entities JSONB;
+ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS significance INT DEFAULT 3;
+ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS is_consolidated BOOLEAN DEFAULT FALSE;
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NPCMemoryAssociations (
+            id SERIAL PRIMARY KEY,
+            memory_id INT NOT NULL,
+            associated_memory_id INT NOT NULL,
+            association_strength FLOAT DEFAULT 0.0,
+            association_type TEXT,
+            FOREIGN KEY (memory_id) REFERENCES NPCMemories(id) ON DELETE CASCADE,
+            FOREIGN KEY (associated_memory_id) REFERENCES NPCMemories(id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NPCAgentState (
+            npc_id INT NOT NULL,
+            user_id INT NOT NULL,
+            conversation_id INT NOT NULL,
+            current_state JSONB,
+            last_decision JSONB,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (npc_id, user_id, conversation_id),
+            FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
+
     conn.commit()
     conn.close()
 
