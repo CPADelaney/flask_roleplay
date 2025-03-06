@@ -16,7 +16,7 @@ class EnhancedMemoryManager:
     """
     Manages memories for an individual NPC with advanced features:
       - significance (1..10 or 1..100) to indicate importance
-      - status = 'active','summarized','archived'
+      - status in ('active','summarized','archived')
       - human-like fading, summarization, recall mechanics
     """
 
@@ -142,7 +142,9 @@ class EnhancedMemoryManager:
                 # Fallback: naive keyword search
                 words = query_text.lower().split()
                 if words:
-                    conditions = " OR ".join([f"LOWER(memory_text) LIKE '%'||${i+2}||'%'" for i in range(len(words))])
+                    conditions = " OR ".join(
+                        [f"LOWER(memory_text) LIKE '%'||${i+2}||'%'" for i in range(len(words))]
+                    )
                     # param order: [npc_id] + words + [limit]
                     params = [self.npc_id] + words + [limit]
                     q = f"""
@@ -239,7 +241,7 @@ class EnhancedMemoryManager:
                                  significance_threshold: int = 3,
                                  intensity_threshold: int = 15):
         """
-        1) Delete trivial memories older than age_days 
+        1) Delete truly trivial memories older than age_days 
            (where significance < significance_threshold and emotional_intensity < intensity_threshold).
         2) For the rest older than age_days, if status='active', set status='summarized'.
         """
@@ -327,7 +329,6 @@ class EnhancedMemoryManager:
         conn = None
         try:
             conn = await asyncpg.connect(dsn=DB_DSN)
-            # e.g. group by memory_text if they match exactly
             rows = await conn.fetch("""
                 SELECT memory_text, COUNT(*) AS cnt, array_agg(id) AS mem_ids
                 FROM NPCMemories
@@ -478,7 +479,7 @@ class EnhancedMemoryManager:
                 secondhand_text,
                 memory_type="secondhand",
                 significance=secondhand_signif,
-                emotional_valence=(secondhand_int/10),
+                emotional_valence=(secondhand_int / 10),
                 tags=tags + ["secondhand"],
                 status="active"
             )
@@ -555,6 +556,38 @@ class EnhancedMemoryManager:
             logger.info("[EnhancedMemoryManager] consolidate_memories => done.")
         except Exception as e:
             logger.error(f"[EnhancedMemoryManager] consolidate_memories error: {e}")
+        finally:
+            if conn:
+                await conn.close()
+
+    # -----------------------------------------------------------
+    # G) ARCHIVING STALE MEMORIES (Optional)
+    # -----------------------------------------------------------
+    async def archive_stale_memories(
+        self,
+        older_than_days: int = 60,
+        max_significance: int = 4
+    ):
+        """
+        Instead of deleting older memories, set status='archived' for
+        those older than 'older_than_days' with significance <= max_significance.
+        So 'active' or 'summarized' memories that are low-value become 'archived'.
+        """
+        cutoff = datetime.now() - timedelta(days=older_than_days)
+        conn = None
+        try:
+            conn = await asyncpg.connect(dsn=DB_DSN)
+            result = await conn.execute("""
+                UPDATE NPCMemories
+                SET status='archived'
+                WHERE npc_id=$1
+                  AND timestamp < $2
+                  AND significance <= $3
+                  AND status IN ('active','summarized')
+            """, self.npc_id, cutoff, max_significance)
+            logger.info(f"[EnhancedMemoryManager] archive_stale_memories => {result} set to archived.")
+        except Exception as e:
+            logger.error(f"Error archiving stale memories: {e}")
         finally:
             if conn:
                 await conn.close()
