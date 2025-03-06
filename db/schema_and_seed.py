@@ -243,7 +243,12 @@ def create_all_tables():
         
             FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
         );
-    ''')            
+    ''')       
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_mem_npcid_status_ts
+          ON NPCMemories (npc_id, status, timestamp);
+    ''')
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Locations (
