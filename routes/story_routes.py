@@ -625,6 +625,30 @@ async def next_storybeat():
             
         return jsonify(response)
 
+        npc_system = NPCAgentSystem(user_id, conv_id)
+    
+    # Process player action
+    player_action = {
+        "type": "talk" if "talk" in user_input.lower() else "action",
+        "description": user_input,
+        "target_location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation")
+    }
+    
+    # Get NPC responses
+    npc_responses = await npc_system.handle_player_action(player_action, context)
+    
+    # Include NPC responses in GPT context
+    npc_response_text = ""
+    for response in npc_responses.get("npc_responses", []):
+        npc_id = response.get("npc_id")
+        npc_name = await get_npc_name(user_id, conv_id, npc_id)
+        action = response.get("action", {}).get("description", "does something")
+        result = response.get("result", {}).get("outcome", "")
+        npc_response_text += f"{npc_name} {action}. {result}\n"
+    
+    # Add NPC responses to aggregator text
+    aggregator_text += f"\n\nNPC RESPONSES:\n{npc_response_text}"
+
     except Exception as e:
         logging.exception("[next_storybeat] Error")
         return jsonify({"error": str(e)}), 500
