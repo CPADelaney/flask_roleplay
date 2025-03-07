@@ -12,9 +12,13 @@ from logic.chatgpt_integration import get_openai_client, get_chatgpt_response
 from logic.gpt_utils import spaced_gpt_call
 from logic.gpt_helpers import fetch_npc_name, adjust_npc_complete
 from db.connection import get_db_connection
-from logic.memory_logic import get_shared_memory, record_npc_event, propagate_shared_memories
 from logic.social_links import create_social_link
 from logic.calendar import load_calendar_names
+
+# Import new memory system components
+from memory.wrapper import MemorySystem
+from memory.core import Memory, MemoryType, MemorySignificance
+from memory.managers import NPCMemoryManager
 
 async def gpt_generate_physical_description(user_id, conversation_id, npc_data, environment_desc):
     """
@@ -83,92 +87,6 @@ Return a valid JSON object with the key "physical_description" containing the de
     
     # Final fallback: Generate a basic description if all else fails
     return f"{npc_name} has an appearance that matches their personality and role in this environment."
-
-async def add_npc_memory_with_embedding(
-    npc_id: int,
-    memory_text: str,
-    tags: list[str] = None,
-    emotional_intensity: int = 0
-):
-    """
-    Inserts a single memory row into NPCMemories for the given npc_id.
-    Also generates and stores the embedding vector for semantic search.
-    """
-    if tags is None:
-        tags = []
-
-    # 1) Generate embedding
-    try:
-        # Make sure you've set openai.api_key earlier
-        response = openai.Embedding.create(
-            model="text-embedding-ada-002",
-            input=memory_text
-        )
-        embedding_data = response["data"][0]["embedding"]  # a list of floats
-    except Exception as e:
-        logging.error(f"Error generating embedding: {e}")
-        embedding_data = None
-    
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO NPCMemories (npc_id, memory_text, embedding, tags, emotional_intensity)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (
-            npc_id,
-            memory_text,
-            embedding_data,  # This must be a Python list of floats
-            tags,
-            emotional_intensity
-        ))
-    conn.commit()
-    conn.close()
-
-async def get_relevant_memories_by_vector(npc_id: int, query_text: str, top_k: int = 5):
-    """
-    1. Generate an embedding of the 'query_text'
-    2. Find the top_k memories (by vector distance) that are most semantically similar.
-    3. Return them as a list of rows: [{ "id":..., "memory_text":..., ...}, ...]
-    """
-    # 1) embed the query
-    try:
-        response = openai.Embedding.create(
-            model="text-embedding-ada-002",
-            input=query_text
-        )
-        query_vector = response["data"][0]["embedding"]
-    except Exception as e:
-        logging.error(f"Error generating embedding for query: {e}")
-        return []
-
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        # 2) do a similarity search using <-> operator for distance
-        # NOTE: 'embedding <-> %s' is the pgvector distance operator
-        # Lower distance => more similar, so we ORDER BY (embedding <-> query_vector) ASC
-        cur.execute(f"""
-            SELECT id, memory_text, tags, emotional_intensity, times_recalled
-            FROM NPCMemories
-            WHERE npc_id = %s
-            ORDER BY embedding <-> %s
-            LIMIT %s
-        """, (npc_id, query_vector, top_k))
-        
-        rows = cur.fetchall()
-
-    conn.close()
-    
-    results = []
-    for row in rows:
-        mem_id, text, tags, intensity, recalled = row
-        results.append({
-            "id": mem_id,
-            "memory_text": text,
-            "tags": tags or [],
-            "emotional_intensity": intensity,
-            "times_recalled": recalled
-        })
-    return results
 
 async def gpt_generate_schedule(user_id, conversation_id, npc_data, environment_desc, day_names):
     """
@@ -266,6 +184,7 @@ async def gpt_generate_memories(user_id, conversation_id, npc_data, environment_
     npc_name = npc_data.get("npc_name", "Unknown NPC")
     archetype_summary = npc_data.get("archetype_summary", "")
     dominance = npc_data.get("dominance", 50)
+    npc_id = npc_data.get("npc_id")
     
     # Organize relationships by target for relationship-specific memory generation
     relationship_by_target = {}
@@ -494,7 +413,7 @@ Return a valid JSON object with a single "memories" key containing an array of m
         all_memories.extend(fallback_memories[:memories_needed])
     
     return all_memories
-
+    
 async def gpt_generate_affiliations(user_id, conversation_id, npc_data, environment_desc):
     """
     Generate affiliations for an NPC (clubs, teams, workplaces, social groups, etc.)
@@ -574,7 +493,6 @@ Return a valid JSON object with a single "affiliations" key containing an array 
 async def gpt_generate_relationship_specific_memories(user_id, conversation_id, npc_data, target_data, relationship_type, environment_desc):
     """
     Generate memories specific to a particular relationship between two characters.
-    This function generates memories tailored to the specific relationship type (mother, enemy, friend, etc.)
     
     Args:
         npc_data: Dict containing data about the NPC whose memories we're generating
@@ -764,6 +682,126 @@ Return a valid JSON object with a single "memories" key containing an array of m
             
             f"There was a misunderstanding between {target_name} and me at {location} that nearly fractured our {relationship_type} relationship. Tensions had been building for weeks over misaligned expectations, culminating in a heated exchange that left both of us saying things we might regret. 'That's not what I meant and you know it,' they insisted, frustration evident in their voice. I remember taking a deliberate breath before responding more calmly than I felt, choosing reconciliation over being right. The relief in their expression when I offered a compromise told me they valued our connection more than they'd been showing. Sometimes conflict reveals the true foundation of a relationship better than harmony ever could."
         ]
+
+async def store_npc_memories(user_id, conversation_id, npc_id, memories):
+    """
+    Store NPC memories using the new memory system.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        npc_id: NPC ID
+        memories: List of memory strings
+    """
+    if not memories:
+        return
+    
+    # Get memory system instance
+    memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+    
+    # Create specialized NPC memory manager
+    npc_memory_manager = await memory_system.npc_memory(npc_id)
+    
+    # Store each memory with appropriate tags and emotional analysis
+    for memory_text in memories:
+        # Add memory with emotional analysis
+        await memory_system.remember(
+            entity_type="npc",
+            entity_id=npc_id,
+            memory_text=memory_text,
+            importance="medium",
+            emotional=True,
+            tags=["initial_memory"]
+        )
+
+async def propagate_shared_memories(user_id, conversation_id, source_npc_id, source_npc_name, memories):
+    """
+    Propagate shared memories to related NPCs.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        source_npc_id: ID of the NPC whose memories to propagate
+        source_npc_name: Name of the source NPC
+        memories: List of memory strings to potentially propagate
+    """
+    if not memories:
+        return
+    
+    # Get connections to other NPCs
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT entity2_id, link_type, link_level
+        FROM SocialLinks
+        WHERE user_id=%s AND conversation_id=%s 
+        AND entity1_type='npc' AND entity1_id=%s
+        AND entity2_type='npc'
+    """, (user_id, conversation_id, source_npc_id))
+    
+    connections = []
+    for row in cursor.fetchall():
+        connections.append({
+            "npc_id": row[0],
+            "relationship": row[1],
+            "strength": row[2]
+        })
+    
+    cursor.close()
+    conn.close()
+    
+    if not connections:
+        return
+    
+    # Get memory system instance
+    memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+    
+    # Select a subset of memories to propagate (not all memories should be shared)
+    for connection in connections:
+        target_npc_id = connection["npc_id"]
+        relationship = connection["relationship"]
+        strength = connection["strength"]
+        
+        # Only propagate memories to closer relationships
+        if strength < 30:
+            continue
+        
+        # Get target NPC name
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT npc_name FROM NPCStats WHERE npc_id=%s AND user_id=%s AND conversation_id=%s",
+            (target_npc_id, user_id, conversation_id)
+        )
+        row = cursor.fetchone()
+        target_npc_name = row[0] if row else f"NPC {target_npc_id}"
+        cursor.close()
+        conn.close()
+        
+        # Decide how many memories to share (stronger connections share more)
+        num_to_share = 1
+        if strength > 50:
+            num_to_share = 2
+        if strength > 80:
+            num_to_share = 3
+            
+        # Select random memories to propagate
+        memories_to_share = random.sample(memories, min(num_to_share, len(memories)))
+        
+        # Transform memories to second-hand perspective
+        for memory in memories_to_share:
+            # Create a second-hand version of the memory
+            second_hand_memory = f"{source_npc_name} told me about when {memory[0].lower() + memory[1:]}"
+            
+            # Store the transformed memory
+            await memory_system.remember(
+                entity_type="npc",
+                entity_id=target_npc_id,
+                memory_text=second_hand_memory,
+                importance="low",  # Lower importance for second-hand memories
+                emotional=True,
+                tags=["secondhand", "propagated", relationship]
+            )
 
 
 async def integrate_femdom_elements(npc_data):
@@ -1031,19 +1069,31 @@ async def create_and_refine_npc(user_id, conversation_id, environment_desc, day_
     
     logging.info(f"Successfully refined NPC {npc_id} ({partial_npc['npc_name']})")
     
-    # Step 8: Propagate memories to other connected NPCs
-    from logic.npc_creation import propagate_shared_memories
-    
-    propagate_shared_memories(
-        user_id=user_id,
-        conversation_id=conversation_id,
-        source_npc_id=npc_id,
-        source_npc_name=partial_npc["npc_name"],
-        memories=memories
-    )
+    # Step 8: Store memories in the new memory system
+    try:
+        await store_npc_memories(user_id, conversation_id, npc_id, memories)
+        logging.info(f"Successfully stored memories for NPC {npc_id} in memory system")
+        
+        # Step 9: Propagate memories to other connected NPCs
+        await propagate_shared_memories(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            source_npc_id=npc_id,
+            source_npc_name=partial_npc["npc_name"],
+            memories=memories
+        )
+        logging.info(f"Successfully propagated memories for NPC {npc_id}")
+        
+        # Initialize NPC mask for progressive revelation
+        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+        mask_info = await memory_system.get_npc_mask(npc_id)
+        logging.info(f"Initialized mask for NPC {npc_id}")
+        
+    except Exception as e:
+        logging.error(f"Error storing or propagating memories for NPC {npc_id}: {e}")
     
     return npc_id
-
+    
 async def spawn_multiple_npcs_enhanced(user_id, conversation_id, environment_desc, day_names, count=3):
     """
     Create multiple NPCs using the enhanced process.
@@ -1111,7 +1161,28 @@ async def init_chase_schedule(user_id, conversation_id, combined_env, day_names)
     conn.commit()
     conn.close()
     
+    # Store as player memory using the new memory system
+    try:
+        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+        
+        # Create a journal entry for the schedule
+        schedule_summary = "My typical schedule for the week: "
+        for day, activities in default_schedule.items():
+            day_summary = f"\n{day}: "
+            for period, activity in activities.items():
+                day_summary += f"{period.lower()}: {activity}; "
+            schedule_summary += day_summary
+            
+        await memory_system.add_journal_entry(
+            player_name="Chase",
+            entry_text=schedule_summary,
+            entry_type="schedule"
+        )
+    except Exception as e:
+        logging.error(f"Error storing player schedule in memory system: {e}")
+    
     return default_schedule
+    
 # -------------------------------------------------------------------------
 # HELPERS FOR ROBUST JSON PARSING
 # -------------------------------------------------------------------------
