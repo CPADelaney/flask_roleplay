@@ -1,4 +1,4 @@
-# logic/npc_agents/npc_agent.py (Updated)
+# logic/npc_agents/npc_agent.py
 
 """
 Core NPC agent class that manages individual NPC behavior with memory capabilities.
@@ -7,6 +7,7 @@ Core NPC agent class that manages individual NPC behavior with memory capabiliti
 import logging
 import json
 import asyncio
+import random
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 class NPCAgent:
     """
     Independent AI agent controlling a single NPC's behavior.
-    Now enhanced with memory capabilities.
+    Enhanced with memory capabilities.
 
     Responsibilities:
     - Perceive environment (with memory-informed context)
@@ -75,7 +76,7 @@ class NPCAgent:
     async def perceive_environment(self, current_context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Update the NPC's perception of the current environment & context.
-        Now enhanced with memory-based perception.
+        Enhanced with memory-based perception.
 
         Args:
             current_context: Dictionary that may contain location/time or relevant info
@@ -88,6 +89,8 @@ class NPCAgent:
               - emotional_state
               - mask
               - timestamp
+              - beliefs
+              - flashback (if triggered)
         """
         # Fetch basic environment data
         environment_data = await fetch_environment_data(
@@ -99,32 +102,63 @@ class NPCAgent:
         # Enhance perception with memory system
         memory_system = await self._get_memory_system()
         
+        # Get text description from context for better memory recall
+        context_description = current_context.get("description", "")
+        if "text" in current_context:
+            context_description += " " + current_context["text"]
+            
+        context_for_recall = {
+            "text": context_description,
+            "location": environment_data.get("location", "Unknown"),
+            "time_of_day": environment_data.get("time_of_day", "Unknown"),
+            "entities_present": [e.get("name", "") for e in environment_data.get("entities_present", [])]
+        }
+        
         # Retrieve relevant memories based on current context
         memory_result = await memory_system.recall(
             entity_type="npc",
             entity_id=self.npc_id,
-            context=current_context,
+            context=context_for_recall,
             limit=7  # More memories for richer context
         )
         relevant_memories = memory_result.get("memories", [])
         
         # Check for flashback potential
         flashback = None
-        if "text" in current_context and random.random() < 0.15:  # 15% chance of flashback
+        if random.random() < 0.15:  # 15% chance of flashback
             flashback = await memory_system.npc_flashback(
                 npc_id=self.npc_id, 
-                context=current_context.get("text", "")
+                context=context_description
             )
         
         # Get current emotional state
         emotional_state = await memory_system.get_npc_emotion(self.npc_id)
         self.current_emotional_state = emotional_state
         
+        # Check for traumatic triggers
+        traumatic_trigger = None
+        if context_description:
+            trigger_result = await memory_system.emotional_manager.process_traumatic_triggers(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                text=context_description
+            )
+            
+            if trigger_result and trigger_result.get("triggered", False):
+                traumatic_trigger = trigger_result
+        
         # Get mask information (true vs. presented personality)
         mask_info = await memory_system.get_npc_mask(self.npc_id)
         
         # Get relationship data
         relationship_data = await self._fetch_relationships()
+        
+        # Get beliefs that might influence perception
+        beliefs = await memory_system.get_beliefs(
+            entity_type="npc",
+            entity_id=self.npc_id,
+            topic="player"  # Focus on player-related beliefs
+        )
         
         # Combine into a single perception dictionary
         perception = {
@@ -133,7 +167,9 @@ class NPCAgent:
             "flashback": flashback,
             "relationships": relationship_data,
             "emotional_state": emotional_state,
+            "traumatic_trigger": traumatic_trigger,
             "mask": mask_info,
+            "beliefs": beliefs,
             "timestamp": datetime.now().isoformat()
         }
 
@@ -150,7 +186,7 @@ class NPCAgent:
                            available_actions: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Decide which action to take based on current perception and available actions.
-        Now enhanced with memory-driven decision making.
+        Enhanced with memory-driven decision making.
 
         Args:
             perception: The NPC's current perception dictionary
@@ -166,6 +202,47 @@ class NPCAgent:
                 perception = await self.perceive_environment({})
             else:
                 perception = self.last_perception
+
+        # Get memory system
+        memory_system = await self._get_memory_system()
+        
+        # Get beliefs that should influence decisions
+        beliefs = perception.get("beliefs", [])
+        
+        # Apply belief weights to available actions
+        if available_actions and beliefs:
+            weighted_actions = await self._apply_belief_weights_to_actions(available_actions, beliefs)
+            available_actions = weighted_actions
+            
+        # Check if there's an active traumatic trigger that should influence decision
+        traumatic_trigger = perception.get("traumatic_trigger")
+        if traumatic_trigger and traumatic_trigger.get("triggered", False):
+            # Modify available actions or create a trauma-response action
+            trauma_response = self._create_trauma_response_action(traumatic_trigger)
+            if trauma_response:
+                # Add trauma response as a high-priority action
+                if available_actions:
+                    available_actions.append(trauma_response)
+                else:
+                    available_actions = [trauma_response]
+        
+        # Apply emotional state influences to decision-making
+        emotional_state = perception.get("emotional_state", {})
+        current_emotion = emotional_state.get("current_emotion", {})
+        
+        if current_emotion:
+            primary_emotion = current_emotion.get("primary", {})
+            emotion_name = primary_emotion.get("name", "neutral")
+            intensity = primary_emotion.get("intensity", 0.0)
+            
+            # For intense emotions, they might override normal decision-making
+            if intensity > 0.7 and emotion_name in ["anger", "fear"]:
+                emotional_action = self._create_emotional_response_action(emotion_name, intensity)
+                if emotional_action:
+                    if available_actions:
+                        available_actions.insert(0, emotional_action)
+                    else:
+                        available_actions = [emotional_action]
 
         # Pass the enriched perception with memories to the decision engine
         chosen_action = await self.decision_engine.decide(perception, available_actions)
@@ -197,7 +274,6 @@ class NPCAgent:
                 slip_chance *= (100 - mask_integrity) / 100  # Factor in mask integrity
                 
                 # Also factor in emotional intensity
-                current_emotion = perception.get("emotional_state", {}).get("current_emotion", {})
                 emotion_intensity = current_emotion.get("primary", {}).get("intensity", 0.0)
                 slip_chance *= (1 + emotion_intensity)
                 
@@ -206,12 +282,11 @@ class NPCAgent:
                 
                 if should_slip:
                     # Generate mask slippage
-                    memory_system = await self._get_memory_system()
                     trigger = f"deciding to {chosen_action.get('description', 'act')}"
                     
                     # Emotional triggers are more likely to cause slips
-                    if current_emotion.get("primary", {}).get("name") in ["anger", "fear", "excitement"]:
-                        trigger = f"feeling {current_emotion.get('primary', {}).get('name')} while " + trigger
+                    if emotion_name in ["anger", "fear", "excitement"]:
+                        trigger = f"feeling {emotion_name} while " + trigger
                         
                     slip_result = await memory_system.reveal_npc_trait(
                         npc_id=self.npc_id,
@@ -222,11 +297,122 @@ class NPCAgent:
                     chosen_action["mask_slippage"] = slip_result
         
         return chosen_action
+    
+    async def _apply_belief_weights_to_actions(self, 
+                                             available_actions: List[Dict[str, Any]], 
+                                             beliefs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply belief weights to actions to influence decision-making."""
+        for action in available_actions:
+            action_type = action.get("type", "")
+            target = action.get("target", "")
+            
+            # Default weight starts at 1.0
+            belief_weight = 1.0
+            
+            for belief in beliefs:
+                belief_text = belief.get("belief", "").lower()
+                confidence = belief.get("confidence", 0.5)
+                
+                # Skip low-confidence beliefs
+                if confidence < 0.3:
+                    continue
+                
+                # Apply belief weights based on action type and target
+                if target == "player" or target == "group":
+                    # Positive beliefs about player increase talk/observe weights
+                    if ("trust" in belief_text or "like" in belief_text) and action_type in ["talk", "observe"]:
+                        belief_weight += confidence * 0.5
+                    
+                    # Negative beliefs increase leave/observe weights
+                    elif ("distrust" in belief_text or "fear" in belief_text) and action_type in ["leave", "observe"]:
+                        belief_weight += confidence * 0.5
+                        
+                    # Negative beliefs decrease talk weights
+                    elif ("distrust" in belief_text or "fear" in belief_text) and action_type == "talk":
+                        belief_weight -= confidence * 0.3
+                
+                # For specific NPC targets (by ID)
+                elif target.isdigit():
+                    target_id = int(target)
+                    if f"npc_{target_id}" in belief_text:
+                        if "friend" in belief_text and action_type in ["talk_to", "observe"]:
+                            belief_weight += confidence * 0.5
+                        elif "enemy" in belief_text and action_type in ["mock", "command"]:
+                            belief_weight += confidence * 0.4
+            
+            # Apply the calculated weight to the action
+            if "weight" in action:
+                action["weight"] *= belief_weight
+            else:
+                action["weight"] = belief_weight
+                
+        return available_actions
+    
+    def _create_trauma_response_action(self, trauma_trigger: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Create an action in response to a traumatic trigger."""
+        # Get the emotional response from the trigger
+        emotional_response = trauma_trigger.get("emotional_response", {})
+        primary_emotion = emotional_response.get("primary_emotion", "fear")
+        intensity = emotional_response.get("intensity", 0.5)
+        
+        # Different responses based on the primary emotion
+        if primary_emotion == "fear":
+            return {
+                "type": "traumatic_response",
+                "description": "react with fear to a triggering memory",
+                "target": "group",
+                "weight": 2.0 * intensity,  # High priority
+                "stats_influenced": {"trust": -10}
+            }
+        elif primary_emotion == "anger":
+            return {
+                "type": "traumatic_response",
+                "description": "respond with anger to a triggering situation",
+                "target": "group",
+                "weight": 1.8 * intensity,
+                "stats_influenced": {"trust": -5, "respect": -5}
+            }
+        else:
+            return {
+                "type": "traumatic_response",
+                "description": f"respond emotionally to a triggering memory",
+                "target": "group",
+                "weight": 1.5 * intensity,
+                "stats_influenced": {}
+            }
+    
+    def _create_emotional_response_action(self, emotion: str, intensity: float) -> Optional[Dict[str, Any]]:
+        """Create an action based on a strong emotional state."""
+        if emotion == "anger":
+            return {
+                "type": "emotional_outburst",
+                "description": "express anger",
+                "target": "group",
+                "weight": 1.7 * intensity,
+                "stats_influenced": {"respect": -10}
+            }
+        elif emotion == "fear":
+            return {
+                "type": "emotional_response",
+                "description": "show fear and defensiveness",
+                "target": "group",
+                "weight": 1.6 * intensity,
+                "stats_influenced": {"trust": -5}
+            }
+        elif emotion == "joy":
+            return {
+                "type": "emotional_expression",
+                "description": "express happiness and excitement",
+                "target": "group",
+                "weight": 1.2 * intensity,
+                "stats_influenced": {"trust": 5}
+            }
+        return None
 
     async def execute_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute the chosen action in the game world.
-        Now records the action in memory.
+        Records the action in memory.
 
         Args:
             action: Dictionary describing the action
@@ -252,13 +438,18 @@ class NPCAgent:
             # Format memory text
             memory_text = f"I {action.get('description', 'did something')} which resulted in {result.get('outcome', 'something happening')}"
             
-            # Record in memory system
-            memory_result = await memory_system.remember(
+            # Get emotional analysis for more accurate emotional tagging
+            emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(memory_text)
+            
+            # Record in memory system with emotional context
+            memory_result = await memory_system.emotional_manager.add_emotional_memory(
                 entity_type="npc",
                 entity_id=self.npc_id,
                 memory_text=memory_text,
-                importance="medium",  # Default importance
-                emotional=True,  # Analyze emotional content
+                primary_emotion=emotion_analysis.get("primary_emotion", "neutral"),
+                emotion_intensity=emotion_analysis.get("intensity", 0.5),
+                secondary_emotions=emotion_analysis.get("secondary_emotions", {}),
+                significance=MemorySignificance.MEDIUM,  # Default importance
                 tags=["action", action.get("type", "unknown")]
             )
             
@@ -291,7 +482,7 @@ class NPCAgent:
     async def process_player_action(self, player_action: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process a player action and generate an NPC response.
-        Now enhanced with memory of the interaction.
+        Enhanced with memory of the interaction.
 
         Steps:
           1) Update the NPC's perception based on the player action context
@@ -322,22 +513,39 @@ class NPCAgent:
         # Format memory text for what player did
         player_memory_text = f"The player {player_action.get('description', 'did something')}"
         
-        # Record the player's action from NPC's perspective
+        # Get emotional analysis of the player's action
+        emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(
+            player_memory_text, 
+            context=str(player_action)
+        )
+        
+        # Record the player's action as an emotional memory
         memory_kwargs = {
             "tags": ["player_action", player_action.get("type", "unknown")]
         }
         
-        # Adjust importance based on action type
-        if player_action.get("type") in ["attack", "command", "insult", "seduce"]:
-            memory_kwargs["importance"] = "high"
-            
-        # Remember the player's action
-        await memory_system.remember(
-            entity_type="npc", 
+        # Create an emotional memory with proper emotional context
+        memory_result = await memory_system.emotional_manager.add_emotional_memory(
+            entity_type="npc",
             entity_id=self.npc_id,
             memory_text=player_memory_text,
-            **memory_kwargs
+            primary_emotion=emotion_analysis.get("primary_emotion", "neutral"),
+            emotion_intensity=emotion_analysis.get("intensity", 0.5),
+            secondary_emotions=emotion_analysis.get("secondary_emotions", {}),
+            significance=MemorySignificance.MEDIUM,  # Default importance
+            tags=memory_kwargs["tags"]
         )
+        
+        memory_id = memory_result.get("memory_id")
+        
+        # Apply schemas to the memory to improve future recall and interpretation
+        if memory_id:
+            await memory_system.integrated.apply_schema_to_memory(
+                memory_id=memory_id,
+                entity_type="npc",
+                entity_id=self.npc_id,
+                auto_detect=True
+            )
         
         # Check if the player action triggers specific emotions
         player_action_type = player_action.get("type", "").lower()
@@ -375,17 +583,29 @@ class NPCAgent:
             f"I responded by {response_action.get('description','doing something')}"
         )
         
-        await memory_system.remember(
+        # Get emotional analysis of the interaction
+        interaction_emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(
+            interaction_memory_text
+        )
+        
+        # Create emotional memory of the interaction
+        await memory_system.emotional_manager.add_emotional_memory(
             entity_type="npc",
             entity_id=self.npc_id,
             memory_text=interaction_memory_text,
-            importance="medium",
+            primary_emotion=interaction_emotion_analysis.get("primary_emotion", "neutral"),
+            emotion_intensity=interaction_emotion_analysis.get("intensity", 0.5),
+            secondary_emotions=interaction_emotion_analysis.get("secondary_emotions", {}),
+            significance=MemorySignificance.MEDIUM,
             tags=["interaction", "player", player_action.get("type", "unknown")]
         )
         
-        # Step 6: Update relationships if relevant
+        # Step 6: Update beliefs based on interaction
+        await self._update_beliefs_from_interaction(player_action, response_action, result)
+        
+        # Step 7: Update relationships if relevant
         if player_action.get("type") == "talk":
-            # Potentially update relationship here
+            # Potentially update relationship here based on emotional outcome
             pass
 
         logger.debug("NPCAgent %s processed player action '%s': result=%s", 
@@ -396,11 +616,76 @@ class NPCAgent:
             "action": response_action,
             "result": result
         }
+    
+    async def _update_beliefs_from_interaction(self, 
+                                            player_action: Dict[str, Any], 
+                                            npc_action: Dict[str, Any],
+                                            result: Dict[str, Any]) -> None:
+        """Update beliefs based on an interaction with the player."""
+        memory_system = await self._get_memory_system()
+        
+        # Get current beliefs about the player
+        current_beliefs = await memory_system.get_beliefs(
+            entity_type="npc",
+            entity_id=self.npc_id,
+            topic="player"
+        )
+        
+        # Determine if we need to create or update beliefs
+        player_action_type = player_action.get("type", "")
+        outcome = result.get("outcome", "")
+        emotional_impact = result.get("emotional_impact", 0)
+        
+        # Example belief updates based on action types
+        if player_action_type == "help" and emotional_impact > 0:
+            # Check if we already have a belief about player helpfulness
+            helpful_belief = next((b for b in current_beliefs if "helpful" in b.get("belief", "").lower()), None)
+            
+            if helpful_belief:
+                # Update confidence in existing belief
+                await memory_system.semantic_manager.update_belief_confidence(
+                    belief_id=helpful_belief["id"],
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    new_confidence=min(1.0, helpful_belief["confidence"] + 0.1),
+                    reason=f"Player helped again with {player_action.get('description', 'something')}"
+                )
+            else:
+                # Create new belief
+                await memory_system.create_belief(
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    belief_text=f"The player is helpful and supportive",
+                    confidence=0.6
+                )
+        
+        elif player_action_type in ["attack", "threaten", "insult"] and emotional_impact < 0:
+            # Check if we already have a belief about player being dangerous
+            dangerous_belief = next((b for b in current_beliefs if "dangerous" in b.get("belief", "").lower() 
+                                   or "threat" in b.get("belief", "").lower()), None)
+            
+            if dangerous_belief:
+                # Update confidence in existing belief
+                await memory_system.semantic_manager.update_belief_confidence(
+                    belief_id=dangerous_belief["id"],
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    new_confidence=min(1.0, dangerous_belief["confidence"] + 0.15),
+                    reason=f"Player was hostile again with {player_action.get('description', 'something')}"
+                )
+            else:
+                # Create new belief
+                await memory_system.create_belief(
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    belief_text=f"The player is potentially dangerous and should be treated carefully",
+                    confidence=0.55
+                )
 
     async def perform_scheduled_activity(self) -> Optional[Dict[str, Any]]:
         """
         Perform the activity scheduled for this NPC at the current time of day.
-        Now enhanced with memory of routines.
+        Enhanced with memory of routines.
 
         Returns:
             A dict like {"npc_id":..., "action":..., "result":...}
@@ -439,13 +724,33 @@ class NPCAgent:
             # 4) Record a memory for routine using memory system
             memory_system = await self._get_memory_system()
             
-            await memory_system.remember(
+            memory_text = f"I did '{activity_desc}' as scheduled for {day_name} {time_of_day}"
+            
+            # Analyze emotional content of the routine
+            emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(memory_text)
+            
+            # Create emotional memory of the routine
+            memory_result = await memory_system.emotional_manager.add_emotional_memory(
                 entity_type="npc",
                 entity_id=self.npc_id,
-                memory_text=f"I did '{activity_desc}' as scheduled for {day_name} {time_of_day}",
-                importance="low",  # Low significance for routine activities
+                memory_text=memory_text,
+                primary_emotion=emotion_analysis.get("primary_emotion", "neutral"),
+                emotion_intensity=emotion_analysis.get("intensity", 0.2),  # Usually low intensity for routines
+                secondary_emotions=emotion_analysis.get("secondary_emotions", {}),
+                significance=MemorySignificance.LOW,  # Low significance for routine activities
                 tags=["routine", "scheduled", day_name.lower(), time_of_day.lower()]
             )
+            
+            memory_id = memory_result.get("memory_id")
+            
+            # Apply schemas to help categorize the routine
+            if memory_id:
+                await memory_system.integrated.apply_schema_to_memory(
+                    memory_id=memory_id,
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    auto_detect=True
+                )
 
             logger.debug("NPCAgent %s performed scheduled activity: %s => %s", 
                         self.npc_id, activity_desc, result)
@@ -469,10 +774,18 @@ class NPCAgent:
         try:
             memory_system = await self._get_memory_system()
             
-            # Run memory maintenance
-            return await memory_system.maintain(
+            # Run comprehensive memory maintenance
+            return await memory_system.integrated.run_memory_maintenance(
                 entity_type="npc",
-                entity_id=self.npc_id
+                entity_id=self.npc_id,
+                maintenance_options={
+                    "core_maintenance": True,
+                    "schema_maintenance": True,
+                    "emotional_decay": True,
+                    "background_reconsolidation": True,
+                    "interference_processing": True,
+                    "mask_checks": True
+                }
             )
         except Exception as e:
             logger.error(f"Error running memory maintenance for NPC {self.npc_id}: {e}")
@@ -621,6 +934,3 @@ class NPCAgent:
         except Exception:
             logger.error("Invalid schedule data for NPC %s", self.npc_id)
             return None
-
-# Need to import random for mask slippage chance
-import random
