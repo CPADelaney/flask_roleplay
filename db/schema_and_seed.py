@@ -643,6 +643,40 @@ ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS is_consolidated BOOLEAN DEFAULT
         );
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerReputation (
+            user_id INT,
+            npc_id INT,
+            reputation_score FLOAT DEFAULT 0,
+            PRIMARY KEY (user_id, npc_id)
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ReflectionLogs (
+            id SERIAL PRIMARY KEY,
+            user_id INT NOT NULL,
+            reflection_text TEXT NOT NULL,
+            was_accurate BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS AIReflectionSettings (
+            id SERIAL PRIMARY KEY,
+            temperature FLOAT DEFAULT 0.7,
+            max_tokens INT DEFAULT 4000
+        );
+    ''')
+
+    CREATE EXTENSION IF NOT EXISTS vector;
+    
+    ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS embedding VECTOR(1536);
+    
+    CREATE INDEX IF NOT EXISTS npc_memory_embedding_hnsw_idx
+      ON NPCMemories USING hnsw (embedding);
+
     conn.commit()
     conn.close()
 
