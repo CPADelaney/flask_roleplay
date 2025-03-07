@@ -1,6 +1,7 @@
 # db/schema_and_seed.py
 
 import json
+import logging
 from db.connection import get_db_connection
 from routes.activities import insert_missing_activities
 from routes.archetypes import insert_missing_archetypes
@@ -14,15 +15,24 @@ from logic.stats_logic import (
     insert_default_player_stats_chase
 )
 
+
 def create_all_tables():
     """
-    Creates all core tables with user_id, conversation_id columns from the start,
-    adjusted for fantastical punishments and image generation.
+    Creates all your database tables in one go. 
+    Includes both old memory tables (NPCMemories, NyxMemories) 
+    and the new 'unified_memories' plus 'memory_telemetry'.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # StateUpdates
+    # 1) Ensure vector extension is available before any tables use vector columns
+    cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+
+    # 2) Create or ensure existence of all tables:
+
+    #
+    # ---------- GLOBAL / CORE TABLES ----------
+    #
     cursor.execute('''    
         CREATE TABLE IF NOT EXISTS StateUpdates (
             user_id INTEGER NOT NULL,
@@ -33,7 +43,6 @@ def create_all_tables():
         );
     ''')
 
-    # Global Tables (unchanged except where noted)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Settings (
             id SERIAL PRIMARY KEY,
@@ -77,6 +86,16 @@ def create_all_tables():
     ''')
 
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS folders (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            folder_name TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS conversations (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
@@ -113,17 +132,9 @@ def create_all_tables():
         );
     ''')
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS folders (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            folder_name TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT NOW(),
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-    ''')
-
-    # Per-User/Conversation Tables
+    #
+    # ---------- PER-USER / CONVERSATION TABLES ----------
+    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCStats (
             npc_id SERIAL PRIMARY KEY,
@@ -138,7 +149,7 @@ def create_all_tables():
             relationships JSONB,
             dominance INT CHECK (dominance BETWEEN -100 AND 100),
             cruelty INT CHECK (cruelty BETWEEN -100 AND 100),
-            closeness INT CHECK (closeness BETWEEN -100 AND 100), 
+            closeness INT CHECK (closeness BETWEEN -100 AND 100),
             trust INT CHECK (trust BETWEEN -100 AND 100),
             respect INT CHECK (respect BETWEEN -100 AND 100),
             intensity INT CHECK (intensity BETWEEN -100 AND 100),
@@ -198,7 +209,8 @@ def create_all_tables():
             stat_integration JSONB,
             intensity_tiers JSONB,
             setting_variants JSONB,
-            fantasy_level TEXT DEFAULT 'realistic' CHECK (fantasy_level IN ('realistic', 'fantastical', 'surreal'))  -- Added for surreal punishments
+            fantasy_level TEXT DEFAULT 'realistic' 
+                CHECK (fantasy_level IN ('realistic','fantastical','surreal'))
         );
     ''')
 
@@ -218,38 +230,91 @@ def create_all_tables():
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
-    
+
+    #
+    # ---------- LEGACY “NPCMemories” TABLE (OPTIONAL) ----------
+    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCMemories (
             id SERIAL PRIMARY KEY,
             npc_id INT NOT NULL,
             memory_text TEXT NOT NULL,
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        
+
             tags TEXT[],
-            emotional_intensity INT DEFAULT 0,   -- 0..100 for the final intensity
+            emotional_intensity INT DEFAULT 0,   -- 0..100
             times_recalled INT DEFAULT 0,
             last_recalled TIMESTAMP,
             embedding VECTOR(1536),
-        
-            -- Additional columns from your original code
+
             memory_type TEXT DEFAULT 'observation',
             associated_entities JSONB DEFAULT '{}'::jsonb,
             is_consolidated BOOLEAN NOT NULL DEFAULT FALSE,
-        
-            -- NEW columns for advanced memory lifecycle
-            significance INT NOT NULL DEFAULT 3,          -- 1..10 or 1..100, your choice
-            status VARCHAR(20) NOT NULL DEFAULT 'active', -- 'active','summarized','archived'
-        
+
+            significance INT NOT NULL DEFAULT 3,
+            status VARCHAR(20) NOT NULL DEFAULT 'active',
+
             FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
         );
-    ''')       
-
+    ''')
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_mem_npcid_status_ts
-          ON NPCMemories (npc_id, status, timestamp);
+            ON NPCMemories (npc_id, status, timestamp);
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS npc_memory_embedding_hnsw_idx
+            ON NPCMemories 
+            USING hnsw (embedding vector_cosine_ops);
     ''')
 
+    #
+    # ---------- NEW “unified_memories” TABLE ----------
+    #
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS unified_memories (
+            id SERIAL PRIMARY KEY,
+            entity_type TEXT NOT NULL,        
+            entity_id INTEGER NOT NULL,     
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+
+            memory_text TEXT NOT NULL,
+            memory_type TEXT NOT NULL DEFAULT 'observation',
+            significance INTEGER NOT NULL DEFAULT 3,
+            emotional_intensity INTEGER NOT NULL DEFAULT 0,
+            tags TEXT[] DEFAULT '{}',
+            embedding VECTOR(1536),
+            metadata JSONB,
+
+            timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            times_recalled INTEGER NOT NULL DEFAULT 0,
+            last_recalled TIMESTAMP,
+
+            status TEXT NOT NULL DEFAULT 'active',
+            is_consolidated BOOLEAN NOT NULL DEFAULT FALSE
+        );
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_unified_memories_entity
+            ON unified_memories(entity_type, entity_id);
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_unified_memories_user_conv
+            ON unified_memories(user_id, conversation_id);
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_unified_memories_timestamp
+            ON unified_memories(timestamp);
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_unified_memories_embedding_hnsw
+            ON unified_memories
+            USING hnsw (embedding vector_cosine_ops);
+    ''')
+
+    #
+    # ---------- MORE TABLES ----------
+    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Locations (
             id SERIAL PRIMARY KEY,
@@ -330,7 +395,7 @@ def create_all_tables():
             experienced_crossroads JSONB,
             experienced_rituals JSONB,
             relationship_stage TEXT,
-            group_interaction TEXT,  -- Added for group dynamics in punishments
+            group_interaction TEXT,
             UNIQUE (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -361,11 +426,10 @@ def create_all_tables():
             key_features JSONB NOT NULL,
             activity_examples JSONB,
             permanent_effects JSONB,
-            fantasy_level TEXT DEFAULT 'realistic' CHECK (fantasy_level IN ('realistic', 'fantastical', 'surreal'))  -- Added for surreal punishments
+            fantasy_level TEXT DEFAULT 'realistic'
+                CHECK (fantasy_level IN ('realistic','fantastical','surreal'))
         );
     ''')
-
-    # Removed incomplete ImageGenerations in favor of full image tables below
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Interactions (
@@ -374,7 +438,8 @@ def create_all_tables():
             detailed_rules JSONB NOT NULL,
             task_examples JSONB,
             agency_overrides JSONB,
-            fantasy_level TEXT DEFAULT 'realistic' CHECK (fantasy_level IN ('realistic', 'fantastical', 'surreal'))  -- Added for surreal interactions
+            fantasy_level TEXT DEFAULT 'realistic'
+                CHECK (fantasy_level IN ('realistic','fantastical','surreal'))
         );
     ''')
 
@@ -391,7 +456,9 @@ def create_all_tables():
         );
     ''')
 
-    # Enhanced Systems
+    #
+    # ---------- ENHANCED SYSTEMS ----------
+    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerJournal (
             id SERIAL PRIMARY KEY,
@@ -401,8 +468,8 @@ def create_all_tables():
             entry_text TEXT NOT NULL,
             revelation_types TEXT,
             narrative_moment TEXT,
-            fantasy_flag BOOLEAN DEFAULT FALSE,  -- Flags surreal events
-            intensity_level INT CHECK (intensity_level BETWEEN 0 AND 4),  -- Ties to IntensityTiers
+            fantasy_flag BOOLEAN DEFAULT FALSE,
+            intensity_level INT CHECK (intensity_level BETWEEN 0 AND 4),
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -454,20 +521,51 @@ def create_all_tables():
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
-    
+
+    #
+    # ---------- TELEMETRY TABLE ----------
+    #
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS memory_telemetry (
+            id SERIAL PRIMARY KEY,
+            timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            operation TEXT NOT NULL,
+            success BOOLEAN NOT NULL,
+            duration FLOAT NOT NULL,
+            data_size INTEGER,
+            error TEXT,
+            metadata JSONB
+        );
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_memory_telemetry_timestamp
+            ON memory_telemetry(timestamp);
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_memory_telemetry_operation
+            ON memory_telemetry(operation);
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_memory_telemetry_success
+            ON memory_telemetry(success);
+    ''')
+
+    #
+    # ---------- KINK DATA ----------
+    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS UserKinkProfile (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
-            kink_type TEXT NOT NULL,           -- e.g., "ass", "feet", "shrink_ray"
+            kink_type TEXT NOT NULL,
             level INTEGER CHECK (level BETWEEN 0 AND 4) DEFAULT 0,
-            discovery_source TEXT,             -- e.g., "user_input", "narrative_response", "action_analysis"
+            discovery_source TEXT,
             first_discovered TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            frequency INTEGER DEFAULT 0,       -- Times used across games
+            frequency INTEGER DEFAULT 0,
             intensity_preference INTEGER CHECK (intensity_preference BETWEEN 0 AND 4) DEFAULT 0,
-            trigger_context JSONB,             -- e.g., {"location": "arcade", "npc": "Lila", "action": "staring"}
-            confidence_score FLOAT DEFAULT 0.5, -- 0-1, how sure Nyx is of this kink (updates with evidence)
+            trigger_context JSONB,
+            confidence_score FLOAT DEFAULT 0.5,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             UNIQUE (user_id, kink_type)
         );
@@ -479,8 +577,8 @@ def create_all_tables():
             user_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL,
             kink_id INTEGER NOT NULL,
-            tease_text TEXT NOT NULL,          -- e.g., "Face near her ass again, huh?"
-            tease_type TEXT CHECK (tease_type IN ('narrative', 'meta_commentary', 'punishment')),
+            tease_text TEXT NOT NULL,
+            tease_type TEXT CHECK (tease_type IN ('narrative','meta_commentary','punishment')),
             narrative_context TEXT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -489,7 +587,9 @@ def create_all_tables():
         );
     ''')
 
-    # Image Generation Tables (from ai_image_generator.py)
+    #
+    # ---------- IMAGE GENERATION TABLES ----------
+    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCVisualAttributes (
             id SERIAL PRIMARY KEY,
@@ -541,7 +641,7 @@ def create_all_tables():
             npc_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             conversation_id TEXT NOT NULL,
-            event_type TEXT CHECK (event_type IN ('outfit_change', 'appearance_change', 'location_change', 'mood_change')),
+            event_type TEXT CHECK (event_type IN ('outfit_change','appearance_change','location_change','mood_change')),
             event_description TEXT,
             previous_state JSONB,
             current_state JSONB,
@@ -570,12 +670,9 @@ def create_all_tables():
             user_id, npc_name
     ''')
 
--- Add columns to NPCMemories table for enhanced features
-ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS memory_type TEXT DEFAULT 'observation';
-ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS associated_entities JSONB;
-ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS significance INT DEFAULT 3;
-ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS is_consolidated BOOLEAN DEFAULT FALSE;
-
+    #
+    # ---------- (OPTIONAL) Additional NPCMemory Associations ----------
+    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCMemoryAssociations (
             id SERIAL PRIMARY KEY,
@@ -603,8 +700,9 @@ ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS is_consolidated BOOLEAN DEFAULT
         );
     ''')
 
-# Memories for Nyx, the DM
-
+    #
+    # ---------- “NyxMemories” LEGACY TABLE (OPTIONAL) ----------
+    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxMemories (
             id SERIAL PRIMARY KEY,
@@ -612,31 +710,31 @@ ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS is_consolidated BOOLEAN DEFAULT
             conversation_id INTEGER NOT NULL,
             memory_text TEXT NOT NULL,
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        
+
             embedding VECTOR(1536),
-        
+
             significance INT NOT NULL DEFAULT 3,
             times_recalled INT NOT NULL DEFAULT 0,
             last_recalled TIMESTAMP,
-            memory_type TEXT DEFAULT 'reflection',  
+            memory_type TEXT DEFAULT 'reflection',
             is_archived BOOLEAN DEFAULT FALSE,
-        
+
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-# Thought process for Nyx
-
+    #
+    # ---------- “NyxAgentState” FOR DM LOGIC ----------
+    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxAgentState (
             user_id INT NOT NULL,
             conversation_id INT NOT NULL,
-            current_goals JSONB,        
-            predicted_futures JSONB,     
-            reflection_notes TEXT,      
+            current_goals JSONB,
+            predicted_futures JSONB,
+            reflection_notes TEXT,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        
             PRIMARY KEY (user_id, conversation_id),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -670,17 +768,18 @@ ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS is_consolidated BOOLEAN DEFAULT
         );
     ''')
 
-    CREATE EXTENSION IF NOT EXISTS vector;
-    
-    ALTER TABLE NPCMemories ADD COLUMN IF NOT EXISTS embedding VECTOR(1536);
-    
-    CREATE INDEX IF NOT EXISTS npc_memory_embedding_hnsw_idx
-      ON NPCMemories USING hnsw (embedding);
-
+    # Done creating everything:
     conn.commit()
     conn.close()
+    logging.info("All tables created (old + new).")
+
 
 def seed_initial_data():
+    """
+    Seeds default data for rules, stats, settings, etc.
+    If you already have references to them in logic, 
+    it ensures your DB has the minimal data set.
+    """
     insert_or_update_game_rules()
     insert_stat_definitions()
     insert_missing_settings()
@@ -692,7 +791,12 @@ def seed_initial_data():
     insert_default_player_stats_chase()
     print("All default data seeded successfully.")
 
+
 def initialize_all_data():
+    """
+    Convenience function to create tables + seed initial data 
+    in one call.
+    """
     create_all_tables()
     seed_initial_data()
     print("All tables created & default data seeded successfully!")
