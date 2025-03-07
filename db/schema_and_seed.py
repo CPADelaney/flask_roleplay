@@ -768,8 +768,8 @@ def create_all_tables():
         );
     ''')
 
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS MemoryMaintenanceSchedule (
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS MemoryMaintenanceSchedule (
             user_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL,
             entity_type TEXT NOT NULL,
