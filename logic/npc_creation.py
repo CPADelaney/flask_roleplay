@@ -685,7 +685,7 @@ Return a valid JSON object with a single "memories" key containing an array of m
 
 async def store_npc_memories(user_id, conversation_id, npc_id, memories):
     """
-    Store NPC memories using the new memory system.
+    Store NPC memories using the new memory system with enhanced features.
     
     Args:
         user_id: User ID
@@ -702,17 +702,53 @@ async def store_npc_memories(user_id, conversation_id, npc_id, memories):
     # Create specialized NPC memory manager
     npc_memory_manager = await memory_system.npc_memory(npc_id)
     
+    # Get NPC stats for contextualization
+    npc_stats = await npc_memory_manager.get_npc_stats()
+    dominance = npc_stats.get('dominance', 50)
+    
     # Store each memory with appropriate tags and emotional analysis
-    for memory_text in memories:
-        # Add memory with emotional analysis
+    for i, memory_text in enumerate(memories):
+        # Determine appropriate significance based on content and position
+        # First memories are often more foundational
+        significance = "high" if i < 2 else "medium"
+        
+        # Add appropriate tags based on content
+        tags = ["initial_memory"]
+        
+        # Simple keyword tagging for demonstration
+        if "childhood" in memory_text.lower() or "young" in memory_text.lower():
+            tags.append("childhood")
+        
+        if "power" in memory_text.lower() or "control" in memory_text.lower():
+            tags.append("power_dynamics")
+            
+        if "family" in memory_text.lower() or "parent" in memory_text.lower():
+            tags.append("family")
+            
+        # Store with emotional analysis
         await memory_system.remember(
             entity_type="npc",
             entity_id=npc_id,
             memory_text=memory_text,
-            importance="medium",
-            emotional=True,
-            tags=["initial_memory"]
+            importance=significance,
+            emotional=True,  # Perform emotional analysis
+            tags=tags
         )
+        
+        # For key memories, create semantic abstractions that represent general beliefs
+        if significance == "high" and random.random() < 0.7:  # 70% chance for high significance memories
+            from memory.semantic import SemanticMemoryManager
+            semantic_manager = SemanticMemoryManager(user_id, conversation_id)
+            
+            # Get the recently added memory's ID
+            recent_memories = await npc_memory_manager.retrieve_memories(limit=1)
+            if recent_memories:
+                await semantic_manager.generate_semantic_memory(
+                    source_memory_id=recent_memories[0].id,
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    abstraction_level=0.7  # Higher abstraction
+                )
 
 async def propagate_shared_memories(user_id, conversation_id, source_npc_id, source_npc_name, memories):
     """
@@ -1071,28 +1107,682 @@ async def create_and_refine_npc(user_id, conversation_id, environment_desc, day_
     
     # Step 8: Store memories in the new memory system
     try:
+        # Store memories in the memory system
         await store_npc_memories(user_id, conversation_id, npc_id, memories)
         logging.info(f"Successfully stored memories for NPC {npc_id} in memory system")
         
-        # Step 9: Propagate memories to other connected NPCs
+        # Initialize the memory system with advanced features
+        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+        
+        # PHASE 1: Core Memory Setup
+        # Propagate memories to connected NPCs
         await propagate_shared_memories(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            source_npc_id=npc_id,
-            source_npc_name=partial_npc["npc_name"],
+            user_id=user_id, conversation_id=conversation_id,
+            source_npc_id=npc_id, source_npc_name=partial_npc["npc_name"],
             memories=memories
         )
-        logging.info(f"Successfully propagated memories for NPC {npc_id}")
         
-        # Initialize NPC mask for progressive revelation
-        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+        # Initialize NPC mask
         mask_info = await memory_system.get_npc_mask(npc_id)
-        logging.info(f"Initialized mask for NPC {npc_id}")
+        
+        # Initialize emotional state
+        await initialize_npc_emotional_state(user_id, conversation_id, npc_id, partial_npc, memories)
+        
+        # Generate initial beliefs
+        await generate_npc_beliefs(user_id, conversation_id, npc_id, partial_npc)
+        
+        # Initialize memory schemas
+        await initialize_npc_memory_schemas(user_id, conversation_id, npc_id, partial_npc)
+        
+        # PHASE 2: Advanced Memory Features
+        # Setup trauma model if appropriate
+        trauma_result = await setup_npc_trauma_model(user_id, conversation_id, npc_id, partial_npc, memories)
+        
+        # Setup flashback triggers
+        flashback_result = await setup_npc_flashback_triggers(user_id, conversation_id, npc_id, partial_npc)
+        
+        # Generate counterfactual memories
+        await generate_counterfactual_memories(user_id, conversation_id, npc_id, partial_npc)
+        
+        # Plan mask revelations
+        await plan_mask_revelations(user_id, conversation_id, npc_id, partial_npc)
+        
+        # Setup relationship evolution tracking
+        await setup_relationship_evolution_tracking(user_id, conversation_id, npc_id, relationships)
+        
+        # PHASE 3: Knowledge Structure and Maintenance
+        # Build semantic networks
+        await build_initial_semantic_network(user_id, conversation_id, npc_id, partial_npc)
+        
+        # Detect initial memory patterns
+        await detect_memory_patterns(user_id, conversation_id, npc_id)
+        
+        # Schedule memory maintenance
+        await schedule_npc_memory_maintenance(user_id, conversation_id, npc_id)
+        
+        # Run initial memory maintenance
+        await memory_system.maintain(entity_type="npc", entity_id=npc_id)
+        
+        logging.info(f"Successfully set up advanced memory system for NPC {npc_id}")
         
     except Exception as e:
-        logging.error(f"Error storing or propagating memories for NPC {npc_id}: {e}")
+        logging.error(f"Error setting up memory system for NPC {npc_id}: {e}")
     
     return npc_id
+
+async def setup_npc_flashback_triggers(user_id, conversation_id, npc_id, npc_data):
+    """Set up potential flashback triggers based on NPC traits and memories."""
+    try:
+        from memory.flashbacks import FlashbackManager
+        
+        flashback_manager = FlashbackManager(user_id, conversation_id)
+        
+        # Get NPC's memories to extract potential triggers
+        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+        npc_memories = await memory_system.recall(
+            entity_type="npc",
+            entity_id=npc_id,
+            limit=10
+        )
+        
+        # Identify potential trigger words from memories
+        trigger_words = []
+        high_intensity_memories = [m for m in npc_memories.get("memories", []) 
+                                  if m.get("emotional_intensity", 0) > 60]
+        
+        for memory in high_intensity_memories:
+            # Extract significant words as potential triggers
+            content = memory.get("text", "")
+            words = [w for w in content.split() if len(w) > 4 and w.isalpha()]
+            
+            if words:
+                # Select 1-2 significant words as triggers
+                selected = random.sample(words, min(2, len(words)))
+                trigger_words.extend(selected)
+        
+        # If no triggers found from memories, use archetype-based triggers
+        if not trigger_words:
+            archetype = npc_data.get("archetype_summary", "").lower()
+            
+            if "mother" in archetype or "maternal" in archetype:
+                trigger_words = ["child", "mother", "family", "responsibility"]
+            elif "teacher" in archetype or "mentor" in archetype:
+                trigger_words = ["student", "failure", "potential", "discipline"]
+            elif "dominant" in archetype:
+                trigger_words = ["control", "power", "obedience", "submission"]
+            else:
+                trigger_words = ["past", "mistake", "secret", "fear"]
+        
+        # Create a test flashback
+        if trigger_words:
+            test_flashback = await flashback_manager.check_for_triggered_flashback(
+                entity_type="npc",
+                entity_id=npc_id,
+                trigger_words=trigger_words,
+                chance=1.0  # Ensure creation for testing
+            )
+            
+            # Store trigger words in database for future reference
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE NPCStats
+                SET flashback_triggers = %s
+                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+                """,
+                (json.dumps(trigger_words), user_id, conversation_id, npc_id)
+            )
+            conn.commit()
+            conn.close()
+            
+            return {
+                "triggers_established": len(trigger_words),
+                "trigger_words": trigger_words,
+                "test_flashback": test_flashback is not None
+            }
+    except Exception as e:
+        logging.error(f"Error setting up flashback triggers for NPC {npc_id}: {e}")
+        return {"error": str(e)}
+
+async def setup_npc_trauma_model(user_id, conversation_id, npc_id, npc_data, memories):
+    """Set up trauma model for NPCs with traumatic backgrounds."""
+    try:
+        # Only setup trauma for NPCs with higher cruelty or intense backgrounds
+        cruelty = npc_data.get("cruelty", 0)
+        archetype_summary = npc_data.get("archetype_summary", "").lower()
+        
+        has_traumatic_background = (
+            cruelty > 70 or
+            "trauma" in archetype_summary or 
+            "tragic" in archetype_summary or
+            "abused" in archetype_summary
+        )
+        
+        if not has_traumatic_background:
+            # Check memories for trauma indicators
+            trauma_keywords = ["hurt", "pain", "suffer", "trauma", "abuse", "betray", "abandon"]
+            memory_has_trauma = any(
+                any(keyword in memory.lower() for keyword in trauma_keywords)
+                for memory in memories
+            )
+            
+            if not memory_has_trauma:
+                return {"trauma_model_needed": False}
+        
+        # At this point, we've determined trauma modeling is appropriate
+        from memory.emotional import EmotionalMemoryManager
+        
+        emotional_manager = EmotionalMemoryManager(user_id, conversation_id)
+        
+        # Create traumatic event record
+        traumatic_memory = next(
+            (memory for memory in memories 
+             if any(keyword in memory.lower() for keyword in ["hurt", "pain", "suffer", "trauma", "abuse", "betray", "abandon"])),
+            memories[0] if memories else "A traumatic experience from the past that still affects me today."
+        )
+        
+        # Analyze emotional content
+        emotion_analysis = await emotional_manager.analyze_emotional_content(traumatic_memory)
+        
+        # Create trauma event
+        trauma_event = {
+            "memory_text": traumatic_memory,
+            "emotion": emotion_analysis.get("primary_emotion", "fear"),
+            "intensity": emotion_analysis.get("intensity", 0.8),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Update emotional state with trauma
+        await emotional_manager.update_entity_emotional_state(
+            entity_type="npc",
+            entity_id=npc_id,
+            trauma_event=trauma_event
+        )
+        
+        # Generate trauma triggers
+        words = traumatic_memory.split()
+        significant_words = [w for w in words if len(w) > 4 and w.isalpha()]
+        triggers = random.sample(significant_words, min(3, len(significant_words)))
+        
+        # Store triggers in database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE NPCStats
+            SET trauma_triggers = %s
+            WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+            """,
+            (json.dumps(triggers), user_id, conversation_id, npc_id)
+        )
+        conn.commit()
+        conn.close()
+        
+        return {
+            "trauma_model_created": True,
+            "trauma_triggers": triggers,
+            "primary_emotion": emotion_analysis.get("primary_emotion")
+        }
+    except Exception as e:
+        logging.error(f"Error setting up trauma model for NPC {npc_id}: {e}")
+        return {"error": str(e)}
+
+
+async def generate_counterfactual_memories(user_id, conversation_id, npc_id, npc_data):
+    """Generate 'what-if' alternative versions of key memories to deepen personality."""
+    try:
+        from memory.semantic import SemanticMemoryManager
+        
+        semantic_manager = SemanticMemoryManager(user_id, conversation_id)
+        
+        # Get NPC's existing memories
+        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+        memories_result = await memory_system.recall(
+            entity_type="npc",
+            entity_id=npc_id,
+            limit=5
+        )
+        
+        # Find a significant memory for counterfactual generation
+        significant_memories = [m for m in memories_result.get("memories", []) 
+                              if m.get("significance", 0) >= 3]
+        
+        if not significant_memories:
+            return {"counterfactuals_generated": 0}
+            
+        # Generate counterfactuals for the most significant memory
+        target_memory = significant_memories[0]
+        
+        # Generate opposite outcome counterfactual
+        opposite_cf = await semantic_manager.generate_counterfactual(
+            memory_id=target_memory["id"],
+            entity_type="npc",
+            entity_id=npc_id,
+            variation_type="opposite"
+        )
+        
+        # Generate exaggerated outcome counterfactual
+        exaggerated_cf = await semantic_manager.generate_counterfactual(
+            memory_id=target_memory["id"],
+            entity_type="npc",
+            entity_id=npc_id,
+            variation_type="exaggeration"
+        )
+        
+        return {
+            "counterfactuals_generated": 2,
+            "based_on_memory": target_memory["text"],
+            "counterfactuals": [
+                opposite_cf.get("counterfactual_text"),
+                exaggerated_cf.get("counterfactual_text")
+            ]
+        }
+    except Exception as e:
+        logging.error(f"Error generating counterfactuals for NPC {npc_id}: {e}")
+        return {"error": str(e)}
+
+async def plan_mask_revelations(user_id, conversation_id, npc_id, npc_data):
+    """Create a revelation plan for gradually exposing the NPC's true nature."""
+    try:
+        from memory.masks import ProgressiveRevealManager, RevealType, RevealSeverity
+        
+        mask_manager = ProgressiveRevealManager(user_id, conversation_id)
+        
+        # Get current mask info
+        mask_info = await mask_manager.get_npc_mask(npc_id)
+        if "error" in mask_info:
+            return {"error": mask_info["error"]}
+        
+        # Hidden traits that need to be revealed
+        hidden_traits = mask_info.get("hidden_traits", {})
+        if not hidden_traits:
+            return {"revelation_plan_needed": False}
+        
+        # Create a progressive revelation plan
+        revelation_plan = []
+        
+        # Plan subtle revelations for early encounters
+        for trait_name in hidden_traits.keys():
+            # Early stage - subtle hints through physical tells
+            revelation_plan.append({
+                "trait": trait_name,
+                "severity": RevealSeverity.SUBTLE,
+                "type": RevealType.PHYSICAL,
+                "stage": "early",
+                "integrity_threshold": 90,
+                "trigger_contexts": ["stress", "unexpected", "authority challenged"]
+            })
+            
+            # Mid stage - verbal slips
+            revelation_plan.append({
+                "trait": trait_name,
+                "severity": RevealSeverity.MINOR,
+                "type": RevealType.VERBAL_SLIP,
+                "stage": "mid",
+                "integrity_threshold": 70,
+                "trigger_contexts": ["command", "confrontation", "private conversation"]
+            })
+            
+            # Later stage - behavioral inconsistencies
+            revelation_plan.append({
+                "trait": trait_name,
+                "severity": RevealSeverity.MODERATE,
+                "type": RevealType.BEHAVIOR,
+                "stage": "later",
+                "integrity_threshold": 50,
+                "trigger_contexts": ["frustration", "opportunity", "unexpected behavior"]
+            })
+            
+            # Final stage - direct revelation
+            revelation_plan.append({
+                "trait": trait_name,
+                "severity": RevealSeverity.MAJOR,
+                "type": RevealType.EMOTIONAL,
+                "stage": "final",
+                "integrity_threshold": 30,
+                "trigger_contexts": ["confronted", "cornered", "powerful position"]
+            })
+        
+        # Store the revelation plan
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE NPCStats
+            SET revelation_plan = %s
+            WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+            """,
+            (json.dumps(revelation_plan), user_id, conversation_id, npc_id)
+        )
+        conn.commit()
+        conn.close()
+        
+        return {
+            "revelation_plan_created": True,
+            "planned_revelations": len(revelation_plan),
+            "traits_covered": list(hidden_traits.keys())
+        }
+    except Exception as e:
+        logging.error(f"Error planning mask revelations for NPC {npc_id}: {e}")
+        return {"error": str(e)}
+
+async def setup_relationship_evolution_tracking(user_id, conversation_id, npc_id, relationships):
+    """Setup tracking for relationship evolution based on the memory system."""
+    try:
+        if not relationships:
+            return {"relationships_tracked": 0}
+        
+        from memory.reconsolidation import ReconsolidationManager
+        
+        # For each relationship, establish evolution parameters
+        for relationship in relationships:
+            entity_type = relationship.get("entity_type")
+            entity_id = relationship.get("entity_id")
+            relationship_label = relationship.get("relationship_label", "associate")
+            
+            if not entity_type or not entity_id:
+                continue
+            
+            # Create a relationship tracker entry
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO RelationshipEvolution (
+                    user_id, conversation_id, npc1_id, entity2_type, entity2_id, 
+                    relationship_type, current_stage, progress_to_next, evolution_history
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, conversation_id, npc1_id, entity2_type, entity2_id) 
+                DO NOTHING
+                """,
+                (
+                    user_id, conversation_id, npc_id, entity_type, entity_id,
+                    relationship_label, "initial", 0,
+                    json.dumps([{
+                        "stage": "initial",
+                        "date": datetime.now().isoformat(),
+                        "note": f"Relationship as {relationship_label} established"
+                    }])
+                )
+            )
+            conn.commit()
+            conn.close()
+        
+        return {"relationships_tracked": len(relationships)}
+    except Exception as e:
+        logging.error(f"Error setting up relationship evolution for NPC {npc_id}: {e}")
+        return {"error": str(e)}
+
+async def build_initial_semantic_network(user_id, conversation_id, npc_id, npc_data):
+    """Build initial semantic networks for the NPC's knowledge structure."""
+    try:
+        from memory.semantic import SemanticMemoryManager
+        
+        semantic_manager = SemanticMemoryManager(user_id, conversation_id)
+        
+        # Determine central topics based on archetype
+        archetype_summary = npc_data.get("archetype_summary", "").lower()
+        central_topics = []
+        
+        # Extract key themes from archetype
+        if "mother" in archetype_summary or "maternal" in archetype_summary:
+            central_topics.append("Family")
+        if "teacher" in archetype_summary or "mentor" in archetype_summary:
+            central_topics.append("Education")
+        if "dominant" in archetype_summary or "control" in archetype_summary:
+            central_topics.append("Power")
+        if "professional" in archetype_summary or "career" in archetype_summary:
+            central_topics.append("Career")
+        
+        # Add default topic if none detected
+        if not central_topics:
+            central_topics.append("Self")
+        
+        # Build semantic networks for each central topic
+        networks = []
+        for topic in central_topics:
+            network = await semantic_manager.build_semantic_network(
+                entity_type="npc",
+                entity_id=npc_id,
+                central_topic=topic,
+                depth=1  # Start with shallow networks
+            )
+            
+            # Store network in database
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO SemanticNetworks (
+                    user_id, conversation_id, entity_type, entity_id,
+                    central_topic, network_data, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                """,
+                (user_id, conversation_id, "npc", npc_id, topic, json.dumps(network))
+            )
+            conn.commit()
+            conn.close()
+            
+            networks.append({
+                "topic": topic,
+                "nodes": len(network.get("nodes", [])),
+                "edges": len(network.get("edges", []))
+            })
+        
+        return {
+            "semantic_networks_created": len(networks),
+            "networks": networks
+        }
+    except Exception as e:
+        logging.error(f"Error building semantic networks for NPC {npc_id}: {e}")
+        return {"error": str(e)}
+
+async def detect_memory_patterns(user_id, conversation_id, npc_id):
+    """Detect patterns in memories to establish consistent personality traits."""
+    try:
+        from memory.schemas import MemorySchemaManager
+        
+        schema_manager = MemorySchemaManager(user_id, conversation_id)
+        
+        # Attempt to detect schemas from existing memories
+        result = await schema_manager.detect_schema_from_memories(
+            entity_type="npc",
+            entity_id=npc_id,
+            min_memories=2  # Lower threshold for initial detection
+        )
+        
+        if result.get("schema_detected", False):
+            # Schema detected - we have a pattern to work with
+            schema_id = result.get("schema_id")
+            schema_name = result.get("schema_name")
+            
+            # Store this as a personality pattern
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE NPCStats
+                SET personality_patterns = personality_patterns || %s::jsonb
+                WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+                """,
+                (json.dumps([{
+                    "pattern_name": schema_name,
+                    "schema_id": schema_id,
+                    "confidence": result.get("confidence", 0.7),
+                    "detected_at": datetime.now().isoformat()
+                }]), user_id, conversation_id, npc_id)
+            )
+            conn.commit()
+            conn.close()
+            
+            return {
+                "pattern_detected": True,
+                "pattern_name": schema_name,
+                "schema_id": schema_id
+            }
+        
+        return {"pattern_detected": False}
+    except Exception as e:
+        logging.error(f"Error detecting memory patterns for NPC {npc_id}: {e}")
+        return {"error": str(e)}
+
+async def schedule_npc_memory_maintenance(user_id, conversation_id, npc_id):
+    """Schedule regular memory maintenance for an NPC."""
+    try:
+        # Create maintenance schedule entry in database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check if we already have a schedule
+        cursor.execute(
+            """
+            SELECT 1 FROM MemoryMaintenanceSchedule
+            WHERE user_id=%s AND conversation_id=%s AND entity_type='npc' AND entity_id=%s
+            """,
+            (user_id, conversation_id, npc_id)
+        )
+        
+        if cursor.fetchone():
+            # Already scheduled
+            conn.close()
+            return {"already_scheduled": True}
+        
+        # Create maintenance schedule
+        # Different maintenance types happen at different intervals:
+        maintenance_types = [
+            {
+                "type": "consolidation",
+                "description": "Consolidate related memories",
+                "interval_days": 3,
+                "last_run": None
+            },
+            {
+                "type": "decay",
+                "description": "Apply memory decay to old memories",
+                "interval_days": 7,
+                "last_run": None
+            },
+            {
+                "type": "schema_update",
+                "description": "Update memory schemas based on new experiences",
+                "interval_days": 5,
+                "last_run": None
+            },
+            {
+                "type": "mask_update",
+                "description": "Evolve mask integrity based on interactions",
+                "interval_days": 2,
+                "last_run": None
+            }
+        ]
+        
+        cursor.execute(
+            """
+            INSERT INTO MemoryMaintenanceSchedule (
+                user_id, conversation_id, entity_type, entity_id,
+                maintenance_schedule, next_maintenance_date
+            )
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP + INTERVAL '1 day')
+            """,
+            (user_id, conversation_id, "npc", npc_id, json.dumps(maintenance_types))
+        )
+        conn.commit()
+        conn.close()
+        
+        return {
+            "maintenance_scheduled": True,
+            "maintenance_types": len(maintenance_types)
+        }
+    except Exception as e:
+        logging.error(f"Error scheduling memory maintenance for NPC {npc_id}: {e}")
+        return {"error": str(e)}
+
+async def generate_npc_beliefs(user_id, conversation_id, npc_id, npc_data):
+    """Generate initial beliefs based on NPC archetype."""
+    try:
+        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+        archetype_summary = npc_data.get("archetype_summary", "")
+        
+        # Generate beliefs based on archetype
+        beliefs = []
+        
+        # Dominance-related beliefs
+        if npc_data.get("dominance", 50) > 60:
+            beliefs.append("I deserve to be in control of social situations.")
+            beliefs.append("Those who submit easily are meant to be guided by stronger personalities.")
+        
+        # Cruelty-related beliefs
+        if npc_data.get("cruelty", 30) > 60:
+            beliefs.append("A little discomfort is necessary for growth in others.")
+            beliefs.append("Emotional reactions reveal useful vulnerabilities in people.")
+        
+        # Archetype-specific beliefs (simple keyword matching for demonstration)
+        if "maternal" in archetype_summary.lower() or "mother" in archetype_summary.lower():
+            beliefs.append("I know what's best for those under my care.")
+            beliefs.append("Guidance requires a firm hand and clear boundaries.")
+        
+        if "mentor" in archetype_summary.lower() or "teacher" in archetype_summary.lower():
+            beliefs.append("Knowledge is a form of power to be carefully dispensed.")
+            beliefs.append("Those who learn from me owe me their loyalty and respect.")
+        
+        # Add beliefs to memory system
+        for belief_text in beliefs:
+            await memory_system.create_belief(
+                entity_type="npc",
+                entity_id=npc_id,
+                belief_text=belief_text,
+                confidence=0.8
+            )
+        
+        return True
+    except Exception as e:
+        logging.error(f"Error generating beliefs for NPC {npc_id}: {e}")
+        return False
+
+async def initialize_npc_memory_schemas(user_id, conversation_id, npc_id, npc_data):
+    """Initialize basic memory schemas based on NPC archetype."""
+    try:
+        from memory.schemas import MemorySchemaManager
+        
+        schema_manager = MemorySchemaManager(user_id, conversation_id)
+        archetype_summary = npc_data.get("archetype_summary", "")
+        
+        # Create a basic schema for interactions with the player
+        await schema_manager.create_schema(
+            entity_type="npc",
+            entity_id=npc_id,
+            schema_name="Player Interactions",
+            description="Patterns in how the player behaves toward me",
+            category="social",
+            attributes={
+                "compliance_level": "unknown",
+                "respect_shown": "moderate",
+                "vulnerability_signs": "to be observed"
+            }
+        )
+        
+        # Create archetype-specific schemas
+        if npc_data.get("dominance", 50) > 60:
+            await schema_manager.create_schema(
+                entity_type="npc",
+                entity_id=npc_id,
+                schema_name="Control Dynamics",
+                description="Patterns of establishing and maintaining control",
+                category="power",
+                attributes={
+                    "submission_triggers": "to be identified",
+                    "resistance_patterns": "to be analyzed",
+                    "effective_techniques": "to be developed"
+                }
+            )
+        
+        return True
+    except Exception as e:
+        logging.error(f"Error initializing memory schemas for NPC {npc_id}: {e}")
+        return False
     
 async def spawn_multiple_npcs_enhanced(user_id, conversation_id, environment_desc, day_names, count=3):
     """
@@ -2665,6 +3355,58 @@ RELATIONSHIP_STAGES = {
         {"level": 90, "name": "Domination Contest", "description": "All-out struggle for supremacy"}
     ]
 }
+
+async def initialize_npc_emotional_state(user_id, conversation_id, npc_id, npc_data, memories):
+    """Initialize emotional state based on NPC traits and memories."""
+    try:
+        emotional_manager = EmotionalMemoryManager(user_id, conversation_id)
+        
+        # Determine base emotional state from NPC traits
+        dominance = npc_data.get("dominance", 50)
+        cruelty = npc_data.get("cruelty", 30)
+        
+        # Higher dominance tends toward confident emotions
+        # Higher cruelty tends toward colder emotions
+        primary_emotion = "neutral"
+        if dominance > 70:
+            primary_emotion = "confidence" if cruelty < 50 else "pride"
+        elif cruelty > 70:
+            primary_emotion = "contempt"
+        elif dominance > 50 and cruelty > 50:
+            primary_emotion = "satisfaction"
+        
+        # Set intensity based on traits
+        intensity = ((dominance + cruelty) / 200) + 0.3  # 0.3-0.8 range
+        
+        # Create emotional state
+        current_emotion = {
+            "primary_emotion": primary_emotion,
+            "intensity": intensity,
+            "secondary_emotions": {},
+            "valence": 0.1 if cruelty > 50 else 0.3,  # Slight positive bias
+            "arousal": dominance / 200  # Higher dominance = higher arousal
+        }
+        
+        await emotional_manager.update_entity_emotional_state(
+            entity_type="npc",
+            entity_id=npc_id,
+            current_emotion=current_emotion
+        )
+        
+        # Additionally, analyze the emotional content of the first memory
+        if memories:
+            await emotional_manager.add_emotional_memory(
+                entity_type="npc",
+                entity_id=npc_id,
+                memory_text=memories[0],
+                primary_emotion=primary_emotion,
+                emotion_intensity=intensity
+            )
+        
+        return True
+    except Exception as e:
+        logging.error(f"Error initializing emotional state for NPC {npc_id}: {e}")
+        return False
 
 async def check_for_mask_slippage(user_id, conversation_id, npc_id):
     """
