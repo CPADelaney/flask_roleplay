@@ -480,7 +480,20 @@ def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input:
     raw_messages = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
     
     # Add the system prompt as the first message
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [   
+        {
+            "role": "system",
+            "content": PUBLIC_SYSTEM_PROMPT
+        },
+        {
+            "role": "system",
+            "content": PRIVATE_REFLECTION_INSTRUCTIONS
+        },
+        {
+            "role": "user",
+            "content": user_input
+        }
+    ]
     messages.extend(raw_messages)
     
     # Make the API call
