@@ -113,3 +113,74 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
         gpt_reply_dict["type"] = "fallback"
         
     return json.dumps(gpt_reply_dict)
+
+@celery_app.task
+def nyx_memory_maintenance_task():
+    """
+    Celery task to perform regular maintenance on Nyx's memory system.
+    - Consolidates related memories into patterns
+    - Applies memory decay to older memories
+    - Archives unimportant memories
+    - Updates narrative arcs based on accumulated experiences
+    Should run daily for optimal performance.
+    """
+    import asyncio
+    import asyncpg
+    import os
+    from logic.nyx_memory_manager import perform_memory_maintenance
+    
+    logging.info("Starting Nyx memory maintenance task")
+    
+    async def process_all_conversations():
+        dsn = os.getenv("DB_DSN")
+        if not dsn:
+            logging.error("DB_DSN environment variable not set")
+            return {"status": "error", "error": "DB_DSN not set"}
+            
+        conn = None
+        try:
+            conn = await asyncpg.connect(dsn)
+            
+            # Get active conversations
+            rows = await conn.fetch("""
+                SELECT DISTINCT user_id, conversation_id
+                FROM NyxMemories
+                WHERE is_archived = FALSE
+                AND timestamp > NOW() - INTERVAL '30 days'
+            """)
+            
+            if not rows:
+                logging.info("No conversations found with Nyx memories to maintain")
+                return {"status": "success", "conversations_processed": 0}
+            
+            processed_count = 0
+            for row in rows:
+                user_id = row["user_id"]
+                conversation_id = row["conversation_id"]
+                
+                try:
+                    await perform_memory_maintenance(user_id, conversation_id)
+                    processed_count += 1
+                    logging.info(f"Memory maintenance completed for user_id={user_id}, conversation_id={conversation_id}")
+                except Exception as e:
+                    logging.error(f"Error in memory maintenance for user_id={user_id}, conversation_id={conversation_id}: {str(e)}")
+                    
+                # Brief pause between processing to avoid overloading the database
+                await asyncio.sleep(0.5)
+                
+            return {
+                "status": "success", 
+                "conversations_processed": processed_count
+            }
+                
+        except Exception as e:
+            logging.error(f"Error in nyx_memory_maintenance_task: {str(e)}")
+            return {"status": "error", "error": str(e)}
+        finally:
+            if conn:
+                await conn.close()
+    
+    # Run the async function and return the result
+    result = asyncio.run(process_all_conversations())
+    logging.info(f"Nyx memory maintenance task completed: {result}")
+    return result
