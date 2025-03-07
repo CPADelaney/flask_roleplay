@@ -19,7 +19,18 @@ from logic.npc_creation import (
     gpt_generate_memories,
     gpt_generate_affiliations,
     integrate_femdom_elements,
-    propagate_shared_memories
+    propagate_shared_memories,
+    initialize_npc_emotional_state,
+    generate_npc_beliefs,
+    initialize_npc_memory_schemas,
+    setup_npc_trauma_model,
+    setup_npc_flashback_triggers,
+    generate_counterfactual_memories,
+    plan_mask_revelations,
+    setup_relationship_evolution_tracking,
+    build_initial_semantic_network,
+    detect_memory_patterns,
+    schedule_npc_memory_maintenance
 )
 from logic.social_links import (
     create_social_link,
@@ -59,10 +70,118 @@ from logic.stats_logic import (
     STAT_COMBINATIONS
 )
 
+# Import for memory system
+try:
+    from memory.wrapper import MemorySystem
+    from memory.core import Memory
+    from memory.emotional import EmotionalMemoryManager
+    from memory.semantic import SemanticMemoryManager
+    from memory.schemas import MemorySchemaManager
+    MEMORY_SYSTEM_AVAILABLE = True
+except ImportError:
+    MEMORY_SYSTEM_AVAILABLE = False
+    logging.warning("Advanced memory system not available. Some features will be disabled.")
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Function to add NPC memory with embedding
+async def add_npc_memory_with_embedding(npc_id: int, memory_text: str, tags: List[str] = None, 
+                                      user_id: int = None, conversation_id: int = None):
+    """
+    Add a memory to an NPC with embedding generation.
+    
+    Args:
+        npc_id: ID of the NPC
+        memory_text: Text of the memory
+        tags: Optional list of tags for the memory
+        user_id: Optional user ID (if not provided, will be fetched from the NPC record)
+        conversation_id: Optional conversation ID (if not provided, will be fetched from the NPC record)
+        
+    Returns:
+        The ID of the created memory
+    """
+    # Get user_id and conversation_id if not provided
+    if not user_id or not conversation_id:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_id, conversation_id FROM NPCStats WHERE npc_id=%s",
+            (npc_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            user_id = user_id or row[0]
+            conversation_id = conversation_id or row[1]
+        else:
+            logger.error(f"Cannot find user_id and conversation_id for NPC {npc_id}")
+            return None
+    
+    try:
+        # If advanced memory system is available, use it
+        if MEMORY_SYSTEM_AVAILABLE:
+            memory_system = await MemorySystem.get_instance(user_id, conversation_id)
+            memory_id = await memory_system.remember(
+                entity_type="npc",
+                entity_id=npc_id,
+                memory_text=memory_text,
+                tags=tags or [],
+                embedding=True,  # Generate embedding
+                importance="medium"
+            )
+            return memory_id
+        
+        # Otherwise use legacy memory approach
+        else:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Record the memory
+            cursor.execute("""
+                SELECT memory FROM NPCStats 
+                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+            """, (npc_id, user_id, conversation_id))
+            
+            row = cursor.fetchone()
+            memories = []
+            
+            if row and row[0]:
+                if isinstance(row[0], str):
+                    try:
+                        memories = json.loads(row[0])
+                    except:
+                        memories = []
+                else:
+                    memories = row[0]
+            
+            memories.append(memory_text)
+            cursor.execute("""
+                UPDATE NPCStats 
+                SET memory = %s 
+                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+            """, (json.dumps(memories), npc_id, user_id, conversation_id))
+            
+            # We don't have real embeddings in legacy mode
+            # but we'll record the memory in NPCMemories table anyway
+            cursor.execute("""
+                INSERT INTO NPCMemories 
+                (npc_id, memory_text, tags) 
+                VALUES (%s, %s, %s)
+                RETURNING id
+            """, (npc_id, memory_text, tags or []))
+            
+            memory_id = cursor.fetchone()[0]
+            conn.commit()
+            conn.close()
+            return memory_id
+            
+    except Exception as e:
+        logger.error(f"Error adding memory with embedding for NPC {npc_id}: {e}")
+        return None
 
 class IntegratedNPCSystem:
     """
@@ -223,7 +342,7 @@ class IntegratedNPCSystem:
         logger.info(f"Successfully refined NPC {npc_id} ({partial_npc['npc_name']})")
         
         # Step 8: Propagate memories to other connected NPCs - Using propagate_shared_memories
-        propagate_shared_memories(
+        await propagate_shared_memories(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
             source_npc_id=npc_id,
@@ -241,6 +360,78 @@ class IntegratedNPCSystem:
         record_npc_event(
             self.user_id, self.conversation_id, npc_id, creation_memory
         )
+        
+        # ENHANCED NPC FEATURES FROM npc_creation.py
+        if MEMORY_SYSTEM_AVAILABLE:
+            try:
+                # Store memories in the memory system
+                memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+                
+                # PHASE 1: Core Memory Setup
+                # Initialize emotional state
+                await initialize_npc_emotional_state(
+                    self.user_id, self.conversation_id, npc_id, partial_npc, memories
+                )
+                
+                # Generate initial beliefs
+                await generate_npc_beliefs(
+                    self.user_id, self.conversation_id, npc_id, partial_npc
+                )
+                
+                # Initialize memory schemas
+                await initialize_npc_memory_schemas(
+                    self.user_id, self.conversation_id, npc_id, partial_npc
+                )
+                
+                # PHASE 2: Advanced Memory Features
+                # Setup trauma model if appropriate
+                await setup_npc_trauma_model(
+                    self.user_id, self.conversation_id, npc_id, partial_npc, memories
+                )
+                
+                # Setup flashback triggers
+                await setup_npc_flashback_triggers(
+                    self.user_id, self.conversation_id, npc_id, partial_npc
+                )
+                
+                # Generate counterfactual memories
+                await generate_counterfactual_memories(
+                    self.user_id, self.conversation_id, npc_id, partial_npc
+                )
+                
+                # Plan mask revelations
+                await plan_mask_revelations(
+                    self.user_id, self.conversation_id, npc_id, partial_npc
+                )
+                
+                # Setup relationship evolution tracking
+                await setup_relationship_evolution_tracking(
+                    self.user_id, self.conversation_id, npc_id, relationships
+                )
+                
+                # PHASE 3: Knowledge Structure and Maintenance
+                # Build semantic networks
+                await build_initial_semantic_network(
+                    self.user_id, self.conversation_id, npc_id, partial_npc
+                )
+                
+                # Detect initial memory patterns
+                await detect_memory_patterns(
+                    self.user_id, self.conversation_id, npc_id
+                )
+                
+                # Schedule memory maintenance
+                await schedule_npc_memory_maintenance(
+                    self.user_id, self.conversation_id, npc_id
+                )
+                
+                # Run initial memory maintenance
+                await memory_system.maintain(entity_type="npc", entity_id=npc_id)
+                
+                logger.info(f"Successfully set up advanced memory system for NPC {npc_id}")
+                
+            except Exception as e:
+                logger.error(f"Error setting up advanced memory system for NPC {npc_id}: {e}")
         
         return npc_id
     
