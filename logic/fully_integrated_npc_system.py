@@ -19,29 +19,12 @@ from logic.npc_creation import (
     gpt_generate_memories,
     gpt_generate_affiliations,
     integrate_femdom_elements,
-    propagate_shared_memories,
-    initialize_npc_emotional_state,
-    generate_npc_beliefs,
-    initialize_npc_memory_schemas,
-    setup_npc_trauma_model,
-    setup_npc_flashback_triggers,
-    generate_counterfactual_memories,
-    plan_mask_revelations,
-    setup_relationship_evolution_tracking,
-    build_initial_semantic_network,
-    detect_memory_patterns,
-    schedule_npc_memory_maintenance
+    propagate_shared_memories
 )
 from logic.social_links import (
     create_social_link,
     update_link_type_and_level,
-    add_link_event,
-    get_relationship_dynamic_level,
-    update_relationship_dynamic,
-    check_for_relationship_crossroads,
-    check_for_relationship_ritual,
-    apply_crossroads_choice,
-    EnhancedRelationshipManager
+    add_link_event
 )
 from logic.time_cycle import (
     advance_time_with_events,
@@ -53,12 +36,8 @@ from logic.time_cycle import (
 )
 from logic.memory_logic import (
     record_npc_event,
-    get_shared_memory,
-    MemoryManager,
-    EnhancedMemory,
     MemoryType,
-    MemorySignificance,
-    ProgressiveRevealManager
+    MemorySignificance
 )
 from logic.stats_logic import (
     apply_stat_change,
@@ -70,13 +49,21 @@ from logic.stats_logic import (
     STAT_COMBINATIONS
 )
 
+# Import agent-based architecture components
+from logic.npc_agents.npc_agent import NPCAgent
+from logic.npc_agents.agent_system import NPCAgentSystem
+from logic.npc_agents.agent_coordinator import NPCAgentCoordinator
+from logic.npc_agents.decision_engine import NPCDecisionEngine
+from logic.npc_agents.relationship_manager import NPCRelationshipManager
+from logic.npc_agents.memory_manager import EnhancedMemoryManager
+
 # Import for memory system
 try:
     from memory.wrapper import MemorySystem
     from memory.core import Memory
     from memory.emotional import EmotionalMemoryManager
-    from memory.semantic import SemanticMemoryManager
     from memory.schemas import MemorySchemaManager
+    from memory.masks import ProgressiveRevealManager
     MEMORY_SYSTEM_AVAILABLE = True
 except ImportError:
     MEMORY_SYSTEM_AVAILABLE = False
@@ -87,115 +74,29 @@ logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Function to add NPC memory with embedding
-async def add_npc_memory_with_embedding(npc_id: int, memory_text: str, tags: List[str] = None, 
-                                      user_id: int = None, conversation_id: int = None):
-    """
-    Add a memory to an NPC with embedding generation.
-    
-    Args:
-        npc_id: ID of the NPC
-        memory_text: Text of the memory
-        tags: Optional list of tags for the memory
-        user_id: Optional user ID (if not provided, will be fetched from the NPC record)
-        conversation_id: Optional conversation ID (if not provided, will be fetched from the NPC record)
-        
-    Returns:
-        The ID of the created memory
-    """
-    # Get user_id and conversation_id if not provided
-    if not user_id or not conversation_id:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT user_id, conversation_id FROM NPCStats WHERE npc_id=%s",
-            (npc_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
-        
-        if row:
-            user_id = user_id or row[0]
-            conversation_id = conversation_id or row[1]
-        else:
-            logger.error(f"Cannot find user_id and conversation_id for NPC {npc_id}")
-            return None
-    
-    try:
-        # If advanced memory system is available, use it
-        if MEMORY_SYSTEM_AVAILABLE:
-            memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-            memory_id = await memory_system.remember(
-                entity_type="npc",
-                entity_id=npc_id,
-                memory_text=memory_text,
-                tags=tags or [],
-                embedding=True,  # Generate embedding
-                importance="medium"
-            )
-            return memory_id
-        
-        # Otherwise use legacy memory approach
-        else:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            # Record the memory
-            cursor.execute("""
-                SELECT memory FROM NPCStats 
-                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-            """, (npc_id, user_id, conversation_id))
-            
-            row = cursor.fetchone()
-            memories = []
-            
-            if row and row[0]:
-                if isinstance(row[0], str):
-                    try:
-                        memories = json.loads(row[0])
-                    except:
-                        memories = []
-                else:
-                    memories = row[0]
-            
-            memories.append(memory_text)
-            cursor.execute("""
-                UPDATE NPCStats 
-                SET memory = %s 
-                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
-            """, (json.dumps(memories), npc_id, user_id, conversation_id))
-            
-            # We don't have real embeddings in legacy mode
-            # but we'll record the memory in NPCMemories table anyway
-            cursor.execute("""
-                INSERT INTO NPCMemories 
-                (npc_id, memory_text, tags) 
-                VALUES (%s, %s, %s)
-                RETURNING id
-            """, (npc_id, memory_text, tags or []))
-            
-            memory_id = cursor.fetchone()[0]
-            conn.commit()
-            conn.close()
-            return memory_id
-            
-    except Exception as e:
-        logger.error(f"Error adding memory with embedding for NPC {npc_id}: {e}")
-        return None
-
 class IntegratedNPCSystem:
     """
     Central system that integrates NPC creation, social dynamics, time management,
-    memory systems, and stat progression.
+    memory systems, and stat progression using an agent-based architecture.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.activity_manager = ActivityManager()
-        logger.info(f"Initialized IntegratedNPCSystem for user={user_id}, conversation={conversation_id}")
-        logger.info(f"Available time phases: {TIME_PHASES}")
         
+        # Initialize the activity manager
+        self.activity_manager = ActivityManager()
+        
+        # Initialize the agent system - core component for NPC agentic behavior
+        self.agent_system = NPCAgentSystem(user_id, conversation_id)
+        
+        logger.info(f"Initialized IntegratedNPCSystem with NPCAgentSystem for user={user_id}, conversation={conversation_id}")
+        logger.info(f"Available time phases: {TIME_PHASES}")
+    
+    async def _get_memory_system(self):
+        """Lazy-load the memory system."""
+        return await MemorySystem.get_instance(self.user_id, self.conversation_id)
+    
     #=================================================================
     # NPC CREATION AND MANAGEMENT
     #=================================================================
@@ -214,7 +115,7 @@ class IntegratedNPCSystem:
         """
         logger.info(f"Creating new NPC in environment: {environment_desc[:30]}...")
         
-        # Step 1: Create the partial NPC (base data) - Using create_npc_partial
+        # Step 1: Create the partial NPC (base data)
         partial_npc = create_npc_partial(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
@@ -223,16 +124,16 @@ class IntegratedNPCSystem:
             environment_desc=environment_desc
         )
         
-        # Step 1.5: Integrate subtle femdom elements - Using integrate_femdom_elements
+        # Step 1.5: Integrate subtle femdom elements
         partial_npc = await integrate_femdom_elements(partial_npc)
         
-        # Step 2: Insert the partial NPC into the database - Using insert_npc_stub_into_db
+        # Step 2: Insert the partial NPC into the database
         npc_id = await insert_npc_stub_into_db(
             partial_npc, self.user_id, self.conversation_id
         )
         logger.info(f"Created NPC stub with ID {npc_id} and name {partial_npc['npc_name']}")
         
-        # Step 3: Assign relationships - Using assign_random_relationships
+        # Step 3: Assign relationships
         await assign_random_relationships(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
@@ -259,28 +160,23 @@ class IntegratedNPCSystem:
         conn.close()
 
         # Step 5: Generate enhanced fields using GPT
-        # Using gpt_generate_physical_description
         physical_description = await gpt_generate_physical_description(
             self.user_id, self.conversation_id, partial_npc, environment_desc
         )
         
-        # Using gpt_generate_schedule
         schedule = await gpt_generate_schedule(
             self.user_id, self.conversation_id, partial_npc, environment_desc, day_names
         )
         
-        # Using gpt_generate_memories
         memories = await gpt_generate_memories(
             self.user_id, self.conversation_id, partial_npc, environment_desc, relationships
         )
         
-        # Using gpt_generate_affiliations
         affiliations = await gpt_generate_affiliations(
             self.user_id, self.conversation_id, partial_npc, environment_desc
         )
         
         # Step 6: Determine current location based on time of day and schedule
-        # Using get_current_time
         current_year, current_month, current_day, time_of_day = get_current_time(
             self.user_id, self.conversation_id
         )
@@ -341,7 +237,7 @@ class IntegratedNPCSystem:
         
         logger.info(f"Successfully refined NPC {npc_id} ({partial_npc['npc_name']})")
         
-        # Step 8: Propagate memories to other connected NPCs - Using propagate_shared_memories
+        # Step 8: Propagate memories to other connected NPCs
         await propagate_shared_memories(
             user_id=self.user_id,
             conversation_id=self.conversation_id,
@@ -350,88 +246,34 @@ class IntegratedNPCSystem:
             memories=memories
         )
         
-        # Step 9: Initialize mask for the NPC - Using ProgressiveRevealManager
-        await ProgressiveRevealManager.initialize_npc_mask(
-            self.user_id, self.conversation_id, npc_id
-        )
+        # Step 9: Create NPC Agent and initialize mask
+        # This utilizes the agent framework by explicitly creating the agent
+        agent = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        self.agent_system.npc_agents[npc_id] = agent
         
-        # Step 10: Create a direct memory event - Using record_npc_event
+        # Initialize mask using the agent's capabilities
+        mask_manager = await agent._get_mask_manager()
+        await mask_manager.initialize_npc_mask(npc_id)
+        
+        # Step 10: Create a direct memory event using the agent's memory system
+        memory_system = await agent._get_memory_system()
         creation_memory = f"I was created on {current_year}-{current_month}-{current_day} during {time_of_day}."
-        record_npc_event(
-            self.user_id, self.conversation_id, npc_id, creation_memory
+        
+        await memory_system.remember(
+            entity_type="npc",
+            entity_id=npc_id,
+            memory_text=creation_memory,
+            importance="medium",
+            tags=["creation", "origin"]
         )
         
-        # ENHANCED NPC FEATURES FROM npc_creation.py
-        if MEMORY_SYSTEM_AVAILABLE:
-            try:
-                # Store memories in the memory system
-                memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
-                
-                # PHASE 1: Core Memory Setup
-                # Initialize emotional state
-                await initialize_npc_emotional_state(
-                    self.user_id, self.conversation_id, npc_id, partial_npc, memories
-                )
-                
-                # Generate initial beliefs
-                await generate_npc_beliefs(
-                    self.user_id, self.conversation_id, npc_id, partial_npc
-                )
-                
-                # Initialize memory schemas
-                await initialize_npc_memory_schemas(
-                    self.user_id, self.conversation_id, npc_id, partial_npc
-                )
-                
-                # PHASE 2: Advanced Memory Features
-                # Setup trauma model if appropriate
-                await setup_npc_trauma_model(
-                    self.user_id, self.conversation_id, npc_id, partial_npc, memories
-                )
-                
-                # Setup flashback triggers
-                await setup_npc_flashback_triggers(
-                    self.user_id, self.conversation_id, npc_id, partial_npc
-                )
-                
-                # Generate counterfactual memories
-                await generate_counterfactual_memories(
-                    self.user_id, self.conversation_id, npc_id, partial_npc
-                )
-                
-                # Plan mask revelations
-                await plan_mask_revelations(
-                    self.user_id, self.conversation_id, npc_id, partial_npc
-                )
-                
-                # Setup relationship evolution tracking
-                await setup_relationship_evolution_tracking(
-                    self.user_id, self.conversation_id, npc_id, relationships
-                )
-                
-                # PHASE 3: Knowledge Structure and Maintenance
-                # Build semantic networks
-                await build_initial_semantic_network(
-                    self.user_id, self.conversation_id, npc_id, partial_npc
-                )
-                
-                # Detect initial memory patterns
-                await detect_memory_patterns(
-                    self.user_id, self.conversation_id, npc_id
-                )
-                
-                # Schedule memory maintenance
-                await schedule_npc_memory_maintenance(
-                    self.user_id, self.conversation_id, npc_id
-                )
-                
-                # Run initial memory maintenance
-                await memory_system.maintain(entity_type="npc", entity_id=npc_id)
-                
-                logger.info(f"Successfully set up advanced memory system for NPC {npc_id}")
-                
-            except Exception as e:
-                logger.error(f"Error setting up advanced memory system for NPC {npc_id}: {e}")
+        # Step 11: Initialize agent's perception of environment
+        initial_context = {
+            "location": current_location,
+            "time_of_day": time_of_day,
+            "description": f"Initial perception upon creation at {current_location}"
+        }
+        await agent.perceive_environment(initial_context)
         
         return npc_id
     
@@ -458,7 +300,7 @@ class IntegratedNPCSystem:
     
     async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
         """
-        Get detailed information about an NPC.
+        Get detailed information about an NPC, enhanced with agent-based data.
         
         Args:
             npc_id: The ID of the NPC to retrieve
@@ -466,6 +308,12 @@ class IntegratedNPCSystem:
         Returns:
             Dictionary with NPC details or None if not found
         """
+        # Get or create NPC agent
+        if npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        
+        agent = self.agent_system.npc_agents[npc_id]
+        
         conn = get_db_connection()
         cursor = conn.cursor()
         
@@ -495,10 +343,37 @@ class IntegratedNPCSystem:
                 else:
                     memories = memory_json
             
-            # Get mask information
-            mask_info = await ProgressiveRevealManager.get_npc_mask(
-                self.user_id, self.conversation_id, npc_id
+            # Get enhanced memory from the agent's memory system
+            memory_system = await agent._get_memory_system()
+            memory_result = await memory_system.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                limit=5
             )
+            
+            agent_memories = memory_result.get("memories", [])
+            
+            # Get mask information using agent
+            mask_info = await agent._get_mask_manager().get_npc_mask(npc_id)
+            
+            # Get emotional state using agent
+            emotional_state = await memory_system.get_npc_emotion(npc_id)
+            
+            # Get beliefs using agent
+            beliefs = await memory_system.get_beliefs(
+                entity_type="npc",
+                entity_id=npc_id,
+                topic="player"
+            )
+            
+            # Get current perception through agent
+            current_perception = None
+            if agent.last_perception:
+                current_perception = {
+                    "location": agent.last_perception.get("environment", {}).get("location"),
+                    "time_of_day": agent.last_perception.get("environment", {}).get("time_of_day"),
+                    "entities_present": agent.last_perception.get("environment", {}).get("entities_present", [])
+                }
             
             # Get social links
             cursor.execute("""
@@ -534,7 +409,7 @@ class IntegratedNPCSystem:
                     "link_level": link_level
                 })
             
-            # Build response
+            # Build enhanced response with agent-based data
             npc_details = {
                 "npc_id": npc_id,
                 "npc_name": npc_name,
@@ -551,9 +426,12 @@ class IntegratedNPCSystem:
                 "archetype_summary": archetype_summary,
                 "physical_description": physical_description,
                 "current_location": current_location,
-                "memories": memories[:5],  # Latest 5 memories
+                "memories": agent_memories or memories[:5],  # Prefer agent memories
                 "memory_count": len(memories),
                 "mask": mask_info if mask_info and "error" not in mask_info else {"integrity": 100},
+                "emotional_state": emotional_state,
+                "beliefs": beliefs,
+                "current_perception": current_perception,
                 "relationships": links
             }
             
@@ -568,7 +446,7 @@ class IntegratedNPCSystem:
     
     async def introduce_npc(self, npc_id: int) -> bool:
         """
-        Mark an NPC as introduced.
+        Mark an NPC as introduced, updating agent memory.
         
         Args:
             npc_id: The ID of the NPC to introduce
@@ -576,6 +454,12 @@ class IntegratedNPCSystem:
         Returns:
             True if successful, False otherwise
         """
+        # Get or create the NPC agent
+        if npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        
+        agent = self.agent_system.npc_agents[npc_id]
+        
         conn = get_db_connection()
         cursor = conn.cursor()
         
@@ -603,10 +487,23 @@ class IntegratedNPCSystem:
                 f"Met {npc_name} for the first time."
             ))
             
-            # Create an introduction memory for the NPC - Using record_npc_event
+            # Create an introduction memory using the agent's memory system
+            memory_system = await agent._get_memory_system()
             introduction_memory = f"I was formally introduced to the player today."
-            record_npc_event(
-                self.user_id, self.conversation_id, npc_id, introduction_memory
+            
+            await memory_system.remember(
+                entity_type="npc",
+                entity_id=npc_id,
+                memory_text=introduction_memory,
+                importance="medium",
+                tags=["introduction", "player_interaction", "first_meeting"]
+            )
+            
+            # Update the agent's emotional state based on introduction
+            await memory_system.update_npc_emotion(
+                npc_id=npc_id,
+                emotion="curiosity", 
+                intensity=0.7
             )
             
             conn.commit()
@@ -651,6 +548,42 @@ class IntegratedNPCSystem:
             link_type, link_level
         )
         
+        # If this involves an NPC, update their relationship manager
+        if entity1_type == "npc":
+            # Get or create NPC agent
+            if entity1_id not in self.agent_system.npc_agents:
+                self.agent_system.npc_agents[entity1_id] = NPCAgent(entity1_id, self.user_id, self.conversation_id)
+            
+            # Create memory of this link
+            agent = self.agent_system.npc_agents[entity1_id]
+            memory_system = await agent._get_memory_system()
+            
+            target_name = "Unknown"
+            if entity2_type == "player":
+                target_name = "Chase"
+            elif entity2_type == "npc":
+                # Get NPC name
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT npc_name FROM NPCStats
+                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+                """, (self.user_id, self.conversation_id, entity2_id))
+                row = cursor.fetchone()
+                if row:
+                    target_name = row[0]
+                conn.close()
+            
+            memory_text = f"I formed a {link_type} relationship with {target_name}."
+            
+            await memory_system.remember(
+                entity_type="npc",
+                entity_id=entity1_id,
+                memory_text=memory_text,
+                importance="medium",
+                tags=["relationship", entity2_type, link_type]
+            )
+        
         logger.info(f"Created social link (ID: {link_id}) between {entity1_type}:{entity1_id} and {entity2_type}:{entity2_id}")
         return link_id
     
@@ -666,11 +599,82 @@ class IntegratedNPCSystem:
         Returns:
             Dictionary with update results
         """
+        # Get the relationship details before update
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
+            FROM SocialLinks
+            WHERE link_id=%s AND user_id=%s AND conversation_id=%s
+        """, (link_id, self.user_id, self.conversation_id))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return {"error": "Link not found"}
+            
+        entity1_type, entity1_id, entity2_type, entity2_id, old_type, old_level = row
+        
         # Using update_link_type_and_level
         result = update_link_type_and_level(
             self.user_id, self.conversation_id,
             link_id, new_type, level_change
         )
+        
+        # Update agent memory if an NPC is involved
+        if result and entity1_type == "npc":
+            # Get or create NPC agent
+            if entity1_id not in self.agent_system.npc_agents:
+                self.agent_system.npc_agents[entity1_id] = NPCAgent(entity1_id, self.user_id, self.conversation_id)
+            
+            agent = self.agent_system.npc_agents[entity1_id]
+            memory_system = await agent._get_memory_system()
+            
+            target_name = "Unknown"
+            if entity2_type == "player":
+                target_name = "Chase"
+            elif entity2_type == "npc":
+                # Get NPC name
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT npc_name FROM NPCStats
+                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+                """, (self.user_id, self.conversation_id, entity2_id))
+                row = cursor.fetchone()
+                if row:
+                    target_name = row[0]
+                conn.close()
+            
+            if new_type and new_type != old_type:
+                memory_text = f"My relationship with {target_name} changed from {old_type} to {new_type}."
+            else:
+                direction = "improved" if level_change > 0 else "worsened"
+                memory_text = f"My relationship with {target_name} {direction} from level {old_level} to {result['new_level']}."
+            
+            await memory_system.remember(
+                entity_type="npc",
+                entity_id=entity1_id,
+                memory_text=memory_text,
+                importance="medium",
+                tags=["relationship_change", entity2_type]
+            )
+            
+            # Update emotional state based on relationship change
+            if abs(level_change) >= 10:
+                if level_change > 0:
+                    await memory_system.update_npc_emotion(
+                        npc_id=entity1_id,
+                        emotion="joy",
+                        intensity=0.6
+                    )
+                else:
+                    await memory_system.update_npc_emotion(
+                        npc_id=entity1_id,
+                        emotion="sadness",
+                        intensity=0.6
+                    )
         
         if result:
             logger.info(f"Updated link {link_id}: type={result['new_type']}, level={result['new_level']}")
@@ -688,353 +692,180 @@ class IntegratedNPCSystem:
         Returns:
             True if successful
         """
+        # Get the relationship details
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT entity1_type, entity1_id, entity2_type, entity2_id
+            FROM SocialLinks
+            WHERE link_id=%s AND user_id=%s AND conversation_id=%s
+        """, (link_id, self.user_id, self.conversation_id))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return False
+            
+        entity1_type, entity1_id, entity2_type, entity2_id = row
+        
         # Using add_link_event
         add_link_event(
             self.user_id, self.conversation_id,
             link_id, event_text
         )
         
+        # Create memory record for NPC agents involved
+        if entity1_type == "npc":
+            # Get or create NPC agent
+            if entity1_id not in self.agent_system.npc_agents:
+                self.agent_system.npc_agents[entity1_id] = NPCAgent(entity1_id, self.user_id, self.conversation_id)
+            
+            agent = self.agent_system.npc_agents[entity1_id]
+            memory_system = await agent._get_memory_system()
+            
+            target_name = "Unknown"
+            if entity2_type == "player":
+                target_name = "Chase"
+            elif entity2_type == "npc":
+                # Get NPC name
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT npc_name FROM NPCStats
+                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+                """, (self.user_id, self.conversation_id, entity2_id))
+                row = cursor.fetchone()
+                if row:
+                    target_name = row[0]
+                conn.close()
+            
+            memory_text = f"With {target_name}: {event_text}"
+            
+            await memory_system.remember(
+                entity_type="npc",
+                entity_id=entity1_id,
+                memory_text=memory_text,
+                importance="medium",
+                tags=["relationship_event", entity2_type]
+            )
+        
         logger.info(f"Added event to link {link_id}: {event_text[:50]}...")
         return True
     
-    async def get_dynamic_level(self, 
-                              entity1_type: str, entity1_id: int,
-                              entity2_type: str, entity2_id: int,
-                              dynamic_name: str) -> int:
+    async def update_relationship_from_interaction(self, 
+                                                npc_id: int, 
+                                                player_action: Dict[str, Any],
+                                                npc_action: Dict[str, Any]) -> bool:
         """
-        Get the level of a specific relationship dynamic.
+        Update relationship between NPC and player based on an interaction.
         
         Args:
-            entity1_type: Type of first entity
-            entity1_id: ID of first entity
-            entity2_type: Type of second entity
-            entity2_id: ID of second entity
-            dynamic_name: Name of the dynamic
+            npc_id: ID of the NPC
+            player_action: Description of the player's action
+            npc_action: Description of the NPC's action
             
         Returns:
-            Current level of the dynamic
+            True if successful
         """
-        # Using get_relationship_dynamic_level
-        level = get_relationship_dynamic_level(
-            self.user_id, self.conversation_id,
-            entity1_type, entity1_id,
-            entity2_type, entity2_id,
-            dynamic_name
+        # Get or create NPCRelationshipManager for this NPC
+        relationship_manager = NPCRelationshipManager(npc_id, self.user_id, self.conversation_id)
+        
+        # Get or create NPC agent
+        if npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        
+        # Update relationship through the manager
+        await relationship_manager.update_relationship_from_interaction(
+            "player", self.user_id, player_action, npc_action
         )
         
-        logger.info(f"Dynamic '{dynamic_name}' level between {entity1_type}:{entity1_id} and {entity2_type}:{entity2_id} is {level}")
-        return level
-    
-    async def update_dynamic(self, 
-                           entity1_type: str, entity1_id: int,
-                           entity2_type: str, entity2_id: int,
-                           dynamic_name: str, change: int) -> int:
-        """
-        Update a specific relationship dynamic.
-        
-        Args:
-            entity1_type: Type of first entity
-            entity1_id: ID of first entity
-            entity2_type: Type of second entity
-            entity2_id: ID of second entity
-            dynamic_name: Name of the dynamic
-            change: Amount to change the dynamic by
-            
-        Returns:
-            New level of the dynamic
-        """
-        # Using update_relationship_dynamic
-        new_level = update_relationship_dynamic(
-            self.user_id, self.conversation_id,
-            entity1_type, entity1_id,
-            entity2_type, entity2_id,
-            dynamic_name, change
-        )
-        
-        logger.info(f"Updated dynamic '{dynamic_name}' to level {new_level}")
-        return new_level
-    
-    async def create_relationship(self, 
-                                entity1_type: str, entity1_id: int,
-                                entity2_type: str, entity2_id: int,
-                                relationship_type: str = None, 
-                                initial_level: int = 0) -> Dict[str, Any]:
-        """
-        Create a new relationship between two entities.
-        
-        Args:
-            entity1_type: Type of first entity ("npc" or "player")
-            entity1_id: ID of first entity
-            entity2_type: Type of second entity
-            entity2_id: ID of second entity
-            relationship_type: Type of relationship
-            initial_level: Initial relationship level
-            
-        Returns:
-            Dictionary with result information
-        """
-        # Use the EnhancedRelationshipManager to create the relationship
-        result = await EnhancedRelationshipManager.create_relationship(
-            self.user_id, self.conversation_id,
-            entity1_type, entity1_id,
-            entity2_type, entity2_id,
-            relationship_type, initial_level
-        )
-        
-        return result
-    
-    async def update_relationship_dimensions(self, 
-                                          link_id: int, 
-                                          dimension_changes: Dict[str, int],
-                                          reason: str = None) -> Dict[str, Any]:
-        """
-        Update dimensions of a relationship.
-        
-        Args:
-            link_id: ID of the relationship link
-            dimension_changes: Dictionary of dimension changes (e.g., {"trust": +5, "fear": -2})
-            reason: Reason for the changes
-            
-        Returns:
-            Dictionary with update results
-        """
-        # Use EnhancedRelationshipManager to update dimensions
-        result = await EnhancedRelationshipManager.update_relationship_dimensions(
-            self.user_id, self.conversation_id, link_id, dimension_changes,
-            add_history_event=reason
-        )
-        
-        return result
-    
-    async def increase_relationship_tension(self, link_id: int, amount: int, reason: str = None) -> Dict[str, Any]:
-        """
-        Increase tension in a relationship.
-        
-        Args:
-            link_id: ID of the relationship link
-            amount: Amount to increase tension by
-            reason: Reason for the tension increase
-            
-        Returns:
-            Dictionary with update results
-        """
-        result = await EnhancedRelationshipManager.increase_relationship_tension(
-            self.user_id, self.conversation_id, link_id, amount, reason
-        )
-        
-        return result
-    
-    async def release_relationship_tension(self, 
-                                         link_id: int, 
-                                         amount: int, 
-                                         resolution_type: str = "positive",
-                                         reason: str = None) -> Dict[str, Any]:
-        """
-        Release tension in a relationship.
-        
-        Args:
-            link_id: ID of the relationship link
-            amount: Amount to decrease tension by
-            resolution_type: Type of resolution ("positive", "negative", "dominance", "submission")
-            reason: Reason for the tension release
-            
-        Returns:
-            Dictionary with update results
-        """
-        result = await EnhancedRelationshipManager.release_relationship_tension(
-            self.user_id, self.conversation_id, link_id, amount, resolution_type, reason
-        )
-        
-        return result
-    
-    async def check_for_relationship_events(self) -> List[Dict[str, Any]]:
-        """
-        Check for significant relationship events that might occur.
-        
-        Returns:
-            List of event dictionaries
-        """
-        events = []
-        
-        # Using check_for_relationship_crossroads
-        crossroads = await check_for_relationship_crossroads(self.user_id, self.conversation_id)
-        if crossroads:
-            events.append({
-                "type": "relationship_crossroads",
-                "data": crossroads
-            })
-        
-        # Using check_for_relationship_ritual
-        ritual = await check_for_relationship_ritual(self.user_id, self.conversation_id)
-        if ritual:
-            events.append({
-                "type": "relationship_ritual",
-                "data": ritual
-            })
-        
-        # Check for relationship stage changes
-        await EnhancedRelationshipManager.detect_relationship_stage_changes(
-            self.user_id, self.conversation_id
-        )
-        
-        return events
-    
-    async def apply_crossroads_choice(self, link_id: int, crossroads_name: str, choice_index: int) -> Dict[str, Any]:
-        """
-        Apply a choice in a relationship crossroads.
-        
-        Args:
-            link_id: ID of the relationship link
-            crossroads_name: Name of the crossroads
-            choice_index: Index of the selected choice
-            
-        Returns:
-            Dictionary with the results
-        """
-        # Using apply_crossroads_choice
-        result = await apply_crossroads_choice(
-            self.user_id, self.conversation_id, link_id, crossroads_name, choice_index
-        )
-        
-        return result
+        return True
     
     #=================================================================
     # MEMORY MANAGEMENT
     #=================================================================
     
-    async def record_memory_event(self, npc_id: int, event_description: str) -> bool:
-        """
-        Record a memory event for an NPC.
-        
-        Args:
-            npc_id: ID of the NPC
-            event_description: Description of the event
-            
-        Returns:
-            True if successful
-        """
-        # Using record_npc_event
-        record_npc_event(
-            self.user_id, self.conversation_id, npc_id, event_description
-        )
-        logger.info(f"Recorded memory event for NPC {npc_id}: {event_description[:50]}...")
-        return True
-    
-    async def generate_shared_memory(self, 
-                                   npc_id: int, 
-                                   target: str = "player", 
-                                   target_name: str = "Chase", 
-                                   rel_type: str = "related") -> str:
-        """
-        Generate a shared memory between an NPC and another entity.
-        
-        Args:
-            npc_id: ID of the NPC
-            target: Target type
-            target_name: Target name
-            rel_type: Relationship type
-            
-        Returns:
-            Generated memory text
-        """
-        # Using get_shared_memory
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT npc_name, archetype_summary, archetype_extras_summary 
-            FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-        """, (self.user_id, self.conversation_id, npc_id))
-        
-        row = cursor.fetchone()
-        conn.close()
-        
-        if not row:
-            return "Memory generation failed: NPC not found."
-            
-        npc_name, archetype_summary, archetype_extras_summary = row
-        
-        # Create relationship object
-        relationship = {
-            "target": target,
-            "target_name": target_name,
-            "type": rel_type
-        }
-        
-        memory_text = get_shared_memory(
-            self.user_id, self.conversation_id,
-            relationship, npc_name,
-            archetype_summary, archetype_extras_summary
-        )
-        
-        # Record the generated memory
-        record_npc_event(
-            self.user_id, self.conversation_id, npc_id, memory_text
-        )
-        
-        return memory_text
-    
     async def add_memory_to_npc(self, 
                               npc_id: int, 
                               memory_text: str,
-                              memory_type: str = "interaction",
-                              significance: int = 3,
-                              emotional_valence: int = 0,
+                              importance: str = "medium",
+                              emotional: bool = False,
                               tags: List[str] = None) -> bool:
         """
-        Add a memory to an NPC.
+        Add a memory to an NPC using the agent architecture.
         
         Args:
             npc_id: ID of the NPC
             memory_text: Text of the memory
-            memory_type: Type of memory
-            significance: Significance level (1-10)
-            emotional_valence: Emotional impact (-10 to +10)
+            importance: Importance of the memory ("low", "medium", "high")
+            emotional: Whether the memory has emotional content
             tags: List of tags for the memory
             
         Returns:
             True if successful, False otherwise
         """
-        # Using MemoryManager.add_memory
-        result = await MemoryManager.add_memory(
-            self.user_id, self.conversation_id,
-            npc_id, "npc",
-            memory_text, memory_type,
-            significance, emotional_valence,
-            tags
+        # Get or create NPC agent
+        if npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        
+        agent = self.agent_system.npc_agents[npc_id]
+        memory_system = await agent._get_memory_system()
+        
+        # Create memory using the agent's memory system
+        memory_id = await memory_system.remember(
+            entity_type="npc",
+            entity_id=npc_id,
+            memory_text=memory_text,
+            importance=importance,
+            emotional=emotional,
+            tags=tags or []
         )
         
-        return result
+        return memory_id is not None
     
     async def retrieve_relevant_memories(self, 
                                        npc_id: int, 
-                                       context: str = None,
-                                       tags: List[str] = None,
-                                       limit: int = 5) -> List[EnhancedMemory]:
+                                       query: str = None,
+                                       context: Dict[str, Any] = None,
+                                       limit: int = 5) -> List[Dict[str, Any]]:
         """
         Retrieve memories relevant to a context.
         
         Args:
             npc_id: ID of the NPC
-            context: Context to retrieve memories for
-            tags: List of tags to filter by
+            query: Search query
+            context: Context dictionary
             limit: Maximum number of memories to retrieve
             
         Returns:
             List of memory objects
         """
-        # Using MemoryManager.retrieve_relevant_memories
-        memories = await MemoryManager.retrieve_relevant_memories(
-            self.user_id, self.conversation_id,
-            npc_id, "npc",
-            context, tags, limit
+        # Get or create NPC agent
+        if npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        
+        agent = self.agent_system.npc_agents[npc_id]
+        memory_system = await agent._get_memory_system()
+        
+        # Retrieve memories using the agent's memory system
+        context_obj = context or {}
+        if query:
+            context_obj["query"] = query
+        
+        result = await memory_system.recall(
+            entity_type="npc",
+            entity_id=npc_id,
+            query=query,
+            context=context_obj,
+            limit=limit
         )
         
-        return memories
+        return result.get("memories", [])
     
     async def generate_flashback(self, npc_id: int, current_context: str) -> Optional[Dict[str, Any]]:
         """
-        Generate a flashback for an NPC.
+        Generate a flashback for an NPC using the agent's capabilities.
         
         Args:
             npc_id: ID of the NPC
@@ -1043,69 +874,117 @@ class IntegratedNPCSystem:
         Returns:
             Flashback data or None if no flashback was generated
         """
-        # Using MemoryManager.generate_flashback
-        flashback = await MemoryManager.generate_flashback(
-            self.user_id, self.conversation_id, npc_id, current_context
+        # Get or create NPC agent
+        if npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        
+        agent = self.agent_system.npc_agents[npc_id]
+        memory_system = await agent._get_memory_system()
+        
+        # Generate flashback using the agent's memory system
+        flashback = await memory_system.npc_flashback(
+            npc_id=npc_id,
+            context=current_context
         )
         
         return flashback
     
-    async def propagate_significant_memory(self, 
-                                         source_npc_id: int,
-                                         memory_text: str,
-                                         memory_type: str = "emotional",
-                                         significance: int = 5,
-                                         emotional_valence: int = 0) -> bool:
+    async def propagate_memory_to_related_npcs(self, 
+                                           source_npc_id: int,
+                                           memory_text: str,
+                                           importance: str = "medium") -> bool:
         """
-        Propagate a significant memory to related NPCs.
+        Propagate a memory to NPCs related to the source NPC.
         
         Args:
             source_npc_id: ID of the source NPC
-            memory_text: Text of the memory
-            memory_type: Type of memory
-            significance: Significance level (1-10)
-            emotional_valence: Emotional impact (-10 to +10)
+            memory_text: Text of the memory to propagate
+            importance: Importance of the memory
             
         Returns:
             True if successful, False otherwise
         """
         # First, add the memory to the source NPC
         await self.add_memory_to_npc(
-            source_npc_id, memory_text, memory_type, significance, emotional_valence
+            source_npc_id, memory_text, importance
         )
         
-        # Using MemoryManager.propagate_significant_memory
-        result = await MemoryManager.propagate_significant_memory(
-            self.user_id, self.conversation_id,
-            source_npc_id, "npc",
-            EnhancedMemory(
-                memory_text, memory_type, significance
-            )
-        )
+        # Get or create source NPC agent
+        if source_npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[source_npc_id] = NPCAgent(source_npc_id, self.user_id, self.conversation_id)
         
-        return result
-    
-    #=================================================================
-    # MASK REVELATIONS AND PROGRESSIVE EVOLUTION
-    #=================================================================
-    
-    async def initialize_npc_mask(self, npc_id: int, overwrite: bool = False) -> Dict[str, Any]:
-        """
-        Initialize a mask for an NPC.
+        # Find related NPCs
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT entity2_id, link_level 
+            FROM SocialLinks
+            WHERE user_id=%s AND conversation_id=%s 
+            AND entity1_type='npc' AND entity1_id=%s
+            AND entity2_type='npc'
+            AND link_level > 30
+        """, (self.user_id, self.conversation_id, source_npc_id))
         
-        Args:
-            npc_id: ID of the NPC
-            overwrite: Whether to overwrite an existing mask
+        related_npcs = []
+        for row in cursor.fetchall():
+            related_npcs.append((row[0], row[1]))
+        
+        # Get source NPC name
+        source_name = "Unknown"
+        cursor.execute("""
+            SELECT npc_name FROM NPCStats
+            WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+        """, (self.user_id, self.conversation_id, source_npc_id))
+        
+        name_row = cursor.fetchone()
+        if name_row:
+            source_name = name_row[0]
+        
+        conn.close()
+        
+        # Propagate memory to each related NPC
+        for npc_id, link_level in related_npcs:
+            # Modify the memory text based on relationship
+            relationship_factor = link_level / 100.0  # 0.0 to 1.0
             
-        Returns:
-            Dictionary with result information
-        """
-        # Using ProgressiveRevealManager.initialize_npc_mask
-        result = await ProgressiveRevealManager.initialize_npc_mask(
-            self.user_id, self.conversation_id, npc_id, overwrite
-        )
+            # Higher relationship means more accurate propagation
+            if relationship_factor > 0.7:
+                propagated_text = f"I heard from {source_name} that {memory_text}"
+            else:
+                # Add potential distortion
+                words = memory_text.split()
+                if len(words) > 5:
+                    # Replace 1-2 words to create slight distortion
+                    for _ in range(random.randint(1, 2)):
+                        if len(words) > 3:
+                            idx = random.randint(0, len(words) - 1)
+                            
+                            # Replace with similar word or opposite
+                            replacements = {
+                                "good": "nice", "bad": "terrible", "happy": "pleased",
+                                "sad": "unhappy", "angry": "upset", "large": "big",
+                                "small": "tiny", "important": "critical", "interesting": "fascinating"
+                            }
+                            
+                            if words[idx].lower() in replacements:
+                                words[idx] = replacements[words[idx].lower()]
+                
+                distorted_text = " ".join(words)
+                propagated_text = f"I heard from {source_name} that {distorted_text}"
+            
+            # Create the propagated memory
+            await self.add_memory_to_npc(
+                npc_id, 
+                propagated_text, 
+                "low" if importance == "medium" else "medium" if importance == "high" else "low",
+                tags=["hearsay", "secondhand", "rumor"]
+            )
         
-        return result
+        return True
+    
+    #=================================================================
+    # MASK AND EMOTIONAL STATE MANAGEMENT
+    #=================================================================
     
     async def get_npc_mask(self, npc_id: int) -> Dict[str, Any]:
         """
@@ -1117,18 +996,22 @@ class IntegratedNPCSystem:
         Returns:
             Dictionary with mask information
         """
-        # Using ProgressiveRevealManager.get_npc_mask
-        result = await ProgressiveRevealManager.get_npc_mask(
-            self.user_id, self.conversation_id, npc_id
-        )
+        # Get or create NPC agent
+        if npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        
+        agent = self.agent_system.npc_agents[npc_id]
+        mask_manager = await agent._get_mask_manager()
+        
+        # Get mask using the agent's mask manager
+        result = await mask_manager.get_npc_mask(npc_id)
         
         return result
     
     async def generate_mask_slippage(self, 
                                    npc_id: int, 
                                    trigger: str = None,
-                                   severity: int = None,
-                                   reveal_type: str = None) -> Dict[str, Any]:
+                                   severity: int = None) -> Dict[str, Any]:
         """
         Generate a mask slippage event for an NPC.
         
@@ -1136,55 +1019,81 @@ class IntegratedNPCSystem:
             npc_id: ID of the NPC
             trigger: What triggered the slippage
             severity: Severity level of the slippage
-            reveal_type: Type of revelation
             
         Returns:
             Dictionary with slippage information
         """
-        # Using ProgressiveRevealManager.generate_mask_slippage
-        result = await ProgressiveRevealManager.generate_mask_slippage(
-            self.user_id, self.conversation_id, npc_id, trigger, severity, reveal_type
+        # Get or create NPC agent
+        if npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        
+        agent = self.agent_system.npc_agents[npc_id]
+        memory_system = await agent._get_memory_system()
+        
+        # Generate mask slippage using the memory system
+        result = await memory_system.reveal_npc_trait(
+            npc_id=npc_id,
+            trigger=trigger,
+            severity=severity
         )
         
         return result
     
-    async def check_for_mask_slippage(self, npc_id: int) -> Optional[List[Dict[str, Any]]]:
+    async def update_npc_emotional_state(self, 
+                                      npc_id: int, 
+                                      emotion: str,
+                                      intensity: float) -> Dict[str, Any]:
         """
-        Check if an NPC has reached thresholds where their true nature begins to show.
+        Update an NPC's emotional state.
+        
+        Args:
+            npc_id: ID of the NPC
+            emotion: Primary emotion
+            intensity: Intensity of the emotion (0.0-1.0)
+            
+        Returns:
+            Updated emotional state
+        """
+        # Get or create NPC agent
+        if npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        
+        agent = self.agent_system.npc_agents[npc_id]
+        memory_system = await agent._get_memory_system()
+        
+        # Update emotional state using the memory system
+        result = await memory_system.update_npc_emotion(
+            npc_id=npc_id,
+            emotion=emotion,
+            intensity=intensity
+        )
+        
+        return result
+    
+    async def get_npc_emotional_state(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Get an NPC's current emotional state.
         
         Args:
             npc_id: ID of the NPC
             
         Returns:
-            List of slippage events or None
+            Current emotional state
         """
-        # Using ProgressiveRevealManager.check_for_mask_slippage
-        result = await ProgressiveRevealManager.check_for_mask_slippage(
-            self.user_id, self.conversation_id, npc_id
-        )
+        # Get or create NPC agent
+        if npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
         
-        return result
-    
-    async def perform_npc_daily_activity(self, npc_id: int, time_of_day: str) -> bool:
-        """
-        Have an NPC perform activities during their daily schedule.
+        agent = self.agent_system.npc_agents[npc_id]
+        memory_system = await agent._get_memory_system()
         
-        Args:
-            npc_id: ID of the NPC
-            time_of_day: Current time of day
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        # Using ProgressiveRevealManager.perform_npc_daily_activity
-        result = await ProgressiveRevealManager.perform_npc_daily_activity(
-            self.user_id, self.conversation_id, npc_id, time_of_day
-        )
+        # Get emotional state using the memory system
+        result = await memory_system.get_npc_emotion(npc_id)
         
         return result
     
     #=================================================================
-    # TIME MANAGEMENT AND ACTIVITIES
+    # TIME MANAGEMENT AND NPC ACTIVITIES
     #=================================================================
     
     async def get_current_game_time(self) -> Tuple[int, int, int, str]:
@@ -1245,6 +1154,10 @@ class IntegratedNPCSystem:
             self.user_id, self.conversation_id, activity_type
         )
         
+        # After time advances, process scheduled activities for all NPCs
+        if result.get("time_advanced", False):
+            await self.process_npc_scheduled_activities()
+        
         return result
     
     async def process_player_activity(self, player_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -1265,20 +1178,17 @@ class IntegratedNPCSystem:
         
         return result
     
-    async def update_npc_schedules(self, day: int, time_of_day: str) -> bool:
+    async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
         """
-        Update all NPC schedules for the current time.
+        Process scheduled activities for all NPCs using the agent system.
         
-        Args:
-            day: Current day
-            time_of_day: Current time of day
-            
         Returns:
-            True if successful
+            Dictionary with results of NPC activities
         """
-        # Using update_npc_schedules_for_time
-        update_npc_schedules_for_time(self.user_id, self.conversation_id, day, time_of_day)
-        return True
+        # Using the NPCAgentSystem to process scheduled activities
+        result = await self.agent_system.process_npc_scheduled_activities()
+        
+        return result
     
     #=================================================================
     # STATS AND PROGRESSION
@@ -1298,7 +1208,7 @@ class IntegratedNPCSystem:
         # Using apply_stat_change
         result = apply_stat_change(self.user_id, self.conversation_id, changes, cause)
         
-        # Record each stat change separately - Using record_stat_change_event
+        # Record each stat change separately
         for stat_name, change_value in changes.items():
             # Get current value first
             conn = get_db_connection()
@@ -1390,15 +1300,7 @@ class IntegratedNPCSystem:
                                    player_input: str,
                                    context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Handle a complete interaction between player and NPC.
-        
-        This high-level method coordinates multiple subsystems:
-        1. Processes the player activity
-        2. Updates relationships based on interaction
-        3. Generates appropriate memories
-        4. Checks for mask slippage
-        5. Applies stat effects
-        6. Advances time if needed
+        Handle a complete interaction between player and NPC using the agent architecture.
         
         Args:
             npc_id: ID of the NPC
@@ -1409,439 +1311,304 @@ class IntegratedNPCSystem:
         Returns:
             Comprehensive result dictionary
         """
-        results = {
+        # Create player action object
+        player_action = {
+            "type": interaction_type,
+            "description": player_input,
+            "target_npc_id": npc_id
+        }
+        
+        # Prepare context
+        context_obj = context or {}
+        context_obj["interaction_type"] = interaction_type
+        
+        # Process through the agent system - this is the key change utilizing the agent architecture
+        result = await self.agent_system.handle_player_action(player_action, context_obj)
+        
+        # Process the activity and potentially advance time
+        activity_result = await self.process_player_activity(player_input, context_obj)
+        
+        # Combine results
+        combined_result = {
             "npc_id": npc_id,
             "interaction_type": interaction_type,
+            "npc_responses": result.get("npc_responses", []),
             "events": [],
             "memories_created": [],
             "stat_changes": {},
-            "time_advanced": False
+            "time_advanced": activity_result.get("time_advanced", False)
         }
         
-        # Step 1: Get NPC details
-        npc_details = await self.get_npc_details(npc_id)
-        if not npc_details:
-            return {"error": f"NPC with ID {npc_id} not found"}
-        
-        # Step 2: Process the activity and potentially advance time
-        activity_result = await self.process_player_activity(player_input, context)
-        results["activity_processed"] = activity_result
-        
+        # Add time advancement info if applicable
         if activity_result.get("time_advanced", False):
-            results["time_advanced"] = True
-            results["new_time"] = activity_result.get("new_time")
+            combined_result["new_time"] = activity_result.get("new_time")
             
             # If time advanced, add any events that occurred
             for event in activity_result.get("events", []):
-                results["events"].append(event)
+                combined_result["events"].append(event)
         
-        # Step 3: Update relationships based on interaction
-        # Find link between player and this NPC
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT link_id FROM SocialLinks
-            WHERE user_id=%s AND conversation_id=%s
-            AND ((entity1_type='player' AND entity1_id=%s AND entity2_type='npc' AND entity2_id=%s)
-            OR (entity1_type='npc' AND entity1_id=%s AND entity2_type='player' AND entity2_id=%s))
-        """, (
-            self.user_id, self.conversation_id,
-            self.user_id, npc_id,
-            npc_id, self.user_id
-        ))
-        
-        link_row = cursor.fetchone()
-        conn.close()
-        
-        if link_row:
-            link_id = link_row[0]
-            
-            # Update relationship dimensions based on interaction type
-            dimension_changes = {}
-            
-            if interaction_type == "friendly_conversation":
-                dimension_changes = {
-                    "trust": +3,
-                    "respect": +2
-                }
-            elif interaction_type == "defiant_response":
-                dimension_changes = {
-                    "tension": +5,
-                    "respect": -2
-                }
-            elif interaction_type == "submissive_response":
-                dimension_changes = {
-                    "control": +5,
-                    "dependency": +3
-                }
-            elif interaction_type == "flirtatious_remark":
-                dimension_changes = {
-                    "intimacy": +4,
-                    "tension": +2
-                }
-            
-            if dimension_changes:
-                # Using update_relationship_dimensions
-                relationship_result = await self.update_relationship_dimensions(
-                    link_id, dimension_changes, 
-                    reason=f"Player interaction: {interaction_type}"
-                )
-                results["relationship_updated"] = relationship_result
-                
-                # Using add_link_event
-                await self.add_event_to_link(
-                    link_id,
-                    f"Player interaction: {interaction_type} - '{player_input[:30]}...'"
-                )
-        
-        # Step 4: Generate appropriate memories
-        memory_text = f"Interaction with player: {interaction_type}. The player said: '{player_input[:50]}...'"
-        
-        # Using record_npc_event
-        record_npc_event(
-            self.user_id, self.conversation_id, npc_id, memory_text
-        )
-        
-        # Also add using MemoryManager for richer memory tracking
-        memory_result = await self.add_memory_to_npc(
-            npc_id, memory_text, 
-            memory_type=MemoryType.INTERACTION,
-            significance=MemorySignificance.MEDIUM
-        )
-        results["memory_created"] = memory_result
-        results["memories_created"].append(memory_text)
-        
-        # Step 5: Check for mask slippage
-        if interaction_type in ["defiant_response", "probing_question"]:
-            # Higher chance of slippage during confrontational interactions
-            if random.random() < 0.4:  # 40% chance
-                # Using generate_mask_slippage
-                slippage_result = await self.generate_mask_slippage(
-                    npc_id, trigger=f"Player {interaction_type}"
-                )
-                if slippage_result and "error" not in slippage_result:
-                    results["mask_slippage"] = slippage_result
-                    results["events"].append({
-                        "type": "mask_slippage",
-                        "data": slippage_result
-                    })
-        
-        # Step 6: Apply stat effects to player
+        # Apply stat effects to player
         stat_changes = {}
         
-        # Base the stat changes on NPC's attributes and interaction type
-        dominance = npc_details["stats"]["dominance"]
-        cruelty = npc_details["stats"]["cruelty"]
+        # Get NPC details
+        npc_details = await self.get_npc_details(npc_id)
         
-        if interaction_type == "submissive_response":
-            # Submitting to a dominant NPC increases corruption and obedience
-            dominance_factor = dominance / 100  # 0.0 to 1.0
-            stat_changes = {
-                "corruption": int(2 + (dominance_factor * 3)),
-                "obedience": int(3 + (dominance_factor * 4)),
-                "willpower": -2,
-                "confidence": -1
-            }
-        elif interaction_type == "defiant_response":
-            # Defying increases willpower and confidence but may decrease other stats
-            # More cruel NPCs cause more mental damage when defied
-            cruelty_factor = cruelty / 100  # 0.0 to 1.0
-            stat_changes = {
-                "willpower": +3,
-                "confidence": +2,
-                "mental_resilience": int(-1 - (cruelty_factor * 3))
-            }
+        if npc_details:
+            dominance = npc_details["stats"]["dominance"]
+            cruelty = npc_details["stats"]["cruelty"]
+            
+            if interaction_type == "submissive_response":
+                # Submitting to a dominant NPC increases corruption and obedience
+                dominance_factor = dominance / 100  # 0.0 to 1.0
+                stat_changes = {
+                    "corruption": int(2 + (dominance_factor * 3)),
+                    "obedience": int(3 + (dominance_factor * 4)),
+                    "willpower": -2,
+                    "confidence": -1
+                }
+            elif interaction_type == "defiant_response":
+                # Defying increases willpower and confidence but may decrease other stats
+                # More cruel NPCs cause more mental damage when defied
+                cruelty_factor = cruelty / 100  # 0.0 to 1.0
+                stat_changes = {
+                    "willpower": +3,
+                    "confidence": +2,
+                    "mental_resilience": int(-1 - (cruelty_factor * 3))
+                }
         
         if stat_changes:
-            # Using apply_stat_changes
-            stat_result = await self.apply_stat_changes(
+            # Apply stat changes
+            await self.apply_stat_changes(
                 stat_changes, 
-                cause=f"Interaction with {npc_details['npc_name']}: {interaction_type}"
+                cause=f"Interaction with {npc_details['npc_name'] if npc_details else 'NPC'}: {interaction_type}"
             )
-            results["stat_changes"] = stat_changes
+            combined_result["stat_changes"] = stat_changes
         
-        # Step 7: Check for relationship events
-        relationship_events = await self.check_for_relationship_events()
-        for event in relationship_events:
-            results["events"].append(event)
-        
-        return results
+        return combined_result
     
-    async def generate_multi_npc_scene(self, 
-                                     npc_ids: List[int], 
-                                     location: str = None,
-                                     include_player: bool = True) -> Dict[str, Any]:
+    async def handle_group_interaction(self,
+                                    npc_ids: List[int],
+                                    interaction_type: str,
+                                    player_input: str,
+                                    context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Generate a scene with multiple NPCs.
+        Handle an interaction between player and multiple NPCs using the agent architecture.
+        
+        Args:
+            npc_ids: List of NPC IDs to interact with
+            interaction_type: Type of interaction
+            player_input: Player's input text
+            context: Additional context
+            
+        Returns:
+            Comprehensive result dictionary
+        """
+        # Create player action object
+        player_action = {
+            "type": interaction_type,
+            "description": player_input,
+            "group_interaction": True
+        }
+        
+        # Prepare context
+        context_obj = context or {}
+        context_obj["interaction_type"] = interaction_type
+        context_obj["group_interaction"] = True
+        context_obj["affected_npcs"] = npc_ids
+        
+        # Process through the agent system's coordinator
+        result = await self.agent_system.handle_group_npc_interaction(npc_ids, player_action, context_obj)
+        
+        # Process the activity and potentially advance time
+        activity_result = await self.process_player_activity(player_input, context_obj)
+        
+        # Combine results
+        combined_result = {
+            "npc_ids": npc_ids,
+            "interaction_type": interaction_type,
+            "npc_responses": result.get("npc_responses", []),
+            "events": [],
+            "stat_changes": {},
+            "time_advanced": activity_result.get("time_advanced", False)
+        }
+        
+        # Add time advancement info if applicable
+        if activity_result.get("time_advanced", False):
+            combined_result["new_time"] = activity_result.get("new_time")
+            
+            # If time advanced, add any events that occurred
+            for event in activity_result.get("events", []):
+                combined_result["events"].append(event)
+        
+        # Apply stat effects to player based on the group interaction
+        stat_changes = {}
+        
+        # Calculate group dominance average
+        total_dominance = 0
+        total_cruelty = 0
+        npc_count = 0
+        
+        for npc_id in npc_ids:
+            npc_details = await self.get_npc_details(npc_id)
+            if npc_details:
+                total_dominance += npc_details["stats"]["dominance"]
+                total_cruelty += npc_details["stats"]["cruelty"]
+                npc_count += 1
+        
+        if npc_count > 0:
+            avg_dominance = total_dominance / npc_count
+            avg_cruelty = total_cruelty / npc_count
+            
+            if interaction_type == "submissive_response":
+                # Submitting to a group increases effects
+                dominance_factor = avg_dominance / 100  # 0.0 to 1.0
+                stat_changes = {
+                    "corruption": int(3 + (dominance_factor * 4)),
+                    "obedience": int(4 + (dominance_factor * 5)),
+                    "willpower": -3,
+                    "confidence": -2
+                }
+            elif interaction_type == "defiant_response":
+                # Defying a group is more impactful
+                cruelty_factor = avg_cruelty / 100  # 0.0 to 1.0
+                stat_changes = {
+                    "willpower": +4,
+                    "confidence": +3,
+                    "mental_resilience": int(-2 - (cruelty_factor * 4))
+                }
+        
+        if stat_changes:
+            # Apply stat changes
+            await self.apply_stat_changes(
+                stat_changes, 
+                cause=f"Group interaction with {npc_count} NPCs: {interaction_type}"
+            )
+            combined_result["stat_changes"] = stat_changes
+        
+        return combined_result
+    
+    async def generate_npc_scene(self, 
+                               npc_ids: List[int], 
+                               location: str = None) -> Dict[str, Any]:
+        """
+        Generate a scene with NPCs using the agent framework.
         
         Args:
             npc_ids: List of NPC IDs to include
             location: Location for the scene
-            include_player: Whether to include the player
             
         Returns:
             Scene information
         """
-        # Import MultiNPCInteractionManager for this specific functionality
-        from logic.social_links import MultiNPCInteractionManager
+        # Prepare context
+        context = {
+            "location": location,
+            "description": f"NPCs interacting at {location}"
+        }
         
-        result = await MultiNPCInteractionManager.generate_multi_npc_scene(
-            self.user_id, self.conversation_id,
-            npc_ids, location, include_player
+        # Use coordinator to generate group decisions
+        result = await self.agent_system.coordinator.make_group_decisions(
+            npc_ids, 
+            shared_context=context
         )
         
-        return result
+        # Format scene from result
+        scene = {
+            "location": location,
+            "npcs": npc_ids,
+            "actions": result.get("group_actions", []),
+            "individual_actions": result.get("individual_actions", {}),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        return scene
     
-    async def generate_overheard_conversation(self, 
-                                           npc_ids: List[int],
-                                           topic: str = None,
-                                           about_player: bool = False) -> Dict[str, Any]:
-        """
-        Generate a conversation between NPCs that the player can overhear.
-        
-        Args:
-            npc_ids: List of NPC IDs to include
-            topic: Topic of conversation
-            about_player: Whether the conversation is about the player
-            
-        Returns:
-            Conversation information
-        """
-        # Import MultiNPCInteractionManager for this specific functionality
-        from logic.social_links import MultiNPCInteractionManager
-        
-        result = await MultiNPCInteractionManager.generate_overheard_conversation(
-            self.user_id, self.conversation_id,
-            npc_ids, topic, about_player
-        )
-        
-        return result
+    #=================================================================
+    # AGENT SYSTEM MAINTENANCE AND MANAGEMENT
+    #=================================================================
     
-    async def create_npc_group(self, 
-                             name: str, 
-                             description: str, 
-                             member_ids: List[int]) -> Dict[str, Any]:
+    async def run_agent_memory_maintenance(self) -> Dict[str, Any]:
         """
-        Create a group of NPCs.
+        Run memory maintenance for all agents.
         
-        Args:
-            name: Name of the group
-            description: Description of the group
-            member_ids: List of NPC IDs to include
-            
         Returns:
-            Group information
+            Results of maintenance operations
         """
-        # Import MultiNPCInteractionManager for this specific functionality
-        from logic.social_links import MultiNPCInteractionManager
+        return await self.agent_system.run_maintenance()
+    
+    async def get_all_npc_beliefs_about_player(self) -> Dict[int, List[Dict[str, Any]]]:
+        """
+        Get all NPC's beliefs about the player.
         
-        result = await MultiNPCInteractionManager.create_npc_group(
-            self.user_id, self.conversation_id,
-            name, description, member_ids
-        )
+        Returns:
+            Dictionary mapping NPC IDs to lists of beliefs
+        """
+        return await self.agent_system.get_all_npc_beliefs_about_player()
+    
+    async def get_player_beliefs_about_npcs(self) -> Dict[int, List[Dict[str, Any]]]:
+        """
+        Get player's beliefs about all NPCs.
         
-        return result
+        Returns:
+            Dictionary mapping NPC IDs to lists of beliefs
+        """
+        return await self.agent_system.get_player_beliefs_about_npcs()
 
 #=================================================================
 # USAGE EXAMPLES
 #=================================================================
 
-async def comprehensive_example():
-    """Comprehensive usage example demonstrating all functions."""
+async def example_usage():
+    """Example demonstrating key agent-based functionality."""
     user_id = 1
     conversation_id = 123
     
     # Initialize the system
     npc_system = IntegratedNPCSystem(user_id, conversation_id)
     
-    # 1. Create a new NPC
-    environment_desc = "A elegant mansion with sprawling gardens and opulent interior."
+    # Create a new NPC
+    environment_desc = "A mansion with sprawling gardens and opulent interior."
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     npc_id = await npc_system.create_new_npc(environment_desc, day_names)
     
-    # 2. Get NPC details
+    # Get NPC details
     npc_details = await npc_system.get_npc_details(npc_id)
     print(f"Created NPC: {npc_details['npc_name']}")
     
-    # 3. Introduce the NPC
+    # Introduce the NPC
     await npc_system.introduce_npc(npc_id)
     
-    # 4. Create a direct social link between player and NPC
-    link_id = await npc_system.create_direct_social_link(
-        "player", user_id, "npc", npc_id, "neutral", 10
-    )
-    
-    # 5. Update link details
-    await npc_system.update_link_details(link_id, "dominant", +20)
-    
-    # 6. Add event to link
-    await npc_system.add_event_to_link(link_id, "Initial meeting and power assessment")
-    
-    # 7. Create relationship with dimensions
-    relationship = await npc_system.create_relationship(
-        "player", user_id, "npc", npc_id, "dominant"
-    )
-    
-    # 8. Get dynamic level
-    control_level = await npc_system.get_dynamic_level(
-        "player", user_id, "npc", npc_id, "control"
-    )
-    print(f"Control level: {control_level}")
-    
-    # 9. Update dynamic
-    new_control = await npc_system.update_dynamic(
-        "player", user_id, "npc", npc_id, "control", +15
-    )
-    print(f"New control level: {new_control}")
-    
-    # 10. Update relationship dimensions
-    await npc_system.update_relationship_dimensions(
-        link_id, {"trust": +10, "fear": +5}, "Getting to know each other"
-    )
-    
-    # 11. Add tension
-    await npc_system.increase_relationship_tension(
-        link_id, 25, "Uncomfortable power imbalance"
-    )
-    
-    # 12. Release tension
-    await npc_system.release_relationship_tension(
-        link_id, 10, "submission", "Player acquiesces to demands"
-    )
-    
-    # 13. Record memory event
-    await npc_system.record_memory_event(
-        npc_id, "The player was hesitant at first but eventually followed instructions."
-    )
-    
-    # 14. Generate shared memory
-    shared_memory = await npc_system.generate_shared_memory(
-        npc_id, "player", "Chase", "dominant"
-    )
-    print(f"Generated shared memory: {shared_memory[:50]}...")
-    
-    # 15. Add enhanced memory
-    await npc_system.add_memory_to_npc(
-        npc_id, 
-        "I noticed the player watching me carefully, analyzing my behaviors.",
-        MemoryType.OBSERVATION,
-        MemorySignificance.MEDIUM,
-        +3,
-        ["observation", "assessment"]
-    )
-    
-    # 16. Retrieve relevant memories
-    memories = await npc_system.retrieve_relevant_memories(
-        npc_id, "watching behavior", ["observation"]
-    )
-    print(f"Retrieved {len(memories)} relevant memories")
-    
-    # 17. Generate flashback
-    flashback = await npc_system.generate_flashback(
-        npc_id, "The player is watching me again, just like that day..."
-    )
-    if flashback:
-        print(f"Flashback generated: {flashback['text'][:50]}...")
-    
-    # 18. Propagate significant memory
-    await npc_system.propagate_significant_memory(
-        npc_id,
-        "There was a significant incident where several NPCs witnessed the player show unexpected strength.",
-        MemoryType.EMOTIONAL,
-        MemorySignificance.HIGH,
-        -5
-    )
-    
-    # 19. Initialize mask
-    mask_result = await npc_system.initialize_npc_mask(npc_id)
-    print(f"Mask initialized with integrity: {mask_result.get('mask_created', False)}")
-    
-    # 20. Get mask info
-    mask_info = await npc_system.get_npc_mask(npc_id)
-    if mask_info:
-        print(f"Mask integrity: {mask_info.get('integrity', 100)}")
-    
-    # 21. Generate mask slippage
-    slippage = await npc_system.generate_mask_slippage(
-        npc_id, "Player challenged authority", None, "verbal_slip"
-    )
-    if slippage:
-        print(f"Mask slippage: {slippage.get('description', '')[:50]}...")
-    
-    # 22. Check for mask slippage
-    slippage_events = await npc_system.check_for_mask_slippage(npc_id)
-    print(f"Found {len(slippage_events) if slippage_events else 0} slippage events")
-    
-    # 23. Perform NPC daily activity
-    await npc_system.perform_npc_daily_activity(npc_id, "Morning")
-    
-    # 24. Get current game time
-    year, month, day, time_of_day = await npc_system.get_current_game_time()
-    print(f"Current game time: Year {year}, Month {month}, Day {day}, {time_of_day}")
-    
-    # 25. Set game time
-    await npc_system.set_game_time(year, month, day + 1, "Afternoon")
-    
-    # 26. Advance time with activity
-    time_result = await npc_system.advance_time_with_activity("extended_conversation")
-    print(f"Time advanced: {time_result.get('time_advanced', False)}")
-    
-    # 27. Process player activity
-    activity_result = await npc_system.process_player_activity(
-        "I want to spend some time getting to know the other residents."
-    )
-    print(f"Activity processed: {activity_result.get('activity_type', '')}")
-    
-    # 28. Update NPC schedules
-    await npc_system.update_npc_schedules(day, time_of_day)
-    
-    # 29. Apply stat changes
-    await npc_system.apply_stat_changes(
-        {"corruption": +5, "confidence": -3},
-        "Prolonged exposure to dominant NPC"
-    )
-    
-    # 30. Apply activity effects
-    await npc_system.apply_activity_effects("public_humiliation", 1.2)
-    
-    # 31. Get player current tier
-    corruption_tier = await npc_system.get_player_current_tier("corruption")
-    if corruption_tier:
-        print(f"Corruption tier: {corruption_tier['name']} (level {corruption_tier['level']})")
-    
-    # 32. Check for combination triggers
-    combinations = await npc_system.check_for_combination_triggers()
-    print(f"Found {len(combinations)} stat combinations")
-    
-    # 33. Handle a complete NPC interaction
+    # Handle an interaction with the NPC using the agent architecture
     interaction_result = await npc_system.handle_npc_interaction(
-        npc_id, "submissive_response", "Yes, I'll do whatever you ask."
+        npc_id, "conversation", "Hello, nice to meet you."
     )
-    print(f"Interaction complete with {len(interaction_result.get('events', []))} events")
+    print(f"Interaction result: {interaction_result}")
     
-    # 34. Generate a multi-NPC scene
-    scene = await npc_system.generate_multi_npc_scene([npc_id])
-    if scene:
-        print(f"Generated scene: {scene.get('opening_description', '')[:50]}...")
+    # Update NPC's emotional state
+    await npc_system.update_npc_emotional_state(npc_id, "joy", 0.7)
     
-    # 35. Generate overheard conversation
+    # Create another NPC
     second_npc_id = await npc_system.create_new_npc(environment_desc, day_names)
-    conversation = await npc_system.generate_overheard_conversation(
-        [npc_id, second_npc_id], None, True
-    )
-    if conversation:
-        print(f"Generated conversation: {conversation.get('conversation', [''])[0][:50]}...")
     
-    # 36. Create NPC group
-    group = await npc_system.create_npc_group(
-        "Mansion Elite", "The dominant figures in the mansion hierarchy", 
-        [npc_id, second_npc_id]
+    # Handle a group interaction
+    group_result = await npc_system.handle_group_interaction(
+        [npc_id, second_npc_id], "conversation", "Hello everyone!"
     )
-    print(f"Created group with ID: {group.get('group_id')}")
+    print(f"Group interaction result: {group_result}")
     
-    print("Comprehensive NPC system demo completed successfully!")
+    # Generate a scene with both NPCs
+    scene = await npc_system.generate_npc_scene([npc_id, second_npc_id], "Garden")
+    print(f"Generated scene: {scene}")
+    
+    # Process scheduled activities
+    await npc_system.process_npc_scheduled_activities()
+    
+    # Run memory maintenance
+    await npc_system.run_agent_memory_maintenance()
+    
+    print("Agent-based NPC system demo completed successfully!")
 
 if __name__ == "__main__":
-    # Run the comprehensive example
+    # Run the agent-based example
     import asyncio
-    asyncio.run(comprehensive_example())
+    asyncio.run(example_usage())
