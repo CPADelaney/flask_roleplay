@@ -768,6 +768,34 @@ def create_all_tables():
         );
     ''')
 
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS MemoryMaintenanceSchedule (
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id INTEGER NOT NULL,
+            maintenance_schedule JSONB NOT NULL,
+            next_maintenance_date TIMESTAMP NOT NULL,
+            last_maintenance_date TIMESTAMP,
+            PRIMARY KEY (user_id, conversation_id, entity_type, entity_id)
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS RelationshipEvolution (
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            npc1_id INTEGER NOT NULL,
+            entity2_type TEXT NOT NULL,
+            entity2_id INTEGER NOT NULL,
+            relationship_type TEXT NOT NULL,
+            current_stage TEXT NOT NULL,
+            progress_to_next INTEGER NOT NULL DEFAULT 0,
+            evolution_history JSONB NOT NULL DEFAULT '[]'::jsonb,
+            PRIMARY KEY (user_id, conversation_id, npc1_id, entity2_type, entity2_id)
+        );
+    ''')
+
     # Done creating everything:
     conn.commit()
     conn.close()
