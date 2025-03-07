@@ -26,6 +26,7 @@ from routes.chatgpt_routes import init_app as init_chat_routes
 from logic.gpt_image_decision import should_generate_image_for_response
 from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
+from logic.nyx_enhancements_integration import initialize_nyx_memory_system, enhanced_background_chat_task
 
 # DB connection helper
 from db.connection import get_db_connection
@@ -36,142 +37,11 @@ socketio = None
 from logic.chatgpt_integration import get_chatgpt_response
 from db.connection import get_db_connection
 
-def background_chat_task(conversation_id, user_input, universal_update):
-    """
-    Process chat messages in a background task using ChatGPT.
-    Uses the sophisticated context generator from story_routes.py.
-    """
-    try:
-        logging.info(f"Starting GPT background chat task for conversation {conversation_id}")
-        
-        # Retrieve the user_id for this conversation
-        conn = get_db_connection()
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT user_id FROM conversations WHERE id = %s", (conversation_id,))
-                result = cur.fetchone()
-                if not result:
-                    logging.error(f"Conversation {conversation_id} not found")
-                    socketio.emit('error', {'error': f"Conversation not found"}, room=conversation_id)
-                    return
-                user_id = result[0]
-            
-        # Get player name (defaulting to "Chase")
-        player_name = "Chase"  # Default value
-        
-        # Use the advanced context generator from story_routes.py
-        # First, get the aggregated context using the aggregator
-        from logic.aggregator import get_aggregated_roleplay_context
-        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
-        
-        # Then, use build_aggregator_text to convert it to a text representation
-        from routes.story_routes import build_aggregator_text, gather_rule_knowledge
-        
-        # Optionally include rule knowledge for deeper context
-        rule_knowledge = gather_rule_knowledge()
-        
-        # Build the full context with rules
-        aggregator_text = build_aggregator_text(aggregator_data, rule_knowledge)
-        logging.info(f"Built advanced context for conversation {conversation_id}")
-        
-        # Call the GPT integration with the enhanced context
-        response_data = get_chatgpt_response(conversation_id, aggregator_text, user_input)
-        logging.info("Received GPT response from ChatGPT integration")
-        
-        # Extract the narrative from the response
-        if response_data["type"] == "function_call":
-            # When the response is a function call, extract the narrative field
-            ai_response = response_data["function_args"].get("narrative", "")
-            
-            # Process any universal updates received
-            try:
-                # Only apply updates if we received function call with args
-                if response_data["function_args"]:
-                    import asyncio
-                    import asyncpg
-                    from logic.universal_updater import apply_universal_updates_async
-                    
-                    async def apply_updates():
-                        dsn = os.getenv("DB_DSN")
-                        conn = await asyncpg.connect(dsn=dsn, statement_cache_size=0)
-                        try:
-                            await apply_universal_updates_async(
-                                user_id, 
-                                conversation_id, 
-                                response_data["function_args"], 
-                                conn
-                            )
-                        finally:
-                            await conn.close()
-                    
-                    # Run the async function
-                    asyncio.run(apply_updates())
-                    logging.info(f"Applied universal updates for conversation {conversation_id}")
-            except Exception as update_error:
-                logging.error(f"Error applying universal updates: {str(update_error)}")
-        else:
-            ai_response = response_data.get("response", "")
-        
-        # Stream the response token by token
-        for i in range(0, len(ai_response), 3):
-            token = ai_response[i:i+3]
-            socketio.emit('new_token', {'token': token}, room=conversation_id)
-            socketio.sleep(0.05)
-        
-        # Store the complete GPT response in the database
-        try:
-            conn = get_db_connection()
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-                        (conversation_id, "Nyx", ai_response)
-                    )
-                    conn.commit()
-            logging.info(f"GPT response stored in database for conversation {conversation_id}")
-        except Exception as db_error:
-            logging.error(f"Database error storing GPT response: {str(db_error)}")
+asyncio.run(initialize_nyx_memory_system())
 
-        # Check if we should generate an image
-        should_generate, reason = should_generate_image_for_response(
-            user_id, 
-            conversation_id, 
-            response_data["function_args"]
-        )
-        
-        # Image generation code
-        image_result = None
-        if should_generate:
-            logging.info(f"Generating image for scene: {reason}")
-            from routes.ai_image_generator import generate_roleplay_image_from_gpt
-            image_result = generate_roleplay_image_from_gpt(
-                response_data["function_args"], 
-                user_id, 
-                conversation_id
-            )
-            
-            # Emit image to the client
-            if image_result and "image_urls" in image_result and image_result["image_urls"]:
-                socketio.emit('image', {
-                    'image_url': image_result["image_urls"][0],
-                    'prompt_used': image_result.get('prompt_used', ''),
-                    'reason': reason
-                }, room=conversation_id)
-                logging.info(f"Image emitted to client: {image_result['image_urls'][0]}")
-        
-        # Stream the response token by token
-        for i in range(0, len(ai_response), 3):
-            token = ai_response[i:i+3]
-            socketio.emit('new_token', {'token': token}, room=conversation_id)
-            socketio.sleep(0.05)
-        
-        # Emit the final 'done' event with the full text
-        socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
-        logging.info(f"Completed streaming GPT response for conversation {conversation_id}")
-    
-    except Exception as e:
-        logging.error(f"Error in background_chat_task: {str(e)}")
-        socketio.emit('error', {'error': f"Server error: {str(e)}"}, room=conversation_id)
+
+async def background_chat_task(conversation_id, user_input, universal_update=None):
+    return await enhanced_background_chat_task(conversation_id, user_input, universal_update)
 
 def create_flask_app():
     """
