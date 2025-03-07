@@ -1,0 +1,643 @@
+# logic/relationship_integration.py
+
+"""
+Relationship integration module connecting the enhanced relationship system 
+from IntegratedNPCSystem with the existing game social links.
+"""
+
+import logging
+import json
+import random
+from typing import Dict, List, Any, Optional, Union, Tuple
+from datetime import datetime
+
+from db.connection import get_db_connection
+from logic.fully_integrated_npc_system import IntegratedNPCSystem
+
+class RelationshipIntegration:
+    """
+    Bridge class that integrates the sophisticated relationship management from 
+    IntegratedNPCSystem with the existing social links handling.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        """
+        Initialize relationship integration.
+        
+        Args:
+            user_id: The user ID
+            conversation_id: The conversation ID
+        """
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.npc_system = IntegratedNPCSystem(user_id, conversation_id)
+    
+    async def create_relationship(self, entity1_type: str, entity1_id: int,
+                                entity2_type: str, entity2_id: int,
+                                relationship_type: str = None, 
+                                initial_level: int = 0) -> Dict[str, Any]:
+        """
+        Create a new relationship between two entities.
+        
+        Args:
+            entity1_type: Type of first entity
+            entity1_id: ID of first entity
+            entity2_type: Type of second entity
+            entity2_id: ID of second entity
+            relationship_type: Type of relationship
+            initial_level: Initial relationship level
+            
+        Returns:
+            Dictionary with relationship data
+        """
+        return await self.npc_system.create_relationship(
+            entity1_type, entity1_id,
+            entity2_type, entity2_id,
+            relationship_type, initial_level
+        )
+    
+    async def get_relationship(self, entity1_type: str, entity1_id: int,
+                             entity2_type: str, entity2_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get relationship data between two entities.
+        
+        Args:
+            entity1_type: Type of first entity
+            entity1_id: ID of first entity
+            entity2_type: Type of second entity
+            entity2_id: ID of second entity
+            
+        Returns:
+            Dictionary with relationship data or None if not found
+        """
+        # Use the integrated system's get_relationship function
+        return await self.npc_system.get_relationship(
+            entity1_type, entity1_id,
+            entity2_type, entity2_id
+        )
+    
+    async def update_dimensions(self, link_id: int, 
+                              dimension_changes: Dict[str, int],
+                              reason: str = None) -> Dict[str, Any]:
+        """
+        Update specific dimensions of a relationship.
+        
+        Args:
+            link_id: ID of the relationship link
+            dimension_changes: Dictionary of dimension changes
+            reason: Reason for the changes
+            
+        Returns:
+            Dictionary with update results
+        """
+        return await self.npc_system.update_relationship_dimensions(
+            link_id, dimension_changes, reason
+        )
+    
+    async def increase_tension(self, link_id: int, 
+                             amount: int, 
+                             reason: str = None) -> Dict[str, Any]:
+        """
+        Increase tension in a relationship.
+        
+        Args:
+            link_id: ID of the relationship link
+            amount: Amount to increase tension by
+            reason: Reason for the tension increase
+            
+        Returns:
+            Dictionary with update results
+        """
+        return await self.npc_system.increase_relationship_tension(
+            link_id, amount, reason
+        )
+    
+    async def release_tension(self, link_id: int,
+                            amount: int,
+                            resolution_type: str = "positive",
+                            reason: str = None) -> Dict[str, Any]:
+        """
+        Release tension in a relationship.
+        
+        Args:
+            link_id: ID of the relationship link
+            amount: Amount to decrease tension by
+            resolution_type: Type of resolution
+            reason: Reason for the tension release
+            
+        Returns:
+            Dictionary with update results
+        """
+        return await self.npc_system.release_relationship_tension(
+            link_id, amount, resolution_type, reason
+        )
+    
+    async def check_for_events(self) -> List[Dict[str, Any]]:
+        """
+        Check for significant relationship events.
+        
+        Returns:
+            List of event dictionaries
+        """
+        return await self.npc_system.check_for_relationship_events()
+    
+    async def apply_crossroads_choice(self, link_id: int,
+                                    crossroads_name: str,
+                                    choice_index: int) -> Dict[str, Any]:
+        """
+        Apply a choice in a relationship crossroads.
+        
+        Args:
+            link_id: ID of the relationship link
+            crossroads_name: Name of the crossroads
+            choice_index: Index of the selected choice
+            
+        Returns:
+            Dictionary with the results
+        """
+        return await self.npc_system.apply_crossroads_choice(
+            link_id, crossroads_name, choice_index
+        )
+    
+    async def add_link_event(self, link_id: int, event_text: str) -> bool:
+        """
+        Add an event to a relationship's history.
+        
+        Args:
+            link_id: ID of the relationship link
+            event_text: Text describing the event
+            
+        Returns:
+            True if successful
+        """
+        return await self.npc_system.add_event_to_link(link_id, event_text)
+    
+    async def get_dynamic_level(self, entity1_type: str, entity1_id: int,
+                              entity2_type: str, entity2_id: int,
+                              dynamic_name: str) -> int:
+        """
+        Get the level of a specific relationship dynamic.
+        
+        Args:
+            entity1_type: Type of first entity
+            entity1_id: ID of first entity
+            entity2_type: Type of second entity
+            entity2_id: ID of second entity
+            dynamic_name: Name of the dynamic
+            
+        Returns:
+            Current level of the dynamic
+        """
+        return await self.npc_system.get_dynamic_level(
+            entity1_type, entity1_id, entity2_type, entity2_id, dynamic_name
+        )
+    
+    async def update_dynamic(self, entity1_type: str, entity1_id: int,
+                           entity2_type: str, entity2_id: int,
+                           dynamic_name: str, change: int) -> int:
+        """
+        Update a specific relationship dynamic.
+        
+        Args:
+            entity1_type: Type of first entity
+            entity1_id: ID of first entity
+            entity2_type: Type of second entity
+            entity2_id: ID of second entity
+            dynamic_name: Name of the dynamic
+            change: Amount to change the dynamic by
+            
+        Returns:
+            New level of the dynamic
+        """
+        return await self.npc_system.update_dynamic(
+            entity1_type, entity1_id, entity2_type, entity2_id, dynamic_name, change
+        )
+    
+    async def create_npc_group(self, name: str, description: str, 
+                             member_ids: List[int]) -> Dict[str, Any]:
+        """
+        Create a group of NPCs.
+        
+        Args:
+            name: Name of the group
+            description: Description of the group
+            member_ids: List of NPC IDs to include
+            
+        Returns:
+            Group information
+        """
+        return await self.npc_system.create_npc_group(name, description, member_ids)
+    
+    async def add_npc_to_group(self, group_id: int, npc_id: int, role: str = "member") -> bool:
+        """
+        Add an NPC to a group.
+        
+        Args:
+            group_id: ID of the group
+            npc_id: ID of the NPC
+            role: Role of the NPC in the group
+            
+        Returns:
+            True if successful
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Get group data
+            cursor.execute("""
+                SELECT group_data
+                FROM NPCGroups
+                WHERE group_id=%s AND user_id=%s AND conversation_id=%s
+            """, (group_id, self.user_id, self.conversation_id))
+            
+            row = cursor.fetchone()
+            if not row:
+                return False
+                
+            group_data = row[0]
+            if isinstance(group_data, str):
+                try:
+                    group_data = json.loads(group_data)
+                except json.JSONDecodeError:
+                    return False
+            
+            # Get NPC data
+            cursor.execute("""
+                SELECT npc_name, dominance
+                FROM NPCStats
+                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+            """, (npc_id, self.user_id, self.conversation_id))
+            
+            npc_row = cursor.fetchone()
+            if not npc_row:
+                return False
+                
+            npc_name, dominance = npc_row
+            
+            # Add NPC to group
+            members = group_data.get("members", [])
+            
+            # Check if NPC is already in group
+            for member in members:
+                if member.get("npc_id") == npc_id:
+                    return True
+            
+            # Add NPC to group
+            members.append({
+                "npc_id": npc_id,
+                "npc_name": npc_name,
+                "dominance": dominance,
+                "joined_date": datetime.now().isoformat(),
+                "status": "active",
+                "role": role
+            })
+            
+            group_data["members"] = members
+            
+            # Update group data
+            cursor.execute("""
+                UPDATE NPCGroups
+                SET group_data=%s
+                WHERE group_id=%s AND user_id=%s AND conversation_id=%s
+            """, (json.dumps(group_data), group_id, self.user_id, self.conversation_id))
+            
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            logging.error(f"Error adding NPC to group: {e}")
+            return False
+        finally:
+            cursor.close()
+            conn.close()
+    
+    async def generate_group_dynamics(self, group_id: int) -> Dict[str, Any]:
+        """
+        Generate group dynamics for a group of NPCs.
+        
+        Args:
+            group_id: ID of the group
+            
+        Returns:
+            Dictionary with group dynamics
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Get group data
+            cursor.execute("""
+                SELECT group_data, group_name
+                FROM NPCGroups
+                WHERE group_id=%s AND user_id=%s AND conversation_id=%s
+            """, (group_id, self.user_id, self.conversation_id))
+            
+            row = cursor.fetchone()
+            if not row:
+                return {"error": "Group not found"}
+                
+            group_data, group_name = row
+            if isinstance(group_data, str):
+                try:
+                    group_data = json.loads(group_data)
+                except json.JSONDecodeError:
+                    return {"error": "Invalid group data"}
+            
+            # Generate dynamic relationships between members
+            members = group_data.get("members", [])
+            member_ids = [m.get("npc_id") for m in members]
+            
+            relationships = []
+            for i in range(len(member_ids)):
+                for j in range(i+1, len(member_ids)):
+                    npc1_id = member_ids[i]
+                    npc2_id = member_ids[j]
+                    
+                    # Check existing relationship
+                    rel = await self.get_relationship("npc", npc1_id, "npc", npc2_id)
+                    if not rel:
+                        # Create relationship
+                        rel_type = random.choice(["neutral", "alliance", "rivalry", "dominant", "submission"])
+                        rel = await self.create_relationship("npc", npc1_id, "npc", npc2_id, rel_type)
+                    
+                    relationships.append(rel)
+            
+            # Generate random group events
+            events = []
+            for _ in range(3):
+                event_type = random.choice(["meeting", "conflict", "collaboration", "celebration", "crisis"])
+                
+                if event_type == "meeting":
+                    events.append(f"The group held a meeting to discuss their goals and plans.")
+                elif event_type == "conflict":
+                    conflict_members = random.sample(members, min(2, len(members)))
+                    events.append(f"{conflict_members[0].get('npc_name')} and {conflict_members[1].get('npc_name')} had a disagreement about the group's direction.")
+                elif event_type == "collaboration":
+                    events.append(f"The group worked together on a project, strengthening their bonds.")
+                elif event_type == "celebration":
+                    events.append(f"The group celebrated a significant achievement together.")
+                elif event_type == "crisis":
+                    events.append(f"The group faced a crisis that tested their unity and resolve.")
+            
+            # Update group dynamics
+            dynamics = group_data.get("dynamics", {})
+            if not dynamics:
+                dynamics = {
+                    "hierarchy": random.randint(30, 70),
+                    "cohesion": random.randint(30, 70),
+                    "secrecy": random.randint(30, 70),
+                    "territoriality": random.randint(30, 70),
+                    "exclusivity": random.randint(30, 70)
+                }
+            
+            # Update group data
+            group_data["dynamics"] = dynamics
+            group_data["shared_history"] = group_data.get("shared_history", []) + events
+            
+            cursor.execute("""
+                UPDATE NPCGroups
+                SET group_data=%s
+                WHERE group_id=%s AND user_id=%s AND conversation_id=%s
+            """, (json.dumps(group_data), group_id, self.user_id, self.conversation_id))
+            
+            conn.commit()
+            
+            return {
+                "group_id": group_id,
+                "group_name": group_name,
+                "dynamics": dynamics,
+                "events": events,
+                "relationships": relationships
+            }
+        except Exception as e:
+            conn.rollback()
+            logging.error(f"Error generating group dynamics: {e}")
+            return {"error": str(e)}
+        finally:
+            cursor.close()
+            conn.close()
+    
+    async def generate_relationship_evolution(self, link_id: int) -> Dict[str, Any]:
+        """
+        Generate relationship evolution information.
+        
+        Args:
+            link_id: ID of the relationship link
+            
+        Returns:
+            Dictionary with evolution information
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Get relationship data
+            cursor.execute("""
+                SELECT entity1_type, entity1_id, entity2_type, entity2_id,
+                       link_type, link_level, link_history, dynamics
+                FROM SocialLinks
+                WHERE link_id=%s AND user_id=%s AND conversation_id=%s
+            """, (link_id, self.user_id, self.conversation_id))
+            
+            row = cursor.fetchone()
+            if not row:
+                return {"error": "Relationship not found"}
+                
+            e1_type, e1_id, e2_type, e2_id, link_type, link_level, history, dynamics_json = row
+            
+            # Get entity names
+            e1_name = await self.get_entity_name(e1_type, e1_id)
+            e2_name = await self.get_entity_name(e2_type, e2_id)
+            
+            # Parse dynamics
+            dynamics = {}
+            if dynamics_json:
+                if isinstance(dynamics_json, str):
+                    try:
+                        dynamics = json.loads(dynamics_json)
+                    except json.JSONDecodeError:
+                        dynamics = {}
+                else:
+                    dynamics = dynamics_json
+            
+            # Parse history
+            history_events = []
+            if history:
+                if isinstance(history, str):
+                    try:
+                        history_events = json.loads(history)
+                    except json.JSONDecodeError:
+                        history_events = []
+                else:
+                    history_events = history
+            
+            # Generate potential future trajectories
+            trajectories = []
+            
+            if "control" in dynamics and dynamics["control"] > 60:
+                trajectories.append({
+                    "name": "Increasing Control",
+                    "description": f"{e1_name} gains even more control over {e2_name}",
+                    "probability": "High",
+                    "triggers": ["Extended isolation", "Emotional vulnerability", "Dependency reinforcement"]
+                })
+            
+            if "trust" in dynamics and dynamics["trust"] > 70:
+                trajectories.append({
+                    "name": "Deep Trust",
+                    "description": f"{e1_name} and {e2_name} develop profound trust",
+                    "probability": "Medium",
+                    "triggers": ["Shared vulnerability", "Consistent support", "Mutual secrets"]
+                })
+            
+            if "tension" in dynamics and dynamics["tension"] > 50:
+                trajectories.append({
+                    "name": "Breaking Point",
+                    "description": f"Tension between {e1_name} and {e2_name} reaches a critical threshold",
+                    "probability": "Medium-High",
+                    "triggers": ["Public confrontation", "Boundary violation", "Resource competition"]
+                })
+            
+            # Generate default trajectory if none exist
+            if not trajectories:
+                trajectories.append({
+                    "name": "Status Quo",
+                    "description": f"Relationship between {e1_name} and {e2_name} continues as is",
+                    "probability": "High",
+                    "triggers": ["Routine maintenance", "Absence of disruption"]
+                })
+            
+            # Generate relationship insights
+            insights = []
+            
+            # Power dynamic insight
+            if "control" in dynamics and "dependency" in dynamics:
+                control = dynamics["control"]
+                dependency = dynamics["dependency"]
+                
+                if control > 70 and dependency > 60:
+                    insights.append(f"Strong power imbalance with {e1_name} controlling and {e2_name} dependent")
+                elif control > 50 and dependency > 40:
+                    insights.append(f"Moderate power dynamic with {e1_name} guiding and {e2_name} following")
+                else:
+                    insights.append(f"Balanced power dynamic between {e1_name} and {e2_name}")
+            
+            # Emotional dynamic insight
+            if "intimacy" in dynamics and "trust" in dynamics:
+                intimacy = dynamics["intimacy"]
+                trust = dynamics["trust"]
+                
+                if intimacy > 70 and trust > 70:
+                    insights.append(f"Deep emotional connection between {e1_name} and {e2_name}")
+                elif intimacy > 50 and trust < 30:
+                    insights.append(f"Intimate but untrusting relationship between {e1_name} and {e2_name}")
+                elif intimacy < 30 and trust > 70:
+                    insights.append(f"Trusted but distant relationship between {e1_name} and {e2_name}")
+                else:
+                    insights.append(f"Developing emotional dynamic between {e1_name} and {e2_name}")
+            
+            # Default insight if none exist
+            if not insights:
+                insights.append(f"Evolving relationship between {e1_name} and {e2_name}")
+            
+            return {
+                "link_id": link_id,
+                "entity1_name": e1_name,
+                "entity2_name": e2_name,
+                "relationship_type": link_type,
+                "relationship_level": link_level,
+                "dynamics": dynamics,
+                "history_length": len(history_events),
+                "recent_history": history_events[-3:] if len(history_events) >= 3 else history_events,
+                "trajectories": trajectories,
+                "insights": insights
+            }
+        except Exception as e:
+            logging.error(f"Error generating relationship evolution: {e}")
+            return {"error": str(e)}
+        finally:
+            cursor.close()
+            conn.close()
+    
+    async def get_entity_name(self, entity_type: str, entity_id: int) -> str:
+        """
+        Get the name of an entity.
+        
+        Args:
+            entity_type: Type of entity
+            entity_id: ID of entity
+            
+        Returns:
+            Name of the entity
+        """
+        if entity_type == "player":
+            return "Chase"
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT npc_name
+                FROM NPCStats
+                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+            """, (entity_id, self.user_id, self.conversation_id))
+            
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+            
+            return "Unknown NPC"
+        finally:
+            cursor.close()
+            conn.close()
+    
+    async def get_player_relationships(self) -> List[Dict[str, Any]]:
+        """
+        Get all relationships involving the player.
+        
+        Returns:
+            List of relationship data
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Get all relationships involving the player
+            cursor.execute("""
+                SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id,
+                       link_type, link_level
+                FROM SocialLinks
+                WHERE user_id=%s AND conversation_id=%s
+                AND ((entity1_type='player' AND entity1_id=%s) OR 
+                     (entity2_type='player' AND entity2_id=%s))
+            """, (self.user_id, self.conversation_id, self.user_id, self.user_id))
+            
+            relationships = []
+            for row in cursor.fetchall():
+                link_id, e1_type, e1_id, e2_type, e2_id, link_type, link_level = row
+                
+                # Determine the NPC
+                if e1_type == "player":
+                    npc_type = e2_type
+                    npc_id = e2_id
+                else:
+                    npc_type = e1_type
+                    npc_id = e1_id
+                
+                # Get NPC name
+                npc_name = await self.get_entity_name(npc_type, npc_id)
+                
+                relationships.append({
+                    "link_id": link_id,
+                    "npc_id": npc_id,
+                    "npc_name": npc_name,
+                    "relationship_type": link_type,
+                    "relationship_level": link_level
+                })
+            
+            return relationships
+        finally:
+            cursor.close()
+            conn.close()
