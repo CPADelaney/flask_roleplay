@@ -562,8 +562,13 @@ async def next_storybeat():
                 npc_responses.append(response_data)
                 
                 # Record memories created
-                for memory in interaction_result.get("memories_created", []):
-                    await npc_system.record_memory_event(nearby_npc["npc_id"], memory)
+                memories_created = interaction_result.get("memories_created", [])
+                for memory_text in memories_created:
+                    await npc_system.add_memory_to_npc(
+                        npc_id=nearby_npc["npc_id"],
+                        memory_text=memory_text,
+                        tags=["player_interaction", interaction_type]
+                    )
 
         # 5) Check time advancement using IntegratedNPCSystem
         old_year, old_month, old_day, old_phase = await npc_system.get_current_game_time()
@@ -620,13 +625,13 @@ async def next_storybeat():
                     if event.get("type") == "relationship_crossroads":
                         crossroads_event = event.get("data")
                         break
-            
+                    
             # Handle crossroads choice if provided
             if data.get("crossroads_choice") is not None and data.get("crossroads_name") and data.get("link_id"):
                 choice_result = await npc_system.apply_crossroads_choice(
-                    data["link_id"],
+                    int(data["link_id"]),
                     data["crossroads_name"],
-                    data["crossroads_choice"]
+                    int(data["crossroads_choice"])
                 )
                 
                 if isinstance(choice_result, dict) and "error" in choice_result:
@@ -775,6 +780,13 @@ async def get_relationship_details():
             entity1_type, int(entity1_id),
             entity2_type, int(entity2_id)
         )
+        
+        if not relationship:
+            # Try alternative relationship configuration
+            relationship = await npc_system.get_relationship(
+                entity2_type, int(entity2_id),
+                entity1_type, int(entity1_id)
+            )
         
         if not relationship:
             return jsonify({"error": "Relationship not found"}), 404
