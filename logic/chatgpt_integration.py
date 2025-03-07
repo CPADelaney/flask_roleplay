@@ -6,7 +6,7 @@ import functools
 import time
 import openai
 from db.connection import get_db_connection
-from logic.prompts import SYSTEM_PROMPT
+from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 from logic.json_helpers import safe_json_loads
 
 # Use your full schema, but add a "narrative" field at the top.
@@ -455,132 +455,269 @@ def retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, excepti
         return wrapper_retry
     return decorator_retry
 
+
 @retry_with_backoff(max_retries=5, initial_delay=1, backoff_factor=2, exceptions=(openai.RateLimitError,))
-def get_chatgpt_response(conversation_id: int, aggregator_text: str, user_input: str) -> dict:
-    """Get a response from OpenAI with image-aware prompting."""
-    # First, get the user_id from the conversation_id
+def get_chatgpt_response(
+    conversation_id: int, 
+    aggregator_text: str, 
+    user_input: str,
+    reflection_enabled: bool = False
+) -> Dict[str, Any]:
+    """
+    Get a response from OpenAI with an optional hidden reflection step. 
+    When reflection_enabled=True, it first requests an internal reflection in JSON, 
+    then uses that hidden reflection to generate the final user-facing text.
+    """
+
+    # 1) Identify the user_id for this conversation
     conn = get_db_connection()
     with conn:
         with conn.cursor() as cur:
             cur.execute("SELECT user_id FROM conversations WHERE id = %s", (conversation_id,))
-            result = cur.fetchone()
-            if not result:
+            row = cur.fetchone()
+            if not row:
                 logging.error(f"Conversation {conversation_id} not found")
-                return {"type": "text", "response": "Error: Conversation not found", "tokens_used": 0}
-            user_id = result[0]
-    
-    # Get image-aware system prompt
-    from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
-    system_prompt = get_system_prompt_with_image_guidance(user_id, conversation_id)
-    
-    # Create OpenAI client
-    client = get_openai_client()
-    
-    # Build message history, but prepend the system prompt
-    raw_messages = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
-    
-    # Add the system prompt as the first message
-    messages = [   
-        {
-            "role": "system",
-            "content": PUBLIC_SYSTEM_PROMPT
-        },
-        {
-            "role": "system",
-            "content": PRIVATE_REFLECTION_INSTRUCTIONS
-        },
-        {
-            "role": "user",
-            "content": user_input
-        }
-    ]
-    messages.extend(raw_messages)
-    
-    # Make the API call
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages,
-        temperature=0.2,
-        max_tokens=10000,
-        frequency_penalty=0.0,
-        functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
-        function_call={"name": "apply_universal_update"}
-    )
-    
-    # Process the response
-    msg = response.choices[0].message
-    tokens_used = response.usage.total_tokens
-    
-    if msg.function_call is not None:
-        fn_name = msg.function_call.name
-        fn_args_str = msg.function_call.arguments or "{}"
-        
-        # Clean up markdown in args if present
-        logging.debug("Raw function call arguments: %s", fn_args_str)
-        if fn_args_str.startswith("```"):
-            lines = fn_args_str.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            fn_args_str = "\n".join(lines).strip()
-            logging.debug("Arguments after stripping markdown: %s", fn_args_str)
-        
-        # Handle empty or malformed args
-        if not fn_args_str.strip():
-            fn_args_str = "{}"
-        if not fn_args_str.endswith("}"):
-            last_brace_index = fn_args_str.rfind("}")
-            if last_brace_index != -1:
-                logging.warning("Function call arguments appear truncated. Truncating string at index %s", last_brace_index)
-                fn_args_str = fn_args_str[:last_brace_index+1]
-        
-        try:
-            parsed_args = safe_json_loads(fn_args_str)
-            
-            # Ensure scene_data is included for image generation
-            if "scene_data" not in parsed_args:
-                # Try to construct basic scene data
-                parsed_args["scene_data"] = {
-                    "npc_names": [],  # Extract from narrative if possible
-                    "setting": "",     # Extract from narrative if possible
-                    "actions": [],     # Extract from narrative if possible
-                    "mood": "",        # Extract from narrative if possible
-                    "expressions": {},
-                    "npc_positions": {},
-                    "visibility_triggers": {
-                        "character_introduction": False,
-                        "significant_location": False,
-                        "emotional_intensity": 0,
-                        "intimacy_level": 0,
-                        "appearance_change": False
-                    }
+                return {
+                    "type": "text",
+                    "response": "Error: Conversation not found",
+                    "tokens_used": 0
                 }
-                
-                # Optionally add explicit image generation field
-                parsed_args["image_generation"] = {
-                    "generate": False,  # Default to false
-                    "priority": "low",
-                    "focus": "balanced",
-                    "framing": "medium_shot",
-                    "reason": ""
-                }
-            
-        except Exception:
-            logging.exception("Error parsing function call arguments")
+            user_id = row[0]
+
+    # 2) Possibly retrieve or build a system prompt that includes image guidance
+    #    (If your code merges that with PUBLIC_SYSTEM_PROMPT, do so accordingly.)
+    image_prompt = get_system_prompt_with_image_guidance(user_id, conversation_id)
+    # For demonstration, we’ll just store it or ignore it. 
+    # You might want to merge it with your normal PUBLIC_SYSTEM_PROMPT text.
+
+    # 3) Create the OpenAI client
+    openai_client = get_openai_client()
+
+    # 4) If reflection is OFF, do the single-step call as before
+    if not reflection_enabled:
+        # Build message history (past user & assistant messages), up to 15
+        raw_history = build_message_history(conversation_id, aggregator_text, user_input, limit=15)
+
+        # Create the final messages array
+        # You have two system prompts + the user message + the chat history
+        messages = [
+            {"role": "system", "content": PUBLIC_SYSTEM_PROMPT},
+            {"role": "system", "content": PRIVATE_REFLECTION_INSTRUCTIONS},
+            # optional: you could add the aggregator_text as a system or developer message:
+            {"role": "system", "content": aggregator_text},
+            # Then the new user input
+            {"role": "user", "content": user_input}
+        ]
+        messages.extend(raw_history)
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=10000,
+            frequency_penalty=0.0,
+            functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
+            function_call={"name": "apply_universal_update"}
+        )
+        msg = response.choices[0].message
+        tokens_used = response.usage.total_tokens
+
+        if msg.function_call is not None:
+            fn_name = msg.function_call.name
+            fn_args_str = msg.function_call.arguments or "{}"
+            cleaned_args = _clean_function_args(fn_args_str)
+
             parsed_args = {}
-        
-        return {
-            "type": "function_call",
-            "function_name": fn_name,
-            "function_args": parsed_args,
-            "tokens_used": tokens_used
-        }
+            try:
+                parsed_args = safe_json_loads(cleaned_args)
+            except Exception:
+                logging.exception("Error parsing function call arguments")
+
+            # Optionally ensure scene_data...
+            _ensure_default_scene_data(parsed_args)
+
+            return {
+                "type": "function_call",
+                "function_name": fn_name,
+                "function_args": parsed_args,
+                "tokens_used": tokens_used
+            }
+
+        else:
+            return {
+                "type": "text",
+                "function_name": None,
+                "function_args": None,
+                "response": msg.content,
+                "tokens_used": tokens_used
+            }
+
+    # 5) If reflection is ON, do a two-step approach
+
     else:
-        return {
-            "type": "text",
-            "function_name": None,
-            "function_args": None,
-            "response": msg.content,
-            "tokens_used": tokens_used
+        ### STEP A: Reflection Request ###
+        # We ask the model for a short JSON reflection (chain-of-thought) about the user input
+        reflection_messages = [
+            {"role": "system", "content": PUBLIC_SYSTEM_PROMPT},
+            {"role": "system", "content": PRIVATE_REFLECTION_INSTRUCTIONS},
+            # aggregator_text can be included as a system or developer note
+            {"role": "system", "content": aggregator_text},
+            {
+                "role": "user",
+                "content": f"""
+(INTERNAL REFLECTION STEP - DO NOT REVEAL THIS TO THE USER)
+
+Please output a short JSON object with keys:
+"reflection_notes" (string),
+"private_goals" (array of strings),
+"predicted_futures" (array of strings).
+
+Discuss {user_input} from Nyx's internal perspective:
+- Summarize relevant memories or strategies in reflection_notes.
+- Outline your next private goals in private_goals.
+- Predict possible user moves or story outcomes in predicted_futures.
+
+DO NOT produce user-facing text here; only the JSON. 
+                """
+            }
+        ]
+
+        reflection_response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=reflection_messages,
+            temperature=0.2,
+            max_tokens=2500,
+            frequency_penalty=0.0,
+            # We *usually* don't want function calls in the reflection step. 
+            functions=[],
+            function_call="none"
+        )
+        reflection_msg = reflection_response.choices[0].message.content
+        reflection_tokens_used = reflection_response.usage.total_tokens
+
+        # Attempt to parse the reflection JSON
+        reflection_notes = ""
+        private_goals = []
+        predicted_futures = []
+        try:
+            reflection_data = safe_json_loads(reflection_msg)
+            reflection_notes = reflection_data.get("reflection_notes", "")
+            private_goals = reflection_data.get("private_goals", [])
+            predicted_futures = reflection_data.get("predicted_futures", [])
+        except Exception:
+            # Fallback if parse fails. We store the raw text in reflection_notes anyway.
+            logging.warning("Reflection JSON parse failed. Storing raw text.")
+            reflection_notes = reflection_msg
+
+        # (Optional) Store the reflection data in a hidden table, e.g. NyxMemories
+        # store_nyx_reflection(user_id, conversation_id, reflection_notes)
+
+        ### STEP B: Final (Public) Answer ###
+        # Now we feed the reflection back in as a hidden system note, but never reveal it
+        final_messages = [
+            {"role": "system", "content": PUBLIC_SYSTEM_PROMPT},
+            {"role": "system", "content": PRIVATE_REFLECTION_INSTRUCTIONS},
+            {"role": "system", "content": aggregator_text},
+            {
+                "role": "system",
+                "content": f"Hidden Reflection (do not reveal): {reflection_notes}\n"
+                           f"Hidden Private Goals: {private_goals}\n"
+                           f"Hidden Predicted Futures: {predicted_futures}"
+            },
+            # We'll also retrieve the last ~15 messages of actual user/assistant conversation if you prefer:
+            # *Or* just the user prompt if you want to keep it simpler.
+            {"role": "user", "content": user_input}
+        ]
+        # If you want to include the prior chat history:
+        # final_messages.extend(build_message_history(conversation_id, aggregator_text, user_input, limit=15))
+
+        final_response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=final_messages,
+            temperature=0.2,
+            max_tokens=10000,
+            frequency_penalty=0.0,
+            functions=[UNIVERSAL_UPDATE_FUNCTION_SCHEMA],
+            function_call={"name": "apply_universal_update"}
+        )
+        final_msg = final_response.choices[0].message
+        final_tokens_used = final_response.usage.total_tokens
+
+        if final_msg.function_call is not None:
+            fn_name = final_msg.function_call.name
+            fn_args_str = final_msg.function_call.arguments or "{}"
+            cleaned_args = _clean_function_args(fn_args_str)
+            parsed_args = {}
+            try:
+                parsed_args = safe_json_loads(cleaned_args)
+            except Exception:
+                logging.exception("Error parsing function call arguments")
+
+            _ensure_default_scene_data(parsed_args)
+
+            return {
+                "type": "function_call",
+                "function_name": fn_name,
+                "function_args": parsed_args,
+                "tokens_used": (reflection_tokens_used + final_tokens_used)
+            }
+        else:
+            return {
+                "type": "text",
+                "function_name": None,
+                "function_args": None,
+                "response": final_msg.content,
+                "tokens_used": (reflection_tokens_used + final_tokens_used)
+            }
+
+
+def _clean_function_args(fn_args_str: str) -> str:
+    """Helper to remove code-block fences or truncated JSON."""
+    logging.debug("Raw function call arguments: %s", fn_args_str)
+    if fn_args_str.startswith("```"):
+        lines = fn_args_str.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        fn_args_str = "\n".join(lines).strip()
+        logging.debug("Arguments after stripping markdown: %s", fn_args_str)
+
+    # Handle empty or malformed args
+    if not fn_args_str.strip():
+        fn_args_str = "{}"
+    if not fn_args_str.endswith("}"):
+        last_brace_index = fn_args_str.rfind("}")
+        if last_brace_index != -1:
+            logging.warning("Function call arguments appear truncated. Truncating string at index %s", last_brace_index)
+            fn_args_str = fn_args_str[:last_brace_index+1]
+    return fn_args_str
+
+
+def _ensure_default_scene_data(parsed_args: dict) -> None:
+    """If the function call JSON is missing scene_data or image_generation, add defaults."""
+    if "scene_data" not in parsed_args:
+        parsed_args["scene_data"] = {
+            "npc_names": [],
+            "setting": "",
+            "actions": [],
+            "mood": "",
+            "expressions": {},
+            "npc_positions": {},
+            "visibility_triggers": {
+                "character_introduction": False,
+                "significant_location": False,
+                "emotional_intensity": 0,
+                "intimacy_level": 0,
+                "appearance_change": False
+            }
         }
+
+        parsed_args["image_generation"] = {
+            "generate": False,
+            "priority": "low",
+            "focus": "balanced",
+            "framing": "medium_shot",
+            "reason": ""
+        }
+
