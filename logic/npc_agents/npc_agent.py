@@ -1,7 +1,7 @@
 # logic/npc_agents/npc_agent.py
 
 """
-Core NPC agent class that manages individual NPC behavior.
+Core NPC agent class that manages individual NPC behavior with enhanced memory capabilities.
 """
 
 import json
@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-from .memory_manager import NPCMemoryManager
+from .enhanced_memory_manager import EnhancedNPCMemoryManager
 from .decision_engine import NPCDecisionEngine
 from .relationship_manager import NPCRelationshipManager
 from .environment_perception import (
@@ -31,6 +31,7 @@ class NPCAgent:
     - Execute chosen actions (with optional memory recording if action is significant)
     - Track player interactions and update relationships accordingly
     - Handle scheduled/routine activities (e.g., from the NPC's daily schedule)
+    - Form and utilize memories with advanced cognitive features
     """
 
     def __init__(self, npc_id: int, user_id: int, conversation_id: int):
@@ -46,11 +47,13 @@ class NPCAgent:
         self.user_id = user_id
         self.conversation_id = conversation_id
 
-        self.memory_manager = NPCMemoryManager(npc_id, user_id, conversation_id)
+        # Initialize enhanced memory manager instead of basic one
+        self.memory_manager = EnhancedNPCMemoryManager(npc_id, user_id, conversation_id)
         self.decision_engine = NPCDecisionEngine(npc_id, user_id, conversation_id)
         self.relationship_manager = NPCRelationshipManager(npc_id, user_id, conversation_id)
 
         self.last_perception: Optional[Dict[str, Any]] = None
+        self.current_emotional_state: Optional[Dict[str, Any]] = None
 
     async def perceive_environment(self, current_context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -64,6 +67,7 @@ class NPCAgent:
               - environment (location, time_of_day, etc.)
               - relevant_memories
               - relationships
+              - emotional_state
               - timestamp
         """
         # Fetch environment data
@@ -73,32 +77,36 @@ class NPCAgent:
             current_context
         )
 
-        # Retrieve relevant memories for the given context
-        relevant_memories = await self.memory_manager.retrieve_relevant_memories(current_context)
+        # Retrieve relevant memories using enhanced memory system
+        relevant_memories = await self.memory_manager.retrieve_relevant_memories(
+            context=current_context
+        )
 
         # Update or retrieve relationship data
         relationship_data = await self.relationship_manager.update_relationships(current_context)
+        
+        # Get current emotional state
+        emotional_state = await self.memory_manager.get_emotional_state()
+        self.current_emotional_state = emotional_state
 
         # Combine into a single perception dictionary
         perception = {
             "environment": environment_data,
             "relevant_memories": relevant_memories,
             "relationships": relationship_data,
+            "emotional_state": emotional_state,
             "timestamp": datetime.now().isoformat()
         }
 
-        # Store the current perception in the agent's internal state (DB)
-        await self.store_perception(perception)
+        # Store the current perception
         self.last_perception = perception
 
         logger.debug("NPCAgent %s perceived environment: %s", self.npc_id, perception)
         return perception
 
-    async def make_decision(
-        self,
-        perception: Optional[Dict[str, Any]] = None,
-        available_actions: Optional[List[Dict[str, Any]]] = None
-    ) -> Dict[str, Any]:
+    async def make_decision(self,
+                           perception: Optional[Dict[str, Any]] = None,
+                           available_actions: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Decide which action to take based on current perception and available actions.
 
@@ -117,8 +125,53 @@ class NPCAgent:
             else:
                 perception = self.last_perception
 
+        # We pass the perception to the decision engine which now has access to enhanced memories
         chosen_action = await self.decision_engine.decide(perception, available_actions)
         logger.debug("NPCAgent %s decided on action: %s", self.npc_id, chosen_action)
+        
+        # Check if this decision requires a mask slippage
+        should_slip = False
+        
+        # More dominant and cruel NPCs with deteriorating masks are more likely to slip
+        if "dominance" in perception.get("basic_stats", {}) and "cruelty" in perception.get("basic_stats", {}):
+            dominance = perception["basic_stats"]["dominance"]
+            cruelty = perception["basic_stats"]["cruelty"]
+            
+            # Get mask information
+            try:
+                mask_info = await self.memory_manager.get_npc_mask()
+                mask_integrity = mask_info.get("integrity", 100)
+                
+                # Higher dominance/cruelty with lower mask integrity increases slip chance
+                slip_chance = (dominance + cruelty) / 200  # 0.0 to 1.0
+                slip_chance *= (100 - mask_integrity) / 100  # Factor in mask integrity
+                
+                # Also factor in emotional intensity
+                if self.current_emotional_state:
+                    current_emotion = self.current_emotional_state.get("current_emotion", {})
+                    emotion_intensity = current_emotion.get("intensity", 0)
+                    slip_chance *= (1 + emotion_intensity)
+                
+                # Decision to slip
+                should_slip = random.random() < slip_chance
+                
+                if should_slip:
+                    # Generate mask slippage
+                    slip_result = await self.memory_manager.generate_mask_slippage(
+                        trigger=f"deciding to {chosen_action.get('description', 'act')}"
+                    )
+                    
+                    # Record the slip as a memory
+                    if "description" in slip_result:
+                        await self.memory_manager.add_memory(
+                            memory_text=f"My mask slipped: {slip_result['description']}",
+                            memory_type="reflection",
+                            significance=4,  # High significance
+                            tags=["mask_slip", "true_nature"]
+                        )
+            except Exception as e:
+                logger.error(f"Error checking for mask slippage: {e}")
+        
         return chosen_action
 
     async def execute_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -144,70 +197,44 @@ class NPCAgent:
         # If it's a significant action, record it in memory
         if is_significant_action(action, result):
             memory_text = f"I {action.get('description', 'did something')} => {result.get('outcome', '')}"
+            
+            # Map emotional_impact to emotional_intensity (0-100 scale)
+            emotional_impact = result.get("emotional_impact", 0)
+            emotional_intensity = abs(emotional_impact) * 20  # Scale from -5...5 to 0...100
+            
+            # Add memory with emotional information
             await self.memory_manager.add_memory(
-                memory_text,
+                memory_text=memory_text,
                 memory_type="action",
                 significance=action.get("significance", 3),
-                emotional_valence=result.get("emotional_impact", 0)
+                emotional_intensity=emotional_intensity,
+                tags=["action", action.get("type", "unknown")]
             )
+            
+            # Update emotional state based on the action's impact
+            if emotional_impact != 0:
+                # Map emotional impact to an emotion
+                emotion = "neutral"
+                if emotional_impact > 2:
+                    emotion = "joy"
+                elif emotional_impact > 0:
+                    emotion = "satisfaction"
+                elif emotional_impact < -2:
+                    emotion = "anger"
+                elif emotional_impact < 0:
+                    emotion = "sadness"
+                
+                # Normalize intensity to 0-1 scale
+                intensity = min(1.0, abs(emotional_impact) / 5.0)
+                
+                # Update emotional state
+                await self.memory_manager.update_emotional_state(
+                    primary_emotion=emotion,
+                    intensity=intensity,
+                    trigger=f"Action: {action.get('description', 'unknown action')}"
+                )
 
         return result
-
-    async def store_perception(self, perception: Dict[str, Any]) -> None:
-        """
-        Store the current perception state in NPCAgentState.
-
-        Args:
-            perception: A dictionary containing environment, relationships, etc.
-        """
-        # We'll keep only a lightweight snapshot (environment + timestamp)
-        snapshot = {
-            "environment": perception.get("environment", {}),
-            "timestamp": perception.get("timestamp", datetime.now().isoformat())
-        }
-
-        from db.connection import get_db_connection
-        with get_db_connection() as conn, conn.cursor() as cursor:
-            try:
-                cursor.execute("""
-                    SELECT 1
-                    FROM NPCAgentState
-                    WHERE npc_id = %s
-                      AND user_id = %s
-                      AND conversation_id = %s
-                """, (self.npc_id, self.user_id, self.conversation_id))
-                exists = cursor.fetchone() is not None
-
-                if exists:
-                    cursor.execute("""
-                        UPDATE NPCAgentState
-                        SET current_state = %s,
-                            last_updated = CURRENT_TIMESTAMP
-                        WHERE npc_id = %s
-                          AND user_id = %s
-                          AND conversation_id = %s
-                    """, (
-                        json.dumps(snapshot),
-                        self.npc_id,
-                        self.user_id,
-                        self.conversation_id
-                    ))
-                else:
-                    cursor.execute("""
-                        INSERT INTO NPCAgentState
-                            (npc_id, user_id, conversation_id, current_state, last_updated)
-                        VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-                    """, (
-                        self.npc_id,
-                        self.user_id,
-                        self.conversation_id,
-                        json.dumps(snapshot)
-                    ))
-                conn.commit()
-
-            except Exception as e:
-                conn.rollback()
-                logger.error("Error storing perception for NPC %s: %s", self.npc_id, e)
 
     async def process_player_action(self, player_action: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -228,6 +255,7 @@ class NPCAgent:
         # Incorporate the player's action into the environment context
         context = {
             "player_action": player_action,
+            "text": player_action.get("description", ""),
             "description": f"Player {player_action.get('description', 'did something')}"
         }
 
@@ -249,17 +277,47 @@ class NPCAgent:
                 response_action
             )
 
-        # Record an interaction memory with the emotional tone from the result
+        # Record an interaction memory with enhanced emotional processing
         memory_text = (
             f"Player {player_action.get('description','???')} -> I responded by "
             f"{response_action.get('description','???')}"
         )
+        
+        # Extract emotional data from the result
+        emotional_impact = result.get("emotional_impact", 0)
+        emotional_intensity = abs(emotional_impact) * 20  # Scale to 0-100
+        
+        # Add the interaction memory
         await self.memory_manager.add_memory(
-            memory_text,
+            memory_text=memory_text,
             memory_type="interaction",
             significance=3,
-            emotional_valence=result.get("emotional_impact", 0) / 10
+            emotional_intensity=emotional_intensity,
+            tags=["interaction", "player", player_action.get("type", "unknown")]
         )
+        
+        # Update emotional state
+        if emotional_impact != 0:
+            # Map the impact to an emotion
+            emotion = "neutral"
+            if emotional_impact > 2:
+                emotion = "joy"
+            elif emotional_impact > 0:
+                emotion = "satisfaction"
+            elif emotional_impact < -2:
+                emotion = "anger"
+            elif emotional_impact < 0:
+                emotion = "sadness"
+                
+            # Calculate intensity (0-1 scale)
+            intensity = min(1.0, abs(emotional_impact) / 5.0)
+            
+            # Update emotional state
+            await self.memory_manager.update_emotional_state(
+                primary_emotion=emotion,
+                intensity=intensity,
+                trigger=f"Player action: {player_action.get('description', 'unknown')}"
+            )
 
         logger.debug("NPCAgent %s processed player action '%s': result=%s", self.npc_id, player_action, result)
 
@@ -313,12 +371,12 @@ class NPCAgent:
             }
             result = await self.execute_action(action, context)
 
-            # 4) Record a memory for routine
+            # 4) Record a memory for routine using enhanced memory system
             await self.memory_manager.add_memory(
-                f"I did '{activity_desc}' as scheduled for {day_name} {time_of_day}",
+                memory_text=f"I did '{activity_desc}' as scheduled for {day_name} {time_of_day}",
                 memory_type="routine",
-                significance=1,
-                emotional_valence=0
+                significance=2,  # Low-medium significance for routine activities
+                tags=["routine", "scheduled", day_name.lower(), time_of_day.lower()]
             )
 
             logger.debug("NPCAgent %s performed scheduled activity: %s => %s", self.npc_id, activity_desc, result)
@@ -330,6 +388,20 @@ class NPCAgent:
         except Exception as e:
             logger.error("Error in perform_scheduled_activity for NPC %s: %s", self.npc_id, e)
             return None
+            
+    async def run_memory_maintenance(self) -> Dict[str, Any]:
+        """
+        Run periodic maintenance tasks on the NPC's memory system.
+        
+        Returns:
+            Results of maintenance operations
+        """
+        try:
+            # Run memory maintenance
+            return await self.memory_manager.run_maintenance()
+        except Exception as e:
+            logger.error(f"Error running memory maintenance for NPC {self.npc_id}: {e}")
+            return {"error": str(e)}
 
     # ------------------------------------------------------------------
     # Internal helper methods for scheduling/time
@@ -411,3 +483,6 @@ class NPCAgent:
         except Exception:
             logger.error("Invalid schedule data for NPC %s", self.npc_id)
             return None
+
+# Need to import random for mask slippage chance
+import random
