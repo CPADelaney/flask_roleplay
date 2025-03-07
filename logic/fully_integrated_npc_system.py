@@ -754,11 +754,12 @@ class IntegratedNPCSystem:
         return True
     
     async def update_relationship_from_interaction(self, 
-                                                npc_id: int, 
-                                                player_action: Dict[str, Any],
-                                                npc_action: Dict[str, Any]) -> bool:
+                                               npc_id: int, 
+                                               player_action: Dict[str, Any],
+                                               npc_action: Dict[str, Any]) -> bool:
         """
         Update relationship between NPC and player based on an interaction.
+        Enhanced to use agent's relationship manager and memory system for more nuanced updates.
         
         Args:
             npc_id: ID of the NPC
@@ -775,12 +776,774 @@ class IntegratedNPCSystem:
         if npc_id not in self.agent_system.npc_agents:
             self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
         
-        # Update relationship through the manager
+        agent = self.agent_system.npc_agents[npc_id]
+        
+        # Get agent's current emotional state and perception for context
+        memory_system = await agent._get_memory_system()
+        emotional_state = await memory_system.get_npc_emotion(npc_id)
+        
+        # Enhance relationship update with emotional context
+        context = {
+            "emotional_state": emotional_state,
+            "recent_interactions": [],  # Could populate from memory
+            "interaction_type": player_action.get("type", "unknown")
+        }
+        
+        # Get recent memories to inform relationship change
+        memory_result = await memory_system.recall(
+            entity_type="npc",
+            entity_id=npc_id,
+            query="player interaction",
+            limit=3
+        )
+        
+        context["recent_interactions"] = memory_result.get("memories", [])
+        
+        # Update relationship with enhanced context
         await relationship_manager.update_relationship_from_interaction(
-            "player", self.user_id, player_action, npc_action
+            "player", self.user_id, player_action, npc_action, context
+        )
+        
+        # Create a memory of this relationship change
+        # Format memory text based on action types
+        if player_action.get("type") in ["help", "assist", "support"]:
+            memory_text = "The player helped me, improving our relationship."
+        elif player_action.get("type") in ["insult", "mock", "threaten"]:
+            memory_text = "The player was hostile to me, damaging our relationship."
+        else:
+            memory_text = f"My relationship with the player changed after they {player_action.get('description', 'interacted with me')}."
+        
+        await memory_system.remember(
+            entity_type="npc",
+            entity_id=npc_id,
+            memory_text=memory_text,
+            importance="medium",
+            tags=["relationship_change", "player_interaction"]
         )
         
         return True
+
+    async def record_memory_event(self, npc_id: int, memory_text: str, tags: List[str] = None) -> bool:
+    """
+    Record a memory event for an NPC using the agent's memory system.
+    
+    Args:
+        npc_id: ID of the NPC
+        memory_text: The memory text to record
+        tags: Optional tags for the memory
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    # Get or create the NPC agent
+    if npc_id not in self.agent_system.npc_agents:
+        self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+    
+    agent = self.agent_system.npc_agents[npc_id]
+    memory_system = await agent._get_memory_system()
+    
+    # Create the memory
+    try:
+        await memory_system.remember(
+            entity_type="npc",
+            entity_id=npc_id,
+            memory_text=memory_text,
+            importance="medium",  # Default importance
+            tags=tags or ["player_interaction"]
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error recording memory for NPC {npc_id}: {e}")
+        return False
+
+    async def check_for_relationship_events(self) -> List[Dict[str, Any]]:
+        """
+        Check for special relationship events like crossroads or rituals.
+        
+        Returns:
+            List of relationship events
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        events = []
+        
+        try:
+            # Get social links with sufficiently high levels that might trigger events
+            cursor.execute("""
+                SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id, 
+                       link_type, link_level
+                FROM SocialLinks
+                WHERE user_id = %s AND conversation_id = %s
+                  AND (entity1_type = 'player' OR entity2_type = 'player')
+                  AND link_level >= 50
+            """, (self.user_id, self.conversation_id))
+            
+            links = []
+            for row in cursor.fetchall():
+                link_id, e1_type, e1_id, e2_type, e2_id, link_type, link_level = row
+                
+                # Get NPC name if applicable
+                npc_id = e1_id if e1_type == 'npc' else e2_id if e2_type == 'npc' else None
+                npc_name = None
+                
+                if npc_id:
+                    cursor.execute("""
+                        SELECT npc_name FROM NPCStats
+                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                    """, (npc_id, self.user_id, self.conversation_id))
+                    name_row = cursor.fetchone()
+                    if name_row:
+                        npc_name = name_row[0]
+                
+                links.append({
+                    "link_id": link_id,
+                    "entity1_type": e1_type,
+                    "entity1_id": e1_id,
+                    "entity2_type": e2_type,
+                    "entity2_id": e2_id,
+                    "link_type": link_type,
+                    "link_level": link_level,
+                    "npc_id": npc_id,
+                    "npc_name": npc_name
+                })
+            
+            # Check each link for potential events
+            for link in links:
+                # Check for crossroads event - significant decision point
+                if link["link_level"] >= 70 and random.random() < 0.2:  # 20% chance for high level links
+                    # Get or create NPC agent for better decision making
+                    npc_id = link["npc_id"]
+                    if npc_id and npc_id not in self.agent_system.npc_agents:
+                        self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                    
+                    # Get NPC agent if available
+                    agent = self.agent_system.npc_agents.get(npc_id) if npc_id else None
+                    
+                    # Generate crossroads event (potentially using agent for better decision modeling)
+                    crossroads_data = await self._generate_relationship_crossroads(link, agent)
+                    
+                    if crossroads_data:
+                        events.append({
+                            "type": "relationship_crossroads",
+                            "data": crossroads_data
+                        })
+        
+        except Exception as e:
+            logger.error(f"Error checking for relationship events: {e}")
+        
+        finally:
+            cursor.close()
+            conn.close()
+        
+        return events
+    
+    async def _generate_relationship_crossroads(self, link: Dict[str, Any], agent: Optional[NPCAgent] = None) -> Dict[str, Any]:
+        """
+        Generate a relationship crossroads event based on link details and NPC agent.
+        
+        Args:
+            link: The social link data
+            agent: Optional NPC agent for better decision modeling
+            
+        Returns:
+            Crossroads event data
+        """
+        # Default crossroads types based on relationship level
+        crossroads_types = [
+            "trust_test",
+            "commitment_decision",
+            "loyalty_challenge",
+            "boundary_setting",
+            "power_dynamic_shift"
+        ]
+        
+        # Use agent to refine crossroads type if available
+        selected_type = random.choice(crossroads_types)
+        if agent:
+            # Get agent's current emotional state and perception for better context
+            memory_system = await agent._get_memory_system()
+            emotional_state = await memory_system.get_npc_emotion(link["npc_id"])
+            
+            # Use emotional state to influence crossroads type
+            if emotional_state and "current_emotion" in emotional_state:
+                emotion = emotional_state["current_emotion"]
+                primary = emotion.get("primary", {})
+                emotion_name = primary.get("name", "neutral")
+                
+                # Adjust crossroads type based on emotional state
+                if emotion_name == "anger":
+                    selected_type = "boundary_setting" if random.random() < 0.7 else "power_dynamic_shift"
+                elif emotion_name == "joy":
+                    selected_type = "commitment_decision" if random.random() < 0.7 else "trust_test"
+                elif emotion_name == "fear":
+                    selected_type = "trust_test" if random.random() < 0.7 else "loyalty_challenge"
+        
+        # Generate crossroads options based on type
+        options = self._generate_crossroads_options(selected_type, link)
+        
+        # Create crossroads data
+        crossroads_data = {
+            "link_id": link["link_id"],
+            "npc_id": link["npc_id"],
+            "npc_name": link["npc_name"],
+            "type": selected_type,
+            "description": self._get_crossroads_description(selected_type, link),
+            "options": options,
+            "expires_in": 3  # Number of interactions before expiring
+        }
+        
+        return crossroads_data
+    
+    def _generate_crossroads_options(self, crossroads_type: str, link: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate options for a relationship crossroads based on type."""
+        if crossroads_type == "trust_test":
+            return [
+                {
+                    "text": "Trust completely",
+                    "stat_effects": {"trust": 10, "respect": 5, "willpower": -5},
+                    "outcome": f"Your trust in {link['npc_name']} deepens significantly."
+                },
+                {
+                    "text": "Remain cautious",
+                    "stat_effects": {"trust": 0, "willpower": 5, "respect": 0},
+                    "outcome": f"You maintain your guard with {link['npc_name']}."
+                },
+                {
+                    "text": "Express distrust",
+                    "stat_effects": {"trust": -10, "respect": 0, "willpower": 10},
+                    "outcome": f"Your relationship with {link['npc_name']} becomes more distant."
+                }
+            ]
+        elif crossroads_type == "commitment_decision":
+            # Generate options based on commitment decision
+            return [
+                {
+                    "text": "Commit fully",
+                    "stat_effects": {"closeness": 15, "willpower": -10, "obedience": 10},
+                    "outcome": f"Your relationship with {link['npc_name']} becomes much closer."
+                },
+                {
+                    "text": "Partial commitment",
+                    "stat_effects": {"closeness": 5, "willpower": 0, "obedience": 0},
+                    "outcome": f"You become somewhat closer to {link['npc_name']}."
+                },
+                {
+                    "text": "Maintain independence",
+                    "stat_effects": {"willpower": 10, "closeness": -5, "obedience": -5},
+                    "outcome": f"You maintain your independence from {link['npc_name']}."
+                }
+            ]
+        # Add options for other crossroads types
+        # ...
+        
+        # Default options if type not recognized
+        return [
+            {
+                "text": "Strengthen relationship",
+                "stat_effects": {"closeness": 10, "respect": 5},
+                "outcome": f"Your bond with {link['npc_name']} strengthens."
+            },
+            {
+                "text": "Maintain status quo",
+                "stat_effects": {"closeness": 0, "respect": 0},
+                "outcome": f"Your relationship with {link['npc_name']} continues unchanged."
+            },
+            {
+                "text": "Create distance",
+                "stat_effects": {"closeness": -10, "respect": -5, "willpower": 5},
+                "outcome": f"You create some distance between yourself and {link['npc_name']}."
+            }
+        ]
+    
+    def _get_crossroads_description(self, crossroads_type: str, link: Dict[str, Any]) -> str:
+        """Get description text for a relationship crossroads."""
+        npc_name = link.get("npc_name", "The NPC")
+        
+        descriptions = {
+            "trust_test": f"{npc_name} has shared something important with you. How much will you trust them?",
+            "commitment_decision": f"Your relationship with {npc_name} has reached a critical point. How committed will you be?",
+            "loyalty_challenge": f"{npc_name} is testing your loyalty. How will you respond?",
+            "boundary_setting": f"{npc_name} is pushing boundaries in your relationship. How will you establish limits?",
+            "power_dynamic_shift": f"The power dynamic with {npc_name} is shifting. How will you position yourself?"
+        }
+        
+        return descriptions.get(crossroads_type, f"You've reached a crossroads in your relationship with {npc_name}.")
+    
+    async def apply_crossroads_choice(self, link_id: int, crossroads_name: str, choice_index: int) -> Dict[str, Any]:
+        """
+        Apply a choice in a relationship crossroads.
+        
+        Args:
+            link_id: ID of the social link
+            crossroads_name: Type/name of the crossroads
+            choice_index: Index of the chosen option
+            
+        Returns:
+            Result of the choice
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Get link details
+            cursor.execute("""
+                SELECT entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
+                FROM SocialLinks
+                WHERE link_id = %s AND user_id = %s AND conversation_id = %s
+            """, (link_id, self.user_id, self.conversation_id))
+            
+            row = cursor.fetchone()
+            if not row:
+                return {"error": "Link not found"}
+            
+            e1_type, e1_id, e2_type, e2_id, link_type, link_level = row
+            
+            # Get NPC details if applicable
+            npc_id = e1_id if e1_type == 'npc' else e2_id if e2_type == 'npc' else None
+            npc_name = None
+            
+            if npc_id:
+                cursor.execute("""
+                    SELECT npc_name FROM NPCStats
+                    WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                """, (npc_id, self.user_id, self.conversation_id))
+                name_row = cursor.fetchone()
+                if name_row:
+                    npc_name = name_row[0]
+            
+            # Reconstruct link data
+            link = {
+                "link_id": link_id,
+                "entity1_type": e1_type,
+                "entity1_id": e1_id,
+                "entity2_type": e2_type,
+                "entity2_id": e2_id,
+                "link_type": link_type,
+                "link_level": link_level,
+                "npc_id": npc_id,
+                "npc_name": npc_name
+            }
+            
+            # Generate options to find the chosen one
+            options = self._generate_crossroads_options(crossroads_name, link)
+            
+            if choice_index < 0 or choice_index >= len(options):
+                return {"error": "Invalid choice index"}
+            
+            chosen_option = options[choice_index]
+            
+            # Apply stat effects
+            if "stat_effects" in chosen_option:
+                # Convert dict to a list of separate changes for apply_stat_change
+                await self.apply_stat_changes(
+                    chosen_option["stat_effects"],
+                    f"Crossroads choice in relationship with {npc_name}"
+                )
+            
+            # Apply relationship changes
+            # Determine change based on choice index
+            level_change = 10 if choice_index == 0 else 0 if choice_index == 1 else -10
+            
+            # Update relationship
+            cursor.execute("""
+                UPDATE SocialLinks
+                SET link_level = GREATEST(0, LEAST(100, link_level + %s))
+                WHERE link_id = %s
+            """, (level_change, link_id))
+            
+            # Add event to link history
+            cursor.execute("""
+                UPDATE SocialLinks
+                SET link_history = COALESCE(link_history, '[]'::jsonb) || %s::jsonb
+                WHERE link_id = %s
+            """, (json.dumps([f"Crossroads choice: {chosen_option['text']}"]), link_id))
+            
+            conn.commit()
+            
+            # Create memory for NPC
+            if npc_id:
+                await self.add_memory_to_npc(
+                    npc_id,
+                    f"The player made a choice about our relationship: {chosen_option['text']}",
+                    importance="high",
+                    tags=["crossroads", "relationship_choice"]
+                )
+            
+            return {
+                "success": True,
+                "outcome_text": chosen_option.get("outcome", "Your choice has been recorded."),
+                "stat_effects": chosen_option.get("stat_effects", {})
+            }
+        
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error applying crossroads choice: {e}")
+            return {"error": str(e)}
+        
+        finally:
+            cursor.close()
+            conn.close()
+    
+    async def get_relationship(self, entity1_type: str, entity1_id: int, entity2_type: str, entity2_id: int) -> Dict[str, Any]:
+        """
+        Get the relationship between two entities.
+        
+        Args:
+            entity1_type: Type of first entity
+            entity1_id: ID of first entity
+            entity2_type: Type of second entity
+            entity2_id: ID of second entity
+            
+        Returns:
+            Dictionary with relationship details
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Check for direct relationship
+            cursor.execute("""
+                SELECT link_id, link_type, link_level, link_history
+                FROM SocialLinks
+                WHERE user_id = %s AND conversation_id = %s
+                  AND ((entity1_type = %s AND entity1_id = %s AND entity2_type = %s AND entity2_id = %s)
+                    OR (entity1_type = %s AND entity1_id = %s AND entity2_type = %s AND entity2_id = %s))
+            """, (
+                self.user_id, self.conversation_id,
+                entity1_type, entity1_id, entity2_type, entity2_id,
+                entity2_type, entity2_id, entity1_type, entity1_id
+            ))
+            
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            link_id, link_type, link_level, link_history = row
+            
+            # Convert link_history to Python list if it's not None
+            if link_history:
+                if isinstance(link_history, str):
+                    try:
+                        history = json.loads(link_history)
+                    except json.JSONDecodeError:
+                        history = []
+                else:
+                    history = link_history
+            else:
+                history = []
+            
+            # Get entity names
+            entity1_name = await self._get_entity_name(entity1_type, entity1_id, cursor)
+            entity2_name = await self._get_entity_name(entity2_type, entity2_id, cursor)
+            
+            # Use agent system for memory-enriched relationship data if one of the entities is an NPC
+            relationship_memories = []
+            if entity1_type == "npc" and entity1_id in self.agent_system.npc_agents:
+                agent = self.agent_system.npc_agents[entity1_id]
+                memory_system = await agent._get_memory_system()
+                
+                # Get memories related to the relationship
+                query = f"{entity2_name}"
+                memory_result = await memory_system.recall(
+                    entity_type="npc",
+                    entity_id=entity1_id,
+                    query=query,
+                    limit=5
+                )
+                
+                relationship_memories.extend(memory_result.get("memories", []))
+            
+            elif entity2_type == "npc" and entity2_id in self.agent_system.npc_agents:
+                agent = self.agent_system.npc_agents[entity2_id]
+                memory_system = await agent._get_memory_system()
+                
+                # Get memories related to the relationship
+                query = f"{entity1_name}"
+                memory_result = await memory_system.recall(
+                    entity_type="npc",
+                    entity_id=entity2_id,
+                    query=query,
+                    limit=5
+                )
+                
+                relationship_memories.extend(memory_result.get("memories", []))
+            
+            relationship = {
+                "link_id": link_id,
+                "entity1_type": entity1_type,
+                "entity1_id": entity1_id,
+                "entity1_name": entity1_name,
+                "entity2_type": entity2_type,
+                "entity2_id": entity2_id,
+                "entity2_name": entity2_name,
+                "link_type": link_type,
+                "link_level": link_level,
+                "link_history": history[-5:],  # Get last 5 events
+                "relationship_memories": relationship_memories
+            }
+            
+            return relationship
+        
+        except Exception as e:
+            logger.error(f"Error getting relationship: {e}")
+            return None
+        
+        finally:
+            cursor.close()
+            conn.close()
+    
+    async def _get_entity_name(self, entity_type: str, entity_id: int, cursor) -> str:
+        """Get the name of an entity."""
+        if entity_type == "player":
+            return "Player"
+        elif entity_type == "npc":
+            cursor.execute("""
+                SELECT npc_name FROM NPCStats
+                WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+            """, (entity_id, self.user_id, self.conversation_id))
+            row = cursor.fetchone()
+            return row[0] if row else f"NPC-{entity_id}"
+        else:
+            return f"{entity_type}-{entity_id}"
+    
+    async def generate_multi_npc_scene(self, npc_ids: List[int], location: str = None, include_player: bool = True) -> Dict[str, Any]:
+        """
+        Generate a scene with multiple NPCs interacting.
+        
+        Args:
+            npc_ids: List of NPC IDs to include in the scene
+            location: Optional location for the scene
+            include_player: Whether to include the player in the scene
+            
+        Returns:
+            Scene information
+        """
+        # Get current time information
+        year, month, day, time_of_day = await self.get_current_game_time()
+        
+        # If location not provided, get a common location for the NPCs
+        if not location:
+            location = await self._find_common_location(npc_ids)
+        
+        # Initialize the scene data
+        scene = {
+            "location": location,
+            "time_of_day": time_of_day,
+            "day": day,
+            "npc_ids": npc_ids,
+            "include_player": include_player,
+            "interactions": [],
+            "description": f"Scene at {location} during {time_of_day}"
+        }
+        
+        # Use the agent coordinator for group behavior
+        coordinator = self.agent_system.coordinator
+        
+        # Prepare context for the scene
+        context = {
+            "location": location,
+            "time_of_day": time_of_day,
+            "day": day,
+            "include_player": include_player,
+            "description": f"NPCs interacting at {location} during {time_of_day}"
+        }
+        
+        # Generate group actions using the coordinator
+        action_plan = await coordinator.make_group_decisions(npc_ids, context)
+        
+        # Add actions to the scene
+        scene["group_actions"] = action_plan.get("group_actions", [])
+        scene["individual_actions"] = action_plan.get("individual_actions", {})
+        
+        # Create interactions
+        interactions = []
+        
+        # Process group actions
+        for group_action in action_plan.get("group_actions", []):
+            npc_id = group_action.get("npc_id")
+            if npc_id is None:
+                continue
+                
+            action_data = group_action.get("action", {})
+            
+            # Get NPC name
+            npc_name = await self.get_npc_name(npc_id)
+            
+            interaction = {
+                "type": "group_action",
+                "npc_id": npc_id,
+                "npc_name": npc_name,
+                "action": action_data.get("type", "interact"),
+                "description": action_data.get("description", "does something"),
+                "target": action_data.get("target", "group")
+            }
+            
+            interactions.append(interaction)
+        
+        # Process individual actions
+        for npc_id, actions in action_plan.get("individual_actions", {}).items():
+            npc_name = await self.get_npc_name(npc_id)
+            
+            for action_data in actions:
+                target = action_data.get("target")
+                target_name = action_data.get("target_name")
+                
+                interaction = {
+                    "type": "individual_action",
+                    "npc_id": npc_id,
+                    "npc_name": npc_name,
+                    "action": action_data.get("type", "interact"),
+                    "description": action_data.get("description", "does something"),
+                    "target": target,
+                    "target_name": target_name
+                }
+                
+                interactions.append(interaction)
+        
+        # Add interactions to the scene
+        scene["interactions"] = interactions
+        
+        return scene
+    
+    async def _find_common_location(self, npc_ids: List[int]) -> str:
+        """Find a common location for a group of NPCs."""
+        if not npc_ids:
+            return "Unknown"
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Get all locations for the NPCs
+            cursor.execute("""
+                SELECT npc_id, current_location
+                FROM NPCStats
+                WHERE npc_id = ANY(%s) AND user_id = %s AND conversation_id = %s
+            """, (npc_ids, self.user_id, self.conversation_id))
+            
+            locations = {}
+            for row in cursor.fetchall():
+                _, loc = row
+                locations[loc] = locations.get(loc, 0) + 1
+            
+            # Find the most common location
+            common_location = max(locations.items(), key=lambda x: x[1])[0] if locations else "Unknown"
+            
+            return common_location
+        
+        except Exception as e:
+            logger.error(f"Error finding common location: {e}")
+            return "Unknown"
+        
+        finally:
+            cursor.close()
+            conn.close()
+    
+    async def generate_overheard_conversation(self, npc_ids: List[int], topic: str = None, about_player: bool = False) -> Dict[str, Any]:
+        """
+        Generate a conversation between NPCs that the player can overhear.
+        
+        Args:
+            npc_ids: List of NPCs involved in the conversation
+            topic: Optional topic of conversation
+            about_player: Whether the conversation is about the player
+            
+        Returns:
+            Conversation details
+        """
+        if len(npc_ids) < 2:
+            return {"error": "Need at least 2 NPCs for a conversation"}
+        
+        # Get current location and time
+        year, month, day, time_of_day = await self.get_current_game_time()
+        location = await self._find_common_location(npc_ids)
+        
+        # Get NPC details
+        npc_details = {}
+        for npc_id in npc_ids:
+            details = await self.get_npc_details(npc_id)
+            if details:
+                npc_details[npc_id] = details
+        
+        # Prepare context for conversation
+        topic_text = topic or ("the player" if about_player else "general matters")
+        context = {
+            "location": location,
+            "time_of_day": time_of_day,
+            "topic": topic_text,
+            "about_player": about_player,
+            "description": f"NPCs conversing about {topic_text} at {location}"
+        }
+        
+        # Use agent system for generating conversation
+        conversation_lines = []
+        
+        # Generate initial statement from first NPC
+        first_npc = npc_ids[0]
+        agent1 = self.agent_system.npc_agents.get(first_npc)
+        if not agent1:
+            self.agent_system.npc_agents[first_npc] = NPCAgent(first_npc, self.user_id, self.conversation_id)
+            agent1 = self.agent_system.npc_agents[first_npc]
+        
+        first_perception = await agent1.perceive_environment(context)
+        first_action = await agent1.make_decision(first_perception)
+        
+        npc1_name = npc_details.get(first_npc, {}).get("npc_name", f"NPC-{first_npc}")
+        first_line = {
+            "npc_id": first_npc,
+            "npc_name": npc1_name,
+            "text": first_action.get("description", f"starts talking about {topic_text}")
+        }
+        conversation_lines.append(first_line)
+        
+        # Generate responses from other NPCs
+        for npc_id in npc_ids[1:]:
+            agent = self.agent_system.npc_agents.get(npc_id)
+            if not agent:
+                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                agent = self.agent_system.npc_agents[npc_id]
+            
+            # Add the previous statement to context
+            response_context = context.copy()
+            response_context["previous_statement"] = first_line.get("text")
+            response_context["previous_speaker"] = first_line.get("npc_name")
+            
+            # Generate response using agent
+            perception = await agent.perceive_environment(response_context)
+            response_action = await agent.make_decision(perception)
+            
+            npc_name = npc_details.get(npc_id, {}).get("npc_name", f"NPC-{npc_id}")
+            response_line = {
+                "npc_id": npc_id,
+                "npc_name": npc_name,
+                "text": response_action.get("description", f"responds about {topic_text}")
+            }
+            conversation_lines.append(response_line)
+        
+        # Create memories of this conversation for each NPC
+        for npc_id in npc_ids:
+            other_npcs = [n for n in npc_ids if n != npc_id]
+            other_names = [npc_details.get(n, {}).get("npc_name", f"NPC-{n}") for n in other_npcs]
+            
+            memory_text = f"I had a conversation with {', '.join(other_names)} about {topic_text} at {location}."
+            
+            await self.add_memory_to_npc(
+                npc_id,
+                memory_text,
+                importance="medium" if about_player else "low",
+                tags=["conversation", "overheard"] + (["player_related"] if about_player else [])
+            )
+        
+        # Format the conversation
+        conversation = {
+            "location": location,
+            "time_of_day": time_of_day,
+            "topic": topic_text,
+            "about_player": about_player,
+            "lines": conversation_lines
+        }
+        
+        return conversation
     
     #=================================================================
     # MEMORY MANAGEMENT
@@ -1163,6 +1926,7 @@ class IntegratedNPCSystem:
     async def process_player_activity(self, player_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Process a player's activity, determining if time should advance and handling events.
+        Enhanced with agent perception and memory formation.
         
         Args:
             player_input: Player's input text
@@ -1171,24 +1935,238 @@ class IntegratedNPCSystem:
         Returns:
             Dictionary with processing results
         """
-        # Using ActivityManager.process_activity
-        result = await self.activity_manager.process_activity(
-            self.user_id, self.conversation_id, player_input, context
+        # Create base context if not provided
+        context_obj = context or {}
+        
+        # Create standardized player action
+        player_action = {
+            "type": "activity",
+            "description": player_input,
+            "text": player_input,
+            "context": context_obj
+        }
+        
+        # Determine activity type using activity manager
+        activity_result = await self.activity_manager.process_activity(
+            self.user_id, self.conversation_id, player_input, context_obj
         )
         
-        return result
+        # Update player action with determined activity type
+        player_action["type"] = activity_result.get("activity_type", "generic_activity")
+        
+        # Add activity perception to nearby NPCs via agent system
+        # This ensures NPCs are aware of what the player is doing
+        current_location = context_obj.get("location")
+        
+        if current_location:
+            # Get NPCs at current location
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT npc_id 
+                FROM NPCStats 
+                WHERE user_id=%s AND conversation_id=%s AND current_location=%s
+            """, (self.user_id, self.conversation_id, current_location))
+            
+            nearby_npc_ids = [row[0] for row in cursor.fetchall()]
+            conn.close()
+            
+            # Update perception for each nearby NPC agent
+            for npc_id in nearby_npc_ids:
+                if npc_id not in self.agent_system.npc_agents:
+                    self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                
+                agent = self.agent_system.npc_agents[npc_id]
+                
+                # Create perception context
+                perception_context = {
+                    "location": current_location,
+                    "player_action": player_action,
+                    "description": f"Player {player_input}"
+                }
+                
+                # Update agent's perception
+                await agent.perceive_environment(perception_context)
+                
+                # Create a memory of observing the player's action
+                memory_system = await agent._get_memory_system()
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=f"I observed the player {player_input} at {current_location}",
+                    importance="low",  # Low importance for routine observations
+                    tags=["player_observation", player_action["type"]]
+                )
+        
+        # Return the original activity result
+        return activity_result
     
     async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
         """
         Process scheduled activities for all NPCs using the agent system.
+        Enhanced with agent-based decision making and memory formation.
         
         Returns:
             Dictionary with results of NPC activities
         """
-        # Using the NPCAgentSystem to process scheduled activities
-        result = await self.agent_system.process_npc_scheduled_activities()
+        # Get current time information for context
+        year, month, day, time_of_day = await self.get_current_game_time()
         
-        return result
+        # Create base context for all NPCs
+        base_context = {
+            "year": year,
+            "month": month,
+            "day": day,
+            "time_of_day": time_of_day,
+            "activity_type": "scheduled"
+        }
+        
+        # Process each NPC's scheduled activities
+        results = []
+        conn = None
+        
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Get all NPCs with their current locations
+            cursor.execute("""
+                SELECT npc_id, npc_name, current_location 
+                FROM NPCStats 
+                WHERE user_id=%s AND conversation_id=%s
+            """, (self.user_id, self.conversation_id))
+            
+            npc_data = {}
+            for row in cursor.fetchall():
+                npc_id, npc_name, location = row
+                npc_data[npc_id] = {
+                    "name": npc_name,
+                    "location": location
+                }
+                
+            # For each NPC, process their scheduled activity
+            for npc_id, data in npc_data.items():
+                try:
+                    # Get or create NPC agent
+                    if npc_id not in self.agent_system.npc_agents:
+                        self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                    
+                    agent = self.agent_system.npc_agents[npc_id]
+                    
+                    # Create context with location
+                    context = base_context.copy()
+                    context["location"] = data["location"]
+                    context["description"] = f"Scheduled activity at {data['location']} during {time_of_day}"
+                    
+                    # Use agent to perceive environment and make decision
+                    perception = await agent.perceive_environment(context)
+                    
+                    # Perform scheduled activity using the agent
+                    activity_result = await agent.perform_scheduled_activity()
+                    
+                    if activity_result:
+                        # Format result for output
+                        formatted_result = {
+                            "npc_id": npc_id,
+                            "npc_name": data["name"],
+                            "location": data["location"],
+                            "action": activity_result.get("action", {}),
+                            "result": activity_result.get("result", {})
+                        }
+                        
+                        # Add emotional impact data from agent if available
+                        memory_system = await agent._get_memory_system()
+                        emotional_state = await memory_system.get_npc_emotion(npc_id)
+                        
+                        if emotional_state:
+                            formatted_result["emotional_state"] = emotional_state
+                        
+                        results.append(formatted_result)
+                except Exception as e:
+                    logger.error(f"Error processing scheduled activity for NPC {npc_id}: {e}")
+        
+        except Exception as e:
+            logger.error(f"Error in process_npc_scheduled_activities: {e}")
+        
+        finally:
+            if conn:
+                conn.close()
+        
+        # Let agent system process all scheduled activities
+        # This handles coordination between NPCs, shared observations, etc.
+        agent_system_result = await self.agent_system.process_npc_scheduled_activities()
+        
+        # Combine our results with agent system results
+        combined_results = {
+            "npc_responses": results,
+            "agent_system_responses": agent_system_result.get("npc_responses", []),
+            "count": len(results)
+        }
+        
+        return combined_results
+
+    async def run_memory_maintenance(self) -> Dict[str, Any]:
+    """
+    Run memory maintenance for all agents with enhanced processing.
+    
+    Returns:
+        Results of maintenance operations
+    """
+    try:
+        # Run system-wide maintenance first
+        system_results = await self.agent_system.run_maintenance()
+        
+        # Run individual agent maintenance for any that need special processing
+        individual_results = {}
+        
+        for npc_id, agent in self.agent_system.npc_agents.items():
+            try:
+                # Run specific maintenance on NPC agents that might need it
+                # These include highly active NPCs or those with special relationships
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                
+                # Check if this NPC has been frequently active or has important relationships
+                cursor.execute("""
+                    SELECT COUNT(*) FROM SocialLinks
+                    WHERE user_id = %s AND conversation_id = %s
+                    AND entity1_type = 'npc' AND entity1_id = %s
+                    AND link_level > 50
+                """, (self.user_id, self.conversation_id, npc_id))
+                
+                important_relationships = cursor.fetchone()[0] > 0
+                
+                cursor.execute("""
+                    SELECT COUNT(*) FROM NPCAgentState
+                    WHERE user_id = %s AND conversation_id = %s
+                    AND npc_id = %s
+                    AND last_updated > NOW() - INTERVAL '1 day'
+                """, (self.user_id, self.conversation_id, npc_id))
+                
+                recently_active = cursor.fetchone()[0] > 0
+                
+                conn.close()
+                
+                # Only run individual maintenance for NPCs that need it
+                if important_relationships or recently_active:
+                    agent_result = await agent.run_memory_maintenance()
+                    individual_results[npc_id] = agent_result
+            
+            except Exception as e:
+                logger.error(f"Error in agent-specific maintenance for NPC {npc_id}: {e}")
+                individual_results[npc_id] = {"error": str(e)}
+        
+        # Combine results
+        combined_results = {
+            "system_maintenance": system_results,
+            "individual_maintenance": individual_results
+        }
+        
+        return combined_results
+    
+    except Exception as e:
+        logger.error(f"Error in run_memory_maintenance: {e}")
+        return {"error": str(e)}
     
     #=================================================================
     # STATS AND PROGRESSION
