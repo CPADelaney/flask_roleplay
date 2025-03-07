@@ -64,43 +64,47 @@ def nyx_memory_maintenance_task():
 # -----------------------------------------------------------
 
 # Update to background_chat_task in main.py
-async def enhanced_background_chat_task(conversation_id, user_input, universal_update=None):
+def enhanced_background_chat_task(conversation_id, user_input, universal_update):
     """
-    Enhanced version of background_chat_task that integrates Nyx's memory system.
-    Replace or modify the existing function.
+    Enhanced version of background_chat_task with Nyx memory system integration
+    while preserving all existing functionality.
     """
     try:
-        logging.info(f"Starting GPT background chat task for conversation {conversation_id}")
+        logging.info(f"Starting enhanced GPT background chat task for conversation {conversation_id}")
         
         # Retrieve the user_id for this conversation
-        import asyncpg
-        dsn = os.getenv("DB_DSN", "postgresql://user:pass@localhost:5432/yourdb")
-        conn = await asyncpg.connect(dsn)
+        conn = get_db_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id FROM conversations WHERE id = %s", (conversation_id,))
+                result = cur.fetchone()
+                if not result:
+                    logging.error(f"Conversation {conversation_id} not found")
+                    socketio.emit('error', {'error': f"Conversation not found"}, room=conversation_id)
+                    return
+                user_id = result[0]
+            
+        # Get player name (defaulting to "Chase")
+        player_name = "Chase"  # Default value
         
-        try:
-            row = await conn.fetchrow("SELECT user_id FROM conversations WHERE id = $1", conversation_id)
-            if not row:
-                logging.error(f"Conversation {conversation_id} not found")
-                return
-            user_id = row["user_id"]
-            
-            # Get player name (defaulting to "Chase")
-            player_name = "Chase"  # Default value
-            
-            # Get current environmental context
-            context_row = await conn.fetch("""
-                SELECT key, value 
-                FROM CurrentRoleplay 
-                WHERE user_id = $1 AND conversation_id = $2 
-                AND key IN ('CurrentLocation', 'TimeOfDay', 'CurrentYear', 'CurrentMonth', 'CurrentDay')
-            """, user_id, conversation_id)
-            
-            # Build context dictionary
-            context = {}
-            for r in context_row:
-                context[r["key"]] = r["value"]
-                
-            # Initialize Nyx memory manager
+        # Get current environmental context for the memory system
+        context = {}
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT key, value FROM CurrentRoleplay 
+                    WHERE user_id = %s AND conversation_id = %s 
+                    AND key IN ('CurrentLocation', 'TimeOfDay', 'CurrentYear', 'CurrentMonth', 'CurrentDay')
+                """, (user_id, conversation_id))
+                for row in cur.fetchall():
+                    context[row[0]] = row[1]
+        
+        # NEW: Initialize Nyx memory manager
+        import asyncio
+        from logic.nyx_memory_manager import NyxMemoryManager
+        
+        async def memory_operations():
+            # Create NyxMemoryManager instance
             nyx_memory = NyxMemoryManager(user_id, conversation_id)
             
             # Record user input as a memory
@@ -113,69 +117,75 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
                 context=context
             )
             
-            # Get the advanced context using aggregator (from existing code)
-            from logic.aggregator import get_aggregated_roleplay_context
-            aggregator_data = await asyncio.to_thread(
-                get_aggregated_roleplay_context,
-                user_id, conversation_id, player_name
-            )
-            
-            # Use build_aggregator_text to convert it to a text representation
-            from routes.story_routes import build_aggregator_text, gather_rule_knowledge
-            
-            # Optionally include rule knowledge for deeper context
-            rule_knowledge = await asyncio.to_thread(gather_rule_knowledge)
-            
-            # Build the full context with rules
-            aggregator_text = await asyncio.to_thread(
-                build_aggregator_text,
-                aggregator_data, 
-                rule_knowledge
-            )
-            logging.info(f"Built advanced context for conversation {conversation_id}")
-            
-            # Enhance with Nyx's memories and metacognition
+            # Get memory enhancement
+            from logic.nyx_enhancements_integration import enhance_context_with_memories
             memory_enhancement = await enhance_context_with_memories(
                 user_id, conversation_id, user_input, context, nyx_memory
             )
             
-            # Combine standard context with memory-enhanced context
-            enhanced_context = f"{aggregator_text}\n\n{memory_enhancement['text']}"
+            return nyx_memory, memory_enhancement
+        
+        # Run memory operations asynchronously
+        nyx_memory, memory_enhancement = asyncio.run(memory_operations())
+        
+        # Use the advanced context generator from story_routes.py (EXISTING CODE)
+        # First, get the aggregated context using the aggregator
+        from logic.aggregator import get_aggregated_roleplay_context
+        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
+        
+        # Then, use build_aggregator_text to convert it to a text representation
+        from routes.story_routes import build_aggregator_text, gather_rule_knowledge
+        
+        # Optionally include rule knowledge for deeper context
+        rule_knowledge = gather_rule_knowledge()
+        
+        # Build the full context with rules
+        aggregator_text = build_aggregator_text(aggregator_data, rule_knowledge)
+        logging.info(f"Built advanced context for conversation {conversation_id}")
+        
+        # NEW: Combine standard context with memory-enhanced context
+        enhanced_context = f"{aggregator_text}\n\n{memory_enhancement['text']}"
+        
+        # Call the GPT integration with the enhanced context
+        response_data = get_chatgpt_response(conversation_id, enhanced_context, user_input)
+        logging.info("Received GPT response from ChatGPT integration")
+        
+        # Extract the narrative from the response
+        if response_data["type"] == "function_call":
+            # When the response is a function call, extract the narrative field
+            ai_response = response_data["function_args"].get("narrative", "")
             
-            # Call the GPT integration with the enhanced context
-            from logic.chatgpt_integration import get_chatgpt_response
-            response_data = await asyncio.to_thread(
-                get_chatgpt_response,
-                conversation_id, 
-                enhanced_context, 
-                user_input
-            )
-            logging.info("Received GPT response with memory-enhanced context")
-            
-            # Extract the narrative from the response
-            if response_data["type"] == "function_call":
-                # When the response is a function call, extract the narrative field
-                ai_response = response_data["function_args"].get("narrative", "")
-                
-                # Process any universal updates received
-                try:
-                    # Only apply updates if we received function call with args
-                    if response_data["function_args"]:
-                        from logic.universal_updater import apply_universal_updates_async
-                        
-                        await apply_universal_updates_async(
-                            user_id, 
-                            conversation_id, 
-                            response_data["function_args"], 
-                            conn
-                        )
-                        logging.info(f"Applied universal updates for conversation {conversation_id}")
-                except Exception as update_error:
-                    logging.error(f"Error applying universal updates: {str(update_error)}")
-            else:
-                ai_response = response_data.get("response", "")
-            
-            # Record Nyx's response as a memory
+            # Process any universal updates received
+            try:
+                # Only apply updates if we received function call with args
+                if response_data["function_args"]:
+                    import asyncio
+                    import asyncpg
+                    from logic.universal_updater import apply_universal_updates_async
+                    
+                    async def apply_updates():
+                        dsn = os.getenv("DB_DSN")
+                        conn = await asyncpg.connect(dsn=dsn, statement_cache_size=0)
+                        try:
+                            await apply_universal_updates_async(
+                                user_id, 
+                                conversation_id, 
+                                response_data["function_args"], 
+                                conn
+                            )
+                        finally:
+                            await conn.close()
+                    
+                    # Run the async function
+                    asyncio.run(apply_updates())
+                    logging.info(f"Applied universal updates for conversation {conversation_id}")
+            except Exception as update_error:
+                logging.error(f"Error applying universal updates: {str(update_error)}")
+        else:
+            ai_response = response_data.get("response", "")
+        
+        # NEW: Store Nyx's response in memory
+        async def record_response_in_memory():
             await nyx_memory.add_memory(
                 memory_text=f"I responded: {ai_response[:200]}...",  # Truncate long responses
                 memory_type="observation",
@@ -186,52 +196,83 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
             )
             
             # Perform memory reconsolidation for memories referenced in this interaction
-            # This simulates how recalled memories change slightly
             if memory_enhancement.get("referenced_memory_ids", []):
                 for mem_id in memory_enhancement["referenced_memory_ids"]:
                     await nyx_memory.reconsolidate_memory(mem_id, context)
-            
-            # Stream the response token by token (using existing code structure)
-            for i in range(0, len(ai_response), 3):
-                token = ai_response[i:i+3]
-                # Emit tokens using your existing socket mechanism
-                # socketio.emit('new_token', {'token': token}, room=conversation_id)
-                await asyncio.sleep(0.05)  # Adjust as needed
-            
-            # Store the complete GPT response in the database
+                    
+            # Update narrative arcs if they exist
+            from logic.nyx_enhancements_integration import update_narrative_arcs_for_interaction
+            async_conn = await asyncpg.connect(dsn=os.getenv("DB_DSN"))
             try:
-                await conn.execute(
-                    "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
-                    conversation_id, "Nyx", ai_response
+                await update_narrative_arcs_for_interaction(
+                    user_id, conversation_id, user_input, ai_response, async_conn
                 )
-                logging.info(f"GPT response stored in database for conversation {conversation_id}")
-            except Exception as db_error:
-                logging.error(f"Database error storing GPT response: {str(db_error)}")
-            
-            # If this conversation has narrative arcs defined, update them
-            await update_narrative_arcs_for_interaction(
-                user_id, conversation_id, user_input, ai_response, conn
+            finally:
+                await async_conn.close()
+                
+        # Record the response asynchronously (don't wait for completion)
+        asyncio.create_task(record_response_in_memory())
+        
+        # Stream the response token by token (ORIGINAL CODE)
+        for i in range(0, len(ai_response), 3):
+            token = ai_response[i:i+3]
+            socketio.emit('new_token', {'token': token}, room=conversation_id)
+            socketio.sleep(0.05)
+        
+        # Store the complete GPT response in the database (ORIGINAL CODE)
+        try:
+            conn = get_db_connection()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                        (conversation_id, "Nyx", ai_response)
+                    )
+                    conn.commit()
+            logging.info(f"GPT response stored in database for conversation {conversation_id}")
+        except Exception as db_error:
+            logging.error(f"Database error storing GPT response: {str(db_error)}")
+
+        # Check if we should generate an image (ORIGINAL CODE)
+        should_generate, reason = should_generate_image_for_response(
+            user_id, 
+            conversation_id, 
+            response_data["function_args"] if response_data["type"] == "function_call" else {}
+        )
+        
+        # Image generation code (ORIGINAL CODE)
+        image_result = None
+        if should_generate:
+            logging.info(f"Generating image for scene: {reason}")
+            from routes.ai_image_generator import generate_roleplay_image_from_gpt
+            image_result = generate_roleplay_image_from_gpt(
+                response_data["function_args"] if response_data["type"] == "function_call" else {}, 
+                user_id, 
+                conversation_id
             )
             
-            # Return the result
-            return {
-                "status": "success",
-                "response": ai_response,
-                "conversation_id": conversation_id
-            }
-            
-        except Exception as e:
-            logging.error(f"Error in enhanced_background_chat_task: {str(e)}")
-            raise
-        finally:
-            await conn.close()
-    except Exception as outer_e:
-        logging.error(f"Outer error in enhanced_background_chat_task: {str(outer_e)}")
-        return {
-            "status": "error",
-            "error": str(outer_e),
-            "conversation_id": conversation_id
-        }
+            # Emit image to the client
+            if image_result and "image_urls" in image_result and image_result["image_urls"]:
+                socketio.emit('image', {
+                    'image_url': image_result["image_urls"][0],
+                    'prompt_used': image_result.get('prompt_used', ''),
+                    'reason': reason
+                }, room=conversation_id)
+                logging.info(f"Image emitted to client: {image_result['image_urls'][0]}")
+        
+        # Stream the response token by token again (ORIGINAL CODE)
+        for i in range(0, len(ai_response), 3):
+            token = ai_response[i:i+3]
+            socketio.emit('new_token', {'token': token}, room=conversation_id)
+            socketio.sleep(0.05)
+        
+        # Emit the final 'done' event with the full text
+        socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
+        logging.info(f"Completed streaming GPT response for conversation {conversation_id}")
+    
+    except Exception as e:
+        logging.error(f"Error in enhanced_background_chat_task: {str(e)}")
+        socketio.emit('error', {'error': f"Server error: {str(e)}"}, room=conversation_id)
 
 async def enhance_context_with_memories(
     user_id, conversation_id, user_input, context, nyx_memory
