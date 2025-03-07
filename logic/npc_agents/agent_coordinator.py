@@ -7,7 +7,7 @@ Coordinates multiple NPC agents for group interactions, with improved memory int
 import logging
 import asyncio
 import random
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 from dataclasses import dataclass
 
 from db.connection import get_db_connection
@@ -36,6 +36,8 @@ class NPCAgentCoordinator:
         self.conversation_id = conversation_id
         self.active_agents: Dict[int, NPCAgent] = {}  # Map of npc_id -> NPCAgent
         self._memory_system = None
+        self._emotional_states = {}  # Cache of emotional states to avoid repeated queries
+        self._mask_states = {}       # Cache of mask states to avoid repeated queries
 
     async def _get_memory_system(self):
         """Lazy-load the memory system."""
@@ -122,12 +124,40 @@ class NPCAgentCoordinator:
                 limit=3
             )
             
+            # Check for flashback opportunity based on context
+            flashback = None
+            if random.random() < 0.15:  # 15% chance of flashback in group setting
+                context_text = f"group interaction at {shared_context.get('location', 'Unknown')}"
+                flashback = await memory_system.npc_flashback(npc_id, context_text)
+            
+            # Get NPC's emotional state
+            emotional_state = await self._get_npc_emotional_state(npc_id)
+            
+            # Get NPC's mask status
+            mask_info = await self._get_npc_mask(npc_id)
+            
+            # Get NPC's beliefs about other NPCs in the group
+            beliefs = {}
+            for other_id in npc_ids:
+                if other_id != npc_id:
+                    npc_beliefs = await memory_system.get_beliefs(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        topic=f"npc_{other_id}"
+                    )
+                    if npc_beliefs:
+                        beliefs[str(other_id)] = npc_beliefs
+            
             # Add to shared context for this NPC
             if "npc_context" not in shared_context:
                 shared_context["npc_context"] = {}
                 
             shared_context["npc_context"][npc_id] = {
-                "group_memories": npc_group_memories.get("memories", [])
+                "group_memories": npc_group_memories.get("memories", []),
+                "emotional_state": emotional_state,
+                "mask_info": mask_info,
+                "flashback": flashback,
+                "beliefs": beliefs
             }
 
         # 1) Each NPC perceives the environment (run concurrently for performance)
@@ -169,6 +199,9 @@ class NPCAgentCoordinator:
         # 5) Create memories of the group interaction
         await self._create_group_interaction_memories(npc_ids, action_plan, shared_context)
         
+        # 6) Check for mask slippage opportunities in group setting
+        await self._check_for_mask_slippage(npc_ids, action_plan, shared_context)
+        
         return action_plan
 
     async def generate_group_actions(
@@ -209,18 +242,26 @@ class NPCAgentCoordinator:
             cru = npc_data[npc_id]["cruelty"]
             
             # Get emotional state to influence available actions
-            emotional_state = None
-            try:
-                emotional_state = await memory_system.get_npc_emotion(npc_id)
-            except Exception as e:
-                logger.error(f"Error getting emotional state for NPC {npc_id}: {e}")
+            emotional_state = await self._get_npc_emotional_state(npc_id)
             
             # Get NPC's mask information
-            mask_info = None
-            try:
-                mask_info = await memory_system.get_npc_mask(npc_id)
-            except Exception as e:
-                logger.error(f"Error getting mask info for NPC {npc_id}: {e}")
+            mask_info = await self._get_npc_mask(npc_id)
+            
+            # Get relevant beliefs that might influence actions
+            beliefs = await memory_system.get_beliefs(
+                entity_type="npc",
+                entity_id=npc_id,
+                topic="group_interaction"
+            )
+            
+            # Get memories of past similar situations to influence actions
+            relevant_memories = await memory_system.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                query="similar group interaction",
+                context={"location": perceptions[npc_id].get("location", "Unknown")},
+                limit=2
+            )
             
             # Add emotionally-influenced actions if in a strong emotional state
             if emotional_state and "current_emotion" in emotional_state:
@@ -249,6 +290,18 @@ class NPCAgentCoordinator:
                             description="Express happiness and excitement",
                             target="group"
                         ))
+                    elif emotion_name == "sadness":
+                        actions.append(NPCAction(
+                            type="emotional_expression",
+                            description="Express sadness or disappointment",
+                            target="group"
+                        ))
+                    elif emotion_name == "disgust":
+                        actions.append(NPCAction(
+                            type="emotional_expression",
+                            description="Express disgust or contempt",
+                            target="group"
+                        ))
             
             # Add mask-appropriate actions
             mask_integrity = 100
@@ -269,6 +322,29 @@ class NPCAgentCoordinator:
                         actions.append(NPCAction(
                             type="mask_slip",
                             description="Attempt to manipulate the situation",
+                            target="group"
+                        ))
+                    elif "selfish" in hidden_traits or "callous" in hidden_traits:
+                        actions.append(NPCAction(
+                            type="mask_slip",
+                            description="Reveal a selfish or callous side",
+                            target="group"
+                        ))
+
+            # Add actions based on beliefs
+            if beliefs:
+                for belief in beliefs:
+                    belief_text = belief.get("belief", "").lower()
+                    if "dangerous" in belief_text or "threat" in belief_text:
+                        actions.append(NPCAction(
+                            type="defensive",
+                            description="Take a defensive stance",
+                            target="group"
+                        ))
+                    elif "opportunity" in belief_text or "beneficial" in belief_text:
+                        actions.append(NPCAction(
+                            type="engage",
+                            description="Actively engage with the group",
                             target="group"
                         ))
 
@@ -322,6 +398,43 @@ class NPCAgentCoordinator:
                                 target=str(other_id),
                                 target_name=other_name
                             ))
+                    
+                    # Specific belief-based actions toward this NPC
+                    other_beliefs = await memory_system.get_beliefs(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        topic=f"npc_{other_id}"
+                    )
+                    
+                    if other_beliefs:
+                        # Process each belief about this specific NPC
+                        for belief in other_beliefs:
+                            belief_text = belief.get("belief", "").lower()
+                            confidence = belief.get("confidence", 0.5)
+                            
+                            # Only act on beliefs with decent confidence
+                            if confidence > 0.6:
+                                if "friend" in belief_text or "ally" in belief_text:
+                                    actions.append(NPCAction(
+                                        type="confide",
+                                        description=f"Confide in {other_name}",
+                                        target=str(other_id),
+                                        target_name=other_name
+                                    ))
+                                elif "enemy" in belief_text or "rival" in belief_text:
+                                    actions.append(NPCAction(
+                                        type="undermine",
+                                        description=f"Undermine {other_name}",
+                                        target=str(other_id),
+                                        target_name=other_name
+                                    ))
+                                elif "untrustworthy" in belief_text or "liar" in belief_text:
+                                    actions.append(NPCAction(
+                                        type="doubt",
+                                        description=f"Express doubt about {other_name}'s statements",
+                                        target=str(other_id),
+                                        target_name=other_name
+                                    ))
 
             group_actions[npc_id] = actions
 
@@ -351,7 +464,7 @@ class NPCAgentCoordinator:
         # Apply emotional state modifiers to dominance
         for npc_id in npc_ids:
             try:
-                emotional_state = await memory_system.get_npc_emotion(npc_id)
+                emotional_state = await self._get_npc_emotional_state(npc_id)
                 if emotional_state and "current_emotion" in emotional_state:
                     current_emotion = emotional_state["current_emotion"]
                     primary = current_emotion.get("primary", {})
@@ -363,13 +476,17 @@ class NPCAgentCoordinator:
                         npc_dominance[npc_id] = min(100, npc_dominance.get(npc_id, 50) + int(intensity * 20))
                     elif emotion_name == "fear" and intensity > 0.5:
                         npc_dominance[npc_id] = max(0, npc_dominance.get(npc_id, 50) - int(intensity * 20))
+                    elif emotion_name == "confidence" and intensity > 0.5:
+                        npc_dominance[npc_id] = min(100, npc_dominance.get(npc_id, 50) + int(intensity * 15))
+                    elif emotion_name == "sadness" and intensity > 0.6:
+                        npc_dominance[npc_id] = max(0, npc_dominance.get(npc_id, 50) - int(intensity * 15))
             except Exception as e:
                 logger.error(f"Error applying emotional modifiers for NPC {npc_id}: {e}")
                 
         # Apply mask integrity modifiers
         for npc_id in npc_ids:
             try:
-                mask_info = await memory_system.get_npc_mask(npc_id)
+                mask_info = await self._get_npc_mask(npc_id)
                 if mask_info:
                     mask_integrity = mask_info.get("integrity", 100)
                     hidden_traits = mask_info.get("hidden_traits", {})
@@ -377,8 +494,28 @@ class NPCAgentCoordinator:
                     # Low mask integrity reveals true dominance
                     if mask_integrity < 50 and "domineering" in hidden_traits:
                         npc_dominance[npc_id] = min(100, npc_dominance.get(npc_id, 50) + 20)
+                    elif mask_integrity < 50 and "submissive" in hidden_traits:
+                        npc_dominance[npc_id] = max(0, npc_dominance.get(npc_id, 50) - 20)
             except Exception as e:
                 logger.error(f"Error applying mask modifiers for NPC {npc_id}: {e}")
+        
+        # Apply modifiers based on trauma or significant memories
+        for npc_id in npc_ids:
+            try:
+                # Check for traumatic memories that might be influencing current behavior
+                trauma_memories = await memory_system.recall(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    query="traumatic event",
+                    context={"location": perceptions[npc_id].get("location", "Unknown")},
+                    limit=1
+                )
+                
+                if trauma_memories and trauma_memories.get("memories"):
+                    # Trauma can reduce effective dominance in triggering contexts
+                    npc_dominance[npc_id] = max(0, npc_dominance.get(npc_id, 50) - 15)
+            except Exception as e:
+                logger.error(f"Error applying trauma modifiers for NPC {npc_id}: {e}")
         
         # Sort by modified dominance descending
         sorted_npcs = sorted(npc_ids, key=lambda id_: npc_dominance.get(id_, 0), reverse=True)
@@ -397,7 +534,7 @@ class NPCAgentCoordinator:
                 affected_npcs.update(npc_ids)
 
             # Direct interactions
-            elif action.type in ["talk_to", "command", "mock", "support", "challenge"] and action.target is not None:
+            elif action.type in ["talk_to", "command", "mock", "support", "challenge", "confide", "undermine", "doubt"] and action.target is not None:
                 try:
                     target_id = int(action.target)  # The other NPC's ID
                 except ValueError:
@@ -408,6 +545,20 @@ class NPCAgentCoordinator:
                         action_plan["individual_actions"][npc_id] = []
                     action_plan["individual_actions"][npc_id].append(action.__dict__)
                     affected_npcs.add(target_id)
+                    
+                    # Record beliefs based on interactions
+                    if action.type in ["confide", "support"]:
+                        # Positive interaction strengthens positive beliefs or forms new ones
+                        await self._update_npc_belief_from_interaction(
+                            npc_id, target_id, positive=True,
+                            interaction_type=action.type
+                        )
+                    elif action.type in ["mock", "challenge", "undermine", "doubt"]:
+                        # Negative interaction strengthens negative beliefs or forms new ones
+                        await self._update_npc_belief_from_interaction(
+                            npc_id, target_id, positive=False,
+                            interaction_type=action.type
+                        )
 
             # Other actions
             else:
@@ -417,6 +568,81 @@ class NPCAgentCoordinator:
 
         logger.info("Resolved action plan: %s", action_plan)
         return action_plan
+
+    async def _update_npc_belief_from_interaction(
+        self,
+        npc_id: int,
+        target_id: int,
+        positive: bool,
+        interaction_type: str
+    ) -> None:
+        """
+        Update an NPC's beliefs about another NPC based on their interaction.
+        
+        Args:
+            npc_id: ID of the NPC forming/updating the belief
+            target_id: ID of the NPC the belief is about
+            positive: Whether the interaction was positive or negative
+            interaction_type: Type of interaction that occurred
+        """
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # Get NPC target name
+            target_name = await self._get_npc_name(target_id)
+            
+            # Get existing beliefs
+            existing_beliefs = await memory_system.get_beliefs(
+                entity_type="npc",
+                entity_id=npc_id,
+                topic=f"npc_{target_id}"
+            )
+            
+            # Determine if we should update existing belief or create new one
+            belief_to_update = None
+            if existing_beliefs:
+                # Look for relevant beliefs to update
+                for belief in existing_beliefs:
+                    if positive and ("friend" in belief.get("belief", "").lower() or 
+                                    "ally" in belief.get("belief", "").lower() or
+                                    "trust" in belief.get("belief", "").lower()):
+                        belief_to_update = belief
+                        break
+                    elif not positive and ("enemy" in belief.get("belief", "").lower() or 
+                                          "rival" in belief.get("belief", "").lower() or
+                                          "distrust" in belief.get("belief", "").lower()):
+                        belief_to_update = belief
+                        break
+            
+            if belief_to_update:
+                # Update confidence in existing belief
+                old_confidence = belief_to_update.get("confidence", 0.5)
+                # Increase confidence by 0.1, capped at 0.95
+                new_confidence = min(0.95, old_confidence + 0.1)
+                
+                await memory_system.update_belief_confidence(
+                    belief_id=belief_to_update.get("id"),
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    new_confidence=new_confidence,
+                    reason=f"Reinforced by {interaction_type} interaction"
+                )
+            else:
+                # Create new belief
+                if positive:
+                    belief_text = f"{target_name} is someone I can trust or ally with."
+                else:
+                    belief_text = f"{target_name} is someone I should be cautious around."
+                
+                await memory_system.create_belief(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    belief_text=belief_text,
+                    confidence=0.6  # Initial confidence based on a single interaction
+                )
+                
+        except Exception as e:
+            logger.error(f"Error updating NPC belief from interaction: {e}")
 
     async def _create_group_interaction_memories(
         self,
@@ -465,24 +691,67 @@ class NPCAgentCoordinator:
                 # Create memory of performing the action
                 actor_memory_text = f"I {action_desc} to the group including {participant_list} at {location} during {time_of_day}"
                 
-                await memory_system.remember(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    memory_text=actor_memory_text,
-                    importance="medium",
-                    tags=["group_interaction", action_type]
-                )
+                # Determine the emotional content of the memory
+                importance = "medium"
+                emotional = action_type in ["emotional_outburst", "mask_slip"]
+                
+                # Create more detailed memory for emotional events
+                if emotional:
+                    importance = "high"
+                    # Use emotional memory system for emotional events
+                    
+                    # Analyze the emotional content
+                    emotional_content = {
+                        "primary_emotion": "neutral",
+                        "intensity": 0.5
+                    }
+                    
+                    if action_type == "emotional_outburst":
+                        if "anger" in action_desc.lower():
+                            emotional_content["primary_emotion"] = "anger"
+                            emotional_content["intensity"] = 0.8
+                        elif "fear" in action_desc.lower():
+                            emotional_content["primary_emotion"] = "fear"
+                            emotional_content["intensity"] = 0.7
+                        elif "happiness" in action_desc.lower() or "joy" in action_desc.lower():
+                            emotional_content["primary_emotion"] = "joy"
+                            emotional_content["intensity"] = 0.8
+                    
+                    # Create emotional memory
+                    await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        memory_text=actor_memory_text,
+                        importance=importance,
+                        emotional=True,
+                        tags=["group_interaction", action_type, "emotional"]
+                    )
+                else:
+                    # Create standard memory
+                    await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        memory_text=actor_memory_text,
+                        importance=importance,
+                        emotional=False,
+                        tags=["group_interaction", action_type]
+                    )
                 
                 # Create memories for other NPCs of observing this action
                 for observer_id in npc_ids:
                     if observer_id != npc_id:
                         observer_memory_text = f"{actor_name} {action_desc} to our group at {location}"
                         
+                        # Determine importance based on relationship
+                        rel_level = self._get_relationship_level(observer_id, npc_id)
+                        observer_importance = "medium" if rel_level and rel_level > 50 else "low"
+                        
+                        # Observers with strong relationships to actor should form stronger memories
                         await memory_system.remember(
                             entity_type="npc",
                             entity_id=observer_id,
                             memory_text=observer_memory_text,
-                            importance="low",
+                            importance=observer_importance,
                             tags=["group_interaction", "observation"]
                         )
         
@@ -501,6 +770,10 @@ class NPCAgentCoordinator:
                     target_id = int(target)
                     target_name = npc_names.get(target_id, f"NPC_{target_id}")
                     
+                    # Determine emotional content based on action type
+                    emotional = action_type in ["mock", "challenge", "support", "confide"]
+                    importance = "high" if emotional else "medium"
+                    
                     # Create memory for the actor
                     actor_memory_text = f"I {action_desc} to {target_name} during our group interaction at {location}"
                     
@@ -508,18 +781,23 @@ class NPCAgentCoordinator:
                         entity_type="npc",
                         entity_id=actor_id,
                         memory_text=actor_memory_text,
-                        importance="medium",
+                        importance=importance,
+                        emotional=emotional,
                         tags=["group_interaction", action_type]
                     )
                     
-                    # Create memory for the target
+                    # Create memory for the target - more emotional for the target
                     target_memory_text = f"{actor_name} {action_desc} to me during our group interaction at {location}"
+                    
+                    # Target experiences the action more strongly
+                    target_importance = "high" if emotional else "medium"
                     
                     await memory_system.remember(
                         entity_type="npc",
                         entity_id=target_id,
                         memory_text=target_memory_text,
-                        importance="medium",
+                        importance=target_importance,
+                        emotional=emotional,
                         tags=["group_interaction", "targeted"]
                     )
                     
@@ -528,13 +806,101 @@ class NPCAgentCoordinator:
                         if observer_id != actor_id and observer_id != target_id:
                             observer_memory_text = f"{actor_name} {action_desc} to {target_name} during our group interaction"
                             
+                            # Calculate observer importance based on relationships
+                            actor_rel = self._get_relationship_level(observer_id, actor_id) or 0
+                            target_rel = self._get_relationship_level(observer_id, target_id) or 0
+                            
+                            # Observers care more if they have strong relationships with either party
+                            rel_strength = max(actor_rel, target_rel)
+                            observer_importance = "medium" if rel_strength > 50 else "low"
+                            
                             await memory_system.remember(
                                 entity_type="npc",
                                 entity_id=observer_id,
                                 memory_text=observer_memory_text,
-                                importance="low",
+                                importance=observer_importance,
                                 tags=["group_interaction", "observation"]
                             )
+
+    async def _check_for_mask_slippage(
+        self,
+        npc_ids: List[int],
+        action_plan: Dict[str, Any],
+        shared_context: Dict[str, Any]
+    ) -> None:
+        """
+        Check for opportunities for mask slippage during group interactions.
+        
+        Args:
+            npc_ids: List of NPC IDs in the group
+            action_plan: The resolved action plan
+            shared_context: Context information
+        """
+        memory_system = await self._get_memory_system()
+        
+        # Focus on NPCs with mask slip actions
+        for group_action in action_plan.get("group_actions", []):
+            action = group_action.get("action", {})
+            npc_id = group_action.get("npc_id")
+            
+            if action.get("type") == "mask_slip" and npc_id:
+                # Generate mask slippage event
+                try:
+                    # Get trigger from context
+                    trigger = f"group interaction at {shared_context.get('location', 'Unknown')}"
+                    
+                    # Generate mask slippage using the memory system
+                    slippage = await memory_system.reveal_npc_trait(
+                        npc_id=npc_id,
+                        trigger=trigger
+                    )
+                    
+                    # Update cached mask info if slippage occurred
+                    if slippage and "integrity_after" in slippage:
+                        # Clear cached mask info to ensure we get fresh data next time
+                        if npc_id in self._mask_states:
+                            del self._mask_states[npc_id]
+                        
+                except Exception as e:
+                    logger.error(f"Error generating mask slippage for NPC {npc_id}: {e}")
+        
+        # Check each NPC for random mask slippage based on actions
+        for npc_id in npc_ids:
+            # Only check NPCs not already processed above
+            if npc_id not in [ga.get("npc_id") for ga in action_plan.get("group_actions", []) 
+                             if ga.get("action", {}).get("type") == "mask_slip"]:
+                try:
+                    # Get current mask status
+                    mask_info = await self._get_npc_mask(npc_id)
+                    
+                    if mask_info and mask_info.get("integrity", 100) < 70:
+                        # Higher chance of slippage as integrity decreases
+                        slippage_chance = (70 - mask_info.get("integrity", 100)) / 200
+                        
+                        # Check for emotional actions that might increase slippage chance
+                        for individual_actions in action_plan.get("individual_actions", {}).values():
+                            for action in individual_actions:
+                                if action.get("target") == str(npc_id) and action.get("type") in ["mock", "challenge"]:
+                                    # Being targeted increases slippage chance
+                                    slippage_chance += 0.1
+                                    break
+                        
+                        # Roll for slippage
+                        if random.random() < slippage_chance:
+                            # Generate mask slippage
+                            trigger = f"stress during group interaction at {shared_context.get('location', 'Unknown')}"
+                            
+                            await memory_system.reveal_npc_trait(
+                                npc_id=npc_id,
+                                trigger=trigger
+                            )
+                            
+                            # Clear cached mask info
+                            if npc_id in self._mask_states:
+                                del self._mask_states[npc_id]
+                            
+                except Exception as e:
+                    logger.error(f"Error checking for random mask slippage for NPC {npc_id}: {e}")
 
     async def handle_player_action(
         self,
@@ -560,6 +926,49 @@ class NPCAgentCoordinator:
         enhanced_context["is_group_interaction"] = True
         enhanced_context["affected_npcs"] = affected_npcs
         
+        # Add memory-based context enhancements
+        memory_system = await self._get_memory_system()
+        
+        # Get emotional states for all NPCs
+        emotional_states = {}
+        for npc_id in affected_npcs:
+            try:
+                emotional_state = await self._get_npc_emotional_state(npc_id)
+                if emotional_state:
+                    emotional_states[npc_id] = emotional_state
+            except Exception as e:
+                logger.error(f"Error getting emotional state for NPC {npc_id}: {e}")
+        
+        enhanced_context["emotional_states"] = emotional_states
+        
+        # Get mask information for all NPCs
+        mask_states = {}
+        for npc_id in affected_npcs:
+            try:
+                mask_info = await self._get_npc_mask(npc_id)
+                if mask_info:
+                    mask_states[npc_id] = mask_info
+            except Exception as e:
+                logger.error(f"Error getting mask info for NPC {npc_id}: {e}")
+        
+        enhanced_context["mask_states"] = mask_states
+        
+        # Get player-related beliefs for all NPCs
+        npc_beliefs = {}
+        for npc_id in affected_npcs:
+            try:
+                beliefs = await memory_system.get_beliefs(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    topic="player"
+                )
+                if beliefs:
+                    npc_beliefs[npc_id] = beliefs
+            except Exception as e:
+                logger.error(f"Error getting player beliefs for NPC {npc_id}: {e}")
+        
+        enhanced_context["npc_beliefs"] = npc_beliefs
+        
         # If many NPCs are affected, add group dynamics to context
         if len(affected_npcs) > 1:
             # Find dominant NPCs
@@ -568,18 +977,75 @@ class NPCAgentCoordinator:
             
             enhanced_context["group_dynamics"] = {
                 "dominant_npc_id": sorted_by_dominance[0] if sorted_by_dominance else None,
-                "participant_count": len(affected_npcs)
+                "participant_count": len(affected_npcs),
+                "dominance_order": sorted_by_dominance
             }
 
+        # Handle potential flashbacks triggered by player action
+        flashbacks = {}
+        for npc_id in affected_npcs:
+            try:
+                # Check for flashback with 15% chance
+                if random.random() < 0.15:
+                    context_text = player_action.get("description", "")
+                    flashback = await memory_system.npc_flashback(npc_id, context_text)
+                    if flashback:
+                        flashbacks[npc_id] = flashback
+            except Exception as e:
+                logger.error(f"Error checking flashback for NPC {npc_id}: {e}")
+        
+        enhanced_context["flashbacks"] = flashbacks
+
+        # Process player action for each NPC
         response_tasks = []
         for npc_id in affected_npcs:
             agent = self.active_agents.get(npc_id)
             if agent:
-                response_tasks.append(agent.process_player_action(player_action))
+                # Pass the enhanced context to each agent
+                npc_context = enhanced_context.copy()
+                # Add NPC-specific context elements
+                npc_context["flashback"] = flashbacks.get(npc_id)
+                npc_context["emotional_state"] = emotional_states.get(npc_id)
+                npc_context["mask_info"] = mask_states.get(npc_id)
+                npc_context["player_beliefs"] = npc_beliefs.get(npc_id)
+                
+                response_tasks.append(agent.process_player_action(player_action, npc_context))
             else:
                 response_tasks.append(asyncio.sleep(0))
 
         responses = await asyncio.gather(*response_tasks)
+        
+        # Check for mask slippage due to player action
+        for npc_id in affected_npcs:
+            try:
+                # Higher chance if action is challenging or emotional
+                action_type = player_action.get("type", "").lower()
+                is_challenging = action_type in ["challenge", "mock", "accuse", "threaten"]
+                
+                slippage_chance = 0.05  # Base chance
+                if is_challenging:
+                    slippage_chance = 0.15
+                
+                # Increase chance for NPCs with compromised masks
+                mask_info = mask_states.get(npc_id)
+                if mask_info:
+                    integrity = mask_info.get("integrity", 100)
+                    if integrity < 70:
+                        slippage_chance += (70 - integrity) / 200
+                
+                # Roll for slippage
+                if random.random() < slippage_chance:
+                    # Generate mask slippage
+                    await memory_system.reveal_npc_trait(
+                        npc_id=npc_id,
+                        trigger=player_action.get("description", "player action")
+                    )
+                    
+                    # Clear cached mask info
+                    if npc_id in self._mask_states:
+                        del self._mask_states[npc_id]
+            except Exception as e:
+                logger.error(f"Error processing mask slippage for NPC {npc_id}: {e}")
         
         # Create memories of this group interaction
         if len(affected_npcs) > 1:
@@ -607,11 +1073,17 @@ class NPCAgentCoordinator:
                 
                 memory_text = f"The player {player_action.get('description', 'interacted with us')} while I was with {others_text}"
                 
+                # Determine emotional impact
+                emotional = False
+                if is_challenging or "emotion" in action_type:
+                    emotional = True
+                
                 await memory_system.remember(
                     entity_type="npc",
                     entity_id=npc_id,
                     memory_text=memory_text,
                     importance="medium",
+                    emotional=emotional,
                     tags=["group_interaction", "player_action"]
                 )
         
@@ -648,6 +1120,60 @@ class NPCAgentCoordinator:
                 logger.error("Error determining affected NPCs: %s", e)
 
         return npc_list
+
+    # ----------------------------------------------------------------
+    # Memory-specific helper methods
+    # ----------------------------------------------------------------
+    
+    async def _get_npc_emotional_state(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Get an NPC's current emotional state, with caching for performance.
+        """
+        # Check cache first
+        if npc_id in self._emotional_states:
+            return self._emotional_states[npc_id]
+            
+        try:
+            memory_system = await self._get_memory_system()
+            emotional_state = await memory_system.get_npc_emotion(npc_id)
+            
+            # Cache the result
+            self._emotional_states[npc_id] = emotional_state
+            return emotional_state
+        except Exception as e:
+            logger.error(f"Error getting emotional state for NPC {npc_id}: {e}")
+            return None
+    
+    async def _get_npc_mask(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Get an NPC's mask information, with caching for performance.
+        """
+        # Check cache first
+        if npc_id in self._mask_states:
+            return self._mask_states[npc_id]
+            
+        try:
+            memory_system = await self._get_memory_system()
+            mask_info = await memory_system.get_npc_mask(npc_id)
+            
+            # Cache the result
+            self._mask_states[npc_id] = mask_info
+            return mask_info
+        except Exception as e:
+            logger.error(f"Error getting mask info for NPC {npc_id}: {e}")
+            return None
+    
+    async def _get_npc_name(self, npc_id: int) -> str:
+        """Get an NPC's name."""
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT npc_name FROM NPCStats
+                WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+            """, (npc_id, self.user_id, self.conversation_id))
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+            return f"NPC_{npc_id}"
 
     # ----------------------------------------------------------------
     # Internal helper methods
