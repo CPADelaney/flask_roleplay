@@ -1,6 +1,7 @@
 # celery_config.py
 from celery import Celery
 import os
+from celery.schedules import crontab
 
 # Use RabbitMQ as the broker (or override via environment variable)
 broker_url = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost//")
@@ -15,3 +16,12 @@ celery_app.conf.update(
     timezone='UTC',
     enable_utc=True,
 )
+
+# Schedule periodic tasks
+celery_app.conf.beat_schedule = {
+    # Add the memory maintenance task to run daily at 3am
+    'nyx-memory-maintenance-daily': {
+        'task': 'tasks.nyx_memory_maintenance_task',
+        'schedule': crontab(hour=3, minute=0),  # Run at 3 AM daily
+    },
+}
