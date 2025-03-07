@@ -6,7 +6,7 @@ from datetime import datetime
 import json
 import os
 from celery_config import celery_app
-from logic.nyx_memory_manager import NyxMemoryManager, perform_memory_maintenance
+from logic.nyx_memory import NyxMemoryManager, perform_memory_maintenance
 
 logger = logging.getLogger(__name__)
 
