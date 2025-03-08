@@ -487,6 +487,7 @@ class NPCAgent:
     async def _fetch_relationships_with_memory(self) -> Dict[str, Any]:
         """
         Get NPC's relationships enhanced with memory references.
+        Optimized to reduce database queries.
         
         Returns:
             Dictionary of relationships with memory context
@@ -495,6 +496,7 @@ class NPCAgent:
         
         try:
             with get_db_connection() as conn, conn.cursor() as cursor:
+                # Get all relationships in a single query
                 cursor.execute("""
                     SELECT entity2_type, entity2_id, link_type, link_level
                     FROM SocialLinks
@@ -505,21 +507,33 @@ class NPCAgent:
                 """, (self.npc_id, self.user_id, self.conversation_id))
                 
                 rows = cursor.fetchall()
+                
+                # Collect entity IDs for bulk name lookup
+                npc_entity_ids = []
+                for entity_type, entity_id, _, _ in rows:
+                    if entity_type == "npc":
+                        npc_entity_ids.append(entity_id)
+                
+                # Bulk fetch NPC names in a single query if we have NPCs
+                npc_names = {}
+                if npc_entity_ids:
+                    cursor.execute("""
+                        SELECT npc_id, npc_name
+                        FROM NPCStats
+                        WHERE npc_id = ANY(%s)
+                          AND user_id = %s
+                          AND conversation_id = %s
+                    """, (npc_entity_ids, self.user_id, self.conversation_id))
+                    
+                    for npc_id, npc_name in cursor.fetchall():
+                        npc_names[npc_id] = npc_name
+                
+                # Now build relationships dictionary
                 for entity_type, entity_id, link_type, link_level in rows:
                     entity_name = "Unknown"
                     
                     if entity_type == "npc":
-                        # Fetch NPC name
-                        cursor.execute("""
-                            SELECT npc_name
-                            FROM NPCStats
-                            WHERE npc_id = %s
-                              AND user_id = %s
-                              AND conversation_id = %s
-                        """, (entity_id, self.user_id, self.conversation_id))
-                        name_row = cursor.fetchone()
-                        if name_row:
-                            entity_name = name_row[0]
+                        entity_name = npc_names.get(entity_id, f"NPC_{entity_id}")
                     elif entity_type == "player":
                         entity_name = "Player"
                     
