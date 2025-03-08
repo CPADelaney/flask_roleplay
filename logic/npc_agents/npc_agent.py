@@ -8,8 +8,9 @@ import logging
 import json
 import asyncio
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
+
 
 from db.connection import get_db_connection
 from .decision_engine import NPCDecisionEngine
