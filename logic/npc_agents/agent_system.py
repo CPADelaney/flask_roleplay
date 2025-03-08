@@ -248,6 +248,92 @@ class NPCAgentSystem:
 
         return []
 
+    async def batch_update_npcs(
+        self,
+        npc_ids: List[int],
+        update_type: str,
+        update_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Update multiple NPCs in a single batch operation for better performance."""
+        results = {
+            "success_count": 0,
+            "error_count": 0,
+            "details": {}
+        }
+        
+        # Ensure all NPCs are loaded
+        await self.load_agents(npc_ids)
+        
+        # Process different update types
+        if update_type == "location_change":
+            # Batch location update
+            new_location = update_data.get("new_location")
+            if not new_location:
+                return {"error": "No location specified"}
+                
+            async with db_transaction() as conn:
+                # Update all NPCs in a single query
+                query = """
+                    UPDATE NPCStats
+                    SET current_location = $1
+                    WHERE npc_id = ANY($2)
+                    AND user_id = $3
+                    AND conversation_id = $4
+                    RETURNING npc_id
+                """
+                rows = await conn.fetch(
+                    query, 
+                    new_location, 
+                    npc_ids, 
+                    self.user_id, 
+                    self.conversation_id
+                )
+                
+                results["success_count"] = len(rows)
+                results["updated_npcs"] = [r["npc_id"] for r in rows]
+                
+        elif update_type == "emotional_update":
+            # Batch emotional state update
+            emotion = update_data.get("emotion")
+            intensity = update_data.get("intensity", 0.5)
+            
+            if not emotion:
+                return {"error": "No emotion specified"}
+                
+            # Get memory system
+            memory_system = await self._get_memory_system()
+            
+            # Process in smaller batches for better control
+            batch_size = 5
+            for i in range(0, len(npc_ids), batch_size):
+                batch = npc_ids[i:i+batch_size]
+                
+                # Process each NPC in batch
+                batch_tasks = []
+                for npc_id in batch:
+                    task = memory_system.update_npc_emotion(
+                        npc_id=npc_id,
+                        emotion=emotion,
+                        intensity=intensity
+                    )
+                    batch_tasks.append(task)
+                    
+                # Execute batch concurrently
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                
+                # Process results
+                for npc_id, result in zip(batch, batch_results):
+                    if isinstance(result, Exception):
+                        results["error_count"] += 1
+                        results["details"][npc_id] = {"error": str(result)}
+                    else:
+                        results["success_count"] += 1
+                        results["details"][npc_id] = {"success": True}
+        
+        # Add other update types as needed
+        
+        return results
+
     async def handle_single_npc_interaction(self, npc_id: int, player_action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle a player action directed at a single NPC with enhanced memory integration.
