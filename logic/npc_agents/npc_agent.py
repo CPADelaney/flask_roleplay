@@ -210,12 +210,6 @@ class NPCAgent:
         
         # Start the task without waiting for it
         asyncio.create_task(report_metrics())
-
-# NPCAgent Improvements
-# Enhanced implementation for npc_agent.py
-
-class NPCAgent:
-    # ... existing code ...
     
     async def perceive_environment(self, current_context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -287,6 +281,38 @@ class NPCAgent:
                 limit=7  # More memories for richer context
             )
             relevant_memories = memory_result.get("memories", [])
+
+            base_limit = 5  # Standard memory limit
+            adaptive_limit = base_limit
+            
+            # Adjust based on context keywords
+            context_importance = 0
+            keywords = {
+                "high": ["critical", "emergency", "dangerous", "threat", "crucial", "sex", "intimate"],
+                "medium": ["important", "significant", "unusual", "strange", "unexpected"]
+            }
+            
+            for word in keywords["high"]:
+                if word in context_description.lower():
+                    context_importance += 2
+                    
+            for word in keywords["medium"]:
+                if word in context_description.lower():
+                    context_importance += 1
+            
+            # Adjust recall limit based on context importance
+            if context_importance >= 3:
+                adaptive_limit = base_limit + 5  # Much more memories for critical contexts
+            elif context_importance >= 1:
+                adaptive_limit = base_limit + 2  # More memories for important contexts
+            
+            # Get memories with adaptive limit
+            memory_result = await memory_system.recall(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                context=context_for_recall,
+                limit=adaptive_limit
+            )
             
             # Check for traumatic triggers in current context
             traumatic_trigger = None
