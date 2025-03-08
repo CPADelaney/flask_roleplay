@@ -477,6 +477,46 @@ class NPCDecisionEngine:
                 "progress": 0,
                 "target_entity": "player"
             })
+
+    # Add this method to NPCDecisionEngine class
+    async def _score_personality_alignment(self, npc_data: Dict[str, Any], action: Dict[str, Any], 
+                                         mask_integrity: float, hidden_traits: Dict[str, Any], 
+                                         presented_traits: Dict[str, Any]) -> float:
+        """Score how well an action aligns with NPC's personality, accounting for mask."""
+        score = 0.0
+        action_type = action.get("type", "")
+        
+        # Calculate how much true vs presented personality influences
+        true_nature_weight = (100 - mask_integrity) / 100  # 0-1 range
+        presented_weight = mask_integrity / 100  # 0-1 range
+        
+        # Extract basic stats
+        dominance = npc_data.get("dominance", 50)
+        cruelty = npc_data.get("cruelty", 50)
+        
+        # Score alignment with true/hidden nature
+        if "dominant" in hidden_traits and action_type in ["command", "dominate", "test", "punish"]:
+            score += 3.0 * true_nature_weight
+        if "cruel" in hidden_traits and action_type in ["mock", "humiliate", "punish"]:
+            score += 3.0 * true_nature_weight
+        if "sadistic" in hidden_traits and action_type in ["punish", "humiliate"]:
+            score += 3.0 * true_nature_weight
+        
+        # Score alignment with presented/masked nature
+        if "kind" in presented_traits and action_type in ["praise", "support", "help"]:
+            score += 2.0 * presented_weight
+        if "gentle" in presented_traits and action_type in ["talk", "observe", "support"]:
+            score += 2.0 * presented_weight
+        
+        # Score based on base stats (especially important for femdom game)
+        if dominance > 70 and action_type in ["command", "dominate", "test"]:
+            score += 2.0
+        if dominance < 30 and action_type in ["observe", "wait", "leave"]:
+            score += 1.5
+        if cruelty > 70 and action_type in ["mock", "humiliate", "punish"]:
+            score += 2.0
+        
+        return score
     
     async def _score_long_term_goals(self, action: Dict[str, Any]) -> float:
         """Score actions based on how they advance long-term goals."""
