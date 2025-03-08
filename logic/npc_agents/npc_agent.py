@@ -138,10 +138,12 @@ class NPCAgent:
             # Invalidate all memory caches
             self._cache['memories'] = {}
             self._cache_timestamps['memories'] = {}
+            logger.debug(f"Invalidated all memory caches for NPC {self.npc_id}")
         elif memory_query in self._cache['memories']:
             # Invalidate specific memory query
             del self._cache['memories'][memory_query]
             del self._cache_timestamps['memories'][memory_query]
+            logger.debug(f"Invalidated memory cache for query '{memory_query}'")
     
     def is_cache_valid(self, cache_key, sub_key=None):
         """
