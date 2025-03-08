@@ -82,7 +82,7 @@ class NPCAgentCoordinator:
 
         logger.info("Loaded agents: %s", loaded_ids)
         return loaded_ids
-
+    
     async def make_group_decisions(
         self,
         npc_ids: List[int],
@@ -91,40 +91,57 @@ class NPCAgentCoordinator:
     ) -> Dict[str, Any]:
         """
         Coordinate decision-making for a group of NPCs with improved memory integration.
-
-        Args:
-            npc_ids: List of NPC IDs in the group
-            shared_context: A dictionary describing the shared context/environment
-            available_actions: Optional dict of predefined actions per NPC
-
-        Returns:
-            A dictionary representing the coordinated 'action_plan' for the entire group.
+        Refactored into smaller, more maintainable methods.
         """
         # Ensure all NPCs are loaded
         await self.load_agents(npc_ids)
-
-        # Get memory system for group context
+        
+        # 1. Prepare enhanced group context with memory integration
+        enhanced_context = await self._prepare_group_context(npc_ids, shared_context)
+        
+        # 2. Each NPC perceives the environment (run concurrently for performance)
+        perceptions = await self._gather_individual_perceptions(npc_ids, enhanced_context)
+        
+        # 3. Determine available actions if not provided
+        if available_actions is None:
+            available_actions = await self.generate_group_actions(npc_ids, perceptions)
+        
+        # 4. Each NPC decides individually (also run concurrently)
+        decisions = await self._collect_individual_decisions(npc_ids, perceptions, available_actions)
+        
+        # 5. Resolve conflicts into a coherent plan
+        action_plan = await self._resolve_group_conflicts(decisions, npc_ids, perceptions)
+        
+        # 6. Create memories and handle emotional effects
+        await self._create_group_memory_effects(npc_ids, action_plan, shared_context)
+        
+        return action_plan
+    
+    async def _prepare_group_context(self, npc_ids: List[int], shared_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Prepare enhanced context for group interactions with memory."""
         memory_system = await self._get_memory_system()
         
-        # Get prior group interaction memories
-        group_context = {
-            "participants": npc_ids,
-            "location": shared_context.get("location", "Unknown"),
-            "type": "group_interaction"
-        }
+        # Create enhanced context
+        enhanced_context = shared_context.copy()
+        enhanced_context["participants"] = npc_ids
+        enhanced_context["type"] = "group_interaction"
         
-        # Enhance shared context with group history for each NPC
+        # Add NPC-specific context information
+        if "npc_context" not in enhanced_context:
+            enhanced_context["npc_context"] = {}
+        
+        # Populate context for each NPC
         for npc_id in npc_ids:
-            # Get NPC's previous memories of group interactions with these participants
-            npc_group_memories = await memory_system.recall(
+            # Get previous group memories
+            group_memories = await memory_system.recall(
                 entity_type="npc",
                 entity_id=npc_id,
                 query="group interaction",
-                context=group_context,
+                context=enhanced_context,
                 limit=3
             )
             
-            # Check for flashback opportunity based on context
+            # Check for flashback opportunity
             flashback = None
             if random.random() < 0.15:  # 15% chance of flashback in group setting
                 context_text = f"group interaction at {shared_context.get('location', 'Unknown')}"
@@ -137,50 +154,49 @@ class NPCAgentCoordinator:
             mask_info = await self._get_npc_mask(npc_id)
             
             # Get NPC's beliefs about other NPCs in the group
-            beliefs = {}
-            for other_id in npc_ids:
-                if other_id != npc_id:
-                    npc_beliefs = await memory_system.get_beliefs(
-                        entity_type="npc",
-                        entity_id=npc_id,
-                        topic=f"npc_{other_id}"
-                    )
-                    if npc_beliefs:
-                        beliefs[str(other_id)] = npc_beliefs
+            beliefs = await self._get_npc_beliefs_about_others(npc_id, npc_ids)
             
-            # Add to shared context for this NPC
-            if "npc_context" not in shared_context:
-                shared_context["npc_context"] = {}
-                
-            shared_context["npc_context"][npc_id] = {
-                "group_memories": npc_group_memories.get("memories", []),
+            # Store in enhanced context
+            enhanced_context["npc_context"][npc_id] = {
+                "group_memories": group_memories.get("memories", []),
                 "emotional_state": emotional_state,
                 "mask_info": mask_info,
                 "flashback": flashback,
                 "beliefs": beliefs
             }
-
-        # 1) Each NPC perceives the environment (run concurrently for performance)
-        perceive_tasks = []
+        
+        return enhanced_context
+    
+    async def _gather_individual_perceptions(self, npc_ids: List[int], enhanced_context: Dict[str, Any]) -> Dict[int, Any]:
+        """Gather perceptions from all NPCs concurrently."""
+        perception_tasks = []
         for npc_id in npc_ids:
             agent = self.active_agents.get(npc_id)
             if agent:
-                # Include group memories in perception context
-                perception_context = shared_context.copy()
+                # Include group context in perception
+                perception_context = enhanced_context.copy()
                 perception_context["group_interaction"] = True
                 
-                perceive_tasks.append(agent.perceive_environment(perception_context))
+                # Add NPC-specific context
+                npc_specific = enhanced_context.get("npc_context", {}).get(npc_id, {})
+                for key, value in npc_specific.items():
+                    perception_context[key] = value
+                    
+                perception_tasks.append(agent.perceive_environment(perception_context))
             else:
-                perceive_tasks.append(asyncio.sleep(0))  # Filler if agent is missing
-
-        perceptions_list = await asyncio.gather(*perceive_tasks)
-        perceptions = {npc_id: perceptions_list[i] for i, npc_id in enumerate(npc_ids)}
-
-        # 2) Determine available actions if not provided
-        if available_actions is None:
-            available_actions = await self.generate_group_actions(npc_ids, perceptions)
-
-        # 3) Each NPC decides individually (also run concurrently)
+                perception_tasks.append(asyncio.sleep(0))  # Filler if agent is missing
+        
+        # Gather results concurrently
+        perceptions_list = await asyncio.gather(*perception_tasks)
+        return {npc_id: perceptions_list[i] for i, npc_id in enumerate(npc_ids)}
+    
+    async def _collect_individual_decisions(
+        self, 
+        npc_ids: List[int], 
+        perceptions: Dict[int, Any],
+        available_actions: Dict[int, List[NPCAction]]
+    ) -> Dict[int, Any]:
+        """Collect decisions from each NPC concurrently."""
         decision_tasks = []
         for npc_id in npc_ids:
             agent = self.active_agents.get(npc_id)
@@ -189,22 +205,26 @@ class NPCAgentCoordinator:
                 decision_tasks.append(agent.make_decision(perceptions[npc_id], npc_actions))
             else:
                 decision_tasks.append(asyncio.sleep(0))
-
-        decisions_list = await asyncio.gather(*decision_tasks)
-        decisions = {npc_id: decisions_list[i] for i, npc_id in enumerate(npc_ids)}
-
-        # 4) Resolve conflicts into a coherent plan
-        action_plan = await self.resolve_decision_conflicts(decisions, npc_ids, perceptions)
         
-        # 5) Create memories of the group interaction
+        # Gather results concurrently
+        decisions_list = await asyncio.gather(*decision_tasks)
+        return {npc_id: decisions_list[i] for i, npc_id in enumerate(npc_ids)}
+    
+    async def _create_group_memory_effects(
+        self,
+        npc_ids: List[int],
+        action_plan: Dict[str, Any],
+        shared_context: Dict[str, Any]
+    ) -> None:
+        """Create memories and handle emotional effects of the group interaction."""
+        # Create memories
         await self._create_group_interaction_memories(npc_ids, action_plan, shared_context)
         
-        # 6) Check for mask slippage opportunities in group setting
+        # Check for mask slippage
         await self._check_for_mask_slippage(npc_ids, action_plan, shared_context)
-
-        await self._process_emotional_contagion(npc_ids, action_plan)
         
-        return action_plan
+        # Process emotional contagion between NPCs
+        await self._process_emotional_contagion(npc_ids, action_plan)
 
     async def generate_group_actions(
         self,
