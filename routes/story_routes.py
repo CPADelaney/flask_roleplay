@@ -737,13 +737,13 @@ async def process_time_advancement(npc_system, activity_type, data, current_time
 
 @timed_function(name="process_relationship_events")
 async def process_relationship_events(npc_system, data):
-    """Process relationship events and crossroads."""
+    """Process relationship events and crossroads with enhanced dynamics."""
     result = {
         "event": None,
         "result": None
     }
     
-    # Only check for events if requested
+    # Check for crossroads events (significant relationship moments)
     if data.get("check_crossroads", False):
         events = await npc_system.check_for_relationship_events()
         if events:
@@ -751,6 +751,12 @@ async def process_relationship_events(npc_system, data):
                 if event.get("type") == "relationship_crossroads":
                     result["event"] = event.get("data")
                     break
+    
+    # Check for relationship rituals (shared activities that boost bonds)
+    if data.get("check_rituals", False):
+        rituals = await npc_system.check_for_relationship_rituals()
+        if rituals:
+            result["rituals"] = rituals
     
     # Process crossroads choice if provided
     if data.get("crossroads_choice") is not None and data.get("crossroads_name") and data.get("link_id"):
@@ -767,6 +773,13 @@ async def process_relationship_events(npc_system, data):
                 "choice_applied": True,
                 "outcome": choice_result.get("outcome_text", "Your choice was processed.")
             }
+            
+            # Check for relationship level changes after choice
+            if choice_result.get("new_level") and choice_result.get("old_level"):
+                level_change = choice_result["new_level"] - choice_result["old_level"]
+                if abs(level_change) >= 10:  # Significant change
+                    result["result"]["significant_change"] = True
+                    result["result"]["level_change"] = level_change
     
     return result
 
@@ -1335,6 +1348,9 @@ async def next_storybeat():
         conv_id = data.get("conversation_id")
         player_name = data.get("player_name", "Chase")
         
+        # Use context manager for resource handling
+        async with npc_system_context(user_id, conv_id) as resources:
+        
         # Initialize NPC system with connection pooling
         resources["npc_system"] = IntegratedNPCSystem(user_id, conv_id)
         resources["pool"] = await resources["npc_system"].get_connection_pool()
@@ -1447,12 +1463,20 @@ async def next_storybeat():
         
         # Run memory maintenance if appropriate time has passed
         tracker.start_phase("memory_maintenance")
-        # Run memory management with 10% chance or after 10 interactions
-        should_run_maintenance = random.random() < 0.1
+        # Get elapsed time since last maintenance
+        maintenance_key = f"last_maintenance:{user_id}:{conv_id}"
+        last_maintenance = TIME_CACHE.get(maintenance_key)
+        current_time = time.time()
+        
+        # Run if enough time has passed (30 minutes) or random chance
+        elapsed_time = float('inf') if last_maintenance is None else current_time - last_maintenance
+        should_run_maintenance = (elapsed_time > 1800) or (random.random() < 0.1)
+        
         if should_run_maintenance:
-            # Run in background task to avoid blocking response
+            # Run maintenance and store timestamp
             asyncio.create_task(manage_npc_memory_lifecycle(resources["npc_system"]))
-            logging.info("Scheduled memory lifecycle management in background")
+            TIME_CACHE.set(maintenance_key, current_time, 3600)  # Cache for 1 hour
+            logging.info(f"Scheduled memory lifecycle management (elapsed: {elapsed_time:.1f}s)")
         tracker.end_phase()
         
         # Assemble the complete response
@@ -1516,6 +1540,25 @@ async def next_storybeat():
     finally:
         # Comprehensive resource cleanup
         await cleanup_resources(resources)
+
+@contextlib.asynccontextmanager
+async def npc_system_context(user_id, conv_id):
+    """Context manager for NPC system resources."""
+    resources = {
+        "npc_system": None,
+        "pool": None
+    }
+    
+    try:
+        # Initialize resources
+        resources["npc_system"] = IntegratedNPCSystem(user_id, conv_id)
+        resources["pool"] = await resources["npc_system"].get_connection_pool()
+        yield resources
+    finally:
+        # Cleanup resources
+        if resources.get("pool") and not resources["pool"].closed:
+            await resources["pool"].close()
+
 
 
 @story_bp.route("/relationship_summary", methods=["GET"])
