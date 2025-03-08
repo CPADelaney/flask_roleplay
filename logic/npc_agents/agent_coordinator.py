@@ -127,6 +127,49 @@ class NPCAgentCoordinator:
             "missing_agent": True  # Flag to identify this as a placeholder
         }
 
+    async def _process_memory_subsystems(self, memory_text: str, tags: List[str], 
+                                       significance: int, emotional_intensity: float):
+        """
+        Propagate memory using memory subsystems instead of direct DB access.
+        """
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # Find NPCs connected to this NPC
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT entity2_id
+                    FROM SocialLinks
+                    WHERE user_id = %s
+                      AND conversation_id = %s
+                      AND entity1_type = 'npc'
+                      AND entity1_id = %s
+                      AND entity2_type = 'npc'
+                """, (self.user_id, self.conversation_id, self.npc_id))
+                
+                related_npcs = [row[0] for row in cursor.fetchall()]
+            
+            # Get this NPC's name
+            npc_name = await self.get_npc_name(self.npc_id)
+            
+            # Create secondhand memories for each related NPC
+            for related_id in related_npcs:
+                # Create secondhand memory with distortion effect
+                secondhand_text = f"I heard that {npc_name} {memory_text}"
+                
+                # Add the secondhand memory
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=related_id,
+                    memory_text=secondhand_text,
+                    importance="low",
+                    tags=tags + ["secondhand", "rumor"]
+                )
+            
+            logger.debug(f"Propagated memory to {len(related_npcs)} related NPCs")
+        except Exception as e:
+            logger.error(f"Error propagating memory via subsystems: {e}")
+
     
     async def _prepare_group_context(self, npc_ids: List[int], shared_context: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare enhanced context for group interactions with memory."""
