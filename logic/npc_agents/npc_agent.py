@@ -158,6 +158,17 @@ class NPCAgent:
             del self._cache['memories'][memory_query]
             del self._cache_timestamps['memories'][memory_query]
             logger.debug(f"Invalidated memory cache for query '{memory_query}'")
+
+    # Add an implementation:
+    async def execute_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the chosen action and return the result."""
+        return await execute_npc_action(
+            self.npc_id, 
+            self.user_id, 
+            self.conversation_id, 
+            action, 
+            context
+        )
     
     def is_cache_valid(self, cache_key, sub_key=None):
         """
