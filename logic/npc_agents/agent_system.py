@@ -585,132 +585,139 @@ class NPCAgentSystem:
 
     async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
         """
-        Process scheduled activities for all NPCs with memory integration.
-
-        This method calls each NPCAgent's `perform_scheduled_activity()` asynchronously, 
-        gathering any responses that might be generated.
-
-        Returns:
-            A dictionary of the form {"npc_responses": [...]}, where each element is
-            what the NPC "did" or any relevant message.
+        Process scheduled activities for all NPCs using the agent system.
+        Optimized for better performance with many NPCs through batching.
         """
-        logger.info("Processing scheduled activities for %d NPCs", len(self.npc_agents))
-
-        tasks = [agent.perform_scheduled_activity() for agent in self.npc_agents.values()]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Filter out None or exception results
-        npc_responses = []
-        for res in results:
-            if isinstance(res, Exception):
-                logger.error("NPC scheduled activity failed: %s", res)
-            elif res:
-                npc_responses.append(res)
+        logger.info("Processing scheduled activities")
         
-        # Create memories for the player of notable NPC activities
-        memory_system = await self._get_memory_system()
-        
-        for response in npc_responses:
-            # Only create memories for significant or visible activities
-            result = response.get("result", {})
-            action = response.get("action", {})
-            npc_id = response.get("npc_id")
+        try:
+            # Get current time information for context
+            year, month, day, time_of_day = await self.get_current_game_time()
             
-            if npc_id and action and result.get("outcome"):
-                # Check if this is a significant activity worth remembering
-                significance = self._determine_activity_significance(action, result)
+            # Create base context for all NPCs
+            base_context = {
+                "year": year,
+                "month": month,
+                "day": day,
+                "time_of_day": time_of_day,
+                "activity_type": "scheduled"
+            }
+            
+            # Get all NPCs with their current locations - batch query for performance
+            npc_data = await self._fetch_all_npc_data_for_activities()
+            
+            # Count total NPCs to process
+            total_npcs = len(npc_data)
+            if total_npcs == 0:
+                return {"npc_responses": [], "count": 0}
                 
-                if significance > 0:
-                    try:
-                        # Get NPC name for better memory
-                        npc_name = await self.get_npc_name(npc_id)
-                        
-                        # Create player memory of observing the activity
-                        player_memory_text = f"I observed {npc_name} {action.get('description', 'doing something')}"
-                        
-                        importance = "medium" if significance > 1 else "low"
-                        
-                        await memory_system.remember(
-                            entity_type="player",
-                            entity_id=self.user_id,
-                            memory_text=player_memory_text,
-                            importance=importance,
-                            tags=["npc_observation", "scheduled_activity"]
-                        )
-                    except Exception as e:
-                        logger.error(f"Error creating player memory of NPC activity: {e}")
+            logger.info(f"Processing scheduled activities for {total_npcs} NPCs")
+            
+            # For very large NPC counts, process in batches rather than all at once
+            batch_size = 20  # Adjust based on system capabilities
+            npc_responses = []
+            
+            # Process in batches
+            for i in range(0, total_npcs, batch_size):
+                batch = list(npc_data.items())[i:i+batch_size]
                 
-                # Update NPC emotional state based on their activity
-                try:
-                    # Check if activity has emotional impact
-                    emotional_impact = result.get("emotional_impact", 0)
-                    if abs(emotional_impact) >= 2:
-                        # Significant enough to affect emotional state
-                        current_state = await memory_system.get_npc_emotion(npc_id)
-                        
-                        # Determine new emotion based on impact
-                        new_emotion = "neutral"
-                        intensity = 0.5
-                        
-                        if emotional_impact > 3:
-                            new_emotion = "joy"
-                            intensity = 0.7
-                        elif emotional_impact > 1:
-                            new_emotion = "joy"
-                            intensity = 0.5
-                        elif emotional_impact < -3:
-                            new_emotion = "sadness" if random.random() < 0.6 else "anger"
-                            intensity = 0.7
-                        elif emotional_impact < -1:
-                            new_emotion = "sadness" if random.random() < 0.6 else "anger"
-                            intensity = 0.5
-                        
-                        # Only update if significant change
-                        if current_state and "current_emotion" in current_state:
-                            current = current_state["current_emotion"]
-                            current_emotion = current.get("primary")
-                            current_intensity = current.get("intensity", 0)
-                            
-                            # Only update if the new emotion is different or intensity change is significant
-                            if (current_emotion != new_emotion or 
-                                abs(current_intensity - intensity) > 0.2):
-                                await memory_system.update_npc_emotion(
-                                    npc_id=npc_id,
-                                    emotion=new_emotion,
-                                    intensity=intensity
-                                )
-                except Exception as e:
-                    logger.error(f"Error updating NPC emotion from activity: {e}")
+                # Create tasks for this batch
+                batch_tasks = []
+                for npc_id, data in batch:
+                    batch_tasks.append(
+                        self._process_single_npc_activity(npc_id, data, base_context)
+                    )
                 
-                # Add mask slippage checks for high-emotional-impact activities
-                try:
-                    if abs(result.get("emotional_impact", 0)) > 3:
-                        # High emotional impact activities might cause mask slippage
-                        mask_info = await memory_system.get_npc_mask(npc_id)
-                        
-                        if mask_info and mask_info.get("integrity", 100) < 70:
-                            # Compromised masks have higher chance of slippage during emotional activities
-                            slippage_chance = (70 - mask_info.get("integrity", 100)) / 200
-                            
-                            if random.random() < slippage_chance:
-                                await memory_system.reveal_npc_trait(
-                                    npc_id=npc_id,
-                                    trigger=action.get("description", "emotional activity")
-                                )
-                except Exception as e:
-                    logger.error(f"Error checking mask slippage from activity: {e}")
-
-        # Check if we should run memory maintenance
-        time_since_maintenance = (datetime.now() - self._last_memory_maintenance).total_seconds()
-        if time_since_maintenance > 3600:  # Run every hour
+                # Run batch concurrently
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                
+                # Process batch results
+                for result in batch_results:
+                    if isinstance(result, Exception):
+                        logger.error(f"Error processing scheduled activity: {result}")
+                    elif result:  # Skip None results
+                        npc_responses.append(result)
+                
+                # If we have multiple batches, add a small delay between them to reduce system load
+                if i + batch_size < total_npcs:
+                    await asyncio.sleep(0.1)
+            
+            # After all NPCs processed, do agent system coordination
             try:
-                await self.run_memory_maintenance()
-                self._last_memory_maintenance = datetime.now()
+                agent_system_result = await self.agent_system.process_npc_scheduled_activities()
+                agent_responses = agent_system_result.get("npc_responses", [])
             except Exception as e:
-                logger.error(f"Error running scheduled memory maintenance: {e}")
-
-        return {"npc_responses": npc_responses}
+                logger.error(f"Error in agent system coordination: {e}")
+                agent_responses = []
+            
+            # Combined results from individual processing and agent system
+            combined_results = {
+                "npc_responses": npc_responses,
+                "agent_system_responses": agent_responses,
+                "count": len(npc_responses) + len(agent_responses)
+            }
+            
+            # Add summary statistics
+            combined_results["stats"] = {
+                "total_npcs": total_npcs,
+                "successful_activities": len(npc_responses),
+                "time_of_day": time_of_day,
+                "processing_time": None  # Could add timing info here
+            }
+            
+            return combined_results
+            
+        except Exception as e:
+            error_msg = f"Error processing NPC scheduled activities: {e}"
+            logger.error(error_msg)
+            raise NPCSystemError(error_msg)
     
+    async def _fetch_all_npc_data_for_activities(self) -> Dict[int, Dict[str, Any]]:
+        """
+        Batch fetch NPC data needed for scheduled activities.
+        Returns {npc_id: {data}} dictionary.
+        """
+        npc_data = {}
+        
+        try:
+            # Use connection pool for better performance
+            async with self.connection_pool.acquire() as conn:
+                # Efficient batch query
+                rows = await conn.fetch("""
+                    SELECT npc_id, npc_name, current_location, schedule, 
+                           dominance, cruelty, introduced
+                    FROM NPCStats 
+                    WHERE user_id=$1 AND conversation_id=$2
+                """, self.user_id, self.conversation_id)
+                
+                for row in rows:
+                    npc_id = row["npc_id"]
+                    
+                    # Parse JSON fields with error handling
+                    schedule = None
+                    if row["schedule"]:
+                        try:
+                            if isinstance(row["schedule"], str):
+                                schedule = json.loads(row["schedule"])
+                            else:
+                                schedule = row["schedule"]
+                        except json.JSONDecodeError:
+                            schedule = {}
+                    
+                    npc_data[npc_id] = {
+                        "name": row["npc_name"],
+                        "location": row["current_location"],
+                        "schedule": schedule,
+                        "dominance": row["dominance"],
+                        "cruelty": row["cruelty"],
+                        "introduced": row["introduced"]
+                    }
+                    
+            return npc_data
+        except Exception as e:
+            logger.error(f"Error fetching NPC data for activities: {e}")
+            return {}
+        
     def _determine_activity_significance(self, action: Dict[str, Any], result: Dict[str, Any]) -> int:
         """
         Determine how significant an NPC activity is for player memory formation.
