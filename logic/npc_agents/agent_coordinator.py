@@ -723,15 +723,19 @@ class NPCAgentCoordinator:
                 assigned_npcs.add(npc2)
         
         return coalitions
-
-      async def _check_trait_compatibility(self, npc1: int, npc2: int) -> bool:
-        """Check if two NPCs have compatible traits for coalition formation."""
-        compatible = False
+    
+    async def _check_trait_compatibility(self, npc1: int, npc2: int) -> bool:
+        """
+        Check if two NPCs have compatible traits for coalition formation.
+        Implements relationship ideas from TO_DO.TXT with trait synergy.
+        """
+        compatibility_score = 0.0
         
         with get_db_connection() as conn, conn.cursor() as cursor:
             # Get traits for both NPCs
             cursor.execute("""
-                SELECT npc_id, dominance, cruelty, personality_traits
+                SELECT npc_id, dominance, cruelty, personality_traits, 
+                       hobbies, affiliations
                 FROM NPCStats
                 WHERE npc_id IN (%s, %s)
                 AND user_id = %s
@@ -740,9 +744,9 @@ class NPCAgentCoordinator:
             
             trait_data = {}
             for row in cursor.fetchall():
-                npc_id, dominance, cruelty, personality_traits = row
+                npc_id, dominance, cruelty, personality_traits, hobbies, affiliations = row
                 
-                # Parse traits
+                # Parse traits with error handling
                 if isinstance(personality_traits, str):
                     try:
                         traits = json.loads(personality_traits)
@@ -751,44 +755,101 @@ class NPCAgentCoordinator:
                 else:
                     traits = personality_traits or []
                     
+                # Parse hobbies
+                if isinstance(hobbies, str):
+                    try:
+                        hobbies_list = json.loads(hobbies)
+                    except:
+                        hobbies_list = []
+                else:
+                    hobbies_list = hobbies or []
+                    
+                # Parse affiliations
+                if isinstance(affiliations, str):
+                    try:
+                        affiliations_list = json.loads(affiliations)
+                    except:
+                        affiliations_list = []
+                else:
+                    affiliations_list = affiliations or []
+                    
                 trait_data[npc_id] = {
                     "dominance": dominance,
                     "cruelty": cruelty,
-                    "traits": traits
+                    "traits": traits,
+                    "hobbies": hobbies_list,
+                    "affiliations": affiliations_list
                 }
         
-        # Check basic compatibility rules
-        if npc1 in trait_data and npc2 in trait_data:
-            data1 = trait_data[npc1]
-            data2 = trait_data[npc2]
+        # If missing data for either NPC, can't form coalition
+        if npc1 not in trait_data or npc2 not in trait_data:
+            return False
             
-            # Rule 1: Very similar dominance levels often don't work well together
-            dom_diff = abs(data1["dominance"] - data2["dominance"])
-            if dom_diff < 20 or dom_diff > 40:
-                # Either clear hierarchy or too similar
-                compatible = True
-                
-            # Rule 2: Shared cruelty trait creates bonds
-            if abs(data1["cruelty"] - data2["cruelty"]) < 20:
-                compatible = True
-                
-            # Rule 3: Check for complementary traits
-            trait_pairs = [
-                ("dominant", "submissive"),
-                ("leader", "follower"),
-                ("teacher", "student"),
-                ("sadistic", "masochistic")
-            ]
-            
-            for trait1, trait2 in trait_pairs:
-                if trait1 in data1["traits"] and trait2 in data2["traits"]:
-                    compatible = True
-                    break
-                if trait1 in data2["traits"] and trait2 in data1["traits"]:
-                    compatible = True
-                    break
+        data1 = trait_data[npc1]
+        data2 = trait_data[npc2]
         
-        return compatible  
+        # 1. Dominance compatibility (from TO_DO.TXT)
+        dom_diff = abs(data1["dominance"] - data2["dominance"])
+        if dom_diff < 20:
+            # Similar dominance often creates friction
+            compatibility_score -= 1.0
+        elif dom_diff > 40:
+            # Clear dominance hierarchy works well
+            compatibility_score += 1.5
+            
+        # 2. Cruelty similarity (shared values)
+        cruelty_diff = abs(data1["cruelty"] - data2["cruelty"])
+        if cruelty_diff < 20:
+            compatibility_score += 1.0
+        else:
+            compatibility_score -= 0.5
+        
+        # 3. Check for complementary trait pairs (dominance/submission dynamics)
+        complementary_pairs = [
+            ("dominant", "submissive"),
+            ("leader", "follower"),
+            ("teacher", "student"),
+            ("sadistic", "masochistic"),
+            ("protective", "dependent"),
+            ("controlling", "obedient")
+        ]
+        
+        for trait1, trait2 in complementary_pairs:
+            if (trait1 in data1["traits"] and trait2 in data2["traits"]):
+                compatibility_score += 2.0
+                break
+            if (trait1 in data2["traits"] and trait2 in data1["traits"]):
+                compatibility_score += 2.0
+                break
+        
+        # 4. Check for shared hobbies/interests (synergy)
+        shared_hobbies = set(data1["hobbies"]) & set(data2["hobbies"])
+        compatibility_score += len(shared_hobbies) * 0.5
+        
+        # 5. Check for shared affiliations (natural alliance point)
+        shared_affiliations = set(data1["affiliations"]) & set(data2["affiliations"])
+        compatibility_score += len(shared_affiliations) * 0.7
+        
+        # 6. Check for incompatible trait combinations
+        incompatible_pairs = [
+            ("loner", "socialite"),
+            ("honest", "manipulative"),
+            ("loyal", "treacherous"),
+            ("patient", "impulsive")
+        ]
+        
+        for trait1, trait2 in incompatible_pairs:
+            if ((trait1 in data1["traits"] and trait2 in data2["traits"]) or
+                (trait1 in data2["traits"] and trait2 in data1["traits"])):
+                compatibility_score -= 1.5
+        
+        # Get current relationship level to influence compatibility
+        link_level = await self._get_relationship_level(npc1, npc2) or 0
+        compatibility_factor = link_level / 25.0  # Scale to 0-4 range
+        compatibility_score += compatibility_factor
+        
+        # Final decision - positive score indicates compatibility
+        return compatibility_score > 1.0
 
     async def update_relationship_from_interaction(
         self,
