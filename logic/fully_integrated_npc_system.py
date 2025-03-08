@@ -3957,78 +3957,225 @@ async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
         except Exception as e:
             logger.error(f"Error processing NPC perception for NPC {npc_id}: {e}")
     
-    async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
-        """
-        Process scheduled activities for all NPCs using the agent system.
-        Enhanced with agent-based decision making and memory formation.
+async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
+    """
+    Process scheduled activities for all NPCs using the agent system.
+    Optimized for better performance with many NPCs through batching.
+    """
+    logger.info("Processing scheduled activities")
+    
+    try:
+        # Get current time information for context
+        year, month, day, time_of_day = await self.get_current_game_time()
         
-        Returns:
-            Dictionary with results of NPC activities
-            
-        Raises:
-            NPCSystemError: If there's an issue processing scheduled activities
-        """
-        try:
-            # Get current time information for context
-            year, month, day, time_of_day = await self.get_current_game_time()
-            
-            # Create base context for all NPCs
-            base_context = {
-                "year": year,
-                "month": month,
-                "day": day,
-                "time_of_day": time_of_day,
-                "activity_type": "scheduled"
-            }
-            
-            # Get all NPCs with their current locations (batch query for performance)
-            async with self.connection_pool.acquire() as conn:
-                rows = await conn.fetch("""
-                    SELECT npc_id, npc_name, current_location 
-                    FROM NPCStats 
-                    WHERE user_id=$1 AND conversation_id=$2
-                """, self.user_id, self.conversation_id)
+        # Create base context for all NPCs
+        base_context = {
+            "year": year,
+            "month": month,
+            "day": day,
+            "time_of_day": time_of_day,
+            "activity_type": "scheduled"
+        }
+        
+        # Get all NPCs with their current locations - batch query for performance
+        npc_data = await self._fetch_all_npc_data_for_activities()
+        
+        # Count total NPCs to process
+        total_npcs = len(npc_data)
+        if total_npcs == 0:
+            return {"npc_responses": [], "count": 0}
                 
-                npc_data = {row["npc_id"]: {"name": row["npc_name"], "location": row["current_location"]} for row in rows}
+        logger.info(f"Processing scheduled activities for {total_npcs} NPCs")
+        
+        # For very large NPC counts, process in batches rather than all at once
+        batch_size = 20  # Adjust based on system capabilities
+        npc_responses = []
+        
+        # Process in batches
+        for i in range(0, total_npcs, batch_size):
+            batch = list(npc_data.items())[i:i+batch_size]
             
-            # Process activities in parallel for better performance
-            activity_tasks = []
-            
-            # For each NPC, process their scheduled activity
-            for npc_id, data in npc_data.items():
-                # Create task to process NPC activity
-                activity_tasks.append(
+            # Create tasks for this batch
+            batch_tasks = []
+            for npc_id, data in batch:
+                batch_tasks.append(
                     self._process_single_npc_activity(npc_id, data, base_context)
                 )
             
-            # Run all activity tasks concurrently and collect results
-            results = await asyncio.gather(*activity_tasks, return_exceptions=True)
+            # Run batch concurrently
+            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
             
-            # Format results, filtering out exceptions
-            npc_responses = []
-            for result in results:
+            # Process batch results
+            for result in batch_results:
                 if isinstance(result, Exception):
                     logger.error(f"Error processing scheduled activity: {result}")
                 elif result:  # Skip None results
                     npc_responses.append(result)
+                
+            # If we have multiple batches, add a small delay between them to reduce system load
+            if i + batch_size < total_npcs:
+                await asyncio.sleep(0.1)
             
-            # Let agent system process all scheduled activities
-            # This handles coordination between NPCs, shared observations, etc.
-            agent_system_result = await self.agent_system.process_npc_scheduled_activities()
+        # After all NPCs processed, do agent system coordination
+        try:
+            # Call the internal coordination method instead of recursively calling this method
+            agent_responses = await self._process_coordination_activities(base_context)
+        except Exception as e:
+            logger.error(f"Error in agent system coordination: {e}")
+            agent_responses = []
+        
+        # Combined results from individual processing and agent system
+        combined_results = {
+            "npc_responses": npc_responses,
+            "agent_system_responses": agent_responses,
+            "count": len(npc_responses) + len(agent_responses)
+        }
+        
+        # Add summary statistics
+        combined_results["stats"] = {
+            "total_npcs": total_npcs,
+            "successful_activities": len(npc_responses),
+            "time_of_day": time_of_day,
+            "processing_time": None  # Could add timing info here
+        }
+        
+        return combined_results
             
-            # Combine our results with agent system results
-            combined_results = {
-                "npc_responses": npc_responses,
-                "agent_system_responses": agent_system_result.get("npc_responses", []),
-                "count": len(npc_responses)
-            }
+    except Exception as e:
+        error_msg = f"Error processing NPC scheduled activities: {e}"
+        logger.error(error_msg)
+        raise NPCSystemError(error_msg)
+
+    async def _process_coordination_activities(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Process NPC coordination activities - handling group interactions and influences.
+        This separates the coordination logic from the main activity processing to avoid recursion.
+        
+        Args:
+            context: Base context for activities
             
-            return combined_results
+        Returns:
+            List of coordination activity responses
+        """
+        logger.info("Processing NPC coordination activities")
+        
+        try:
+            # Get NPCs that are in the same location (for potential group activities)
+            location_groups = await self._get_npcs_by_location()
+            
+            # Process each location group for potential interactions
+            coordination_responses = []
+            
+            for location, npc_ids in location_groups.items():
+                # Only process groups with multiple NPCs
+                if len(npc_ids) < 2:
+                    continue
+                    
+                # Find dominant NPCs in each location who might initiate group activities
+                dominant_npcs = await self._find_dominant_npcs(npc_ids)
+                
+                for dom_npc_id in dominant_npcs:
+                    # Create group context
+                    group_context = context.copy()
+                    group_context["location"] = location
+                    group_context["group_members"] = npc_ids
+                    group_context["initiator_id"] = dom_npc_id
+                    
+                    # Check if this group should interact
+                    if await self._should_group_interact(dom_npc_id, npc_ids, group_context):
+                        # Use coordinator to handle the group interaction
+                        group_result = await self.coordinator.make_group_decisions(
+                            npc_ids, 
+                            group_context
+                        )
+                        
+                        if group_result:
+                            coordination_responses.append({
+                                "type": "group_interaction",
+                                "location": location,
+                                "initiator": dom_npc_id,
+                                "participants": npc_ids,
+                                "result": group_result
+                            })
+            
+            return coordination_responses
             
         except Exception as e:
-            error_msg = f"Error processing NPC scheduled activities: {e}"
-            logger.error(error_msg)
-            raise NPCSystemError(error_msg)
+            logger.error(f"Error in coordination activities: {e}")
+            return []
+            
+    async def _find_dominant_npcs(self, npc_ids: List[int]) -> List[int]:
+        """Find NPCs with high dominance that might initiate group activities."""
+        dominant_npcs = []
+        
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT npc_id 
+                FROM NPCStats
+                WHERE npc_id = ANY(%s)
+                AND dominance > 65
+                ORDER BY dominance DESC
+            """, (npc_ids,))
+            
+            dominant_npcs = [row[0] for row in cursor.fetchall()]
+        
+        return dominant_npcs
+    
+    async def _should_group_interact(self, initiator_id: int, group_members: List[int], context: Dict[str, Any]) -> bool:
+        """Determine if a group interaction should occur based on social dynamics."""
+        # Base chance - 30%
+        interaction_chance = 0.3
+        
+        # Check time of day - certain times are more social
+        time_of_day = context.get("time_of_day", "")
+        if time_of_day == "evening":
+            interaction_chance += 0.2  # More group interactions in evening
+        
+        # Check if initiator has high dominance and cruelty (femdom context)
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT dominance, cruelty
+                FROM NPCStats
+                WHERE npc_id = %s
+            """, (initiator_id,))
+            
+            row = cursor.fetchone()
+            if row:
+                dominance, cruelty = row
+                
+                # Highly dominant NPCs more likely to initiate group dynamics
+                if dominance > 80:
+                    interaction_chance += 0.2
+                    
+                # Cruel dominants enjoy group discipline scenes
+                if cruelty > 70:
+                    interaction_chance += 0.15
+        
+        # Random roll against the calculated chance
+        return random.random() < interaction_chance
+    
+    async def _get_npcs_by_location(self) -> Dict[str, List[int]]:
+        """Group NPCs by their current location."""
+        location_groups = {}
+        
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT npc_id, current_location
+                FROM NPCStats
+                WHERE user_id = %s
+                AND conversation_id = %s
+                AND current_location IS NOT NULL
+            """, (self.user_id, self.conversation_id))
+            
+            for row in cursor.fetchall():
+                npc_id, location = row
+                
+                if location not in location_groups:
+                    location_groups[location] = []
+                    
+                location_groups[location].append(npc_id)
+        
+        return location_groups
     
     async def _process_single_npc_activity(self, npc_id, data, base_context):
         """
