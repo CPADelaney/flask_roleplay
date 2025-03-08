@@ -56,6 +56,50 @@ class NPCDecisionEngine:
         emotional_state = perception.get("emotional_state", {})
         mask = perception.get("mask", {})
         flashback = perception.get("flashback")
+
+        year, month, day, time_of_day = None, None, None, None
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT value FROM CurrentRoleplay 
+                    WHERE key IN ('CurrentYear', 'CurrentMonth', 'CurrentDay', 'TimeOfDay')
+                    AND user_id = %s AND conversation_id = %s
+                """, (self.user_id, self.conversation_id))
+                
+                for row in cursor.fetchall():
+                    key, value = row
+                    if key == "CurrentYear": year = value
+                    elif key == "CurrentMonth": month = value
+                    elif key == "CurrentDay": day = value
+                    elif key == "TimeOfDay": time_of_day = value
+        except Exception as e:
+            logging.error(f"Error getting time context: {e}")
+        
+        # Add time context to perception
+        perception["time_context"] = {
+            "year": year,
+            "month": month,
+            "day": day,
+            "time_of_day": time_of_day
+        }
+        
+        # Get narrative context
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT value FROM CurrentRoleplay 
+                    WHERE key IN ('CurrentPlotStage', 'CurrentTension')
+                    AND user_id = %s AND conversation_id = %s
+                """, (self.user_id, self.conversation_id))
+                
+                narrative_context = {}
+                for row in cursor.fetchall():
+                    key, value = row
+                    narrative_context[key] = value
+                    
+                perception["narrative_context"] = narrative_context
+        except Exception as e:
+            logging.error(f"Error getting narrative context: {e}")
         
         # If there's a flashback, it can override normal decision making
         if flashback and random.random() < 0.7:  # 70% chance to be influenced by flashback
@@ -340,6 +384,36 @@ class NPCDecisionEngine:
         
         return actions
 
+    async def _score_time_context_influence(self, time_context: Dict[str, Any], action: Dict[str, Any]) -> float:
+        """Score actions based on time of day appropriateness."""
+        score = 0.0
+        
+        time_of_day = time_context.get("time_of_day", "").lower()
+        action_type = action.get("type", "")
+        
+        # Time-appropriate actions score higher
+        if time_of_day == "morning":
+            if action_type in ["talk", "observe", "socialize"]:
+                score += 1.0  # Good morning activities
+            elif action_type in ["sleep", "seduce", "dominate"]:
+                score -= 1.0  # Less appropriate for morning
+                
+        elif time_of_day == "afternoon":
+            if action_type in ["talk", "socialize", "command", "test"]:
+                score += 1.0  # Good afternoon activities
+                
+        elif time_of_day == "evening":
+            if action_type in ["talk", "socialize", "seduce", "flirt"]:
+                score += 1.5  # Good evening activities
+                
+        elif time_of_day == "night":
+            if action_type in ["seduce", "dominate", "sleep"]:
+                score += 2.0  # Good night activities
+            elif action_type in ["talk", "socialize"]:
+                score -= 0.5  # Less appropriate late at night
+        
+        return score
+
     async def _generate_memory_based_actions(self, perception: Dict[str, Any]) -> List[dict]:
         """Generate actions based on relevant memories."""
         actions = []
@@ -548,6 +622,12 @@ class NPCDecisionEngine:
                 "score": score,
                 "reasoning": scoring_factors
             })
+
+            time_context = perception.get("time_context", {})
+            if time_context:
+                time_context_score = await self._score_time_context_influence(time_context, action)
+                score += time_context_score
+                scoring_factors["time_context_influence"] = time_context_score                                        
         
         # Sort by score (descending)
         scored_actions.sort(key=lambda x: x["score"], reverse=True)
