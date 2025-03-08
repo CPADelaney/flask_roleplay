@@ -1,21 +1,27 @@
-# routes/story_routes.py (revised)
-
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Complete module: routes/story_routes.py with IntegratedNPCSystem integration
-"""
+# routes/story_routes.py (Revised)
 
 import logging
 import json
 import os
 import asyncio
-from datetime import datetime, date
+import time
+from datetime import datetime, date, timedelta
 from flask import Blueprint, request, jsonify, session
 
-# Import your DB and logic modules
+# Import utility modules
+from utils.db_helpers import (
+    db_transaction, with_transaction, handle_database_operation,
+    fetch_row_async, fetch_all_async, execute_async
+)
+from utils.performance import PerformanceTracker, timed_function, STATS
+from utils.caching import (
+    NPC_CACHE, LOCATION_CACHE, AGGREGATOR_CACHE, TIME_CACHE,
+    COMPUTATION_CACHE
+)
+
+# Import core logic modules
 from db.connection import get_db_connection
-from logic.universal_updater import apply_universal_updates  # async function
+from logic.universal_updater import apply_universal_updates
 from logic.npc_creation import spawn_multiple_npcs_enhanced, create_and_refine_npc
 from logic.aggregator import get_aggregated_roleplay_context
 from logic.time_cycle import get_current_time, should_advance_time, nightly_maintenance
@@ -25,16 +31,32 @@ from routes.settings_routes import generate_mega_setting_logic
 from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 
-# Import IntegratedNPCSystem - PRIMARY CHANGE
+# Import IntegratedNPCSystem
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
 
-# Import new enhanced modules
-from logic.stats_logic import get_player_current_tier, check_for_combination_triggers, apply_stat_change, apply_activity_effects
-
-from logic.npc_creation import process_daily_npc_activities, check_for_mask_slippage, detect_relationship_stage_changes
-from logic.narrative_progression import get_current_narrative_stage, check_for_personal_revelations, check_for_narrative_moments,check_for_npc_revelations, add_dream_sequence, add_moment_of_clarity
-from logic.social_links import get_relationship_dynamic_level, update_relationship_dynamic, check_for_relationship_crossroads, check_for_relationship_ritual, get_relationship_summary, apply_crossroads_choice
-from logic.addiction_system import check_addiction_levels, update_addiction_level, process_addiction_effects, get_addiction_status, get_addiction_label
+# Import enhanced modules
+from logic.stats_logic import (
+    get_player_current_tier, check_for_combination_triggers, 
+    apply_stat_change, apply_activity_effects
+)
+from logic.npc_creation import (
+    process_daily_npc_activities, check_for_mask_slippage, 
+    detect_relationship_stage_changes
+)
+from logic.narrative_progression import (
+    get_current_narrative_stage, check_for_personal_revelations, 
+    check_for_narrative_moments, check_for_npc_revelations, 
+    add_dream_sequence, add_moment_of_clarity
+)
+from logic.social_links import (
+    get_relationship_dynamic_level, update_relationship_dynamic, 
+    check_for_relationship_crossroads, check_for_relationship_ritual, 
+    get_relationship_summary, apply_crossroads_choice
+)
+from logic.addiction_system import (
+    check_addiction_levels, update_addiction_level, process_addiction_effects, 
+    get_addiction_status, get_addiction_label
+)
 
 story_bp = Blueprint("story_bp", __name__)
 
@@ -134,252 +156,355 @@ FUNCTION_SCHEMAS = [
 # HELPER FUNCTIONS
 # -------------------------------------------------------------------
 
-def fetch_npc_details(user_id, conversation_id, npc_id):
+async def fetch_npc_details_async(user_id, conversation_id, npc_id):
     """
     Retrieve full or partial NPC info from NPCStats for a given npc_id.
+    Async version with connection pooling.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    # Create cache key
+    cache_key = f"npc_details:{user_id}:{conversation_id}:{npc_id}"
+    
+    # Check cache first
+    cached_result = NPC_CACHE.get(cache_key)
+    if cached_result:
+        return cached_result
+    
+    # Query database if not in cache
+    query = """
         SELECT npc_name, introduced, dominance, cruelty, closeness,
                trust, respect, intensity, affiliations, schedule, current_location
         FROM NPCStats
-        WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
+        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
         LIMIT 1
-    """, (user_id, conversation_id, npc_id))
-    row = cursor.fetchone()
+    """
+    
+    row = await fetch_row_async(query, user_id, conversation_id, npc_id)
+    
     if not row:
-        cursor.close()
-        conn.close()
         return {"error": f"No NPC found with npc_id={npc_id}"}
-    (nname, intro, dom, cru, clos, tru, resp, inten, affil, sched, cloc) = row
+    
+    # Process row data
     npc_data = {
         "npc_id": npc_id,
-        "npc_name": nname,
-        "introduced": intro,
-        "dominance": dom,
-        "cruelty": cru,
-        "closeness": clos,
-        "trust": tru,
-        "respect": resp,
-        "intensity": inten,
-        "affiliations": affil if affil is not None else [],
-        "schedule": sched if sched is not None else {},
-        "current_location": cloc
+        "npc_name": row["npc_name"],
+        "introduced": row["introduced"],
+        "dominance": row["dominance"],
+        "cruelty": row["cruelty"],
+        "closeness": row["closeness"],
+        "trust": row["trust"],
+        "respect": row["respect"],
+        "intensity": row["intensity"],
+        "affiliations": row["affiliations"] if row["affiliations"] is not None else [],
+        "schedule": row["schedule"] if row["schedule"] is not None else {},
+        "current_location": row["current_location"]
     }
-    cursor.close()
-    conn.close()
+    
+    # Cache the result
+    NPC_CACHE.set(cache_key, npc_data, 30)  # TTL: 30 seconds
+    
     return npc_data
 
-def fetch_quest_details(user_id, conversation_id, quest_id):
+async def fetch_quest_details_async(user_id, conversation_id, quest_id):
     """
     Retrieve quest info from the Quests table by quest_id.
+    Async version with connection pooling.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    # Create cache key
+    cache_key = f"quest_details:{user_id}:{conversation_id}:{quest_id}"
+    
+    # Check cache first
+    cached_result = NPC_CACHE.get(cache_key)
+    if cached_result:
+        return cached_result
+        
+    query = """
         SELECT quest_name, status, progress_detail, quest_giver, reward
         FROM Quests
-        WHERE user_id=%s AND conversation_id=%s AND quest_id=%s
+        WHERE user_id=$1 AND conversation_id=$2 AND quest_id=$3
         LIMIT 1
-    """, (user_id, conversation_id, quest_id))
-    row = cursor.fetchone()
+    """
+    
+    row = await fetch_row_async(query, user_id, conversation_id, quest_id)
+    
     if not row:
-        cursor.close()
-        conn.close()
         return {"error": f"No quest found with quest_id={quest_id}"}
-    (qname, qstatus, qdetail, qgiver, qreward) = row
+    
+    # Process row data
     quest_data = {
         "quest_id": quest_id,
-        "quest_name": qname,
-        "status": qstatus,
-        "progress_detail": qdetail,
-        "quest_giver": qgiver,
-        "reward": qreward
+        "quest_name": row["quest_name"],
+        "status": row["status"],
+        "progress_detail": row["progress_detail"],
+        "quest_giver": row["quest_giver"],
+        "reward": row["reward"]
     }
-    cursor.close()
-    conn.close()
+    
+    # Cache the result
+    NPC_CACHE.set(cache_key, quest_data, 60)  # TTL: 60 seconds
+    
     return quest_data
 
-def fetch_location_details(user_id, conversation_id, location_id=None, location_name=None):
+async def fetch_location_details_async(user_id, conversation_id, location_id=None, location_name=None):
     """
     Retrieve location info by location_id or location_name from the Locations table.
+    Async version with connection pooling.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    # Create cache key
+    cache_key = f"location_details:{user_id}:{conversation_id}:{location_id or ''}:{location_name or ''}"
+    
+    # Check cache first
+    cached_result = LOCATION_CACHE.get(cache_key)
+    if cached_result:
+        return cached_result
+    
     if location_id:
-        cursor.execute("""
+        query = """
             SELECT location_name, description, open_hours
             FROM Locations
-            WHERE user_id=%s AND conversation_id=%s AND id=%s
+            WHERE user_id=$1 AND conversation_id=$2 AND id=$3
             LIMIT 1
-        """, (user_id, conversation_id, location_id))
+        """
+        row = await fetch_row_async(query, user_id, conversation_id, location_id)
     elif location_name:
-        cursor.execute("""
+        query = """
             SELECT location_name, description, open_hours
             FROM Locations
-            WHERE user_id=%s AND conversation_id=%s AND location_name=%s
+            WHERE user_id=$1 AND conversation_id=$2 AND location_name=$3
             LIMIT 1
-        """, (user_id, conversation_id, location_name))
+        """
+        row = await fetch_row_async(query, user_id, conversation_id, location_name)
     else:
         return {"error": "No location_id or location_name provided"}
-    row = cursor.fetchone()
+    
     if not row:
-        cursor.close()
-        conn.close()
         return {"error": "No matching location found"}
-    (lname, ldesc, lhours) = row
+    
+    # Process row data
     loc_data = {
-        "location_name": lname,
-        "description": ldesc,
-        "open_hours": lhours if lhours is not None else []
+        "location_name": row["location_name"],
+        "description": row["description"],
+        "open_hours": row["open_hours"] if row["open_hours"] is not None else []
     }
-    cursor.close()
-    conn.close()
+    
+    # Cache the result
+    LOCATION_CACHE.set(cache_key, loc_data, 120)  # TTL: 2 minutes
+    
     return loc_data
 
-def fetch_event_details(user_id, conversation_id, event_id):
+async def fetch_event_details_async(user_id, conversation_id, event_id):
     """
     Retrieve an event's info by event_id from the Events table.
+    Async version with connection pooling.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT event_name, description, start_time, end_time, location, year, month, day, time_of_day
+    query = """
+        SELECT event_name, description, start_time, end_time, location, 
+               year, month, day, time_of_day
         FROM Events
-        WHERE user_id=%s AND conversation_id=%s AND id=%s
+        WHERE user_id=$1 AND conversation_id=$2 AND id=$3
         LIMIT 1
-    """, (user_id, conversation_id, event_id))
-    row = cursor.fetchone()
+    """
+    
+    row = await fetch_row_async(query, user_id, conversation_id, event_id)
+    
     if not row:
-        cursor.close()
-        conn.close()
         return {"error": f"No event found with id={event_id}"}
-    (ename, edesc, stime, etime, eloc, eyear, emonth, eday, etod) = row
+    
+    # Process row data
     event_data = {
         "event_id": event_id,
-        "event_name": ename,
-        "description": edesc,
-        "start_time": stime,
-        "end_time": etime,
-        "location": eloc,
-        "year": eyear,
-        "month": emonth,
-        "day": eday,
-        "time_of_day": etod
+        "event_name": row["event_name"],
+        "description": row["description"],
+        "start_time": row["start_time"],
+        "end_time": row["end_time"],
+        "location": row["location"],
+        "year": row["year"],
+        "month": row["month"],
+        "day": row["day"],
+        "time_of_day": row["time_of_day"]
     }
-    cursor.close()
-    conn.close()
+    
     return event_data
 
-def fetch_inventory_item(user_id, conversation_id, item_name):
+async def fetch_inventory_item_async(user_id, conversation_id, item_name):
     """
     Lookup a specific item in the player's inventory by item_name.
+    Async version with connection pooling.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    query = """
         SELECT player_name, item_description, item_effect, quantity, category
         FROM PlayerInventory
-        WHERE user_id=%s AND conversation_id=%s AND item_name=%s
+        WHERE user_id=$1 AND conversation_id=$2 AND item_name=$3
         LIMIT 1
-    """, (user_id, conversation_id, item_name))
-    row = cursor.fetchone()
+    """
+    
+    row = await fetch_row_async(query, user_id, conversation_id, item_name)
+    
     if not row:
-        cursor.close()
-        conn.close()
         return {"error": f"No item named '{item_name}' found in inventory"}
-    (pname, idesc, ifx, qty, cat) = row
+    
+    # Process row data
     item_data = {
         "item_name": item_name,
-        "player_name": pname,
-        "item_description": idesc,
-        "item_effect": ifx,
-        "quantity": qty,
-        "category": cat
+        "player_name": row["player_name"],
+        "item_description": row["item_description"],
+        "item_effect": row["item_effect"],
+        "quantity": row["quantity"],
+        "category": row["category"]
     }
-    cursor.close()
-    conn.close()
+    
     return item_data
 
-def fetch_intensity_tiers():
+async def fetch_intensity_tiers_async():
     """
     Retrieve the entire IntensityTiers data.
+    Async version with connection pooling.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    # Check cache first
+    cached_result = AGGREGATOR_CACHE.get("intensity_tiers")
+    if cached_result:
+        return cached_result
+    
+    query = """
         SELECT tier_name, key_features, activity_examples, permanent_effects
         FROM IntensityTiers
         ORDER BY id
-    """)
-    rows = cursor.fetchall()
+    """
+    
+    rows = await fetch_all_async(query)
+    
     all_tiers = []
-    for (tname, kfeat, aex, peff) in rows:
+    for row in rows:
+        try:
+            key_features = json.loads(row["key_features"]) if isinstance(row["key_features"], str) else row["key_features"] or []
+        except (json.JSONDecodeError, TypeError):
+            key_features = []
+            
+        try:
+            activity_examples = json.loads(row["activity_examples"]) if isinstance(row["activity_examples"], str) else row["activity_examples"] or []
+        except (json.JSONDecodeError, TypeError):
+            activity_examples = []
+            
+        try:
+            permanent_effects = json.loads(row["permanent_effects"]) if isinstance(row["permanent_effects"], str) else row["permanent_effects"] or {}
+        except (json.JSONDecodeError, TypeError):
+            permanent_effects = {}
+        
         all_tiers.append({
-            "tier_name": tname,
-            "key_features": kfeat if kfeat is not None else [],
-            "activity_examples": aex if aex is not None else [],
-            "permanent_effects": peff if peff is not None else {}
+            "tier_name": row["tier_name"],
+            "key_features": key_features,
+            "activity_examples": activity_examples,
+            "permanent_effects": permanent_effects
         })
-    cursor.close()
-    conn.close()
+    
+    # Cache the result
+    AGGREGATOR_CACHE.set("intensity_tiers", all_tiers, 300)  # TTL: 5 minutes
+    
     return all_tiers
 
-def fetch_plot_triggers():
+async def fetch_plot_triggers_async():
     """
     Retrieve the entire list of PlotTriggers.
+    Async version with connection pooling.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    # Check cache first
+    cached_result = AGGREGATOR_CACHE.get("plot_triggers")
+    if cached_result:
+        return cached_result
+    
+    query = """
         SELECT trigger_name, stage_name, description,
                key_features, stat_dynamics, examples, triggers
         FROM PlotTriggers
         ORDER BY id
-    """)
-    rows = cursor.fetchall()
+    """
+    
+    rows = await fetch_all_async(query)
+    
     triggers = []
-    for r in rows:
-        (tname, stg, desc, kfeat, sdyn, ex, trigz) = r
+    for row in rows:
+        try:
+            key_features = json.loads(row["key_features"]) if isinstance(row["key_features"], str) else row["key_features"] or []
+        except (json.JSONDecodeError, TypeError):
+            key_features = []
+            
+        try:
+            stat_dynamics = json.loads(row["stat_dynamics"]) if isinstance(row["stat_dynamics"], str) else row["stat_dynamics"] or []
+        except (json.JSONDecodeError, TypeError):
+            stat_dynamics = []
+            
+        try:
+            examples = json.loads(row["examples"]) if isinstance(row["examples"], str) else row["examples"] or []
+        except (json.JSONDecodeError, TypeError):
+            examples = []
+            
+        try:
+            triggers_data = json.loads(row["triggers"]) if isinstance(row["triggers"], str) else row["triggers"] or {}
+        except (json.JSONDecodeError, TypeError):
+            triggers_data = {}
+        
         triggers.append({
-            "title": tname,
-            "stage": stg,
-            "description": desc,
-            "key_features": kfeat if kfeat is not None else [],
-            "stat_dynamics": sdyn if sdyn is not None else [],
-            "examples": ex if ex is not None else [],
-            "triggers": trigz if trigz is not None else {}
+            "title": row["trigger_name"],
+            "stage": row["stage_name"],
+            "description": row["description"],
+            "key_features": key_features,
+            "stat_dynamics": stat_dynamics,
+            "examples": examples,
+            "triggers": triggers_data
         })
-    cursor.close()
-    conn.close()
+    
+    # Cache the result
+    AGGREGATOR_CACHE.set("plot_triggers", triggers, 300)  # TTL: 5 minutes
+    
     return triggers
 
-def fetch_interactions():
+async def fetch_interactions_async():
     """
     Retrieve all Interactions from the Interactions table.
+    Async version with connection pooling.
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    # Check cache first
+    cached_result = AGGREGATOR_CACHE.get("interactions")
+    if cached_result:
+        return cached_result
+    
+    query = """
         SELECT interaction_name, detailed_rules, task_examples, agency_overrides
         FROM Interactions
         ORDER BY id
-    """)
-    rows = cursor.fetchall()
+    """
+    
+    rows = await fetch_all_async(query)
+    
     result = []
-    for (iname, drules, texamples, aover) in rows:
+    for row in rows:
+        try:
+            detailed_rules = json.loads(row["detailed_rules"]) if isinstance(row["detailed_rules"], str) else row["detailed_rules"] or {}
+        except (json.JSONDecodeError, TypeError):
+            detailed_rules = {}
+            
+        try:
+            task_examples = json.loads(row["task_examples"]) if isinstance(row["task_examples"], str) else row["task_examples"] or {}
+        except (json.JSONDecodeError, TypeError):
+            task_examples = {}
+            
+        try:
+            agency_overrides = json.loads(row["agency_overrides"]) if isinstance(row["agency_overrides"], str) else row["agency_overrides"] or {}
+        except (json.JSONDecodeError, TypeError):
+            agency_overrides = {}
+        
         result.append({
-            "interaction_name": iname,
-            "detailed_rules": drules if drules is not None else {},
-            "task_examples": texamples if texamples is not None else {},
-            "agency_overrides": aover if aover is not None else {}
+            "interaction_name": row["interaction_name"],
+            "detailed_rules": detailed_rules,
+            "task_examples": task_examples,
+            "agency_overrides": agency_overrides
         })
-    cursor.close()
-    conn.close()
+    
+    # Cache the result
+    AGGREGATOR_CACHE.set("interactions", result, 300)  # TTL: 5 minutes
+    
     return result
 
-# NEW FUNCTION: Get nearby NPCs for interactions
+@timed_function(name="get_nearby_npcs")
 async def get_nearby_npcs(user_id, conversation_id, location=None):
     """
     Get NPCs that are at the current location with enhanced caching and filtering.
@@ -392,359 +517,104 @@ async def get_nearby_npcs(user_id, conversation_id, location=None):
     Returns:
         List of nearby NPCs with relevant details
     """
-    # Initialize cache if not exists
-    if not hasattr(get_nearby_npcs, "cache"):
-        get_nearby_npcs.cache = {}
-        get_nearby_npcs.cache_timestamps = {}
-    
     # Create cache key
-    cache_key = f"{user_id}:{conversation_id}:{location or 'all'}"
+    cache_key = f"nearby_npcs:{user_id}:{conversation_id}:{location or 'all'}"
     
-    # Check cache first (30 second TTL)
-    cache_timestamp = get_nearby_npcs.cache_timestamps.get(cache_key)
-    if cache_timestamp and (datetime.now() - cache_timestamp).total_seconds() < 30:
-        return get_nearby_npcs.cache.get(cache_key, [])
+    # Check cache first
+    cached_result = NPC_CACHE.get(cache_key)
+    if cached_result:
+        return cached_result
     
-    conn = None
-    cursor = None
-    
+    # Query database if not in cache
     try:
-        # Get connection pool with async driver if available
-        try:
-            import asyncpg
-            dsn = os.getenv("DB_DSN")
-            conn = await asyncpg.connect(dsn=dsn)
-            
-            # Use more efficient async query
-            if location:
-                query = """
-                    SELECT npc_id, npc_name, current_location, dominance, cruelty, 
-                           archetypes, memory
-                    FROM NPCStats
-                    WHERE user_id=$1 AND conversation_id=$2 
-                    AND current_location=$3
-                    ORDER BY introduced DESC
-                    LIMIT 5
-                """
-                rows = await conn.fetch(query, user_id, conversation_id, location)
-            else:
-                query = """
-                    SELECT npc_id, npc_name, current_location, dominance, cruelty,
-                           archetypes, memory
-                    FROM NPCStats
-                    WHERE user_id=$1 AND conversation_id=$2
-                    ORDER BY introduced DESC
-                    LIMIT 5
-                """
-                rows = await conn.fetch(query, user_id, conversation_id)
-            
-            # Process results
-            nearby_npcs = []
-            for row in rows:
-                # Process JSON fields with error handling
-                try:
-                    archetypes = json.loads(row["archetypes"]) if isinstance(row["archetypes"], str) else row["archetypes"] or []
-                except (json.JSONDecodeError, TypeError):
-                    archetypes = []
-                    
-                try:
-                    memories = json.loads(row["memory"]) if isinstance(row["memory"], str) else row["memory"] or []
-                except (json.JSONDecodeError, TypeError):
-                    memories = []
+        if location:
+            query = """
+                SELECT npc_id, npc_name, current_location, dominance, cruelty, 
+                       archetypes, memory
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 
+                AND current_location=$3
+                ORDER BY introduced DESC
+                LIMIT 5
+            """
+            rows = await fetch_all_async(query, user_id, conversation_id, location)
+        else:
+            query = """
+                SELECT npc_id, npc_name, current_location, dominance, cruelty,
+                       archetypes, memory
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2
+                ORDER BY introduced DESC
+                LIMIT 5
+            """
+            rows = await fetch_all_async(query, user_id, conversation_id)
+        
+        # Process results
+        nearby_npcs = []
+        for row in rows:
+            # Process JSON fields with error handling
+            try:
+                archetypes = json.loads(row["archetypes"]) if isinstance(row["archetypes"], str) else row["archetypes"] or []
+            except (json.JSONDecodeError, TypeError):
+                archetypes = []
                 
-                # Add NPC data with selected memories
-                nearby_npcs.append({
-                    "npc_id": row["npc_id"],
-                    "npc_name": row["npc_name"],
-                    "current_location": row["current_location"],
-                    "dominance": row["dominance"],
-                    "cruelty": row["cruelty"],
-                    "archetypes": archetypes,
-                    "recent_memories": memories[:3] if memories else []
-                })
+            try:
+                memories = json.loads(row["memory"]) if isinstance(row["memory"], str) else row["memory"] or []
+            except (json.JSONDecodeError, TypeError):
+                memories = []
             
-            # Cache the results
-            get_nearby_npcs.cache[cache_key] = nearby_npcs
-            get_nearby_npcs.cache_timestamps[cache_key] = datetime.now()
-            
-            return nearby_npcs
-            
-        except (ImportError, Exception) as async_error:
-            # Fall back to synchronous connection if async fails
-            logger.warning(f"Falling back to sync connection: {async_error}")
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            if location:
-                cursor.execute("""
-                    SELECT npc_id, npc_name, current_location, dominance, cruelty
-                    FROM NPCStats
-                    WHERE user_id=%s AND conversation_id=%s 
-                    AND current_location=%s
-                    ORDER BY introduced DESC
-                    LIMIT 5
-                """, (user_id, conversation_id, location))
-            else:
-                cursor.execute("""
-                    SELECT npc_id, npc_name, current_location, dominance, cruelty
-                    FROM NPCStats
-                    WHERE user_id=%s AND conversation_id=%s
-                    ORDER BY introduced DESC
-                    LIMIT 5
-                """, (user_id, conversation_id))
-                
-            nearby_npcs = []
-            for row in cursor.fetchall():
-                npc_id, npc_name, current_location, dominance, cruelty = row
-                nearby_npcs.append({
-                    "npc_id": npc_id,
-                    "npc_name": npc_name,
-                    "current_location": current_location,
-                    "dominance": dominance,
-                    "cruelty": cruelty
-                })
-            
-            # Cache the results
-            get_nearby_npcs.cache[cache_key] = nearby_npcs
-            get_nearby_npcs.cache_timestamps[cache_key] = datetime.now()
-            
-            return nearby_npcs
+            # Add NPC data with selected memories
+            nearby_npcs.append({
+                "npc_id": row["npc_id"],
+                "npc_name": row["npc_name"],
+                "current_location": row["current_location"],
+                "dominance": row["dominance"],
+                "cruelty": row["cruelty"],
+                "archetypes": archetypes,
+                "recent_memories": memories[:3] if memories else []
+            })
+        
+        # Cache the results (shorter TTL for location-specific results)
+        ttl = 20 if location else 30  # Location-specific results expire faster
+        NPC_CACHE.set(cache_key, nearby_npcs, ttl)
+        
+        return nearby_npcs
         
     except Exception as e:
-        logger.error(f"Error getting nearby NPCs: {e}")
+        logging.error(f"Error getting nearby NPCs: {e}")
         return []
-        
-    finally:
-        # Clean up resources
-        if cursor:
-            try:
-                cursor.close()
-            except Exception:
-                pass
-                
-        if conn:
-            try:
-                # Different close methods for different connection types
-                if hasattr(conn, 'close'):
-                    if asyncio.iscoroutinefunction(conn.close):
-                        asyncio.create_task(conn.close())
-                    else:
-                        conn.close()
-            except Exception:
-                pass
-                
-    # Keep cache size reasonable - clean up if more than 20 entries
-    if len(get_nearby_npcs.cache) > 20:
-        # Find oldest cache entries
-        old_keys = sorted(
-            get_nearby_npcs.cache_timestamps.keys(),
-            key=lambda k: get_nearby_npcs.cache_timestamps[k]
-        )[:5]  # Remove 5 oldest
-        
-        # Remove old entries
-        for old_key in old_keys:
-            if old_key in get_nearby_npcs.cache:
-                del get_nearby_npcs.cache[old_key]
-            if old_key in get_nearby_npcs.cache_timestamps:
-                del get_nearby_npcs.cache_timestamps[old_key]
-# -------------------------------------------------------------------
-# ROUTE DEFINITION
-# -------------------------------------------------------------------
-
-@story_bp.route("/next_storybeat", methods=["POST"])
-async def next_storybeat():
-    """Enhanced storybeat endpoint with better resource management and parallel processing."""
-    # Resource tracking containers
-    resources = {
-        "conn": None,
-        "cursor": None,
-        "npc_system": None,
-        "pool": None
-    }
-    
-    try:
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Not logged in"}), 401
-
-        data = request.get_json() or {}
-        user_input = data.get("user_input", "").strip()
-        conv_id = data.get("conversation_id")
-        player_name = data.get("player_name", "Chase")
-        
-        # Database connection with proper context management
-        resources["conn"] = get_db_connection()
-        resources["cursor"] = resources["conn"].cursor()
-        
-        # Initialize NPC system with connection pooling
-        resources["npc_system"] = IntegratedNPCSystem(user_id, conv_id)
-        resources["pool"] = await resources["npc_system"].get_connection_pool()
-
-        # Get context data
-        aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
-        env_desc = aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", "")
-        day_names = aggregator_data.get("calendar", {}).get("days", ["Monday","Tuesday","..."])
-        
-        # Parallel operations for better performance
-        # Create tasks for operations that can run concurrently
-        tasks = [
-            # Check for NPC availability 
-            check_npc_availability(resources["cursor"], user_id, conv_id),
-            # Get current game time
-            resources["npc_system"].get_current_game_time(),
-            # Get nearby NPCs for interaction
-            get_nearby_npcs(user_id, conv_id, aggregator_data.get("currentRoleplay", {}).get("CurrentLocation"))
-        ]
-        
-        # Execute all tasks concurrently and get results
-        npc_count_result, current_time, nearby_npcs = await asyncio.gather(*tasks)
-        
-        # Check if we need to create NPCs
-        unintroduced_count = npc_count_result[0] if npc_count_result else 0
-        if unintroduced_count < 2:
-            # Spawn new NPCs with optimized performance
-            await resources["npc_system"].create_multiple_npcs(env_desc, day_names, count=3)
-
-        # Record user message
-        resources["cursor"].execute("""
-            INSERT INTO messages (conversation_id, sender, content)
-            VALUES (%s, %s, %s)
-        """, (conv_id, "user", user_input))
-        resources["conn"].commit()
-
-        # Process universal updates if provided
-        if data.get("universal_update"):
-            universal_data = data["universal_update"]
-            universal_data["user_id"] = user_id
-            universal_data["conversation_id"] = conv_id
-            
-            # Process updates with connection reuse
-            update_result = await process_universal_updates(universal_data, resources["pool"])
-            if update_result.get("error"):
-                return jsonify(update_result), 500
-
-        # Context for NPC interactions
-        context = {
-            "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
-            "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
-            "player_input": user_input,
-            "player_name": player_name
-        }
-        
-        # Get activity type with enhanced detection
-        activity_result = await resources["npc_system"].process_player_activity(user_input, context)
-        activity_type = activity_result.get("activity_type", "conversation")
-        
-        # Process NPC interactions in batches
-        npc_responses = await process_npc_interactions_batch(
-            resources["npc_system"], 
-            nearby_npcs, 
-            user_input, 
-            activity_type,
-            context
-        )
-        
-        # Time advancement with better verification
-        time_result = await process_time_advancement(
-            resources["npc_system"],
-            activity_type,
-            data,
-            current_time
-        )
-        
-        # Check for relationship events and process choices
-        crossroads_data = await process_relationship_events(
-            resources["npc_system"],
-            data
-        )
-        
-        # Build enhanced aggregator text with NPC responses
-        aggregator_text = build_aggregator_text(
-            aggregator_data, 
-            rule_knowledge=gather_rule_knowledge() if data.get("include_rules", False) else None
-        )
-        
-        if npc_responses:
-            npc_response_text = format_npc_responses(npc_responses)
-            aggregator_text += "\n\n=== NPC RESPONSES ===\n" + npc_response_text
-
-        # Add addiction context if relevant
-        addiction_status = await get_addiction_status(user_id, conv_id, player_name)
-        if addiction_status and addiction_status.get("has_addictions"):
-            aggregator_text += format_addiction_status(addiction_status)
-
-        # Get AI response with enhanced context
-        response_data = get_chatgpt_response(conv_id, aggregator_text, user_input)
-        
-        # Process response and handle function calls if needed
-        final_response, image_result = await process_ai_response(
-            response_data, 
-            user_id, 
-            conv_id
-        )
-
-        # Store the final response
-        resources["cursor"].execute("""
-            INSERT INTO messages (conversation_id, sender, content)
-            VALUES (%s, %s, %s)
-        """, (conv_id, "Nyx", final_response))
-        resources["conn"].commit()
-
-        # Assemble the complete response
-        response = {
-            "message": final_response,
-            "time_result": time_result,
-            "confirm_needed": time_result.get("would_advance", False) and not data.get("confirm_time_advance", False),
-            "npc_responses": format_npc_responses_for_client(npc_responses)
-        }
-        
-        # Add optional elements to response
-        if addiction_status:
-            response["addiction_effects"] = await process_addiction_effects(
-                user_id, conv_id, player_name, addiction_status
-            )
-            
-        if crossroads_data.get("event"):
-            response["crossroads_event"] = crossroads_data["event"]
-        if crossroads_data.get("result"):
-            response["crossroads_result"] = crossroads_data["result"]
-            
-        if image_result and "image_urls" in image_result:
-            response["image"] = {
-                "image_url": image_result["image_urls"][0],
-                "prompt_used": image_result.get("prompt_used", ""),
-                "reason": image_result.get("reason", "")
-            }
-
-        # Add narrative stage information
-        narrative_stage = await get_current_narrative_stage(user_id, conv_id)
-        if narrative_stage:
-            response["narrative_stage"] = narrative_stage.name
-
-        return jsonify(response)
-        
-    except Exception as e:
-        logger.exception("[next_storybeat] Error")
-        return jsonify({"error": str(e)}), 500
-        
-    finally:
-        # Comprehensive resource cleanup
-        await cleanup_resources(resources)
 
 async def process_universal_updates(universal_data, pool):
     """Process universal updates with connection reuse."""
+    operation_name = "process_universal_updates"
+    
+    # Record the start time for performance tracking
+    start_time = time.time()
+    
     try:
+        # We're reusing the passed pool for better performance
         async with pool.acquire() as conn:
-            return await apply_universal_updates(
+            result = await apply_universal_updates(
                 universal_data["user_id"],
                 universal_data["conversation_id"],
                 universal_data,
                 conn
             )
+            
+            # Record performance metrics
+            elapsed_time = time.time() - start_time
+            STATS.record_interaction_time(elapsed_time * 1000)  # Convert to ms
+            logging.info(f"{operation_name} completed in {elapsed_time:.3f}s")
+            
+            return result
     except Exception as e:
-        logger.error(f"Error processing universal updates: {e}")
+        # Record error and elapsed time
+        elapsed_time = time.time() - start_time
+        STATS.record_error(f"{operation_name}_error")
+        logging.error(f"Error in {operation_name} after {elapsed_time:.3f}s: {e}")
         return {"error": str(e)}
 
+@timed_function(name="process_npc_interactions_batch")
 async def process_npc_interactions_batch(npc_system, nearby_npcs, user_input, activity_type, context):
     """Process NPC interactions in efficient batches."""
     if not nearby_npcs:
@@ -777,7 +647,7 @@ async def process_npc_interactions_batch(npc_system, nearby_npcs, user_input, ac
         # Process results
         for npc, result in zip(batch, batch_results):
             if isinstance(result, Exception):
-                logger.error(f"Error processing interaction with NPC {npc['npc_id']}: {result}")
+                logging.error(f"Error processing interaction with NPC {npc['npc_id']}: {result}")
                 continue
                 
             # Format response for display
@@ -811,8 +681,23 @@ def determine_interaction_type(user_input, activity_type):
     else:
         return "standard_interaction"
 
-async def process_time_advancement(npc_system, activity_type, data, current_time):
+def get_response_outcome(result, npc_name, activity_type):
+    """Format the response outcome for display."""
+    if isinstance(result, dict) and "response" in result:
+        return result["response"]
+    elif isinstance(result, dict) and "result" in result and "outcome" in result["result"]:
+        return result["result"]["outcome"]
+    else:
+        # Fallback response
+        return f"{npc_name} acknowledges your {activity_type}"
+
+@timed_function(name="process_time_advancement")
+async def process_time_advancement(npc_system, activity_type, data, current_time=None):
     """Process time advancement with proper verification."""
+    if current_time is None:
+        # Get current time if not provided
+        current_time = await npc_system.get_current_game_time()
+        
     old_year, old_month, old_day, old_phase = current_time
     
     # Default time result
@@ -834,7 +719,7 @@ async def process_time_advancement(npc_system, activity_type, data, current_time
             new_time = time_result.get("new_time", {})
             if new_time.get("time_of_day") == "Morning" and new_time.get("day") > old_day:
                 await nightly_maintenance(npc_system.user_id, npc_system.conversation_id)
-                logger.info("[next_storybeat] Ran nightly maintenance for day rollover.")
+                logging.info("[next_storybeat] Ran nightly maintenance for day rollover.")
     else:
         # Check if it would advance time
         would_advance = await npc_system.would_advance_time(activity_type)
@@ -849,6 +734,7 @@ async def process_time_advancement(npc_system, activity_type, data, current_time
     
     return time_result
 
+@timed_function(name="process_relationship_events")
 async def process_relationship_events(npc_system, data):
     """Process relationship events and crossroads."""
     result = {
@@ -883,6 +769,134 @@ async def process_relationship_events(npc_system, data):
     
     return result
 
+@timed_function(name="process_user_message")
+async def process_user_message(user_id, conv_id, user_input):
+    """Process and store user message."""
+    async with db_transaction() as conn:
+        await conn.execute("""
+            INSERT INTO messages (conversation_id, sender, content)
+            VALUES ($1, $2, $3)
+        """, conv_id, "user", user_input)
+        return {"status": "stored"}
+
+@timed_function(name="process_npc_responses")
+async def process_npc_responses(npc_system, user_input, context):
+    """Process NPC responses to user input."""
+    # Get nearby NPCs
+    nearby_npcs = await get_nearby_npcs(
+        npc_system.user_id, 
+        npc_system.conversation_id, 
+        context.get("location")
+    )
+    
+    if not nearby_npcs:
+        return []
+    
+    # Determine activity type with enhanced detection
+    activity_result = await npc_system.process_player_activity(user_input, context)
+    activity_type = activity_result.get("activity_type", "conversation")
+    
+    # Process NPC interactions in batches
+    return await process_npc_interactions_batch(
+        npc_system, 
+        nearby_npcs, 
+        user_input, 
+        activity_type,
+        context
+    )
+
+@timed_function(name="process_ai_response")
+async def process_ai_response(aggregator_data, user_input, npc_responses, user_id, conv_id):
+    """
+    Process AI response with enhanced context and feedback.
+    
+    Args:
+        aggregator_data: Context data from aggregator
+        user_input: User's input message
+        npc_responses: NPC response data
+        user_id: User ID
+        conv_id: Conversation ID
+        
+    Returns:
+        Tuple of (final_response, image_result)
+    """
+    # Build aggregator text with NPC responses
+    aggregator_text = build_aggregator_text(
+        aggregator_data, 
+        rule_knowledge=None  # Only include rules when specifically requested
+    )
+    
+    if npc_responses:
+        npc_response_text = format_npc_responses(npc_responses)
+        aggregator_text += "\n\n=== NPC RESPONSES ===\n" + npc_response_text
+    
+    # Get AI response
+    response_data = get_chatgpt_response(conv_id, aggregator_text, user_input)
+    
+    # Process function calls if present
+    final_response = response_data.get("content", "")
+    
+    # Check for image generation
+    image_result = None
+    should_generate = await should_generate_image_for_response(final_response, user_input)
+    
+    if should_generate:
+        try:
+            image_result = await generate_roleplay_image_from_gpt(
+                final_response,
+                user_id,
+                conv_id
+            )
+        except Exception as e:
+            logging.error(f"Error generating image: {e}")
+    
+    return final_response, image_result
+
+def format_npc_responses(npc_responses):
+    """Format NPC responses for the AI context."""
+    if not npc_responses:
+        return ""
+    
+    response_text = []
+    for resp in npc_responses:
+        npc_name = resp.get("npc_name", "NPC")
+        result = resp.get("result", {})
+        outcome = result.get("outcome", "reacts")
+        
+        response_text.append(f"{npc_name}: {outcome}")
+    
+    return "\n".join(response_text)
+
+def format_npc_responses_for_client(npc_responses):
+    """Format NPC responses for the client."""
+    if not npc_responses:
+        return []
+    
+    client_responses = []
+    for resp in npc_responses:
+        client_resp = {
+            "npc_id": resp.get("npc_id"),
+            "npc_name": resp.get("npc_name", "NPC"),
+            "response": resp.get("result", {}).get("outcome", "reacts"),
+            "stat_changes": resp.get("stat_changes", {})
+        }
+        client_responses.append(client_resp)
+    
+    return client_responses
+
+def format_addiction_status(addiction_status):
+    """Format addiction status for context."""
+    if not addiction_status or not addiction_status.get("has_addictions"):
+        return ""
+    
+    result = "\n\n=== ADDICTION STATUS ===\n"
+    for addiction, details in addiction_status.get("addictions", {}).items():
+        label = details.get("label", "Unknown")
+        level = details.get("level", 0)
+        result += f"{addiction}: {label} (Level {level})\n"
+    
+    return result
+
 async def cleanup_resources(resources):
     """Comprehensive cleanup of all resources."""
     # Close cursor
@@ -890,405 +904,84 @@ async def cleanup_resources(resources):
         try:
             resources["cursor"].close()
         except Exception as e:
-            logger.error(f"Error closing cursor: {e}")
+            logging.error(f"Error closing cursor: {e}")
     
     # Close connection
     if resources.get("conn"):
         try:
             resources["conn"].close()
         except Exception as e:
-            logger.error(f"Error closing connection: {e}")
+            logging.error(f"Error closing connection: {e}")
     
     # Release pool
-    if resources.get("pool") and not resources["pool"].closed:
+    if resources.get("pool") and resources["pool"].closed is False:
         try:
             await resources["pool"].close()
         except Exception as e:
-            logger.error(f"Error closing connection pool: {e}")
+            logging.error(f"Error closing connection pool: {e}")
 
-async def check_npc_availability(cursor, user_id, conv_id):
+async def check_npc_availability(conn, user_id, conv_id):
     """Check NPC availability with error handling."""
     try:
-        cursor.execute("""
+        query = """
             SELECT COUNT(*) FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s AND introduced=FALSE
-        """, (user_id, conv_id))
-        return cursor.fetchone()
+            WHERE user_id=$1 AND conversation_id=$2 AND introduced=FALSE
+        """
+        count = await conn.fetchval(query, user_id, conv_id)
+        return [count]
     except Exception as e:
-        logger.error(f"Error checking NPC availability: {e}")
+        logging.error(f"Error checking NPC availability: {e}")
         return [0]  # Default to needing NPCs
-@story_bp.route("/relationship_summary", methods=["GET"])
-async def get_relationship_details():
-    """
-    Get a summary of the relationship between two entities using IntegratedNPCSystem
-    """
-    try:
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Not logged in"}), 401
-            
-        conversation_id = request.args.get("conversation_id")
-        entity1_type = request.args.get("entity1_type")
-        entity1_id = request.args.get("entity1_id")
-        entity2_type = request.args.get("entity2_type")
-        entity2_id = request.args.get("entity2_id")
-        
-        if not all([conversation_id, entity1_type, entity1_id, entity2_type, entity2_id]):
-            return jsonify({"error": "Missing required parameters"}), 400
-        
-        # Use IntegratedNPCSystem for relationship summary
-        npc_system = IntegratedNPCSystem(user_id, int(conversation_id))
-        relationship = await npc_system.get_relationship(
-            entity1_type, int(entity1_id),
-            entity2_type, int(entity2_id)
-        )
-        
-        if not relationship:
-            # Try alternative relationship configuration
-            relationship = await npc_system.get_relationship(
-                entity2_type, int(entity2_id),
-                entity1_type, int(entity1_id)
-            )
-        
-        if not relationship:
-            return jsonify({"error": "Relationship not found"}), 404
-            
-        return jsonify(relationship)
-        
-    except Exception as e:
-        logging.exception("[get_relationship_details] Error")
-        return jsonify({"error": str(e)}), 500
 
-@story_bp.route("/addiction_status", methods=["GET"])
-async def addiction_status():
+async def manage_npc_memory_lifecycle(npc_system):
     """
-    Get the current addiction status for a player
+    Comprehensive memory lifecycle management for NPCs.
+    Implements the strategies from TO_DO.TXT.
     """
-    try:
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Not logged in"}), 401
-            
-        conversation_id = request.args.get("conversation_id")
-        player_name = request.args.get("player_name", "Chase")
-        
-        if not conversation_id:
-            return jsonify({"error": "Missing conversation_id parameter"}), 400
-            
-        status = await get_addiction_status(user_id, int(conversation_id), player_name)
-        return jsonify(status)
-        
-    except Exception as e:
-        logging.exception("[addiction_status] Error")
-        return jsonify({"error": str(e)}), 500
-
-@story_bp.route("/apply_crossroads_choice", methods=["POST"])
-async def apply_choice():
-    """
-    Apply a choice in a relationship crossroads using IntegratedNPCSystem
-    """
-    try:
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Not logged in"}), 401
-            
-        data = request.get_json() or {}
-        conversation_id = data.get("conversation_id")
-        link_id = data.get("link_id")
-        crossroads_name = data.get("crossroads_name")
-        choice_index = data.get("choice_index")
-        
-        if not all([conversation_id, link_id, crossroads_name, choice_index is not None]):
-            return jsonify({"error": "Missing required parameters"}), 400
-        
-        # Use IntegratedNPCSystem to apply crossroads choice
-        npc_system = IntegratedNPCSystem(user_id, int(conversation_id))
-        result = await npc_system.apply_crossroads_choice(
-            int(link_id), crossroads_name, int(choice_index)
-        )
-        
-        if isinstance(result, dict) and "error" in result:
-            return jsonify({"error": result["error"]}), 400
-            
-        return jsonify(result)
-        
-    except Exception as e:
-        logging.exception("[apply_choice] Error")
-        return jsonify({"error": str(e)}), 500
-
-@story_bp.route("/generate_multi_npc_scene", methods=["POST"])
-async def generate_scene():
-    """
-    Generate a scene with multiple NPCs interacting
-    """
-    try:
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Not logged in"}), 401
-            
-        data = request.get_json() or {}
-        conversation_id = data.get("conversation_id")
-        npc_ids = data.get("npc_ids", [])
-        location = data.get("location")
-        include_player = data.get("include_player", True)
-        
-        if not conversation_id or not npc_ids:
-            return jsonify({"error": "Missing required parameters"}), 400
-            
-        # Generate scene using IntegratedNPCSystem
-        npc_system = IntegratedNPCSystem(user_id, int(conversation_id))
-        scene = await npc_system.generate_multi_npc_scene(
-            npc_ids, location, include_player
-        )
-        
-        return jsonify(scene)
-        
-    except Exception as e:
-        logging.exception("[generate_scene] Error")
-        return jsonify({"error": str(e)}), 500
-
-@story_bp.route("/generate_overheard_conversation", methods=["POST"])
-async def generate_conversation():
-    """
-    Generate a conversation between NPCs that the player can overhear
-    """
-    try:
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Not logged in"}), 401
-            
-        data = request.get_json() or {}
-        conversation_id = data.get("conversation_id")
-        npc_ids = data.get("npc_ids", [])
-        topic = data.get("topic")
-        about_player = data.get("about_player", False)
-        
-        if not conversation_id or not npc_ids or len(npc_ids) < 2:
-            return jsonify({"error": "Missing required parameters"}), 400
-            
-        # Generate conversation using IntegratedNPCSystem
-        npc_system = IntegratedNPCSystem(user_id, int(conversation_id))
-        conversation = await npc_system.generate_overheard_conversation(
-            npc_ids, topic, about_player
-        )
-        
-        return jsonify(conversation)
-        
-    except Exception as e:
-        logging.exception("[generate_conversation] Error")
-        return jsonify({"error": str(e)}), 500
-
-@story_bp.route("/end_of_day", methods=["POST"])
-async def end_of_day():
-    """
-    Example route that the front-end calls when 
-    the player chooses to finish the day or go to sleep. 
-    This triggers our nightly_maintenance across all NPCs.
-    """
-    try:
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Not logged in"}), 401
-        
-        data = request.get_json() or {}
-        conv_id = data.get("conversation_id")
-        if not conv_id:
-            return jsonify({"error": "Missing conversation_id"}), 400
-
-        # Initialize IntegratedNPCSystem
-        npc_system = IntegratedNPCSystem(user_id, int(conv_id))
-        
-        # Get current time to validate we're at night
-        year, month, day, time_of_day = await npc_system.get_current_game_time()
-        
-        # Advance to next day if not already at night
-        if time_of_day != "Night":
-            await npc_system.set_game_time(year, month, day, "Night")
-            
-        # Call nightly maintenance for memory fading, summarizing
-        await nightly_maintenance(user_id, int(conv_id))
-
-        return jsonify({"status": "Nightly maintenance complete"})
-    except Exception as e:
-        logging.exception("Error in end_of_day route")
-        return jsonify({"error": str(e)}), 500
-
-def gather_rule_knowledge():
-    """
-    Fetch short summaries from PlotTriggers, IntensityTiers, and Interactions.
-    Returns a dictionary with various rule knowledge components.
+    tracker = PerformanceTracker("memory_lifecycle")
     
-    Optimized for better error handling and performance.
-    """
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        # Use a dictionary to store all rule data
-        rule_data = {
-            "plot_triggers": [],
-            "intensity_tiers": [],
-            "interactions": []
-        }
-
-        # 1) PlotTriggers - fetch all in one go
-        cursor.execute("""
-            SELECT trigger_name, stage_name, description, key_features, stat_dynamics, examples, triggers
-            FROM PlotTriggers
-        """)
-        
-        for row in cursor.fetchall():
-            trig_name, stage, desc, kfeat, sdyn, ex, trigz = row
-            
-            # Safe JSON parsing with fallback to empty values
-            try:
-                key_features = json.loads(kfeat) if kfeat else []
-            except (json.JSONDecodeError, TypeError):
-                logging.warning(f"Error parsing key_features for trigger {trig_name}")
-                key_features = []
-                
-            try:
-                stat_dynamics = json.loads(sdyn) if sdyn else []
-            except (json.JSONDecodeError, TypeError):
-                logging.warning(f"Error parsing stat_dynamics for trigger {trig_name}")
-                stat_dynamics = []
-                
-            try:
-                examples = json.loads(ex) if ex else []
-            except (json.JSONDecodeError, TypeError):
-                logging.warning(f"Error parsing examples for trigger {trig_name}")
-                examples = []
-                
-            try:
-                triggers = json.loads(trigz) if trigz else {}
-            except (json.JSONDecodeError, TypeError):
-                logging.warning(f"Error parsing triggers for trigger {trig_name}")
-                triggers = {}
-            
-            rule_data["plot_triggers"].append({
-                "title": trig_name,
-                "stage": stage,
-                "description": desc,
-                "key_features": key_features,
-                "stat_dynamics": stat_dynamics,
-                "examples": examples,
-                "triggers": triggers
-            })
-
-        # 2) Intensity Tiers - fetch all in one go
-        cursor.execute("""
-            SELECT tier_name, key_features, activity_examples, permanent_effects
-            FROM IntensityTiers
-        """)
-        
-        for row in cursor.fetchall():
-            tname, kfeat, aex, peff = row
-            
-            # Safe JSON parsing with fallback to empty values
-            try:
-                key_features = json.loads(kfeat) if kfeat else []
-            except (json.JSONDecodeError, TypeError):
-                logging.warning(f"Error parsing key_features for tier {tname}")
-                key_features = []
-                
-            try:
-                activity_examples = json.loads(aex) if aex else []
-            except (json.JSONDecodeError, TypeError):
-                logging.warning(f"Error parsing activity_examples for tier {tname}")
-                activity_examples = []
-                
-            try:
-                permanent_effects = json.loads(peff) if peff else {}
-            except (json.JSONDecodeError, TypeError):
-                logging.warning(f"Error parsing permanent_effects for tier {tname}")
-                permanent_effects = {}
-            
-            rule_data["intensity_tiers"].append({
-                "tier_name": tname,
-                "key_features": key_features,
-                "activity_examples": activity_examples,
-                "permanent_effects": permanent_effects
-            })
-
-        # 3) Interactions - fetch all in one go
-        cursor.execute("""
-            SELECT interaction_name, detailed_rules, task_examples, agency_overrides
-            FROM Interactions
-        """)
-        
-        for row in cursor.fetchall():
-            iname, drules, tex, aov = row
-            
-            # Safe JSON parsing with fallback to empty values
-            try:
-                detailed_rules = json.loads(drules) if drules else {}
-            except (json.JSONDecodeError, TypeError):
-                logging.warning(f"Error parsing detailed_rules for interaction {iname}")
-                detailed_rules = {}
-                
-            try:
-                task_examples = json.loads(tex) if tex else {}
-            except (json.JSONDecodeError, TypeError):
-                logging.warning(f"Error parsing task_examples for interaction {iname}")
-                task_examples = {}
-                
-            try:
-                agency_overrides = json.loads(aov) if aov else {}
-            except (json.JSONDecodeError, TypeError):
-                logging.warning(f"Error parsing agency_overrides for interaction {iname}")
-                agency_overrides = {}
-            
-            rule_data["interactions"].append({
-                "interaction_name": iname,
-                "detailed_rules": detailed_rules,
-                "task_examples": task_examples,
-                "agency_overrides": agency_overrides
-            })
-
-        cursor.close()
-        
-        # Add the rule enforcement summary
-        rule_data["rule_enforcement_summary"] = (
-            "Conditions are parsed (e.g. 'Lust > 90 or Dependency > 80') and evaluated against stats. "
-            "If true, effects such as 'Locks Independent Choices' are applied, raising Obedience, triggering punishments, "
-            "or even ending the game."
-        )
-        
-        return rule_data
+    results = {
+        "pruned_count": 0,
+        "decayed_count": 0,
+        "consolidated_count": 0,
+        "archived_count": 0
+    }
     
+    try:
+        # Run memory maintenance for all NPCs
+        tracker.start_phase("memory_maintenance")
+        maintenance_result = await npc_system.run_memory_maintenance()
+        tracker.end_phase()
+        
+        # Consolidate repetitive memories
+        tracker.start_phase("consolidate_memories")
+        consolidate_result = await npc_system.consolidate_repetitive_memories()
+        results["consolidated_count"] = consolidate_result.get("consolidated_count", 0)
+        tracker.end_phase()
+        
+        # Process memory decay
+        tracker.start_phase("memory_decay")
+        decay_result = await npc_system.apply_memory_decay()
+        results["decayed_count"] = decay_result.get("decayed_count", 0)
+        tracker.end_phase()
+        
+        # Archive old memories
+        tracker.start_phase("archive_memories")
+        archive_result = await npc_system.archive_stale_memories()
+        results["archived_count"] = archive_result.get("archived_count", 0)
+        tracker.end_phase()
+        
+        # Record performance metrics
+        results["performance_metrics"] = tracker.get_metrics()
+        return results
+        
     except Exception as e:
-        logging.error(f"Error in gather_rule_knowledge: {str(e)}", exc_info=True)
-        # Return minimal data structure to avoid crashes
+        logging.error(f"Error in memory lifecycle management: {e}")
+        tracker.end_phase()
         return {
-            "rule_enforcement_summary": "Error fetching rule data.",
-            "plot_triggers": [],
-            "intensity_tiers": [],
-            "interactions": []
+            "error": str(e),
+            "performance_metrics": tracker.get_metrics()
         }
-    finally:
-        if conn:
-            conn.close()
-
-def force_obedience_to_100(user_id, conversation_id, player_name):
-    """
-    Directly set player's Obedience to 100.
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            UPDATE PlayerStats
-            SET obedience=100
-            WHERE user_id=%s AND conversation_id=%s AND player_name=%s
-        """, (user_id, conversation_id, player_name))
-        conn.commit()
-    except Exception as ex:
-        conn.rollback()
-    finally:
-        cursor.close()
-        conn.close()
-
 
 def build_aggregator_text(aggregator_data, rule_knowledge=None):
     """
@@ -1592,7 +1285,7 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
                     lines.append(f"Interaction: {intr.get('interaction_name', '?')}")
     
     except Exception as e:
-        logging.error(f"Error building aggregator text: {str(e)}", exc_info=True)
+        logging.error(f"Error building aggregator text: {str(e)}")
         # Add error information to prevent complete failure
         lines.append(f"\n[Error occurred while building context: {str(e)}]")
         # Make sure we still return basic information
@@ -1604,3 +1297,496 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
             ]
 
     return "\n".join(lines)
+
+# -------------------------------------------------------------------
+# ROUTE DEFINITION
+# -------------------------------------------------------------------
+
+@story_bp.route("/next_storybeat", methods=["POST"])
+async def next_storybeat():
+    """Enhanced storybeat endpoint with better resource management and parallel processing."""
+    # Performance tracking
+    tracker = PerformanceTracker("next_storybeat")
+    tracker.start_phase("initialization")
+    
+    # Record request for monitoring
+    STATS.record_request("/next_storybeat")
+    
+    # Resource tracking containers
+    resources = {
+        "npc_system": None,
+        "pool": None
+    }
+    
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+
+        data = request.get_json() or {}
+        user_input = data.get("user_input", "").strip()
+        conv_id = data.get("conversation_id")
+        player_name = data.get("player_name", "Chase")
+        
+        # Initialize NPC system with connection pooling
+        resources["npc_system"] = IntegratedNPCSystem(user_id, conv_id)
+        resources["pool"] = await resources["npc_system"].get_connection_pool()
+        tracker.end_phase()
+        
+        # Process user message
+        tracker.start_phase("store_message")
+        await process_user_message(user_id, conv_id, user_input)
+        tracker.end_phase()
+        
+        # Get context data
+        tracker.start_phase("get_context")
+        aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
+        
+        # Create context dictionary
+        context = {
+            "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
+            "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
+            "player_input": user_input,
+            "player_name": player_name
+        }
+        tracker.end_phase()
+        
+        # Parallel operations for better performance
+        tracker.start_phase("parallel_tasks")
+        tasks = [
+            # Check for NPC availability 
+            check_npc_availability(resources["pool"], user_id, conv_id),
+            # Get current game time
+            resources["npc_system"].get_current_game_time(),
+            # Get nearby NPCs for interaction
+            get_nearby_npcs(user_id, conv_id, context["location"])
+        ]
+        
+        # Execute all tasks concurrently and get results
+        npc_count_result, current_time, nearby_npcs = await asyncio.gather(*tasks)
+        tracker.end_phase()
+        
+        # Check if we need to create NPCs
+        tracker.start_phase("spawn_npcs")
+        unintroduced_count = npc_count_result[0] if npc_count_result else 0
+        if unintroduced_count < 2:
+            # Spawn new NPCs with optimized performance
+            await resources["npc_system"].create_multiple_npcs(
+                aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", ""),
+                aggregator_data.get("calendar", {}).get("days", ["Monday","Tuesday","..."]),
+                count=3
+            )
+        tracker.end_phase()
+        
+        # Process universal updates if provided
+        if data.get("universal_update"):
+            tracker.start_phase("universal_updates")
+            universal_data = data["universal_update"]
+            universal_data["user_id"] = user_id
+            universal_data["conversation_id"] = conv_id
+            
+            # Process updates with connection reuse
+            update_result = await process_universal_updates(universal_data, resources["pool"])
+            if update_result.get("error"):
+                return jsonify(update_result), 500
+            tracker.end_phase()
+        
+        # Process NPC interactions
+        tracker.start_phase("npc_interactions")
+        npc_responses = await process_npc_responses(
+            resources["npc_system"], 
+            user_input, 
+            context
+        )
+        tracker.end_phase()
+        
+        # Time advancement with better verification
+        tracker.start_phase("time_advancement")
+        time_result = await process_time_advancement(
+            resources["npc_system"],
+            npc_responses[0].get("action_type", "conversation") if npc_responses else "conversation",
+            data,
+            current_time
+        )
+        tracker.end_phase()
+        
+        # Check for relationship events and process choices
+        tracker.start_phase("relationship_events")
+        crossroads_data = await process_relationship_events(
+            resources["npc_system"],
+            data
+        )
+        tracker.end_phase()
+        
+        # Get AI response
+        tracker.start_phase("ai_response")
+        final_response, image_result = await process_ai_response(
+            aggregator_data, 
+            user_input, 
+            npc_responses,
+            user_id, 
+            conv_id
+        )
+        tracker.end_phase()
+        
+        # Store AI response
+        tracker.start_phase("store_ai_response")
+        async with db_transaction() as conn:
+            await conn.execute("""
+                INSERT INTO messages (conversation_id, sender, content)
+                VALUES ($1, $2, $3)
+            """, conv_id, "Nyx", final_response)
+        tracker.end_phase()
+        
+        # Run memory maintenance if appropriate time has passed
+        tracker.start_phase("memory_maintenance")
+        # Run memory management with 10% chance or after 10 interactions
+        should_run_maintenance = random.random() < 0.1
+        if should_run_maintenance:
+            # Run in background task to avoid blocking response
+            asyncio.create_task(manage_npc_memory_lifecycle(resources["npc_system"]))
+            logging.info("Scheduled memory lifecycle management in background")
+        tracker.end_phase()
+        
+        # Assemble the complete response
+        tracker.start_phase("build_response")
+        response = {
+            "message": final_response,
+            "time_result": time_result,
+            "confirm_needed": time_result.get("would_advance", False) and not data.get("confirm_time_advance", False),
+            "npc_responses": format_npc_responses_for_client(npc_responses),
+            "performance_metrics": tracker.get_metrics()
+        }
+        
+        # Add optional elements to response
+        addiction_status = await get_addiction_status(user_id, conv_id, player_name)
+        if addiction_status and addiction_status.get("has_addictions"):
+            response["addiction_effects"] = await process_addiction_effects(
+                user_id, conv_id, player_name, addiction_status
+            )
+            
+        if crossroads_data.get("event"):
+            response["crossroads_event"] = crossroads_data["event"]
+        if crossroads_data.get("result"):
+            response["crossroads_result"] = crossroads_data["result"]
+            
+        if image_result and "image_urls" in image_result:
+            response["image"] = {
+                "image_url": image_result["image_urls"][0],
+                "prompt_used": image_result.get("prompt_used", ""),
+                "reason": image_result.get("reason", "")
+            }
+
+        # Add narrative stage information
+        narrative_stage = await get_current_narrative_stage(user_id, conv_id)
+        if narrative_stage:
+            response["narrative_stage"] = narrative_stage.name
+            
+        # Add cache stats to response in dev mode
+        if os.getenv("FLASK_ENV") == "development":
+            response["cache_stats"] = {
+                "npc_cache": NPC_CACHE.stats(),
+                "location_cache": LOCATION_CACHE.stats()
+            }
+        tracker.end_phase()
+
+        return jsonify(response)
+        
+    except Exception as e:
+        # End current phase
+        if tracker.current_phase:
+            tracker.end_phase()
+            
+        # Record error for monitoring
+        STATS.record_error(type(e).__name__)
+        logging.exception("[next_storybeat] Error")
+        
+        return jsonify({
+            "error": str(e),
+            "performance": tracker.get_metrics()
+        }), 500
+        
+    finally:
+        # Comprehensive resource cleanup
+        await cleanup_resources(resources)
+
+
+@story_bp.route("/relationship_summary", methods=["GET"])
+@timed_function
+async def get_relationship_details():
+    """
+    Get a summary of the relationship between two entities using IntegratedNPCSystem
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        conversation_id = request.args.get("conversation_id")
+        entity1_type = request.args.get("entity1_type")
+        entity1_id = request.args.get("entity1_id")
+        entity2_type = request.args.get("entity2_type")
+        entity2_id = request.args.get("entity2_id")
+        
+        if not all([conversation_id, entity1_type, entity1_id, entity2_type, entity2_id]):
+            return jsonify({"error": "Missing required parameters"}), 400
+        
+        # Create cache key
+        cache_key = f"relationship:{conversation_id}:{entity1_type}:{entity1_id}:{entity2_type}:{entity2_id}"
+        
+        # Check cache first
+        cached_result = NPC_CACHE.get(cache_key)
+        if cached_result:
+            return jsonify(cached_result)
+        
+        # Use IntegratedNPCSystem for relationship summary
+        npc_system = IntegratedNPCSystem(user_id, int(conversation_id))
+        relationship = await npc_system.get_relationship(
+            entity1_type, int(entity1_id),
+            entity2_type, int(entity2_id)
+        )
+        
+        if not relationship:
+            # Try alternative relationship configuration
+            relationship = await npc_system.get_relationship(
+                entity2_type, int(entity2_id),
+                entity1_type, int(entity1_id)
+            )
+        
+        if not relationship:
+            return jsonify({"error": "Relationship not found"}), 404
+        
+        # Cache the result
+        NPC_CACHE.set(cache_key, relationship, 60)  # TTL: 60 seconds
+            
+        return jsonify(relationship)
+        
+    except Exception as e:
+        logging.exception("[get_relationship_details] Error")
+        return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/addiction_status", methods=["GET"])
+@timed_function
+async def addiction_status():
+    """
+    Get the current addiction status for a player
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        conversation_id = request.args.get("conversation_id")
+        player_name = request.args.get("player_name", "Chase")
+        
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id parameter"}), 400
+        
+        # Create cache key
+        cache_key = f"addiction:{user_id}:{conversation_id}:{player_name}"
+        
+        # Check cache first
+        cached_result = NPC_CACHE.get(cache_key)
+        if cached_result:
+            return jsonify(cached_result)
+            
+        status = await get_addiction_status(user_id, int(conversation_id), player_name)
+        
+        # Cache the result
+        NPC_CACHE.set(cache_key, status, 60)  # TTL: 60 seconds
+        
+        return jsonify(status)
+        
+    except Exception as e:
+        logging.exception("[addiction_status] Error")
+        return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/apply_crossroads_choice", methods=["POST"])
+@timed_function
+async def apply_choice():
+    """
+    Apply a choice in a relationship crossroads using IntegratedNPCSystem
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        data = request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        link_id = data.get("link_id")
+        crossroads_name = data.get("crossroads_name")
+        choice_index = data.get("choice_index")
+        
+        if not all([conversation_id, link_id, crossroads_name, choice_index is not None]):
+            return jsonify({"error": "Missing required parameters"}), 400
+        
+        # Use IntegratedNPCSystem to apply crossroads choice
+        npc_system = IntegratedNPCSystem(user_id, int(conversation_id))
+        result = await npc_system.apply_crossroads_choice(
+            int(link_id), crossroads_name, int(choice_index)
+        )
+        
+        if isinstance(result, dict) and "error" in result:
+            return jsonify({"error": result["error"]}), 400
+            
+        # Clear relationship cache
+        NPC_CACHE.remove_pattern("relationship:")
+            
+        return jsonify(result)
+        
+    except Exception as e:
+        logging.exception("[apply_choice] Error")
+        return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/generate_multi_npc_scene", methods=["POST"])
+@timed_function
+async def generate_scene():
+    """
+    Generate a scene with multiple NPCs interacting
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        data = request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        npc_ids = data.get("npc_ids", [])
+        location = data.get("location")
+        include_player = data.get("include_player", True)
+        
+        if not conversation_id or not npc_ids:
+            return jsonify({"error": "Missing required parameters"}), 400
+        
+        # Create cache key
+        cache_key = f"scene:{conversation_id}:{'-'.join(map(str, sorted(npc_ids)))}:{location}:{include_player}"
+        
+        # Check cache first
+        cached_result = NPC_CACHE.get(cache_key)
+        if cached_result:
+            return jsonify(cached_result)
+            
+        # Generate scene using IntegratedNPCSystem
+        npc_system = IntegratedNPCSystem(user_id, int(conversation_id))
+        scene = await npc_system.generate_multi_npc_scene(
+            npc_ids, location, include_player
+        )
+        
+        # Cache the result for a short time
+        NPC_CACHE.set(cache_key, scene, 30)  # TTL: 30 seconds
+        
+        return jsonify(scene)
+        
+    except Exception as e:
+        logging.exception("[generate_scene] Error")
+        return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/generate_overheard_conversation", methods=["POST"])
+@timed_function
+async def generate_conversation():
+    """
+    Generate a conversation between NPCs that the player can overhear
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        data = request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        npc_ids = data.get("npc_ids", [])
+        topic = data.get("topic")
+        about_player = data.get("about_player", False)
+        
+        if not conversation_id or not npc_ids or len(npc_ids) < 2:
+            return jsonify({"error": "Missing required parameters"}), 400
+            
+        # Generate conversation using IntegratedNPCSystem
+        npc_system = IntegratedNPCSystem(user_id, int(conversation_id))
+        conversation = await npc_system.generate_overheard_conversation(
+            npc_ids, topic, about_player
+        )
+        
+        return jsonify(conversation)
+        
+    except Exception as e:
+        logging.exception("[generate_conversation] Error")
+        return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/end_of_day", methods=["POST"])
+@timed_function
+async def end_of_day():
+    """
+    Example route that the front-end calls when 
+    the player chooses to finish the day or go to sleep. 
+    This triggers our nightly_maintenance across all NPCs.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+        
+        data = request.get_json() or {}
+        conv_id = data.get("conversation_id")
+        if not conv_id:
+            return jsonify({"error": "Missing conversation_id"}), 400
+
+        # Initialize IntegratedNPCSystem
+        npc_system = IntegratedNPCSystem(user_id, int(conv_id))
+        
+        # Get current time to validate we're at night
+        year, month, day, time_of_day = await npc_system.get_current_game_time()
+        
+        # Advance to next day if not already at night
+        if time_of_day != "Night":
+            await npc_system.set_game_time(year, month, day, "Night")
+            
+        # Call nightly maintenance for memory fading, summarizing
+        await nightly_maintenance(user_id, int(conv_id))
+        
+        # Run comprehensive memory lifecycle management
+        maintenance_result = await manage_npc_memory_lifecycle(npc_system)
+
+        # Clear caches for new day
+        NPC_CACHE.clear()
+        LOCATION_CACHE.clear()
+        AGGREGATOR_CACHE.clear()
+        TIME_CACHE.clear()
+
+        return jsonify({
+            "status": "Nightly maintenance complete",
+            "memory_maintenance": maintenance_result
+        })
+    except Exception as e:
+        logging.exception("Error in end_of_day route")
+        return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/performance_stats", methods=["GET"])
+@timed_function
+async def get_performance_stats():
+    """
+    Get performance statistics for monitoring.
+    Development/admin use only.
+    """
+    try:
+        # Only available in development mode
+        if os.getenv("FLASK_ENV") != "development":
+            return jsonify({"error": "Not available in production mode"}), 403
+            
+        # Get stats
+        stats = {
+            "system_stats": STATS.get_stats(),
+            "cache_stats": {
+                "npc": NPC_CACHE.stats(),
+                "location": LOCATION_CACHE.stats(),
+                "aggregator": AGGREGATOR_CACHE.stats(),
+                "time": TIME_CACHE.stats()
+            }
+        }
+        
+        return jsonify(stats)
+        
+    except Exception as e:
+        logging.exception("[get_performance_stats] Error")
+        return jsonify({"error": str(e)}), 500
