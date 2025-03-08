@@ -3,6 +3,7 @@
 import time
 import logging
 import threading
+import asyncio  # Added missing import
 from typing import Dict, Any, Optional, Callable, Tuple, Union, List
 
 class MemoryCache:
@@ -30,6 +31,8 @@ class MemoryCache:
         self.evictions = 0
         self.lock = threading.RLock()
         self.last_cleanup = time.time()
+        # Track memory usage
+        self.estimated_memory_usage = 0
         logging.info(f"Initialized {name} cache with max_size={max_size}, ttl={default_ttl}s")
 
     def get(self, key: str) -> Optional[Any]:
@@ -55,6 +58,22 @@ class MemoryCache:
             if len(self.cache) >= self.max_size and key not in self.cache:
                 self._evict_oldest()
                 
+            # Estimate memory usage (rough approximation)
+            try:
+                import sys
+                value_size = sys.getsizeof(value)
+                key_size = sys.getsizeof(key)
+                
+                # Update memory tracking
+                if key in self.cache:
+                    old_value_size = sys.getsizeof(self.cache[key])
+                    self.estimated_memory_usage += (value_size - old_value_size)
+                else:
+                    self.estimated_memory_usage += (key_size + value_size)
+            except:
+                # Fallback if we can't estimate size
+                self.estimated_memory_usage = 0
+                
             self.cache[key] = value
             self.timestamps[key] = time.time()
             self.ttls[key] = ttl if ttl is not None else self.default_ttl
@@ -71,6 +90,13 @@ class MemoryCache:
     def _remove(self, key: str) -> None:
         """Remove a key from the cache."""
         if key in self.cache:
+            # Update memory tracking
+            try:
+                import sys
+                self.estimated_memory_usage -= (sys.getsizeof(key) + sys.getsizeof(self.cache[key]))
+            except:
+                pass
+                
             del self.cache[key]
         if key in self.timestamps:
             del self.timestamps[key]
@@ -112,6 +138,7 @@ class MemoryCache:
             self.cache.clear()
             self.timestamps.clear()
             self.ttls.clear()
+            self.estimated_memory_usage = 0
             logging.info(f"{self.name} cache cleared")
     
     def remove_pattern(self, pattern: str) -> int:
@@ -133,14 +160,31 @@ class MemoryCache:
                 "misses": self.misses,
                 "hit_ratio": self.hits / (self.hits + self.misses) if (self.hits + self.misses) > 0 else 0,
                 "evictions": self.evictions,
+                "memory_usage_bytes": self.estimated_memory_usage,
+                "memory_usage_mb": self.estimated_memory_usage / (1024 * 1024) if self.estimated_memory_usage > 0 else 0,
                 "keys": list(self.cache.keys())
             }
 
-# Create frequently used cache instances
-NPC_CACHE = MemoryCache(name="npc", max_size=50, default_ttl=30)  # 30 seconds TTL
-LOCATION_CACHE = MemoryCache(name="location", max_size=20, default_ttl=120)  # 2 minutes TTL
-AGGREGATOR_CACHE = MemoryCache(name="aggregator", max_size=10, default_ttl=15)  # 15 seconds TTL
-TIME_CACHE = MemoryCache(name="time", max_size=5, default_ttl=10)  # 10 seconds TTL
+# Create frequently used cache instances with configuration from environment
+from os import environ
+
+# Config-driven cache settings
+NPC_CACHE_SIZE = int(environ.get("NPC_CACHE_SIZE", "50"))
+NPC_CACHE_TTL = int(environ.get("NPC_CACHE_TTL", "30"))
+LOCATION_CACHE_SIZE = int(environ.get("LOCATION_CACHE_SIZE", "20"))
+LOCATION_CACHE_TTL = int(environ.get("LOCATION_CACHE_TTL", "120"))
+AGGREGATOR_CACHE_SIZE = int(environ.get("AGGREGATOR_CACHE_SIZE", "10"))
+AGGREGATOR_CACHE_TTL = int(environ.get("AGGREGATOR_CACHE_TTL", "15"))
+TIME_CACHE_SIZE = int(environ.get("TIME_CACHE_SIZE", "5"))
+TIME_CACHE_TTL = int(environ.get("TIME_CACHE_TTL", "10"))
+COMPUTATION_CACHE_SIZE = int(environ.get("COMPUTATION_CACHE_SIZE", "50"))
+COMPUTATION_CACHE_TTL = int(environ.get("COMPUTATION_CACHE_TTL", "300"))
+
+# Create cache instances
+NPC_CACHE = MemoryCache(name="npc", max_size=NPC_CACHE_SIZE, default_ttl=NPC_CACHE_TTL)
+LOCATION_CACHE = MemoryCache(name="location", max_size=LOCATION_CACHE_SIZE, default_ttl=LOCATION_CACHE_TTL)
+AGGREGATOR_CACHE = MemoryCache(name="aggregator", max_size=AGGREGATOR_CACHE_SIZE, default_ttl=AGGREGATOR_CACHE_TTL)
+TIME_CACHE = MemoryCache(name="time", max_size=TIME_CACHE_SIZE, default_ttl=TIME_CACHE_TTL)
 
 
 class ComputationCache:
@@ -192,4 +236,7 @@ class ComputationCache:
         return result
 
 # Global computation cache
-COMPUTATION_CACHE = ComputationCache()
+COMPUTATION_CACHE = ComputationCache(
+    max_size=COMPUTATION_CACHE_SIZE,
+    default_ttl=COMPUTATION_CACHE_TTL
+)
