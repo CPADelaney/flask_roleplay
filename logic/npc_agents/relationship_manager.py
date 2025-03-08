@@ -144,26 +144,40 @@ class NPCRelationshipManager:
 
         return relationships
 
-    async def update_relationship_from_interaction(
-        self,
-        entity_type: str,
-        entity_id: int,
-        player_action: Dict[str, Any],
-        npc_action: Dict[str, Any]
-    ) -> None:
-        """
-        Update the relationship based on an interaction between this NPC and another entity.
-        Enhanced with memory-informed adjustments.
-
-        For example, if the player 'talked' and the NPC 'mocked' in response, we might
-        lower the relationship level.
-
-        Args:
-            entity_type: "npc" or "player"
-            entity_id: The ID of the entity on the other side of the relationship
-            player_action: A dict describing what the other entity did
-            npc_action: A dict describing what the NPC did
-        """
+async def update_relationship_from_interaction(
+    self,
+    entity_type: str,
+    entity_id: int,
+    player_action: Dict[str, Any],
+    npc_action: Dict[str, Any],
+    context: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """
+    Update the relationship based on an interaction with enhanced
+    error handling and memory integration.
+    
+    Args:
+        entity_type: "npc" or "player"
+        entity_id: The ID of the entity on the other side of the relationship
+        player_action: A dict describing what the other entity did
+        npc_action: A dict describing what the NPC did
+        context: Additional context for the interaction
+        
+    Returns:
+        Dictionary with update results
+    """
+    # Default return structure
+    result = {
+        "success": False,
+        "link_id": None,
+        "old_level": None,
+        "new_level": None,
+        "old_type": None,
+        "new_type": None,
+        "changes": {}
+    }
+    
+    try:
         # Get memory system for beliefs and emotional context
         memory_system = await self._get_memory_system()
         
@@ -211,187 +225,216 @@ class NPCRelationshipManager:
                 emotional_adjustment -= intensity * 2
             elif emotion_name == "sadness":
                 emotional_adjustment -= intensity * 1
+        
+        # Get context information
+        context_obj = context or {}
+        interaction_environment = context_obj.get("environment", {})
+        location = interaction_environment.get("location", "Unknown")
+        
+        # Record all factors that influence the relationship change
+        change_factors = {
+            "belief_adjustment": belief_adjustment,
+            "emotional_adjustment": emotional_adjustment,
+            "location": location,
+            "action_types": {
+                "player": player_action.get("type", "unknown"),
+                "npc": npc_action.get("type", "unknown")
+            }
+        }
+        
+        # Create a connection and transaction
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Begin transaction
+            conn.begin()
+            
+            # 1) Check if a social link record already exists
+            cursor.execute("""
+                SELECT link_id, link_type, link_level
+                FROM SocialLinks
+                WHERE entity1_type = 'npc'
+                  AND entity1_id = %s
+                  AND entity2_type = %s
+                  AND entity2_id = %s
+                  AND user_id = %s
+                  AND conversation_id = %s
+            """, (
+                self.npc_id, entity_type, entity_id,
+                self.user_id, self.conversation_id
+            ))
+            row = cursor.fetchone()
 
-        with get_db_connection() as conn, conn.cursor() as cursor:
-            try:
-                # 1) Check if a social link record already exists
+            if row:
+                link_id, link_type, link_level = row
+                result["link_id"] = link_id
+                result["old_level"] = link_level
+                result["old_type"] = link_type
+            else:
+                # Create a new relationship if none exists
                 cursor.execute("""
-                    SELECT link_id, link_type, link_level
-                    FROM SocialLinks
-                    WHERE entity1_type = 'npc'
-                      AND entity1_id = %s
-                      AND entity2_type = %s
-                      AND entity2_id = %s
-                      AND user_id = %s
-                      AND conversation_id = %s
+                    INSERT INTO SocialLinks (
+                        entity1_type, entity1_id,
+                        entity2_type, entity2_id,
+                        link_type, link_level,
+                        user_id, conversation_id
+                    )
+                    VALUES (
+                        'npc', %s,
+                        %s, %s,
+                        'neutral', 0,
+                        %s, %s
+                    )
+                    RETURNING link_id
                 """, (
                     self.npc_id, entity_type, entity_id,
                     self.user_id, self.conversation_id
                 ))
-                row = cursor.fetchone()
+                link_id = cursor.fetchone()[0]
+                result["link_id"] = link_id
+                link_type = "neutral"
+                link_level = 0
+                result["old_level"] = 0
+                result["old_type"] = "neutral"
 
-                if row:
-                    link_id, link_type, link_level = row
-                else:
-                    # Create a new relationship if none exists
-                    cursor.execute("""
-                        INSERT INTO SocialLinks (
-                            entity1_type, entity1_id,
-                            entity2_type, entity2_id,
-                            link_type, link_level,
-                            user_id, conversation_id
-                        )
-                        VALUES (
-                            'npc', %s,
-                            %s, %s,
-                            'neutral', 0,
-                            %s, %s
-                        )
-                        RETURNING link_id
-                    """, (
-                        self.npc_id, entity_type, entity_id,
-                        self.user_id, self.conversation_id
-                    ))
-                    link_id = cursor.fetchone()[0]
-                    link_type = "neutral"
-                    link_level = 0
+            # 2) Calculate level changes
+            level_change = 0
 
-                # 2) Determine how the link changes
-                level_change = 0
-                type_change = None
+            # Base relationship changes
+            if player_action.get("type") == "talk" and npc_action.get("type") == "talk":
+                level_change += 1
+            elif player_action.get("type") == "talk" and npc_action.get("type") == "leave":
+                level_change -= 1
+            elif player_action.get("type") == "talk" and npc_action.get("type") == "mock":
+                level_change -= 2
+            
+            # Add more complex interaction rules
+            if player_action.get("type") == "help":
+                level_change += 3
+            elif player_action.get("type") == "gift":
+                level_change += 4
+            elif player_action.get("type") == "insult":
+                level_change -= 4
+            elif player_action.get("type") == "threaten":
+                level_change -= 5
+            elif player_action.get("type") == "attack":
+                level_change -= 8
+            
+            # Apply mask slip effects if present
+            if "mask_slippage" in npc_action:
+                # Mask slippages can cause more dramatic relationship changes
+                slip_severity = npc_action["mask_slippage"].get("severity", 1)
+                if slip_severity >= 3:  # Major slips have bigger impacts
+                    if level_change > 0:
+                        level_change = level_change * 2  # Amplify positive changes
+                    else:
+                        level_change = level_change * 2  # Amplify negative changes
+            
+            # Record base level change
+            change_factors["base_level_change"] = level_change
+            
+            # Apply belief and emotional adjustments
+            final_level_change = level_change
+            if level_change > 0:
+                # For positive changes, positive beliefs/emotions amplify
+                final_level_change += belief_adjustment + emotional_adjustment
+            else:
+                # For negative changes, negative beliefs/emotions amplify
+                final_level_change += belief_adjustment - emotional_adjustment
+            
+            # Round to integer, preventing tiny changes
+            final_level_change = round(final_level_change)
+            
+            # Record final change
+            change_factors["final_level_change"] = final_level_change
+            result["changes"] = change_factors
 
-                # Base relationship changes
-                if player_action.get("type") == "talk" and npc_action.get("type") == "talk":
-                    level_change += 1
-                elif player_action.get("type") == "talk" and npc_action.get("type") == "leave":
-                    level_change -= 1
-                elif player_action.get("type") == "talk" and npc_action.get("type") == "mock":
-                    level_change -= 2
-                
-                # Add more complex interaction rules
-                if player_action.get("type") == "help":
-                    level_change += 3
-                elif player_action.get("type") == "gift":
-                    level_change += 4
-                elif player_action.get("type") == "insult":
-                    level_change -= 4
-                elif player_action.get("type") == "threaten":
-                    level_change -= 5
-                elif player_action.get("type") == "attack":
-                    level_change -= 8
-                
-                # Apply mask slip effects if present
-                if "mask_slippage" in npc_action:
-                    # Mask slippages can cause more dramatic relationship changes
-                    slip_severity = npc_action["mask_slippage"].get("severity", 1)
-                    if slip_severity >= 3:  # Major slips have bigger impacts
-                        if level_change > 0:
-                            level_change = level_change * 2  # Amplify positive changes
-                        else:
-                            level_change = level_change * 2  # Amplify negative changes
-                
-                # Apply belief and emotional adjustments
-                final_level_change = level_change
-                if level_change > 0:
-                    # For positive changes, positive beliefs/emotions amplify
-                    final_level_change += belief_adjustment + emotional_adjustment
-                else:
-                    # For negative changes, negative beliefs/emotions amplify
-                    final_level_change += belief_adjustment - emotional_adjustment
-                
-                # Round to integer, preventing tiny changes
-                final_level_change = round(final_level_change)
-
-                # 3) Apply changes
-                new_level = link_level
-                if final_level_change != 0:
-                    new_level = max(0, min(100, link_level + final_level_change))
-                    cursor.execute("""
-                        UPDATE SocialLinks
-                        SET link_level = %s
-                        WHERE link_id = %s
-                    """, (new_level, link_id))
-
-                if type_change:
-                    cursor.execute("""
-                        UPDATE SocialLinks
-                        SET link_type = %s
-                        WHERE link_id = %s
-                    """, (type_change, link_id))
-                
-                # Determine new link type based on level
-                new_link_type = link_type
-                if new_level > 75:
-                    new_link_type = "close"
-                elif new_level > 50:
-                    new_link_type = "friendly"
-                elif new_level < 25:
-                    new_link_type = "hostile"
-                
-                if new_link_type != link_type:
-                    cursor.execute("""
-                        UPDATE SocialLinks
-                        SET link_type = %s
-                        WHERE link_id = %s
-                    """, (new_link_type, link_id))
-                    type_change = new_link_type
-
-                # 4) Add event to the link history
-                change_factors = []
-                if abs(level_change) > 0:
-                    change_factors.append(f"base:{level_change:+d}")
-                if abs(belief_adjustment) > 0:
-                    change_factors.append(f"beliefs:{belief_adjustment:+.1f}")
-                if abs(emotional_adjustment) > 0:
-                    change_factors.append(f"emotions:{emotional_adjustment:+.1f}")
-                
-                change_description = ", ".join(change_factors)
-                
-                event_text = (
-                    f"Interaction: {entity_type.capitalize()} {player_action.get('description','???')}, "
-                    f"NPC {npc_action.get('description','???')}. "
-                    f"Relationship change: {link_level} → {new_level} ({final_level_change:+d}) [Factors: {change_description}]"
-                )
-                
+            # 3) Apply changes
+            new_level = link_level
+            if final_level_change != 0:
+                new_level = max(0, min(100, link_level + final_level_change))
                 cursor.execute("""
                     UPDATE SocialLinks
-                    SET link_history = COALESCE(link_history, '[]'::jsonb) || %s::jsonb
+                    SET link_level = %s
                     WHERE link_id = %s
-                """, (json.dumps([event_text]), link_id))
+                """, (new_level, link_id))
+                result["new_level"] = new_level
+            
+            # Determine new link type based on level
+            new_link_type = link_type
+            if new_level > 75:
+                new_link_type = "close"
+            elif new_level > 50:
+                new_link_type = "friendly"
+            elif new_level < 25:
+                new_link_type = "hostile"
+            
+            if new_link_type != link_type:
+                cursor.execute("""
+                    UPDATE SocialLinks
+                    SET link_type = %s
+                    WHERE link_id = %s
+                """, (new_link_type, link_id))
+                result["new_type"] = new_link_type
 
-                conn.commit()
-                logger.debug(
-                    "Updated relationship for NPC %s -> entity (%s:%s). "
-                    "Change: level=%d => %d, type_change=%s",
-                    self.npc_id, entity_type, entity_id,
-                    link_level, new_level, type_change
-                )
+            # 4) Add event to the link history
+            change_description = []
+            if abs(level_change) > 0:
+                change_description.append(f"base:{level_change:+d}")
+            if abs(belief_adjustment) > 0:
+                change_description.append(f"beliefs:{belief_adjustment:+.1f}")
+            if abs(emotional_adjustment) > 0:
+                change_description.append(f"emotions:{emotional_adjustment:+.1f}")
+            
+            change_str = ", ".join(change_description)
+            
+            event_text = (
+                f"Interaction: {entity_type.capitalize()} {player_action.get('description','???')}, "
+                f"NPC {npc_action.get('description','???')}. "
+                f"Relationship change: {link_level} → {new_level} ({final_level_change:+d}) [Factors: {change_str}]"
+            )
+            
+            cursor.execute("""
+                UPDATE SocialLinks
+                SET link_history = COALESCE(link_history, '[]'::jsonb) || %s::jsonb
+                WHERE link_id = %s
+            """, (json.dumps([event_text]), link_id))
 
-                # 5) Create a memory of this relationship change
-                memory_system = await self._get_memory_system()
-                
+            # Commit the transaction
+            conn.commit()
+            result["success"] = True
+            
+            logger.debug(
+                "Updated relationship for NPC %s -> entity (%s:%s). "
+                "Change: level=%d => %d, type_change=%s",
+                self.npc_id, entity_type, entity_id,
+                link_level, new_level, new_link_type if new_link_type != link_type else None
+            )
+
+            # 5) Create a memory of this relationship change - outside transaction for safety
+            try:
                 # Only create memories for significant changes
-                if abs(final_level_change) >= 3 or type_change:
+                if abs(final_level_change) >= 3 or new_link_type != link_type:
                     entity_name = "the player"
                     if entity_type == "npc":
                         # Get NPC name
-                        npc_query = """
+                        cursor.execute("""
                             SELECT npc_name FROM NPCStats
                             WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                        """
-                        cursor.execute(npc_query, (entity_id, self.user_id, self.conversation_id))
+                        """, (entity_id, self.user_id, self.conversation_id))
                         name_row = cursor.fetchone()
                         if name_row:
                             entity_name = name_row[0]
                     
                     direction = "improved" if final_level_change > 0 else "worsened"
-                    if type_change:
-                        memory_text = f"My relationship with {entity_name} changed to {type_change} (level {new_level})"
+                    if new_link_type != link_type:
+                        memory_text = f"My relationship with {entity_name} changed to {new_link_type} (level {new_level})"
                     else:
                         memory_text = f"My relationship with {entity_name} {direction} (now level {new_level})"
                     
                     # Create memory with appropriate tags and importance
-                    importance = "medium" if abs(final_level_change) >= 5 or type_change else "low"
+                    importance = "medium" if abs(final_level_change) >= 5 or new_link_type != link_type else "low"
                     
                     await memory_system.remember(
                         entity_type="npc",
@@ -406,10 +449,26 @@ class NPCRelationshipManager:
                         entity_type, entity_id, entity_name, 
                         link_level, new_level, final_level_change
                     )
+            except Exception as memory_error:
+                # Don't fail the whole operation if memory creation fails
+                logger.error(f"Error creating relationship memory: {memory_error}")
 
-            except Exception as e:
-                conn.rollback()
-                logger.error("Error updating relationship from interaction for NPC %s: %s", self.npc_id, e)
+        except Exception as sql_error:
+            # Roll back transaction on database errors
+            conn.rollback()
+            logger.error(f"Database error updating relationship: {sql_error}")
+            result["error"] = str(sql_error)
+        finally:
+            # Always clean up cursor and connection
+            cursor.close()
+            conn.close()
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in update_relationship_from_interaction: {e}")
+        result["error"] = str(e)
+        return result
     
     async def _update_beliefs_from_relationship_change(
         self,
