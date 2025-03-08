@@ -25,7 +25,20 @@ class NPCDecisionEngine:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self._memory_system = None
-    
+        self.long_term_goals = []  # Initialize empty list
+        
+        # Initialize long-term goals asynchronously
+        asyncio.create_task(self._initialize_goals())
+        
+    async def _initialize_goals(self):
+        """Initialize goals after getting NPC data."""
+        try:
+            npc_data = await self.get_npc_data()
+            if npc_data:
+                await self.initialize_long_term_goals(npc_data)
+        except Exception as e:
+            logging.error(f"Error initializing goals: {e}")
+        
     async def _get_memory_system(self):
         """Lazy-load the memory system."""
         if self._memory_system is None:
@@ -130,10 +143,53 @@ class NPCDecisionEngine:
         # Store the decision
         await self.store_decision(chosen_action, perception)
         
+        # Simulate action outcome to update goal progress
+        action_outcome = {
+            "result": "success" if random.random() > 0.2 else "failure",
+            "emotional_impact": random.randint(-5, 5)
+        }
+        
+        # Update goal progress based on the action and outcome
+        await self._update_goal_progress(chosen_action, action_outcome)
+        
         # Possibly store a belief based on this decision
         await self._maybe_create_belief(perception, chosen_action, npc_data)
         
         return chosen_action
+
+    # Add a reusable memory context method in NPCDecisionEngine
+    async def _get_enhanced_memory_context(self, base_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Create an enhanced context with memory-related information."""
+        memory_system = await self._get_memory_system()
+        
+        # Get emotional state
+        emotional_state = await memory_system.get_npc_emotion(self.npc_id)
+        
+        # Get beliefs related to the context
+        beliefs = await memory_system.get_beliefs(
+            entity_type="npc",
+            entity_id=self.npc_id,
+            topic=base_context.get("topic", "general")
+        )
+        
+        # Get flashback potential
+        flashback = None
+        if random.random() < 0.1:  # 10% chance
+            flashback = await memory_system.npc_flashback(
+                npc_id=self.npc_id,
+                context=str(base_context)
+            )
+        
+        # Create enhanced context
+        enhanced_context = base_context.copy()
+        enhanced_context.update({
+            "emotional_state": emotional_state,
+            "beliefs": beliefs,
+            "flashback": flashback,
+            "memory_enhanced": True
+        })
+        
+        return enhanced_context
 
     async def get_npc_data(self) -> Dict[str, Any]:
         """Get NPC stats and traits from the database."""
@@ -522,7 +578,7 @@ class NPCDecisionEngine:
         """Score actions based on how they advance long-term goals."""
         if not hasattr(self, 'long_term_goals') or not self.long_term_goals:
             return 0.0
-            
+                
         total_score = 0.0
         
         for goal in self.long_term_goals:
@@ -535,12 +591,12 @@ class NPCDecisionEngine:
                 action.get("target") != target_entity and 
                 not (target_entity == "player" and action.get("target") == "group")):
                 continue
-                
+            
             # Score based on goal type and action alignment
             if goal_type == "dominance":
-                if action["type"] in ["command", "dominate", "test", "punish"]:
+                if action.get("type") in ["command", "dominate", "test", "punish"]:
                     total_score += 2.0 * importance
-                elif action["type"] in ["praise", "reward_submission"]:
+                elif action.get("type") in ["praise", "reward_submission"]:
                     total_score += 1.5 * importance
                     
             elif goal_type == "submission":
