@@ -128,6 +128,19 @@ class NPCAgent:
             self._cache_timestamps[cache_key] = None
             logger.debug(f"Invalidated {cache_key} cache for NPC {self.npc_id}")
 
+    # Add this method:
+    def _update_cache(self, cache_key, sub_key=None, value=None):
+        """Update the cache with new value."""
+        with self.lock:
+            if sub_key is not None:
+                if cache_key not in self._cache:
+                    self._cache[cache_key] = {}
+                self._cache[cache_key][sub_key] = value
+                self._cache_timestamps[cache_key][sub_key] = datetime.now()
+            else:
+                self._cache[cache_key] = value
+                self._cache_timestamps[cache_key] = datetime.now()
+
     def invalidate_memory_cache(self, memory_query=None):
         """
         Invalidate memory cache, either completely or for a specific query.
