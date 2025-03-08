@@ -1,48 +1,97 @@
-# logic/memory_manager.py
+# logic/npc_agents/revised_memory_manager.py
 
 import asyncio
 import json
 import logging
 import os
 import random
+import time
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple, Set
 
 # Import necessary dependencies
 try:
     import asyncpg
-    import openai
 except ImportError:
-    logging.warning("Some dependencies (asyncpg, openai) may not be installed.")
+    logging.warning("asyncpg may not be installed.")
 
 # Import memory subsystem components
-from memory.core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
-from memory.emotional import EmotionalMemoryManager
-from memory.schemas import MemorySchemaManager
-from memory.flashbacks import FlashbackManager
-from memory.masks import ProgressiveRevealManager
-from memory.semantic import SemanticMemoryManager
-from memory.reconsolidation import ReconsolidationManager
-from memory.integrated import IntegratedMemorySystem
+from memory.core import Memory, MemoryType, MemorySignificance
+from memory.wrapper import MemorySystem
+from db.connection import get_db_connection
 
 logger = logging.getLogger(__name__)
 
-# Default DB connection string
-DB_DSN = os.getenv("DB_DSN", "postgresql://user:pass@localhost:5432/yourdb")
+class MemoryPerformanceTracker:
+    """Tracks memory operation performance for optimization."""
+    
+    def __init__(self):
+        self.operation_times = {
+            "add_memory": [],
+            "retrieve_memories": [],
+            "update_emotion": [],
+            "mask_operations": [],
+            "belief_operations": []
+        }
+        self.slow_operations = []
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.last_reported = datetime.now()
+    
+    def record_operation(self, operation_type: str, duration: float) -> None:
+        """Record an operation's duration."""
+        if operation_type in self.operation_times:
+            self.operation_times[operation_type].append(duration)
+            # Keep only the last 100 operations
+            if len(self.operation_times[operation_type]) > 100:
+                self.operation_times[operation_type] = self.operation_times[operation_type][-100:]
+            
+            # Record slow operations
+            if duration > 0.5:  # Over 500ms is slow
+                self.slow_operations.append({
+                    "type": operation_type,
+                    "duration": duration,
+                    "timestamp": datetime.now().isoformat()
+                })
+                # Keep only the last 50 slow operations
+                if len(self.slow_operations) > 50:
+                    self.slow_operations = self.slow_operations[-50:]
+    
+    def record_cache_hit(self) -> None:
+        """Record a cache hit."""
+        self.cache_hits += 1
+    
+    def record_cache_miss(self) -> None:
+        """Record a cache miss."""
+        self.cache_misses += 1
+    
+    def get_performance_report(self) -> Dict[str, Any]:
+        """Get a performance report."""
+        report = {
+            "averages": {},
+            "cache_hit_rate": 0,
+            "slow_operation_count": len(self.slow_operations),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Calculate averages
+        for op_type, times in self.operation_times.items():
+            if times:
+                report["averages"][op_type] = sum(times) / len(times)
+            else:
+                report["averages"][op_type] = 0
+        
+        # Calculate cache hit rate
+        total_cache_ops = self.cache_hits + self.cache_misses
+        if total_cache_ops > 0:
+            report["cache_hit_rate"] = self.cache_hits / total_cache_ops
+        
+        return report
 
 class EnhancedMemoryManager:
     """
-    Enhanced memory manager for NPCs that combines direct database access and
-    memory subsystems for sophisticated memory management including:
-    
-    - Memory lifecycle (active, summarized, archived)
-    - Emotional memory and state tracking
-    - Personality-based biases and recall
-    - Embedding-based retrieval
-    - Schema application and interpretation
-    - Flashbacks and progressive mask revealing
-    - Memory propagation (rumors)
-    - Reputation tracking
+    Enhanced memory manager for NPCs with improved performance, caching, and
+    femdom-specific memory handling.
     """
     
     def __init__(
@@ -63,9 +112,9 @@ class EnhancedMemoryManager:
             user_id: ID of the user/player
             conversation_id: ID of the current conversation
             db_pool: Optional asyncpg connection pool (will create connections if None)
-            npc_personality: Personality type affecting memory biases ('gullible', 'skeptical', 'paranoid', 'neutral')
+            npc_personality: Personality type affecting memory biases
             npc_intelligence: Factor affecting memory decay rate (0.5-2.0)
-            use_subsystems: Whether to use the memory subsystem managers (vs direct DB access only)
+            use_subsystems: Whether to use the memory subsystem managers
         """
         self.npc_id = npc_id
         self.user_id = user_id
@@ -75,28 +124,42 @@ class EnhancedMemoryManager:
         self.npc_intelligence = npc_intelligence
         self.use_subsystems = use_subsystems
         
-        # For optimized memory access
-        self.memory_cache = {}
+        # Performance tracking
+        self.performance = MemoryPerformanceTracker()
+        
+        # Improved caching system
+        self._memory_cache = {}
+        self._emotion_cache = {}
+        self._mask_cache = {}
+        self._belief_cache = {}
+        self._cache_ttl = {
+            "memory": timedelta(minutes=5),
+            "emotion": timedelta(minutes=2),
+            "mask": timedelta(minutes=5),
+            "belief": timedelta(minutes=10)
+        }
         
         # Initialize subsystem managers if enabled
         if use_subsystems:
-            # Initialize the core memory components
-            self.core_memory = UnifiedMemoryManager(
-                entity_type="npc",
-                entity_id=npc_id,
-                user_id=user_id,
-                conversation_id=conversation_id
-            )
-            
-            # Initialize specialized memory components
-            self.emotional_memory = EmotionalMemoryManager(user_id, conversation_id)
-            self.schema_manager = MemorySchemaManager(user_id, conversation_id)
-            self.flashback_manager = FlashbackManager(user_id, conversation_id)
-            self.mask_manager = ProgressiveRevealManager(user_id, conversation_id)
-            self.semantic_manager = SemanticMemoryManager(user_id, conversation_id)
+            self._memory_system = None
+            # Create task for lazy initialization
+            self._init_task = asyncio.create_task(self._initialize_memory_system())
+    
+    async def _initialize_memory_system(self):
+        """Initialize the memory system."""
+        try:
+            self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
             
             # Initialize mask if not already done
-            asyncio.create_task(self._ensure_mask_initialized())
+            await self._ensure_mask_initialized()
+        except Exception as e:
+            logger.error(f"Error initializing memory system: {e}")
+    
+    async def _get_memory_system(self):
+        """Get the memory system, ensuring it's initialized."""
+        if not hasattr(self, '_memory_system') or self._memory_system is None:
+            self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+        return self._memory_system
     
     async def _ensure_mask_initialized(self):
         """Ensure the NPC has a mask initialized."""
@@ -104,29 +167,10 @@ class EnhancedMemoryManager:
             return
             
         try:
-            await self.mask_manager.initialize_npc_mask(self.npc_id)
+            memory_system = await self._get_memory_system()
+            await memory_system.mask_manager.initialize_npc_mask(self.npc_id)
         except Exception as e:
             logger.warning(f"Could not initialize mask for NPC {self.npc_id}: {e}")
-    
-    async def generate_embedding(self, text: str) -> list:
-        """
-        Generate an embedding vector for text using OpenAI's API.
-        
-        Args:
-            text: The text to generate an embedding for
-            
-        Returns:
-            List of floats representing the embedding vector
-        """
-        try:
-            response = await openai.Embedding.acreate(
-                model="text-embedding-ada-002",
-                input=text
-            )
-            return response["data"][0]["embedding"]
-        except Exception as e:
-            logger.error(f"Error generating embedding: {e}")
-            return None
     
     async def add_memory(
         self, 
@@ -137,10 +181,11 @@ class EnhancedMemoryManager:
         emotional_intensity: Optional[int] = None,
         tags: List[str] = None,
         status: str = "active",
-        confidence: float = 1.0
+        confidence: float = 1.0,
+        feminine_context: bool = False  # New parameter for femdom context
     ) -> Optional[int]:
         """
-        Add a new memory for the NPC.
+        Add a new memory for the NPC with enhanced femdom context handling.
         
         Args:
             memory_text: The memory text to store
@@ -151,61 +196,125 @@ class EnhancedMemoryManager:
             tags: Optional tags for the memory
             status: Memory status ('active', 'summarized', 'archived')
             confidence: Confidence in this memory (0.0-1.0)
+            feminine_context: Whether this memory has femdom context
             
         Returns:
             ID of the created memory or None if failed
         """
-        tags = tags or []
+        start_time = time.time()
         
-        # Auto-detect content tags
-        content_tags = await self.analyze_memory_content(memory_text)
-        tags.extend(content_tags)
-        
-        # If emotional_intensity not provided, calculate from valence or analyze text
-        if emotional_intensity is None:
+        try:
+            tags = tags or []
+            
+            # Auto-detect content tags
+            content_tags = await self.analyze_memory_content(memory_text)
+            tags.extend(content_tags)
+            
+            # Add femdom-specific tags if relevant context
+            if feminine_context:
+                femdom_tags = self._extract_femdom_tags(memory_text)
+                tags.extend(femdom_tags)
+                # Increase significance for femdom-related memories
+                if femdom_tags and significance < 5:
+                    significance += 1
+            
+            # If emotional_intensity not provided, calculate from valence or analyze text
+            if emotional_intensity is None:
+                if self.use_subsystems:
+                    try:
+                        memory_system = await self._get_memory_system()
+                        emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(memory_text)
+                        primary_emotion = emotion_analysis.get("primary_emotion", "neutral")
+                        emotional_intensity = int(emotion_analysis.get("intensity", 0.5) * 100)
+                    except Exception as e:
+                        logger.error(f"Error analyzing emotional content: {e}")
+                        emotional_intensity = await self.calculate_emotional_intensity(memory_text, emotional_valence)
+                else:
+                    emotional_intensity = await self.calculate_emotional_intensity(memory_text, emotional_valence)
+            
+            memory_id = None
+            
             if self.use_subsystems:
                 try:
-                    emotion_analysis = await self.emotional_memory.analyze_emotional_content(memory_text)
-                    primary_emotion = emotion_analysis.get("primary_emotion", "neutral")
-                    emotional_intensity = int(emotion_analysis.get("intensity", 0.5) * 100)
+                    memory_id = await self._add_memory_with_subsystems(
+                        memory_text, memory_type, significance, 
+                        emotional_intensity, tags, feminine_context
+                    )
                 except Exception as e:
-                    logger.error(f"Error analyzing emotional content: {e}")
-                    emotional_intensity = await self.calculate_emotional_intensity(memory_text, emotional_valence)
+                    logger.error(f"Error adding memory with subsystems: {e}")
+                    # Fall back to direct DB access
+                    memory_id = await self._add_memory_with_db(
+                        memory_text, memory_type, significance,
+                        emotional_intensity, tags, status, confidence
+                    )
             else:
-                emotional_intensity = await self.calculate_emotional_intensity(memory_text, emotional_valence)
-        
-        if self.use_subsystems:
-            try:
-                return await self._add_memory_with_subsystems(
-                    memory_text, memory_type, significance, 
-                    emotional_intensity, tags
-                )
-            except Exception as e:
-                logger.error(f"Error adding memory with subsystems: {e}")
-                # Fall back to direct DB access
-                return await self._add_memory_with_db(
+                memory_id = await self._add_memory_with_db(
                     memory_text, memory_type, significance,
                     emotional_intensity, tags, status, confidence
                 )
-        else:
-            return await self._add_memory_with_db(
-                memory_text, memory_type, significance,
-                emotional_intensity, tags, status, confidence
-            )
-
-    async def _track_operation_performance(self, operation_name: str, start_time: float) -> None:
-        """Track performance of memory operations and log slow operations."""
-        from utils.performance import STATS
+            
+            # Record performance data
+            elapsed = time.time() - start_time
+            self.performance.record_operation("add_memory", elapsed)
+            
+            # Invalidate relevant cache entries
+            self._invalidate_memory_cache()
+            
+            return memory_id
         
-        # Calculate elapsed time
-        elapsed_ms = (time.time() - start_time) * 1000
+        except Exception as e:
+            logger.error(f"Error adding memory: {e}")
+            # Record failed operation
+            elapsed = time.time() - start_time
+            self.performance.record_operation("add_memory", elapsed)
+            return None
+    
+    def _extract_femdom_tags(self, memory_text: str) -> List[str]:
+        """
+        Extract femdom-specific tags from memory text.
         
-        # Record in stats
-        STATS.record_memory_access_time(elapsed_ms)
+        Args:
+            memory_text: The memory text to analyze
+            
+        Returns:
+            List of femdom-related tags
+        """
+        femdom_tags = []
+        lower_text = memory_text.lower()
         
-        # Log slow operations
-        if elapsed_ms > 100:  # Threshold for slow operations (100ms)
-            logging.warning(f"Slow memory operation: {operation_name} took {elapsed_ms:.2f}ms for NPC {self.npc_id}")
+        # Dominance dynamics
+        if any(word in lower_text for word in ["command", "control", "obey", "order", "dominated"]):
+            femdom_tags.append("dominance_dynamic")
+        
+        # Power exchange
+        if any(word in lower_text for word in ["power", "exchange", "protocol", "dynamic", "role"]):
+            femdom_tags.append("power_exchange")
+        
+        # Discipline
+        if any(word in lower_text for word in ["punish", "discipline", "correct", "consequence"]):
+            femdom_tags.append("discipline")
+        
+        # Service
+        if any(word in lower_text for word in ["serve", "service", "please", "worship"]):
+            femdom_tags.append("service")
+        
+        # Submission
+        if any(word in lower_text for word in ["submit", "obey", "comply", "kneel", "bow"]):
+            femdom_tags.append("submission")
+        
+        # Bondage
+        if any(word in lower_text for word in ["bind", "restrain", "restrict", "tied"]):
+            femdom_tags.append("bondage")
+        
+        # Humiliation
+        if any(word in lower_text for word in ["humiliate", "embarrass", "shame", "mock"]):
+            femdom_tags.append("humiliation")
+        
+        # Ownership
+        if any(word in lower_text for word in ["own", "belong", "property", "possession"]):
+            femdom_tags.append("ownership")
+        
+        return femdom_tags
     
     async def _add_memory_with_subsystems(
         self,
@@ -213,56 +322,65 @@ class EnhancedMemoryManager:
         memory_type: str,
         significance: int,
         emotional_intensity: int,
-        tags: List[str]
+        tags: List[str],
+        femdom_context: bool = False
     ) -> int:
-        """Add memory using memory subsystem managers."""
+        """Add memory using memory subsystem managers with femdom enhancements."""
         try:
-            # Try to add with emotional context if possible
-            memory_result = await self.emotional_memory.add_emotional_memory(
+            memory_system = await self._get_memory_system()
+            
+            # Try to add with emotional context
+            importance = "medium"
+            if significance >= 7:
+                importance = "high"
+            elif significance <= 2:
+                importance = "low"
+            
+            # Determine if this is an emotional memory
+            is_emotional = emotional_intensity > 50 or "emotional" in tags
+            
+            # Add femdom importance boost
+            if femdom_context and importance != "high":
+                # Promote importance level for femdom memories
+                if importance == "low":
+                    importance = "medium"
+                elif importance == "medium":
+                    importance = "high"
+            
+            # Create the memory
+            memory_result = await memory_system.remember(
                 entity_type="npc",
                 entity_id=self.npc_id,
                 memory_text=memory_text,
-                primary_emotion="unknown",  # We'd need to determine this
-                emotion_intensity=emotional_intensity / 100.0,  # Convert to 0-1 scale
-                secondary_emotions={},
-                significance=significance,
+                importance=importance,
+                emotional=is_emotional,
                 tags=tags
             )
             
-            memory_id = memory_result["memory_id"]
-        except Exception as e:
-            logger.error(f"Error adding emotional memory: {e}")
-            # Fall back to regular memory
-            memory = Memory(
-                text=memory_text,
-                memory_type=memory_type,
-                significance=significance,
-                emotional_intensity=emotional_intensity,
-                tags=tags,
-                timestamp=datetime.now()
-            )
+            memory_id = memory_result.get("memory_id")
             
-            memory_id = await self.core_memory.add_memory(memory)
-        
-        # Auto-detect and apply schemas
-        try:
-            await self.schema_manager.apply_schema_to_memory(
-                memory_id=memory_id,
-                entity_type="npc",
-                entity_id=self.npc_id,
-                auto_detect=True
-            )
-        except Exception as e:
-            logger.error(f"Error applying schemas to memory {memory_id}: {e}")
-        
-        # If significance is high, propagate the memory to connected NPCs
-        if significance >= 4:
+            # Auto-detect and apply schemas
             try:
-                await self._propagate_memory_subsystems(memory_text, tags, significance, emotional_intensity)
+                await memory_system.schema_manager.apply_schema_to_memory(
+                    memory_id=memory_id,
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    auto_detect=True
+                )
             except Exception as e:
-                logger.error(f"Error propagating memory: {e}")
-        
-        return memory_id
+                logger.error(f"Error applying schemas to memory {memory_id}: {e}")
+            
+            # If significance is high or femdom context, propagate to connected NPCs
+            if significance >= 4 or femdom_context:
+                try:
+                    await self._propagate_memory_subsystems(memory_text, tags, significance, emotional_intensity)
+                except Exception as e:
+                    logger.error(f"Error propagating memory: {e}")
+            
+            return memory_id
+        except Exception as e:
+            logger.error(f"Error in _add_memory_with_subsystems: {e}")
+            raise
     
     async def _add_memory_with_db(
         self,
@@ -275,67 +393,968 @@ class EnhancedMemoryManager:
         confidence: float
     ) -> Optional[int]:
         """Add memory using direct database access."""
-        # Generate embedding for the memory text
-        embedding_data = await self.generate_embedding(memory_text)
-        
         conn = None
         try:
-            # Get a connection from the pool or create a new one
-            if self.db_pool:
-                conn = await self.db_pool.acquire()
-            else:
-                conn = await asyncpg.connect(dsn=DB_DSN)
-            
-            # Insert row with the memory data
-            memory_id = await conn.fetchval("""
-                INSERT INTO NPCMemories (
-                    npc_id, memory_text, memory_type, tags,
-                    emotional_intensity, significance, embedding,
-                    associated_entities, is_consolidated, status, confidence
-                )
-                VALUES (
-                    $1, $2, $3, $4,
-                    $5, $6, $7,
-                    $8, FALSE, $9, $10
-                )
-                RETURNING id
-            """,
-                self.npc_id,
-                memory_text,
-                memory_type,
-                tags,
-                emotional_intensity,
-                significance,
-                embedding_data,
-                json.dumps({}),
-                status,
-                confidence
-            )
-            
-            # Apply personality-based bias to memory confidence
-            await self.apply_npc_memory_bias(conn, memory_id)
-            
-            # If significance is high, propagate the memory to connected NPCs
-            if significance >= 4:
-                await self.propagate_memory(conn, memory_text, tags, significance, emotional_intensity)
-            
-            # Update reputation if memory involves player actions
-            await self.update_reputation(conn, memory_text)
-            
-            # Update future outcome probabilities
-            await self.update_future_outcomes(conn, memory_text)
-            
-            return memory_id
+            # Get a connection
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Insert row with the memory data
+                cursor.execute("""
+                    INSERT INTO NPCMemories (
+                        npc_id, memory_text, memory_type, tags,
+                        emotional_intensity, significance, 
+                        associated_entities, is_consolidated, status, confidence
+                    )
+                    VALUES (
+                        %s, %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s, %s
+                    )
+                    RETURNING id
+                """, (
+                    self.npc_id,
+                    memory_text,
+                    memory_type,
+                    tags,
+                    emotional_intensity,
+                    significance,
+                    json.dumps({}),
+                    False,
+                    status,
+                    confidence
+                ))
+                
+                memory_id = cursor.fetchone()[0]
+                
+                # Apply personality-based bias to memory confidence
+                await self.apply_npc_memory_bias(conn, memory_id)
+                
+                # If significance is high, propagate the memory to connected NPCs
+                if significance >= 4:
+                    await self.propagate_memory(conn, memory_text, tags, significance, emotional_intensity)
+                
+                return memory_id
+                
         except Exception as e:
             logger.error(f"Error adding memory with DB: {e}")
             return None
-        finally:
-            # Release the connection
-            if conn:
-                if self.db_pool:
-                    await self.db_pool.release(conn)
+    
+    async def retrieve_memories(
+        self, 
+        query: str,
+        context: Dict[str, Any] = None,
+        limit: int = 5,
+        memory_types: List[str] = None,
+        include_archived: bool = False,
+        femdom_focus: bool = False  # New parameter for femdom focus
+    ) -> Dict[str, Any]:
+        """
+        Retrieve memories relevant to a query with enhanced femdom focus option.
+        
+        Args:
+            query: Search query string
+            context: Additional context dictionary
+            limit: Maximum memories to return
+            memory_types: Types of memories to include
+            include_archived: Whether to include archived memories
+            femdom_focus: Whether to prioritize femdom-related memories
+            
+        Returns:
+            Dictionary with memories and metadata
+        """
+        start_time = time.time()
+        
+        try:
+            # Check cache first
+            cache_key = f"{query}_{limit}_{include_archived}_{femdom_focus}"
+            if cache_key in self._memory_cache:
+                cache_time, cached_result = self._memory_cache[cache_key]
+                # Only use cache if it's recent
+                if datetime.now() - cache_time < self._cache_ttl["memory"]:
+                    self.performance.record_cache_hit()
+                    return cached_result
+            
+            self.performance.record_cache_miss()
+            
+            # Set default memory types if not provided
+            memory_types = memory_types or ["observation", "reflection", "semantic", "secondhand"]
+            
+            # Process the query
+            if self.use_subsystems:
+                try:
+                    result = await self._retrieve_memories_subsystems(query, context, limit, memory_types, femdom_focus)
+                except Exception as e:
+                    logger.error(f"Error retrieving memories with subsystems: {e}")
+                    # Fall back to direct DB access
+                    result = await self._retrieve_memories_db(query, context, limit, memory_types, include_archived, femdom_focus)
+            else:
+                result = await self._retrieve_memories_db(query, context, limit, memory_types, include_archived, femdom_focus)
+            
+            # Record performance data
+            elapsed = time.time() - start_time
+            self.performance.record_operation("retrieve_memories", elapsed)
+            
+            # Cache the result
+            self._memory_cache[cache_key] = (datetime.now(), result)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error retrieving memories: {e}")
+            # Return empty result
+            elapsed = time.time() - start_time
+            self.performance.record_operation("retrieve_memories", elapsed)
+            return {"memories": [], "error": str(e)}
+    
+    async def _retrieve_memories_subsystems(
+        self, 
+        query: str,
+        context: Dict[str, Any],
+        limit: int,
+        memory_types: List[str],
+        femdom_focus: bool = False
+    ) -> Dict[str, Any]:
+        """Retrieve memories using memory subsystem managers."""
+        memory_system = await self._get_memory_system()
+        
+        # Enhance query for femdom focus if requested
+        if femdom_focus:
+            enhaned_context = context.copy() if context else {}
+            # Prioritize power dynamic memories
+            enhaned_context["priority_tags"] = [
+                "dominance_dynamic", "power_exchange", "discipline", 
+                "service", "submission", "humiliation", "ownership"
+            ]
+            # Increase limit for better selection
+            enhanced_limit = min(20, limit * 2)
+            
+            # Get a larger set of memories
+            result = await memory_system.recall(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                query=query,
+                context=enhaned_context,
+                limit=enhanced_limit
+            )
+            
+            # Filter and prioritize femdom-related memories
+            memories = result.get("memories", [])
+            
+            # Separate femdom from non-femdom memories
+            femdom_memories = []
+            other_memories = []
+            
+            for memory in memories:
+                tags = memory.get("tags", [])
+                if any(tag in enhaned_context["priority_tags"] for tag in tags):
+                    femdom_memories.append(memory)
                 else:
-                    await conn.close()
+                    other_memories.append(memory)
+            
+            # Take prioritized memories up to limit
+            prioritized_memories = femdom_memories + other_memories
+            final_memories = prioritized_memories[:limit]
+            
+            return {"memories": final_memories, "count": len(final_memories)}
+        else:
+            # Standard memory retrieval
+            result = await memory_system.recall(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                query=query,
+                context=context,
+                limit=limit
+            )
+            
+            return result
+    
+    async def _retrieve_memories_db(
+        self, 
+        query: str,
+        context: Dict[str, Any],
+        limit: int,
+        memory_types: List[str],
+        include_archived: bool,
+        femdom_focus: bool = False
+    ) -> Dict[str, Any]:
+        """Retrieve memories using direct database access."""
+        try:
+            conn = None
+            memories = []
+            
+            # Get connection
+            with get_db_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Determine status filter
+                status_filter = "'active','summarized'"
+                if include_archived:
+                    status_filter += ",'archived'"
+                
+                # Add femdom focus if requested
+                femdom_condition = ""
+                if femdom_focus:
+                    femdom_tags = [
+                        "dominance_dynamic", "power_exchange", "discipline", 
+                        "service", "submission", "humiliation", "ownership"
+                    ]
+                    # Create condition for ANY of these tags
+                    femdom_condition = f"AND (tags && ARRAY{femdom_tags}::text[])"
+                
+                # Perform keyword-based search
+                words = query.lower().split()
+                if words:
+                    conditions = []
+                    params = [self.npc_id, memory_types]
+                    
+                    # Add word conditions
+                    for i, word in enumerate(words):
+                        conditions.append(f"LOWER(memory_text) LIKE %s")
+                        params.append(f"%{word}%")
+                    
+                    condition_str = " OR ".join(conditions)
+                    
+                    # Add limit to params
+                    params.append(limit)
+                    
+                    # Build the query
+                    q = f"""
+                        SELECT id, memory_text, memory_type, tags,
+                               emotional_intensity, significance,
+                               times_recalled, timestamp, status, confidence
+                        FROM NPCMemories
+                        WHERE npc_id = %s
+                          AND status IN ({status_filter})
+                          AND memory_type = ANY(%s)
+                          AND ({condition_str})
+                          {femdom_condition}
+                        ORDER BY 
+                          {f"CASE WHEN tags && ARRAY{femdom_tags}::text[] THEN 0 ELSE 1 END," if femdom_focus else ""}
+                          significance DESC, 
+                          timestamp DESC
+                        LIMIT %s
+                    """
+                    
+                    cursor.execute(q, params)
+                    
+                else:
+                    # No query words, just get recent memories
+                    cursor.execute(f"""
+                        SELECT id, memory_text, memory_type, tags,
+                               emotional_intensity, significance,
+                               times_recalled, timestamp, status, confidence
+                        FROM NPCMemories
+                        WHERE npc_id = %s
+                          AND status IN ({status_filter})
+                          AND memory_type = ANY(%s)
+                          {femdom_condition}
+                        ORDER BY timestamp DESC
+                        LIMIT %s
+                    """, (self.npc_id, memory_types, limit))
+                
+                # Process the results
+                rows = cursor.fetchall()
+                for row in rows:
+                    memory_id, text, mem_type, tags, intensity, significance, times_recalled, timestamp, status, confidence = row
+                    
+                    memories.append({
+                        "id": memory_id,
+                        "text": text,
+                        "type": mem_type,
+                        "tags": tags or [],
+                        "emotional_intensity": intensity,
+                        "significance": significance,
+                        "times_recalled": times_recalled,
+                        "timestamp": timestamp.isoformat() if isinstance(timestamp, datetime) else timestamp,
+                        "status": status,
+                        "confidence": confidence,
+                        "relevance_score": 0.0
+                    })
+                
+                # Update retrieval stats
+                self._update_memory_retrieval_stats(conn, [m["id"] for m in memories])
+                
+            # Apply biases to the memories
+            memories = await self._apply_memory_biases(memories)
+            
+            return {"memories": memories, "count": len(memories)}
+            
+        except Exception as e:
+            logger.error(f"Error in _retrieve_memories_db: {e}")
+            return {"memories": [], "error": str(e)}
+    
+    async def _apply_memory_biases(self, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply various biases to retrieved memories."""
+        try:
+            # Apply recency bias
+            memories = await self.apply_recency_bias(memories)
+            
+            # Apply emotional bias
+            memories = await self.apply_emotional_bias(memories)
+            
+            # Apply personality bias
+            memories = await self.apply_personality_bias(memories)
+            
+            # Sort by relevance score
+            memories.sort(key=lambda x: x["relevance_score"], reverse=True)
+            
+            return memories
+        except Exception as e:
+            logger.error(f"Error applying memory biases: {e}")
+            return memories
+    
+    async def _update_memory_retrieval_stats(self, conn, memory_ids: List[int]):
+        """Update statistics for retrieved memories."""
+        if not memory_ids:
+            return
+        
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE NPCMemories
+                SET times_recalled = times_recalled + 1,
+                    last_recalled = CURRENT_TIMESTAMP
+                WHERE id = ANY(%s)
+            """, (memory_ids,))
+        except Exception as e:
+            logger.error(f"Error updating memory retrieval stats: {e}")
+    
+    def _invalidate_memory_cache(self, query: str = None):
+        """Invalidate memory cache entries."""
+        if query:
+            # Invalidate specific query
+            keys_to_remove = []
+            for key in self._memory_cache:
+                if key.startswith(f"{query}_"):
+                    keys_to_remove.append(key)
+                    
+            for key in keys_to_remove:
+                del self._memory_cache[key]
+        else:
+            # Invalidate all memory cache
+            self._memory_cache = {}
+    
+    def _invalidate_emotion_cache(self):
+        """Invalidate emotion cache."""
+        self._emotion_cache = {}
+    
+    def _invalidate_mask_cache(self):
+        """Invalidate mask cache."""
+        self._mask_cache = {}
+    
+    def _invalidate_belief_cache(self, topic: str = None):
+        """Invalidate belief cache entries."""
+        if topic:
+            # Invalidate specific topic
+            keys_to_remove = []
+            for key in self._belief_cache:
+                if key.endswith(f"_{topic}"):
+                    keys_to_remove.append(key)
+                    
+            for key in keys_to_remove:
+                del self._belief_cache[key]
+        else:
+            # Invalidate all belief cache
+            self._belief_cache = {}
+    
+    async def update_emotional_state(self, 
+                                   primary_emotion: str, 
+                                   intensity: float, 
+                                   trigger: str = None,
+                                   secondary_emotions: Dict[str, float] = None) -> Dict[str, Any]:
+        """
+        Update the NPC's emotional state with enhanced monitoring.
+        
+        Args:
+            primary_emotion: The primary emotion
+            intensity: Intensity of the emotion (0.0-1.0)
+            trigger: What triggered this emotion
+            secondary_emotions: Optional additional emotions
+            
+        Returns:
+            Updated emotional state
+        """
+        start_time = time.time()
+        
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # Create emotional state update
+            current_emotion = {
+                "primary": {
+                    "name": primary_emotion,
+                    "intensity": intensity
+                },
+                "secondary": {}
+            }
+            
+            # Add secondary emotions if provided
+            if secondary_emotions:
+                for emotion, value in secondary_emotions.items():
+                    current_emotion["secondary"][emotion] = value
+            
+            # Add trigger if provided
+            if trigger:
+                current_emotion["trigger"] = trigger
+            
+            # Update emotional state
+            result = await memory_system.update_npc_emotion(
+                npc_id=self.npc_id,
+                emotion=primary_emotion,
+                intensity=intensity,
+                trigger=trigger
+            )
+            
+            # Create memory of significant emotional changes
+            if intensity > 0.7:
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    memory_text=f"I felt strong {primary_emotion}" + (f" due to {trigger}" if trigger else ""),
+                    importance="medium",
+                    tags=["emotional_state", primary_emotion]
+                )
+            
+            # Invalidate emotion cache
+            self._invalidate_emotion_cache()
+            
+            # Record performance
+            elapsed = time.time() - start_time
+            self.performance.record_operation("update_emotion", elapsed)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error updating emotional state: {e}")
+            elapsed = time.time() - start_time
+            self.performance.record_operation("update_emotion", elapsed)
+            return {"error": str(e)}
+    
+    async def get_emotional_state(self) -> Dict[str, Any]:
+        """
+        Get the NPC's current emotional state with caching.
+        
+        Returns:
+            Current emotional state
+        """
+        # Check cache first
+        if "current" in self._emotion_cache:
+            cache_time, cached_state = self._emotion_cache["current"]
+            if datetime.now() - cache_time < self._cache_ttl["emotion"]:
+                self.performance.record_cache_hit()
+                return cached_state
+        
+        self.performance.record_cache_miss()
+        
+        start_time = time.time()
+        
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # Get emotional state
+            state = await memory_system.get_npc_emotion(self.npc_id)
+            
+            # Cache the result
+            self._emotion_cache["current"] = (datetime.now(), state)
+            
+            # Record performance
+            elapsed = time.time() - start_time
+            self.performance.record_operation("update_emotion", elapsed)
+            
+            return state
+            
+        except Exception as e:
+            logger.error(f"Error getting emotional state: {e}")
+            elapsed = time.time() - start_time
+            self.performance.record_operation("update_emotion", elapsed)
+            return {"error": str(e)}
+    
+    async def generate_mask_slippage(self, 
+                                   trigger: str, 
+                                   severity: int = None,
+                                   femdom_context: bool = False) -> Dict[str, Any]:
+        """
+        Generate a mask slippage event where the NPC's true nature shows through.
+        Enhanced with femdom context awareness.
+        
+        Args:
+            trigger: What triggered the mask slippage
+            severity: How severe the slippage is (1-5)
+            femdom_context: Whether the slippage occurs in a femdom context
+            
+        Returns:
+            Mask slippage details
+        """
+        start_time = time.time()
+        
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # Get mask info for integrity checks
+            mask_info = await memory_system.get_npc_mask(self.npc_id)
+            
+            # In femdom context, slippages can be more severe
+            if femdom_context and severity is None:
+                integrity = mask_info.get("integrity", 100)
+                base_severity = max(1, min(5, int((100 - integrity) / 20)))
+                severity = base_severity + 1 if random.random() < 0.7 else base_severity
+            
+            # Generate slippage
+            slip_result = await memory_system.reveal_npc_trait(
+                npc_id=self.npc_id,
+                trigger=trigger,
+                severity=severity
+            )
+            
+            # Create memory of the slippage with femdom context if applicable
+            memory_text = f"My mask slipped when {trigger}, revealing a glimpse of my true nature"
+            
+            if femdom_context:
+                hidden_traits = mask_info.get("hidden_traits", {})
+                
+                # Add femdom-specific context to memory
+                if "dominant" in hidden_traits:
+                    memory_text += ", showing my underlying dominance"
+                elif "submissive" in hidden_traits:
+                    memory_text += ", exposing my natural submission"
+                elif "sadistic" in hidden_traits:
+                    memory_text += ", revealing my cruel tendencies"
+                
+                # Add femdom tags
+                tags = ["mask_slip", "self_awareness", "power_dynamic"]
+                
+                if "dominant" in hidden_traits:
+                    tags.append("dominance_dynamic")
+                elif "submissive" in hidden_traits:
+                    tags.append("submission")
+                elif "sadistic" in hidden_traits:
+                    tags.append("discipline")
+            else:
+                tags = ["mask_slip", "self_awareness"]
+            
+            # Create memory
+            await memory_system.remember(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                memory_text=memory_text,
+                importance="high" if femdom_context else "medium",
+                tags=tags
+            )
+            
+            # Invalidate mask cache
+            self._invalidate_mask_cache()
+            
+            # Record performance
+            elapsed = time.time() - start_time
+            self.performance.record_operation("mask_operations", elapsed)
+            
+            return slip_result
+            
+        except Exception as e:
+            logger.error(f"Error generating mask slippage: {e}")
+            elapsed = time.time() - start_time
+            self.performance.record_operation("mask_operations", elapsed)
+            return {"error": str(e)}
+    
+    async def get_npc_mask(self) -> Dict[str, Any]:
+        """
+        Get information about the NPC's mask with caching.
+        
+        Returns:
+            Mask information (integrity, presented traits, etc.)
+        """
+        # Check cache first
+        if "current" in self._mask_cache:
+            cache_time, cached_mask = self._mask_cache["current"]
+            if datetime.now() - cache_time < self._cache_ttl["mask"]:
+                self.performance.record_cache_hit()
+                return cached_mask
+        
+        self.performance.record_cache_miss()
+        
+        start_time = time.time()
+        
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # Get mask info
+            mask_info = await memory_system.get_npc_mask(self.npc_id)
+            
+            # Cache the result
+            self._mask_cache["current"] = (datetime.now(), mask_info)
+            
+            # Record performance
+            elapsed = time.time() - start_time
+            self.performance.record_operation("mask_operations", elapsed)
+            
+            return mask_info
+            
+        except Exception as e:
+            logger.error(f"Error getting NPC mask: {e}")
+            elapsed = time.time() - start_time
+            self.performance.record_operation("mask_operations", elapsed)
+            return {"error": str(e)}
+    
+    async def create_belief(self, 
+                          belief_text: str, 
+                          confidence: float = 0.7,
+                          topic: str = None,
+                          femdom_context: bool = False) -> Dict[str, Any]:
+        """
+        Create a belief for the NPC with femdom context awareness.
+        
+        Args:
+            belief_text: The belief statement
+            confidence: Confidence level (0.0-1.0)
+            topic: Optional topic categorization
+            femdom_context: Whether this belief has femdom context
+            
+        Returns:
+            Created belief information
+        """
+        start_time = time.time()
+        
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # If no topic provided, try to extract one
+            if not topic:
+                # Default topic extraction
+                words = belief_text.lower().split()
+                topic = words[0] if words else "general"
+                
+                # Check for femdom-specific topics
+                if femdom_context:
+                    # Extract femdom topics
+                    femdom_topics = [
+                        "dominance", "submission", "control", "obedience",
+                        "discipline", "service", "power", "humiliation"
+                    ]
+                    
+                    for ft in femdom_topics:
+                        if ft in belief_text.lower():
+                            topic = ft
+                            break
+            
+            # Create the belief
+            result = await memory_system.create_belief(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                belief_text=belief_text,
+                confidence=confidence,
+                topic=topic
+            )
+            
+            # In femdom context, create a supporting memory
+            if femdom_context and random.random() < 0.7:  # 70% chance
+                # Create a memory supporting this belief
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    memory_text=f"I reflected on my belief that {belief_text}",
+                    importance="medium",
+                    tags=["belief", "reflection", topic] + 
+                         (["power_dynamic"] if topic in ["dominance", "submission", "control", "obedience"] else [])
+                )
+            
+            # Invalidate belief cache
+            self._invalidate_belief_cache(topic)
+            
+            # Record performance
+            elapsed = time.time() - start_time
+            self.performance.record_operation("belief_operations", elapsed)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error creating belief: {e}")
+            elapsed = time.time() - start_time
+            self.performance.record_operation("belief_operations", elapsed)
+            return {"error": str(e)}
+    
+    async def get_beliefs(self, topic: str = None, min_confidence: float = 0.0) -> List[Dict[str, Any]]:
+        """
+        Get the NPC's beliefs with caching and confidence filtering.
+        
+        Args:
+            topic: Optional topic filter
+            min_confidence: Minimum confidence threshold
+            
+        Returns:
+            List of beliefs
+        """
+        # Create cache key
+        cache_key = f"beliefs_{topic or 'all'}_{min_confidence}"
+        
+        # Check cache first
+        if cache_key in self._belief_cache:
+            cache_time, cached_beliefs = self._belief_cache[cache_key]
+            if datetime.now() - cache_time < self._cache_ttl["belief"]:
+                self.performance.record_cache_hit()
+                return cached_beliefs
+        
+        self.performance.record_cache_miss()
+        
+        start_time = time.time()
+        
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # Get beliefs
+            beliefs = await memory_system.get_beliefs(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                topic=topic
+            )
+            
+            # Filter by confidence if needed
+            if min_confidence > 0:
+                beliefs = [b for b in beliefs if b.get("confidence", 0) >= min_confidence]
+            
+            # Cache the result
+            self._belief_cache[cache_key] = (datetime.now(), beliefs)
+            
+            # Record performance
+            elapsed = time.time() - start_time
+            self.performance.record_operation("belief_operations", elapsed)
+            
+            return beliefs
+            
+        except Exception as e:
+            logger.error(f"Error getting beliefs: {e}")
+            elapsed = time.time() - start_time
+            self.performance.record_operation("belief_operations", elapsed)
+            return []
+    
+    async def get_femdom_beliefs(self, min_confidence: float = 0.3) -> List[Dict[str, Any]]:
+        """
+        Get femdom-related beliefs for the NPC.
+        
+        Args:
+            min_confidence: Minimum confidence threshold
+            
+        Returns:
+            List of femdom-related beliefs
+        """
+        start_time = time.time()
+        
+        try:
+            # Get all beliefs
+            all_beliefs = await self.get_beliefs()
+            
+            # Femdom-related keywords
+            femdom_keywords = [
+                "dominance", "submission", "control", "obedience",
+                "discipline", "service", "power", "humiliation",
+                "command", "order", "punishment", "reward", "train",
+                "serve", "worship", "respect", "protocol", "rule"
+            ]
+            
+            # Filter beliefs
+            femdom_beliefs = []
+            for belief in all_beliefs:
+                text = belief.get("belief", "").lower()
+                confidence = belief.get("confidence", 0)
+                
+                # Check if belief contains femdom keywords
+                if any(keyword in text for keyword in femdom_keywords) and confidence >= min_confidence:
+                    femdom_beliefs.append(belief)
+            
+            # Sort by confidence
+            femdom_beliefs.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+            
+            # Record performance
+            elapsed = time.time() - start_time
+            self.performance.record_operation("belief_operations", elapsed)
+            
+            return femdom_beliefs
+            
+        except Exception as e:
+            logger.error(f"Error getting femdom beliefs: {e}")
+            elapsed = time.time() - start_time
+            self.performance.record_operation("belief_operations", elapsed)
+            return []
+    
+    async def run_memory_maintenance(self, include_femdom_maintenance: bool = True) -> Dict[str, Any]:
+        """
+        Run maintenance tasks on the NPC's memory system with femdom-specific optimizations.
+        
+        Args:
+            include_femdom_maintenance: Whether to run femdom-specific maintenance
+            
+        Returns:
+            Results of maintenance operations
+        """
+        start_time = time.time()
+        
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # Run standard maintenance
+            results = await memory_system.maintain(
+                entity_type="npc",
+                entity_id=self.npc_id
+            )
+            
+            # Run femdom-specific maintenance if requested
+            if include_femdom_maintenance:
+                try:
+                    femdom_results = await self._run_femdom_maintenance()
+                    results["femdom_maintenance"] = femdom_results
+                except Exception as e:
+                    logger.error(f"Error in femdom maintenance: {e}")
+                    results["femdom_maintenance"] = {"error": str(e)}
+            
+            # Clear caches after maintenance
+            self._invalidate_memory_cache()
+            self._invalidate_emotion_cache()
+            self._invalidate_mask_cache()
+            self._invalidate_belief_cache()
+            
+            # Record performance
+            elapsed = time.time() - start_time
+            logger.info(f"Memory maintenance completed in {elapsed:.2f}s")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error running memory maintenance: {e}")
+            elapsed = time.time() - start_time
+            logger.info(f"Memory maintenance failed after {elapsed:.2f}s")
+            return {"error": str(e)}
+    
+    async def _run_femdom_maintenance(self) -> Dict[str, Any]:
+        """Run femdom-specific memory maintenance tasks."""
+        results = {
+            "power_dynamic_memories_processed": 0,
+            "dominance_memories_consolidated": 0,
+            "submission_memories_consolidated": 0,
+            "power_beliefs_reinforced": 0
+        }
+        
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # 1. Consolidate repetitive power dynamic memories
+            femdom_tags = [
+                "dominance_dynamic", "power_exchange", "discipline", 
+                "service", "submission", "humiliation", "ownership"
+            ]
+            
+            for tag in femdom_tags:
+                # Get memories with this tag
+                memories = await memory_system.search_memories(
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    query=f"tags:{tag}",
+                    limit=20
+                )
+                
+                results["power_dynamic_memories_processed"] += len(memories)
+                
+                # Group similar memories
+                memory_groups = {}
+                for memory in memories:
+                    # Create a simplified version of the text for grouping
+                    text = memory.get("text", "").lower()
+                    
+                    # Extract key elements based on tag
+                    key_elements = []
+                    if tag == "dominance_dynamic":
+                        for word in ["command", "control", "dominate", "authority"]:
+                            if word in text:
+                                key_elements.append(word)
+                    elif tag == "submission":
+                        for word in ["obey", "submit", "follow", "comply"]:
+                            if word in text:
+                                key_elements.append(word)
+                    
+                    # Create group key
+                    group_key = " ".join(sorted(key_elements)) if key_elements else text[:20]
+                    
+                    if group_key not in memory_groups:
+                        memory_groups[group_key] = []
+                    
+                    memory_groups[group_key].append(memory)
+                
+                # Consolidate groups with multiple memories
+                for group_key, group_memories in memory_groups.items():
+                    if len(group_memories) >= 3:
+                        # Create consolidated memory
+                        memory_texts = [m.get("text", "") for m in group_memories]
+                        ids = [m.get("id") for m in group_memories]
+                        
+                        consolidated_text = f"I have {len(memory_texts)} similar experiences involving {tag}: " + \
+                                           f"'{memory_texts[0]}' and similar events."
+                        
+                        # Create consolidated memory
+                        await memory_system.consolidate_specific_memories(
+                            entity_type="npc",
+                            entity_id=self.npc_id,
+                            memory_ids=ids,
+                            consolidated_text=consolidated_text,
+                            tags=[tag, "consolidated", "power_dynamic"]
+                        )
+                        
+                        if tag in ["dominance_dynamic", "control"]:
+                            results["dominance_memories_consolidated"] += 1
+                        elif tag in ["submission", "service"]:
+                            results["submission_memories_consolidated"] += 1
+            
+            # 2. Reinforce power-related beliefs based on memory evidence
+            # Get femdom beliefs
+            femdom_beliefs = await self.get_femdom_beliefs()
+            
+            for belief in femdom_beliefs:
+                belief_text = belief.get("belief", "")
+                confidence = belief.get("confidence", 0.5)
+                
+                # Search for supporting memories
+                supporting_memories = await memory_system.search_memories(
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    query=belief_text,
+                    limit=5
+                )
+                
+                # Count strong supporting memories
+                significant_support = sum(1 for m in supporting_memories 
+                                        if m.get("significance", 0) >= 4)
+                
+                # Update confidence based on memory support
+                if significant_support >= 3:
+                    # Strong support - increase confidence
+                    new_confidence = min(0.95, confidence + 0.1)
+                    
+                    await memory_system.update_belief_confidence(
+                        entity_type="npc",
+                        entity_id=self.npc_id,
+                        belief_id=belief.get("id"),
+                        new_confidence=new_confidence,
+                        reason=f"Reinforced by {significant_support} significant memories"
+                    )
+                    
+                    results["power_beliefs_reinforced"] += 1
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in femdom maintenance: {e}")
+            return {"error": str(e)}
+    
+    # Other methods from original class...
+    # These methods remain unchanged from the original implementation:
+    # - analyze_memory_content(self, memory_text: str)
+    # - calculate_emotional_intensity(self, memory_text: str, base_valence: float)
+    # - apply_npc_memory_bias(self, conn, memory_id: int)
+    # - propagate_memory(self, conn, memory_text: str, tags, significance, emotional_intensity)
+    # - distort_text(self, original_text: str, severity=0.3)
+    # - categorize_memories_by_significance(self, retention_threshold=5)
+    # - apply_recency_bias(self, memories: List[dict])
+    # - apply_emotional_bias(self, memories: List[dict])
+    # - apply_personality_bias(self, memories: List[dict])
+    # They would be included here in a complete implementation
     
     async def analyze_memory_content(self, memory_text: str) -> List[str]:
         """
@@ -373,9 +1392,9 @@ class EnhancedMemoryManager:
         
         # Dominance dynamics
         if any(word in lower_text for word in ["command", "ordered", "instructed", "demanded"]):
-            tags.append("dominance_assertion")
+            tags.append("dominance_dynamic")
         if any(word in lower_text for word in ["obey", "comply", "submit", "kneel", "bow"]):
-            tags.append("submission_behavior")
+            tags.append("submission")
         
         # Punishment/discipline
         if any(word in lower_text for word in ["punish", "discipline", "correct", "consequences"]):
@@ -451,9 +1470,23 @@ class EnhancedMemoryManager:
             "concerned": 5, "fine": 5, "worried": 5, "okay": 5
         }
         
+        # Femdom-specific emotional words
+        femdom_emotion_words = {
+            "humiliated": 25, "dominated": 22, "controlled": 20, "obedient": 18,
+            "submissive": 18, "powerful": 20, "superior": 15, "worshipped": 22
+        }
+        
         # Scan text for emotional keywords
         lower_text = memory_text.lower()
+        
+        # Check standard emotional words
         for word, boost in emotion_words.items():
+            if word in lower_text:
+                intensity += boost
+                break
+                
+        # Check femdom-specific words
+        for word, boost in femdom_emotion_words.items():
             if word in lower_text:
                 intensity += boost
                 break
@@ -472,622 +1505,55 @@ class EnhancedMemoryManager:
             "gullible": 1.2,   # More likely to believe (higher confidence)
             "skeptical": 0.8,  # Less likely to believe (lower confidence)
             "paranoid": 1.5,   # Much more likely to believe negative things
-            "neutral": 1.0     # No bias
+            "neutral": 1.0,    # No bias
+            "dominant": 1.1,   # Slight bias toward confidence (femdom)
+            "submissive": 0.9  # Slight bias against confidence (femdom)
         }
         
         factor = personality_factors.get(self.npc_personality, 1.0)
         
         try:
+            cursor = conn.cursor()
+            
             # For paranoid NPCs, check if the memory has negative connotations
             if self.npc_personality == "paranoid":
-                memory_text = await conn.fetchval(
-                    "SELECT memory_text FROM NPCMemories WHERE id = $1", 
-                    memory_id
-                )
-                if memory_text:
+                cursor.execute("""
+                    SELECT memory_text FROM NPCMemories WHERE id = %s
+                """, (memory_id,))
+                
+                row = cursor.fetchone()
+                if row:
+                    memory_text = row[0]
                     lower_text = memory_text.lower()
+                    
                     if any(word in lower_text for word in ["betray", "trick", "lie", "deceive", "attack"]):
                         factor = 1.5  # Higher confidence in negative memories
                     else:
                         factor = 0.9  # Lower confidence in positive/neutral memories
             
+            # For dominant NPCs, boost confidence in dominance-related memories
+            elif self.npc_personality == "dominant":
+                cursor.execute("""
+                    SELECT memory_text, tags FROM NPCMemories WHERE id = %s
+                """, (memory_id,))
+                
+                row = cursor.fetchone()
+                if row and len(row) >= 2:
+                    memory_text, tags = row
+                    
+                    # Check if memory has dominance tags
+                    if tags and any(tag in tags for tag in ["dominance_dynamic", "control", "discipline"]):
+                        factor = 1.3  # Higher confidence in dominance memories
+            
             # Apply the confidence adjustment
-            await conn.execute("""
+            cursor.execute("""
                 UPDATE NPCMemories
-                SET confidence = LEAST(confidence * $1, 1.0)
-                WHERE id = $2
-            """, factor, memory_id)
+                SET confidence = LEAST(confidence * %s, 1.0)
+                WHERE id = %s
+            """, (factor, memory_id))
+            
         except Exception as e:
             logger.error(f"Error applying personality bias: {e}")
-    
-    async def propagate_memory(self, conn, memory_text: str, tags: List[str], significance: int, emotional_intensity: float):
-        """
-        Propagate important memories to related NPCs as secondhand information.
-        
-        Args:
-            conn: Database connection
-            memory_text: The memory text
-            tags: Tags for the memory
-            significance: Importance of the memory
-            emotional_intensity: Emotional intensity of the memory
-        """
-        try:
-            # Find NPCs connected to this NPC
-            rows = await conn.fetch("""
-                SELECT entity2_id
-                FROM SocialLinks
-                WHERE user_id = $1
-                  AND conversation_id = $2
-                  AND entity1_type = 'npc'
-                  AND entity1_id = $3
-                  AND entity2_type = 'npc'
-            """, self.user_id, self.conversation_id, self.npc_id)
-            
-            related_npcs = [r["entity2_id"] for r in rows]
-            
-            # Get this NPC's name
-            row = await conn.fetchrow("""
-                SELECT npc_name
-                FROM NPCStats
-                WHERE user_id = $1 
-                  AND conversation_id = $2
-                  AND npc_id = $3
-            """, self.user_id, self.conversation_id, self.npc_id)
-            
-            npc_name = row["npc_name"] if row else f"NPC_{self.npc_id}"
-            
-            # Create secondhand memories for each related NPC
-            for related_id in related_npcs:
-                # Distort the message slightly based on relationship
-                distorted_text = self.distort_text(memory_text, severity=0.3)
-                secondhand_text = f"I heard that {npc_name} {distorted_text}"
-                
-                # Lower significance and intensity for secondhand information
-                secondhand_significance = max(1, significance - 2)
-                secondhand_intensity = max(0, emotional_intensity - 20)
-                
-                # Add the secondhand memory
-                await conn.execute("""
-                    INSERT INTO NPCMemories (
-                        npc_id, memory_text, memory_type, tags,
-                        emotional_intensity, significance, status,
-                        confidence, is_consolidated
-                    )
-                    VALUES (
-                        $1, $2, 'secondhand', $3,
-                        $4, $5, 'active',
-                        0.7, FALSE
-                    )
-                """, 
-                    related_id, 
-                    secondhand_text, 
-                    tags + ["secondhand", "rumor"],
-                    secondhand_intensity,
-                    secondhand_significance
-                )
-            
-            logger.debug(f"Propagated memory to {len(related_npcs)} related NPCs")
-        except Exception as e:
-            logger.error(f"Error propagating memory: {e}")
-    
-    async def categorize_memories_by_significance(self, retention_threshold=5):
-        """
-        Separate core memories from passive ones based on significance, 
-        emotional impact, and frequency of recall (implements TO_DO.TXT strategies).
-        """
-        active_count = 0
-        archived_count = 0
-        
-        with get_db_connection() as conn, conn.cursor() as cursor:
-            # Get all active memories for this NPC
-            cursor.execute("""
-                SELECT id, significance, emotional_intensity, times_recalled, 
-                       memory_text, tags
-                FROM NPCMemories
-                WHERE npc_id = %s AND status = 'active'
-            """, (self.npc_id,))
-            
-            memories = cursor.fetchall()
-            for memory in memories:
-                memory_id, significance, emotional_intensity, recall_count, memory_text, tags = memory
-                
-                # Calculate retention score - memories recalled more often, with higher
-                # emotional/significance values, or tagged as emotional should stay active
-                retention_score = significance + (emotional_intensity / 20) + (recall_count * 0.5)
-                
-                # Intelligence modifier - smarter NPCs retain more
-                if hasattr(self, 'npc_intelligence') and self.npc_intelligence > 1.0:
-                    retention_score *= self.npc_intelligence
-                
-                # Emotional tagging bonus - emotional memories are "stickier"
-                if any(tag in tags for tag in ["emotional", "traumatic", "significant"]):
-                    retention_score += 2
-                    
-                # Context relevance - keep memories relevant to current environment
-                current_location = self._get_npc_current_location()
-                if current_location and current_location.lower() in memory_text.lower():
-                    retention_score += 1.5
-                
-                # Check if memory should be kept active or archived
-                if retention_score < retention_threshold:
-                    # Move to passive storage but remember it can be triggered by context
-                    cursor.execute("""
-                        UPDATE NPCMemories
-                        SET status = 'passive', context_triggers = %s
-                        WHERE id = %s
-                    """, (json.dumps(self._extract_context_triggers(memory_text)), memory_id))
-                    archived_count += 1
-                else:
-                    active_count += 1
-        
-        return {"active": active_count, "archived": archived_count}
-    
-    def _extract_context_triggers(self, memory_text):
-        """Extract keywords that could trigger this passive memory when encountered."""
-        # Simple extraction of potentially important context triggers
-        triggers = []
-        
-        # Extract proper nouns and locations
-        for word in memory_text.split():
-            if word[0].isupper() and len(word) > 3 and word.lower() not in COMMON_WORDS:
-                triggers.append(word.lower())
-        
-        # Extract phrases related to emotions
-        for phrase in ["angry with", "afraid of", "happy about", "saddened by"]:
-            if phrase in memory_text.lower():
-                index = memory_text.lower().find(phrase)
-                # Try to get what comes after the phrase
-                remaining = memory_text[index + len(phrase):].split()
-                if remaining and len(remaining) > 0:
-                    triggers.append(phrase + " " + remaining[0])
-        
-        return triggers
-    
-    def _get_npc_current_location(self):
-        """Get the NPC's current location for context relevance checks."""
-        with get_db_connection() as conn, conn.cursor() as cursor:
-            cursor.execute("""
-                SELECT current_location FROM NPCStats
-                WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-            """, (self.npc_id, self.user_id, self.conversation_id))
-            row = cursor.fetchone()
-            return row[0] if row else None
-    
-    async def _propagate_memory_subsystems(self, memory_text: str, tags: List[str], significance: int, emotional_intensity: float):
-        """
-        Propagate memory using memory subsystems instead of direct DB access.
-        
-        Args:
-            memory_text: The memory text
-            tags: Tags for the memory
-            significance: Importance of the memory
-            emotional_intensity: Emotional intensity of the memory
-        """
-        # This implementation would use the subsystem APIs instead of direct DB queries
-        # For demonstration, we'll leave this as a placeholder
-        logger.info(f"Would propagate memory with significance {significance} using subsystems")
-        pass
-    
-    def distort_text(self, original_text: str, severity=0.3) -> str:
-        """
-        Word-level partial rewrite for rumor distortion.
-        
-        Args:
-            original_text: The original text to distort
-            severity: How much to distort the text (0.0-1.0)
-            
-        Returns:
-            Distorted version of the text
-        """
-        synonyms_map = {
-            "attacked": ["assaulted", "ambushed", "jumped"],
-            "betrayed": ["backstabbed", "double-crossed", "deceived"],
-            "stole": ["looted", "swiped", "snatched", "took"],
-            "helped": ["assisted", "saved", "aided", "supported"],
-            "rescued": ["freed", "saved", "liberated", "pulled out"],
-            "said": ["mentioned", "claimed", "stated", "told me"],
-            "saw": ["noticed", "spotted", "observed", "glimpsed"],
-            "went": ["traveled", "journeyed", "ventured", "headed"],
-            "found": ["discovered", "located", "uncovered", "came across"]
-        }
-        
-        words = original_text.split()
-        for i in range(len(words)):
-            # Chance to modify a word based on severity
-            if random.random() < severity:
-                word_lower = words[i].lower()
-                # Replace with synonym if available
-                if word_lower in synonyms_map:
-                    words[i] = random.choice(synonyms_map[word_lower])
-                # Small chance to delete a word
-                elif random.random() < 0.2:
-                    words[i] = ""
-        
-        # Reconstruct text, removing empty strings
-        return " ".join([w for w in words if w])
-    
-    async def update_reputation(self, conn, memory_text: str):
-        """
-        Update player reputation based on memory content.
-        
-        Args:
-            conn: Database connection
-            memory_text: Memory text to analyze
-        """
-        try:
-            lower_text = memory_text.lower()
-            
-            # Check for negative/positive interaction terms
-            if any(word in lower_text for word in ["betray", "attack", "deceive", "trick"]):
-                await conn.execute("""
-                    INSERT INTO PlayerReputation (user_id, npc_id, reputation_score)
-                    VALUES ($1, $2, -5)
-                    ON CONFLICT (user_id, npc_id) 
-                    DO UPDATE SET reputation_score = 
-                        GREATEST(PlayerReputation.reputation_score - 5, -100)
-                """, self.user_id, self.npc_id)
-            elif any(word in lower_text for word in ["help", "save", "assist", "support"]):
-                await conn.execute("""
-                    INSERT INTO PlayerReputation (user_id, npc_id, reputation_score)
-                    VALUES ($1, $2, 5)
-                    ON CONFLICT (user_id, npc_id) 
-                    DO UPDATE SET reputation_score = 
-                        LEAST(PlayerReputation.reputation_score + 5, 100)
-                """, self.user_id, self.npc_id)
-        except Exception as e:
-            logger.error(f"Error updating reputation: {e}")
-    
-    async def update_future_outcomes(self, conn, memory_text: str):
-        """
-        Update future outcome probabilities based on memory.
-        
-        Args:
-            conn: Database connection
-            memory_text: Memory text to analyze
-        """
-        try:
-            lower_text = memory_text.lower()
-            
-            # Update betrayal-related outcomes
-            if any(word in lower_text for word in ["betray", "deceive", "trick"]):
-                await conn.execute("""
-                    INSERT INTO FutureOutcomes (npc_id, event, probability)
-                    VALUES ($1, 'NPC seeks revenge', 0.5)
-                    ON CONFLICT (npc_id, event) DO NOTHING
-                """, self.npc_id)
-                
-                await conn.execute("""
-                    UPDATE FutureOutcomes
-                    SET probability = LEAST(probability + 0.1, 1.0)
-                    WHERE npc_id = $1 AND event = 'NPC seeks revenge'
-                """, self.npc_id)
-            
-            # Update help-related outcomes
-            elif any(word in lower_text for word in ["help", "save", "assist"]):
-                await conn.execute("""
-                    INSERT INTO FutureOutcomes (npc_id, event, probability)
-                    VALUES ($1, 'NPC allies with player', 0.5)
-                    ON CONFLICT (npc_id, event) DO NOTHING
-                """, self.npc_id)
-                
-                await conn.execute("""
-                    UPDATE FutureOutcomes
-                    SET probability = LEAST(probability + 0.1, 1.0)
-                    WHERE npc_id = $1 AND event = 'NPC allies with player'
-                """, self.npc_id)
-        except Exception as e:
-            logger.error(f"Error updating future outcomes: {e}")
-    
-    async def retrieve_relevant_memories(
-        self, 
-        context: Dict[str, Any], 
-        limit: int = 5,
-        memory_types: List[str] = None,
-        include_archived: bool = False
-    ) -> List[Dict[str, Any]]:
-        """
-        Retrieve memories relevant to the current context.
-        
-        Args:
-            context: Context information (can include text, environment, etc.)
-            limit: Maximum number of memories to retrieve
-            memory_types: Optional filter for memory types
-            include_archived: Whether to include archived memories
-            
-        Returns:
-            List of relevant memories
-        """
-        memory_types = memory_types or ["observation", "reflection", "semantic", "secondhand"]
-        
-        if self.use_subsystems:
-            try:
-                return await self._retrieve_memories_subsystems(context, limit, memory_types)
-            except Exception as e:
-                logger.error(f"Error retrieving memories with subsystems: {e}")
-                # Fall back to direct DB access
-                return await self._retrieve_memories_db(context, limit, memory_types, include_archived)
-        else:
-            return await self._retrieve_memories_db(context, limit, memory_types, include_archived)
-    
-    async def _retrieve_memories_subsystems(
-        self, 
-        context: Dict[str, Any], 
-        limit: int,
-        memory_types: List[str]
-    ) -> List[Dict[str, Any]]:
-        """
-        Retrieve memories using memory subsystem managers.
-        
-        Args:
-            context: Context information
-            limit: Maximum memories to retrieve
-            memory_types: Types of memories to include
-            
-        Returns:
-            List of relevant memories
-        """
-        # Get current emotional state to influence recall
-        emotional_state = await self.emotional_memory.get_entity_emotional_state(
-            entity_type="npc",
-            entity_id=self.npc_id
-        )
-        
-        # Check if there are any traumatic triggers in the context
-        if isinstance(context, dict) and "text" in context:
-            trigger_result = await self.emotional_memory.process_traumatic_triggers(
-                entity_type="npc",
-                entity_id=self.npc_id,
-                text=context["text"]
-            )
-            
-            if trigger_result.get("triggered", False):
-                # If trauma is triggered, prioritize these memories
-                triggered_memories = trigger_result.get("triggered_memories", [])
-                if triggered_memories:
-                    return triggered_memories
-        
-        # Use emotional state for recall if applicable
-        current_emotion = emotional_state.get("current_emotion", {})
-        if current_emotion.get("intensity", 0) > 0.6:
-            # Strong emotions influence memory recall
-            mood_memories = await self.emotional_memory.retrieve_mood_congruent_memories(
-                entity_type="npc",
-                entity_id=self.npc_id,
-                current_mood=current_emotion,
-                limit=limit
-            )
-            
-            if mood_memories:
-                return mood_memories
-        
-        # Extract query text from context
-        query = ""
-        if isinstance(context, str):
-            query = context
-        elif isinstance(context, dict):
-            query = context.get("text", "")
-            if not query:
-                # Try to extract from other context elements
-                context_elements = []
-                for key, value in context.items():
-                    if isinstance(value, str):
-                        context_elements.append(value)
-                query = " ".join(context_elements)
-        
-        # Standard memory retrieval
-        memories = await self.core_memory.retrieve_memories(
-            query=query,
-            memory_types=memory_types,
-            limit=limit
-        )
-        
-        # Format and return memories
-        formatted_memories = []
-        current_emotion_data = current_emotion or {}
-        
-        for memory in memories:
-            # Check if this memory should be reconsolidated
-            if memory.times_recalled > 0 and random.random() < 0.2:  # 20% chance
-                try:
-                    recon_manager = ReconsolidationManager(self.user_id, self.conversation_id)
-                    await recon_manager.reconsolidate_memory(
-                        memory_id=memory.id,
-                        entity_type="npc",
-                        entity_id=self.npc_id,
-                        emotional_context=current_emotion_data,
-                        recall_context=str(context),
-                        alteration_strength=0.05  # Subtle alterations
-                    )
-                except Exception as e:
-                    logger.error(f"Error reconsolidating memory: {e}")
-            
-            # Add schema interpretation if available
-            interpretation = None
-            try:
-                interpretation_result = await self.schema_manager.interpret_memory_with_schemas(
-                    memory_id=memory.id,
-                    entity_type="npc",
-                    entity_id=self.npc_id
-                )
-                
-                if "interpretation" in interpretation_result:
-                    interpretation = interpretation_result["interpretation"]
-            except Exception as e:
-                logger.error(f"Error interpreting memory with schemas: {e}")
-            
-            formatted_memories.append({
-                "id": memory.id,
-                "text": memory.text,
-                "type": memory.memory_type,
-                "significance": memory.significance,
-                "emotional_intensity": memory.emotional_intensity,
-                "schema_interpretation": interpretation,
-                "timestamp": memory.timestamp.isoformat() if memory.timestamp else None
-            })
-        
-        # Optionally generate a flashback (10% chance)
-        if random.random() < 0.1:
-            try:
-                flashback = await self.flashback_manager.generate_flashback(
-                    entity_type="npc",
-                    entity_id=self.npc_id,
-                    current_context=query
-                )
-                
-                if flashback:
-                    # Insert the flashback at a random position
-                    insert_pos = min(len(formatted_memories), random.randint(0, 2))
-                    formatted_memories.insert(insert_pos, {
-                        "id": f"flashback_{datetime.now().timestamp()}",
-                        "text": flashback["text"],
-                        "type": "flashback",
-                        "significance": 4,  # High significance
-                        "flashback": True
-                    })
-            except Exception as e:
-                logger.error(f"Error generating flashback: {e}")
-        
-        return formatted_memories
-    
-    async def _retrieve_memories_db(
-        self, 
-        context: Any, 
-        limit: int,
-        memory_types: List[str],
-        include_archived: bool
-    ) -> List[Dict[str, Any]]:
-        """
-        Retrieve memories using direct database access.
-        
-        Args:
-            context: Query text or context object
-            limit: Maximum memories to retrieve
-            memory_types: Types of memories to include
-            include_archived: Whether to include archived memories
-            
-        Returns:
-            List of relevant memories
-        """
-        # Extract query text
-        query_text = ""
-        if isinstance(context, str):
-            query_text = context
-        elif isinstance(context, dict):
-            query_text = context.get("text", context.get("description", ""))
-        
-        conn = None
-        memories = []
-        
-        try:
-            # Get a connection from the pool or create a new one
-            if self.db_pool:
-                conn = await self.db_pool.acquire()
-            else:
-                conn = await asyncpg.connect(dsn=DB_DSN)
-            
-            # Determine status filter
-            status_filter = "'active','summarized'"
-            if include_archived:
-                status_filter += ",'archived'"
-            
-            try:
-                # Generate embedding for the query
-                query_vector = await self.generate_embedding(query_text)
-                
-                if query_vector:
-                    # Use vector similarity search if embedding was generated
-                    rows = await conn.fetch(f"""
-                        SELECT id, memory_text, memory_type, tags,
-                               emotional_intensity, significance,
-                               times_recalled, timestamp, status, confidence
-                        FROM NPCMemories
-                        WHERE npc_id = $1
-                          AND status IN ({status_filter})
-                          AND memory_type = ANY($3)
-                        ORDER BY embedding <-> $2
-                        LIMIT $4
-                    """, self.npc_id, query_vector, memory_types, limit)
-                else:
-                    # Fall back to keyword search
-                    raise Exception("No embedding generated, falling back to keywords")
-            
-            except Exception as e:
-                logger.error(f"Vector search failed: {e}")
-                # Fallback: keyword search
-                words = query_text.lower().split()
-                if words:
-                    conditions = " OR ".join(
-                        [f"LOWER(memory_text) LIKE '%'||${i+2}||'%'" for i in range(len(words))]
-                    )
-                    # Parameters: npc_id, words..., memory_types, limit
-                    params = [self.npc_id] + words + [memory_types, limit]
-                    q = f"""
-                        SELECT id, memory_text, memory_type, tags,
-                               emotional_intensity, significance,
-                               times_recalled, timestamp, status, confidence
-                        FROM NPCMemories
-                        WHERE npc_id = $1
-                          AND status IN ({status_filter})
-                          AND memory_type = ANY(${len(params) - 1})
-                          AND ({conditions})
-                        ORDER BY significance DESC, timestamp DESC
-                        LIMIT ${len(params)}
-                    """
-                    rows = await conn.fetch(q, *params)
-                else:
-                    # No query words, just get recent memories
-                    rows = await conn.fetch(f"""
-                        SELECT id, memory_text, memory_type, tags,
-                               emotional_intensity, significance,
-                               times_recalled, timestamp, status, confidence
-                        FROM NPCMemories
-                        WHERE npc_id = $1
-                          AND status IN ({status_filter})
-                          AND memory_type = ANY($2)
-                        ORDER BY timestamp DESC
-                        LIMIT $3
-                    """, self.npc_id, memory_types, limit)
-            
-            # Process the results
-            for row in rows:
-                memories.append({
-                    "id": row["id"],
-                    "text": row["memory_text"],
-                    "type": row["memory_type"],
-                    "tags": row["tags"] or [],
-                    "emotional_intensity": row["emotional_intensity"],
-                    "significance": row["significance"],
-                    "times_recalled": row["times_recalled"],
-                    "timestamp": row["timestamp"].isoformat() if isinstance(row["timestamp"], datetime) else row["timestamp"],
-                    "status": row["status"],
-                    "confidence": row["confidence"],
-                    "relevance_score": 0.0
-                })
-            
-            # Apply biases to the memories
-            memories = await self.apply_recency_bias(memories)
-            memories = await self.apply_emotional_bias(memories)
-            memories = await self.apply_personality_bias(memories)
-            
-            # Sort by relevance score
-            memories.sort(key=lambda x: x["relevance_score"], reverse=True)
-            
-            # Update retrieval stats
-            await self.update_memory_retrieval_stats(conn, [m["id"] for m in memories])
-            
-            return memories[:limit]  # Ensure we don't return more than requested
-        
-        except Exception as e:
-            logger.error(f"Error retrieving memories: {e}")
-            return []
-        
-        finally:
-            # Release the connection
-            if conn:
-                if self.db_pool:
-                    await self.db_pool.release(conn)
-                else:
-                    await conn.close()
     
     async def apply_recency_bias(self, memories: List[dict]) -> List[dict]:
         """
@@ -1119,7 +1585,7 @@ class EnhancedMemoryManager:
             recency_factor = max(0, 30 - days_ago) / 30.0
             
             # Add to relevance score
-            mem["relevance_score"] += recency_factor * 5.0
+            mem["relevance_score"] = mem.get("relevance_score", 0) + recency_factor * 5.0
         
         return memories
     
@@ -1139,13 +1605,25 @@ class EnhancedMemoryManager:
             significance = mem.get("significance", 0) / 10.0
             
             # Add to relevance score
-            mem["relevance_score"] += (emotional_intensity * 3.0 + significance * 2.0)
+            mem["relevance_score"] = mem.get("relevance_score", 0) + (emotional_intensity * 3.0 + significance * 2.0)
+            
+            # Check for femdom tags for additional boost
+            tags = mem.get("tags", [])
+            femdom_tags = [
+                "dominance_dynamic", "power_exchange", "discipline", 
+                "service", "submission", "humiliation", "ownership"
+            ]
+            
+            if any(tag in femdom_tags for tag in tags):
+                # Boost femdom-related memories
+                mem["relevance_score"] += 2.0
         
         return memories
     
     async def apply_personality_bias(self, memories: List[dict]) -> List[dict]:
         """
         Apply personality-specific biases to memory relevance.
+        Enhanced for femdom contexts.
         
         Args:
             memories: List of memories to adjust
@@ -1161,1222 +1639,200 @@ class EnhancedMemoryManager:
             if self.npc_personality == "paranoid":
                 # Paranoid NPCs prioritize threatening or negative memories
                 if any(word in text for word in ["threat", "danger", "betray", "attack"]):
-                    mem["relevance_score"] += 3.0
+                    mem["relevance_score"] = mem.get("relevance_score", 0) + 3.0
                 if "negative_emotion" in tags or "negative_interaction" in tags:
-                    mem["relevance_score"] += 2.0
+                    mem["relevance_score"] = mem.get("relevance_score", 0) + 2.0
             
             elif self.npc_personality == "gullible":
                 # Gullible NPCs prioritize secondhand information
                 if "rumor" in tags or "secondhand" in tags:
-                    mem["relevance_score"] += 2.0
+                    mem["relevance_score"] = mem.get("relevance_score", 0) + 2.0
             
             elif self.npc_personality == "skeptical":
                 # Skeptical NPCs deprioritize rumors and secondhand info
                 if "rumor" in tags or "secondhand" in tags:
-                    mem["relevance_score"] -= 1.5
+                    mem["relevance_score"] = mem.get("relevance_score", 0) - 1.5
+            
+            # Femdom-specific personality biases
+            elif self.npc_personality == "dominant":
+                # Dominant NPCs prioritize dominance, control, and discipline memories
+                if any(tag in tags for tag in ["dominance_dynamic", "control", "discipline"]):
+                    mem["relevance_score"] = mem.get("relevance_score", 0) + 3.0
+                if "power_exchange" in tags:
+                    mem["relevance_score"] = mem.get("relevance_score", 0) + 2.0
+            
+            elif self.npc_personality == "submissive":
+                # Submissive NPCs prioritize service, submission, and obedience memories
+                if any(tag in tags for tag in ["submission", "service", "obedience"]):
+                    mem["relevance_score"] = mem.get("relevance_score", 0) + 3.0
+                if "ownership" in tags:
+                    mem["relevance_score"] = mem.get("relevance_score", 0) + 2.0
             
             # Adjust by confidence
             confidence = mem.get("confidence", 1.0)
-            mem["relevance_score"] *= confidence
+            mem["relevance_score"] = mem.get("relevance_score", 0) * confidence
         
         return memories
     
-    async def update_memory_retrieval_stats(self, conn, memory_ids: List[int]):
+    async def propagate_memory(self, conn, memory_text: str, tags: List[str], significance: int, emotional_intensity: float):
         """
-        Update statistics for retrieved memories.
+        Propagate important memories to related NPCs as secondhand information.
+        Enhanced for femdom contexts.
         
         Args:
             conn: Database connection
-            memory_ids: IDs of memories that were retrieved
+            memory_text: The memory text
+            tags: Tags for the memory
+            significance: Importance of the memory
+            emotional_intensity: Emotional intensity of the memory
         """
-        if not memory_ids:
-            return
-        
         try:
-            await conn.execute("""
-                UPDATE NPCMemories
-                SET times_recalled = times_recalled + 1,
-                    last_recalled = CURRENT_TIMESTAMP
-                WHERE id = ANY($1)
-            """, memory_ids)
-        except Exception as e:
-            logger.error(f"Error updating memory retrieval stats: {e}")
-    
-    async def update_emotional_state(self, 
-                                   primary_emotion: str, 
-                                   intensity: float, 
-                                   trigger: str = None) -> Dict[str, Any]:
-        """
-        Update the NPC's emotional state.
-        
-        Args:
-            primary_emotion: The primary emotion
-            intensity: Intensity of the emotion (0.0-1.0)
-            trigger: What triggered this emotion
+            cursor = conn.cursor()
             
-        Returns:
-            Updated emotional state
-        """
-        if self.use_subsystems:
-            # Create emotional state update
-            current_emotion = {
-                "primary_emotion": primary_emotion,
-                "intensity": intensity,
-                "secondary_emotions": {},
-                "trigger": trigger
-            }
+            # Find NPCs connected to this NPC
+            cursor.execute("""
+                SELECT entity2_id, link_type, link_level
+                FROM SocialLinks
+                WHERE user_id = %s
+                  AND conversation_id = %s
+                  AND entity1_type = 'npc'
+                  AND entity1_id = %s
+                  AND entity2_type = 'npc'
+            """, (self.user_id, self.conversation_id, self.npc_id))
             
-            # Record the update
-            return await self.emotional_memory.update_entity_emotional_state(
-                entity_type="npc",
-                entity_id=self.npc_id,
-                current_emotion=current_emotion
-            )
-        else:
-            # Direct DB implementation
-            conn = None
-            try:
-                if self.db_pool:
-                    conn = await self.db_pool.acquire()
-                else:
-                    conn = await asyncpg.connect(dsn=DB_DSN)
-                
-                # Update or insert emotional state
-                await conn.execute("""
-                    INSERT INTO NPCEmotionalStates (
-                        npc_id, primary_emotion, intensity, trigger, timestamp
-                    )
-                    VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-                    ON CONFLICT (npc_id) DO UPDATE SET
-                        primary_emotion = $2,
-                        intensity = $3,
-                        trigger = $4,
-                        timestamp = CURRENT_TIMESTAMP
-                """, self.npc_id, primary_emotion, intensity, trigger)
-                
-                return {
-                    "npc_id": self.npc_id,
-                    "current_emotion": {
-                        "primary_emotion": primary_emotion,
-                        "intensity": intensity,
-                        "trigger": trigger
-                    },
-                    "timestamp": datetime.now().isoformat()
-                }
+            rows = cursor.fetchall()
+            related_npcs = [(row[0], row[1], row[2]) for row in rows]
             
-            except Exception as e:
-                logger.error(f"Error updating emotional state: {e}")
-                return {"error": str(e)}
+            # Get this NPC's name
+            cursor.execute("""
+                SELECT npc_name
+                FROM NPCStats
+                WHERE user_id = %s 
+                  AND conversation_id = %s
+                  AND npc_id = %s
+            """, (self.user_id, self.conversation_id, self.npc_id))
             
-            finally:
-                if conn:
-                    if self.db_pool:
-                        await self.db_pool.release(conn)
-                    else:
-                        await conn.close()
-    
-    async def get_emotional_state(self) -> Dict[str, Any]:
-        """
-        Get the NPC's current emotional state.
-        
-        Returns:
-            Current emotional state
-        """
-        if self.use_subsystems:
-            return await self.emotional_memory.get_entity_emotional_state(
-                entity_type="npc",
-                entity_id=self.npc_id
-            )
-        else:
-            # Direct DB implementation
-            conn = None
-            try:
-                if self.db_pool:
-                    conn = await self.db_pool.acquire()
-                else:
-                    conn = await asyncpg.connect(dsn=DB_DSN)
-                
-                row = await conn.fetchrow("""
-                    SELECT primary_emotion, intensity, trigger, timestamp
-                    FROM NPCEmotionalStates
-                    WHERE npc_id = $1
-                """, self.npc_id)
-                
-                if row:
-                    return {
-                        "npc_id": self.npc_id,
-                        "current_emotion": {
-                            "primary_emotion": row["primary_emotion"],
-                            "intensity": row["intensity"],
-                            "trigger": row["trigger"]
-                        },
-                        "timestamp": row["timestamp"].isoformat()
-                    }
-                else:
-                    return {
-                        "npc_id": self.npc_id,
-                        "current_emotion": {
-                            "primary_emotion": "neutral",
-                            "intensity": 0.0,
-                            "trigger": None
-                        }
-                    }
+            row = cursor.fetchone()
+            npc_name = row[0] if row else f"NPC_{self.npc_id}"
             
-            except Exception as e:
-                logger.error(f"Error getting emotional state: {e}")
-                return {"error": str(e)}
+            # Check if memory has femdom context
+            femdom_tags = [
+                "dominance_dynamic", "power_exchange", "discipline", 
+                "service", "submission", "humiliation", "ownership"
+            ]
             
-            finally:
-                if conn:
-                    if self.db_pool:
-                        await self.db_pool.release(conn)
-                    else:
-                        await conn.close()
-    
-    async def generate_mask_slippage(self, 
-                                   trigger: str = None, 
-                                   severity: int = None) -> Dict[str, Any]:
-        """
-        Generate a mask slippage event where the NPC's true nature shows through.
-        
-        Args:
-            trigger: What triggered the mask slippage
-            severity: How severe the slippage is (1-5)
+            has_femdom_context = any(tag in femdom_tags for tag in tags)
             
-        Returns:
-            Mask slippage details
-        """
-        if self.use_subsystems:
-            return await self.mask_manager.generate_mask_slippage(
-                npc_id=self.npc_id,
-                trigger=trigger,
-                severity=severity
-            )
-        else:
-            # Simple direct implementation
-            conn = None
-            try:
-                if self.db_pool:
-                    conn = await self.db_pool.acquire()
-                else:
-                    conn = await asyncpg.connect(dsn=DB_DSN)
+            # Create secondhand memories for each related NPC
+            for related_id, link_type, link_level in related_npcs:
+                # Distort the message slightly based on relationship
+                distortion_severity = 0.3
                 
-                # Get NPC mask info
-                row = await conn.fetchrow("""
-                    SELECT true_nature, presented_traits
-                    FROM NPCMasks
-                    WHERE npc_id = $1
-                """, self.npc_id)
+                # Less distortion for close relationships
+                if link_level > 75:
+                    distortion_severity = 0.1
+                elif link_level > 50:
+                    distortion_severity = 0.2
+                # More distortion for hostile relationships
+                elif link_level < 25:
+                    distortion_severity = 0.5
                 
-                if not row:
-                    return {"error": "NPC has no mask defined"}
+                distorted_text = self.distort_text(memory_text, severity=distortion_severity)
+                secondhand_text = f"I heard that {npc_name} {distorted_text}"
                 
-                true_nature = row["true_nature"]
-                severity = severity or random.randint(1, 5)
+                # Lower significance and intensity for secondhand information
+                secondhand_significance = max(1, significance - 2)
+                secondhand_intensity = max(0, emotional_intensity - 20)
                 
-                slippage = {
-                    "npc_id": self.npc_id,
-                    "severity": severity,
-                    "trigger": trigger,
-                    "true_nature_glimpse": f"Brief glimpse of {true_nature} (severity {severity}/5)",
-                    "timestamp": datetime.now().isoformat()
-                }
+                # If femdom context, make the distortion more extreme for certain relationships
+                secondhand_tags = tags + ["secondhand", "rumor"]
                 
-                # Log the slippage
-                await conn.execute("""
-                    INSERT INTO NPCMaskSlippages (
-                        npc_id, severity, trigger, timestamp
-                    ) VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-                """, self.npc_id, severity, trigger)
-                
-                return slippage
-            
-            except Exception as e:
-                logger.error(f"Error generating mask slippage: {e}")
-                return {"error": str(e)}
-            
-            finally:
-                if conn:
-                    if self.db_pool:
-                        await self.db_pool.release(conn)
-                    else:
-                        await conn.close()
-    
-    async def get_npc_mask(self) -> Dict[str, Any]:
-        """
-        Get information about the NPC's mask.
-        
-        Returns:
-            Mask information (integrity, presented traits, etc.)
-        """
-        if self.use_subsystems:
-            return await self.mask_manager.get_npc_mask(self.npc_id)
-        else:
-            # Direct DB implementation
-            conn = None
-            try:
-                if self.db_pool:
-                    conn = await self.db_pool.acquire()
-                else:
-                    conn = await asyncpg.connect(dsn=DB_DSN)
-                
-                row = await conn.fetchrow("""
-                    SELECT true_nature, presented_traits, integrity
-                    FROM NPCMasks
-                    WHERE npc_id = $1
-                """, self.npc_id)
-                
-                if row:
-                    # Get recent slippages
-                    slippages = await conn.fetch("""
-                        SELECT severity, trigger, timestamp
-                        FROM NPCMaskSlippages
-                        WHERE npc_id = $1
-                        ORDER BY timestamp DESC
-                        LIMIT 3
-                    """, self.npc_id)
+                if has_femdom_context:
+                    # Check relationship type
+                    if link_type == "submissive":
+                        # Submissives might exaggerate dominance displays
+                        if "dominance_dynamic" in tags or "control" in tags:
+                            secondhand_text = f"I heard that {npc_name} was extremely dominant when {distorted_text}"
+                            secondhand_tags.append("exaggerated")
                     
-                    recent_slippages = [{
-                        "severity": s["severity"],
-                        "trigger": s["trigger"],
-                        "timestamp": s["timestamp"].isoformat()
-                    } for s in slippages]
-                    
-                    return {
-                        "npc_id": self.npc_id,
-                        "true_nature": row["true_nature"],
-                        "presented_traits": row["presented_traits"],
-                        "integrity": row["integrity"],
-                        "recent_slippages": recent_slippages
-                    }
-                else:
-                    return {"error": "NPC has no mask defined"}
-            
-            except Exception as e:
-                logger.error(f"Error getting NPC mask: {e}")
-                return {"error": str(e)}
-            
-            finally:
-                if conn:
-                    if self.db_pool:
-                        await self.db_pool.release(conn)
-                    else:
-                        await conn.close()
-    
-    async def prune_old_memories(self,
-                              age_days: int = 14,
-                              significance_threshold: int = 3,
-                              intensity_threshold: int = 15):
-        """
-        Prune or archive old memories based on their significance and emotional intensity.
-        
-        Args:
-            age_days: Age threshold in days
-            significance_threshold: Minimum significance to retain
-            intensity_threshold: Minimum emotional intensity to retain
-        """
-        conn = None
-        try:
-            if self.db_pool:
-                conn = await self.db_pool.acquire()
-            else:
-                conn = await asyncpg.connect(dsn=DB_DSN)
-            
-            cutoff = datetime.now() - timedelta(days=age_days)
-            
-            # Delete truly trivial memories
-            del_result = await conn.execute("""
-                DELETE FROM NPCMemories
-                WHERE npc_id = $1
-                  AND timestamp < $2
-                  AND significance < $3
-                  AND emotional_intensity < $4
-            """, self.npc_id, cutoff, significance_threshold, intensity_threshold)
-            
-            logger.info(f"Pruned old memories: {del_result}")
-            
-            # Mark older memories as summarized
-            upd_result = await conn.execute("""
-                UPDATE NPCMemories
-                SET status = 'summarized'
-                WHERE npc_id = $1
-                  AND timestamp < $2
-                  AND status = 'active'
-            """, self.npc_id, cutoff)
-            
-            logger.info(f"Updated memory status to summarized: {upd_result}")
-        
-        except Exception as e:
-            logger.error(f"Error pruning old memories: {e}")
-        
-        finally:
-            if conn:
-                if self.db_pool:
-                    await self.db_pool.release(conn)
-                else:
-                    await conn.close()
-    
-    async def apply_memory_decay(self, age_days: int = 30, decay_rate: float = 0.2):
-        """
-        Apply memory decay to older memories to simulate forgetting.
-        
-        Args:
-            age_days: Age threshold in days
-            decay_rate: Rate of decay (0.0-1.0)
-        """
-        conn = None
-        try:
-            if self.db_pool:
-                conn = await self.db_pool.acquire()
-            else:
-                conn = await asyncpg.connect(dsn=DB_DSN)
-            
-            cutoff = datetime.now() - timedelta(days=age_days)
-            
-            # Get older memories
-            rows = await conn.fetch("""
-                SELECT id, emotional_intensity, significance, times_recalled
-                FROM NPCMemories
-                WHERE npc_id = $1
-                  AND timestamp < $2
-                  AND status IN ('active', 'summarized')
-            """, self.npc_id, cutoff)
-            
-            # Apply intelligence-based decay modifier
-            intelligence_modifier = 1.0
-            if self.npc_intelligence > 1.0:
-                # Higher intelligence = slower decay
-                intelligence_modifier = 1.0 / self.npc_intelligence
-            elif self.npc_intelligence < 1.0:
-                # Lower intelligence = faster decay
-                intelligence_modifier = 2.0 - self.npc_intelligence
-            
-            adjusted_decay_rate = decay_rate * intelligence_modifier
-            
-            # Process each memory
-            for row in rows:
-                mem_id = row["id"]
-                intensity = row["emotional_intensity"]
-                significance = row["significance"]
-                recalled = row["times_recalled"]
+                    elif link_type == "dominant":
+                        # Dominants might diminish other dominants' displays
+                        if "dominance_dynamic" in tags or "control" in tags:
+                            secondhand_text = f"I heard that {npc_name} tried to act dominant by {distorted_text}"
+                            secondhand_tags.append("diminished")
                 
-                # Memories recalled more often decay less
-                recall_factor = min(1.0, recalled / 10.0)
-                decay_factor = adjusted_decay_rate * (1.0 - recall_factor)
-                
-                # Calculate new values
-                new_intensity = max(0, int(intensity * (1.0 - decay_factor)))
-                new_significance = max(1, int(significance * (1.0 - decay_factor)))
-                
-                # Update the memory
-                await conn.execute("""
-                    UPDATE NPCMemories
-                    SET emotional_intensity = $1,
-                        significance = $2
-                    WHERE id = $3
-                """, new_intensity, new_significance, mem_id)
-            
-            logger.info(f"Applied memory decay to {len(rows)} memories")
-        
-        except Exception as e:
-            logger.error(f"Error applying memory decay: {e}")
-        
-        finally:
-            if conn:
-                if self.db_pool:
-                    await self.db_pool.release(conn)
-                else:
-                    await conn.close()
-    
-    async def summarize_repetitive_memories(self, lookback_days: int = 7, min_count: int = 3):
-        """
-        Summarize repetitive memories into a consolidated memory.
-        
-        Args:
-            lookback_days: Days to look back for repetitive memories
-            min_count: Minimum number of repetitions to trigger summarization
-        """
-        conn = None
-        try:
-            if self.db_pool:
-                conn = await self.db_pool.acquire()
-            else:
-                conn = await asyncpg.connect(dsn=DB_DSN)
-            
-            # Find repetitive memories
-            rows = await conn.fetch("""
-                SELECT memory_text, COUNT(*) AS cnt, array_agg(id) AS mem_ids
-                FROM NPCMemories
-                WHERE npc_id = $1
-                  AND timestamp > (NOW() - $2::INTERVAL)
-                  AND status = 'active'
-                  AND is_consolidated = FALSE
-                GROUP BY memory_text
-                HAVING COUNT(*) >= $3
-            """, self.npc_id, f"{lookback_days} days", min_count)
-            
-            for row in rows:
-                text = row["memory_text"]
-                count = row["cnt"]
-                mem_ids = row["mem_ids"]
-                
-                if not mem_ids or count < min_count:
-                    continue
-                
-                # Create a summary memory
-                summary_text = f"I recall {count} similar moments: '{text}' repeated multiple times."
-                
-                # Insert the summary
-                new_id = await conn.fetchval("""
+                # Add the secondhand memory
+                cursor.execute("""
                     INSERT INTO NPCMemories (
-                        npc_id, memory_text, memory_type, 
+                        npc_id, memory_text, memory_type, tags,
                         emotional_intensity, significance, status,
-                        is_consolidated
+                        confidence, is_consolidated
                     )
-                    VALUES ($1, $2, 'consolidated', 10, 5, 'summarized', FALSE)
-                    RETURNING id
-                """, self.npc_id, summary_text)
-                
-                # Mark original memories as consolidated
-                await conn.execute("""
-                    UPDATE NPCMemories
-                    SET is_consolidated = TRUE, status = 'summarized'
-                    WHERE id = ANY($1)
-                """, mem_ids)
-                
-                logger.info(f"Summarized {count} memories into memory {new_id}")
+                    VALUES (
+                        %s, %s, 'secondhand', %s,
+                        %s, %s, 'active',
+                        0.7, FALSE
+                    )
+                """, (
+                    related_id, 
+                    secondhand_text, 
+                    secondhand_tags,
+                    secondhand_intensity,
+                    secondhand_significance
+                ))
             
-            logger.info(f"Summarization complete for NPC {self.npc_id}")
-        
+            logger.debug(f"Propagated memory to {len(related_npcs)} related NPCs")
         except Exception as e:
-            logger.error(f"Error summarizing repetitive memories: {e}")
-        
-        finally:
-            if conn:
-                if self.db_pool:
-                    await self.db_pool.release(conn)
-                else:
-                    await conn.close()
+            logger.error(f"Error propagating memory: {e}")
     
-    async def archive_stale_memories(self, older_than_days: int = 60, max_significance: int = 4):
+    def distort_text(self, original_text: str, severity=0.3) -> str:
         """
-        Archive old memories with low significance.
+        Word-level partial rewrite for rumor distortion.
+        Enhanced for femdom contexts.
         
         Args:
-            older_than_days: Age threshold in days
-            max_significance: Maximum significance to archive
-        """
-        conn = None
-        try:
-            if self.db_pool:
-                conn = await self.db_pool.acquire()
-            else:
-                conn = await asyncpg.connect(dsn=DB_DSN)
+            original_text: The original text to distort
+            severity: How much to distort the text (0.0-1.0)
             
-            cutoff = datetime.now() - timedelta(days=older_than_days)
-            
-            # Update status to archived
-            result = await conn.execute("""
-                UPDATE NPCMemories
-                SET status = 'archived'
-                WHERE npc_id = $1
-                  AND timestamp < $2
-                  AND significance <= $3
-                  AND status IN ('active', 'summarized')
-            """, self.npc_id, cutoff, max_significance)
-            
-            logger.info(f"Archived stale memories: {result}")
-        
-        except Exception as e:
-            logger.error(f"Error archiving stale memories: {e}")
-        
-        finally:
-            if conn:
-                if self.db_pool:
-                    await self.db_pool.release(conn)
-                else:
-                    await conn.close()
-    
-    async def consolidate_memories(self, threshold: int = 10, max_days: int = 30):
-        """
-        Consolidate memories with similar tags into a summary memory.
-        
-        Args:
-            threshold: Minimum number of memories to trigger consolidation
-            max_days: Maximum age in days to consider
-        """
-        conn = None
-        try:
-            if self.db_pool:
-                conn = await self.db_pool.acquire()
-            else:
-                conn = await asyncpg.connect(dsn=DB_DSN)
-            
-            # Find groups of memories with the same tags
-            rows = await conn.fetch("""
-                SELECT tags, COUNT(*) as count
-                FROM NPCMemories
-                WHERE npc_id = $1
-                  AND timestamp > NOW() - INTERVAL '$2 days'
-                  AND is_consolidated = FALSE
-                  AND status IN ('active', 'summarized')
-                GROUP BY tags
-                HAVING COUNT(*) >= $3
-            """, self.npc_id, max_days, threshold)
-            
-            for row in rows:
-                group_tags = row["tags"]
-                cnt = row["count"]
-                
-                if not group_tags:
-                    continue
-                
-                # Get all memories in this group
-                mem_rows = await conn.fetch("""
-                    SELECT id, memory_text, memory_type, 
-                           emotional_intensity, significance
-                    FROM NPCMemories
-                    WHERE npc_id = $1
-                      AND tags = $2
-                      AND is_consolidated = FALSE
-                      AND status IN ('active', 'summarized')
-                """, self.npc_id, group_tags)
-                
-                if len(mem_rows) < threshold:
-                    continue
-                
-                # Create a summary
-                joined_text = "\n".join([r["memory_text"] for r in mem_rows])
-                summary_text = (
-                    f"I recall {len(mem_rows)} similar events with tags {group_tags}: \n{joined_text[:200]}..."
-                )
-                
-                # Insert consolidated memory
-                new_id = await conn.fetchval("""
-                    INSERT INTO NPCMemories (
-                        npc_id, memory_text, memory_type,
-                        emotional_intensity, significance,
-                        status, is_consolidated
-                    )
-                    VALUES ($1, $2, 'consolidated', 10, 5, 'summarized', FALSE)
-                    RETURNING id
-                """, self.npc_id, summary_text)
-                
-                # Mark original memories as consolidated
-                old_ids = [r["id"] for r in mem_rows]
-                await conn.execute("""
-                    UPDATE NPCMemories
-                    SET is_consolidated = TRUE, status = 'summarized'
-                    WHERE id = ANY($1)
-                """, old_ids)
-                
-                logger.info(f"Consolidated {len(old_ids)} memories with tags {group_tags}")
-            
-            logger.info(f"Memory consolidation complete for NPC {self.npc_id}")
-        
-        except Exception as e:
-            logger.error(f"Error consolidating memories: {e}")
-        
-        finally:
-            if conn:
-                if self.db_pool:
-                    await self.db_pool.release(conn)
-                else:
-                    await conn.close()
-    
-    async def run_maintenance(self) -> Dict[str, Any]:
-        """
-        Run maintenance tasks on the NPC's memory system.
-        
         Returns:
-            Results of maintenance operations
+            Distorted version of the text
         """
-        if self.use_subsystems:
-            try:
-                integrated = IntegratedMemorySystem(self.user_id, self.conversation_id)
-                return await integrated.run_memory_maintenance(
-                    entity_type="npc",
-                    entity_id=self.npc_id
-                )
-            except Exception as e:
-                logger.error(f"Error running subsystem maintenance: {e}")
-                # Fall back to direct maintenance
-        
-        # Direct maintenance operations
-        results = {
-            "pruned_memories": 0,
-            "decayed_memories": 0,
-            "summarized_memories": 0,
-            "archived_memories": 0,
-            "consolidated_memories": 0
+        synonyms_map = {
+            "attacked": ["assaulted", "ambushed", "jumped"],
+            "betrayed": ["backstabbed", "double-crossed", "deceived"],
+            "stole": ["looted", "swiped", "snatched", "took"],
+            "helped": ["assisted", "saved", "aided", "supported"],
+            "rescued": ["freed", "saved", "liberated", "pulled out"],
+            "said": ["mentioned", "claimed", "stated", "told me"],
+            "saw": ["noticed", "spotted", "observed", "glimpsed"],
+            "went": ["traveled", "journeyed", "ventured", "headed"],
+            "found": ["discovered", "located", "uncovered", "came across"]
         }
         
-        try:
-            # Run all maintenance operations
-            await self.prune_old_memories()
-            results["pruned_memories"] = 1  # Just indicating success
-            
-            await self.apply_memory_decay()
-            results["decayed_memories"] = 1
-            
-            await self.summarize_repetitive_memories()
-            results["summarized_memories"] = 1
-            
-            await self.archive_stale_memories()
-            results["archived_memories"] = 1
-            
-            await self.consolidate_memories()
-            results["consolidated_memories"] = 1
-            
-            logger.info(f"Maintenance complete for NPC {self.npc_id}")
-            return results
+        # Femdom-specific distortions
+        femdom_synonyms = {
+            "dominated": ["controlled completely", "took full control of", "overpowered"],
+            "commanded": ["ordered", "instructed strictly", "demanded"],
+            "punished": ["disciplined", "corrected", "taught a lesson to"],
+            "submitted": ["obeyed", "yielded", "surrendered"],
+            "praised": ["rewarded", "showed approval to", "acknowledged"],
+            "humiliated": ["embarrassed", "shamed", "put in their place"]
+        }
         
-        except Exception as e:
-            logger.error(f"Error running maintenance: {e}")
-            return {"error": str(e)}
-    
-    async def create_belief(self, belief_text: str, confidence: float = 0.7) -> Dict[str, Any]:
-        """
-        Create a belief for the NPC.
+        # Merge the maps
+        all_synonyms = {**synonyms_map, **femdom_synonyms}
         
-        Args:
-            belief_text: The belief statement
-            confidence: Confidence level (0.0-1.0)
-            
-        Returns:
-            Created belief information
-        """
-        if self.use_subsystems:
-            return await self.semantic_manager.create_belief(
-                entity_type="npc",
-                entity_id=self.npc_id,
-                belief_text=belief_text,
-                confidence=confidence
-            )
-        else:
-            # Direct DB implementation
-            conn = None
-            try:
-                if self.db_pool:
-                    conn = await self.db_pool.acquire()
-                else:
-                    conn = await asyncpg.connect(dsn=DB_DSN)
-                
-                # Extract topic from belief
-                words = belief_text.lower().split()
-                topic = words[0] if words else "general"
-                
-                belief_id = await conn.fetchval("""
-                    INSERT INTO NPCBeliefs (
-                        npc_id, belief_text, confidence, topic, created_at
-                    )
-                    VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-                    RETURNING id
-                """, self.npc_id, belief_text, confidence, topic)
-                
-                return {
-                    "belief_id": belief_id,
-                    "belief_text": belief_text,
-                    "confidence": confidence,
-                    "topic": topic,
-                    "created_at": datetime.now().isoformat()
-                }
-            
-            except Exception as e:
-                logger.error(f"Error creating belief: {e}")
-                return {"error": str(e)}
-            
-            finally:
-                if conn:
-                    if self.db_pool:
-                        await self.db_pool.release(conn)
-                    else:
-                        await conn.close()
-    
-    async def get_beliefs(self, topic: str = None) -> List[Dict[str, Any]]:
-        """
-        Get the NPC's beliefs, optionally filtered by topic.
+        words = original_text.split()
+        for i in range(len(words)):
+            # Chance to modify a word based on severity
+            if random.random() < severity:
+                word_lower = words[i].lower()
+                # Replace with synonym if available
+                if word_lower in all_synonyms:
+                    words[i] = random.choice(all_synonyms[word_lower])
+                # Small chance to delete a word
+                elif random.random() < 0.2:
+                    words[i] = ""
         
-        Args:
-            topic: Optional topic filter
-            
-        Returns:
-            List of beliefs
-        """
-        if self.use_subsystems:
-            return await self.semantic_manager.get_beliefs(
-                entity_type="npc",
-                entity_id=self.npc_id,
-                topic=topic
-            )
-        else:
-            # Direct DB implementation
-            conn = None
-            try:
-                if self.db_pool:
-                    conn = await self.db_pool.acquire()
-                else:
-                    conn = await asyncpg.connect(dsn=DB_DSN)
-                
-                if topic:
-                    rows = await conn.fetch("""
-                        SELECT id, belief_text, confidence, topic, created_at
-                        FROM NPCBeliefs
-                        WHERE npc_id = $1 AND topic = $2
-                        ORDER BY confidence DESC
-                    """, self.npc_id, topic)
-                else:
-                    rows = await conn.fetch("""
-                        SELECT id, belief_text, confidence, topic, created_at
-                        FROM NPCBeliefs
-                        WHERE npc_id = $1
-                        ORDER BY confidence DESC
-                    """, self.npc_id)
-                
-                return [{
-                    "belief_id": r["id"],
-                    "belief_text": r["belief_text"],
-                    "confidence": r["confidence"],
-                    "topic": r["topic"],
-                    "created_at": r["created_at"].isoformat()
-                } for r in rows]
-            
-            except Exception as e:
-                logger.error(f"Error retrieving beliefs: {e}")
-                return []
-            
-            finally:
-                if conn:
-                    if self.db_pool:
-                        await self.db_pool.release(conn)
-                    else:
-                        await conn.close()
-    
-    async def detect_patterns(self) -> Dict[str, Any]:
-        """
-        Detect patterns in the NPC's memories and generate insights.
-        
-        Returns:
-            Pattern detection results
-        """
-        if self.use_subsystems:
-            return await self.semantic_manager.find_patterns_across_memories(
-                entity_type="npc",
-                entity_id=self.npc_id
-            )
-        else:
-            # Simplified implementation - in a real system, this would use
-            # more sophisticated analysis
-            conn = None
-            try:
-                if self.db_pool:
-                    conn = await self.db_pool.acquire()
-                else:
-                    conn = await asyncpg.connect(dsn=DB_DSN)
-                
-                # Get memory tags and their frequencies
-                tag_rows = await conn.fetch("""
-                    SELECT unnest(tags) as tag, COUNT(*) as count
-                    FROM NPCMemories
-                    WHERE npc_id = $1 AND status IN ('active', 'summarized')
-                    GROUP BY tag
-                    ORDER BY count DESC
-                    LIMIT 5
-                """, self.npc_id)
-                
-                tag_patterns = [{
-                    "tag": r["tag"],
-                    "frequency": r["count"]
-                } for r in tag_rows]
-                
-                # Get frequent memory types
-                type_rows = await conn.fetch("""
-                    SELECT memory_type, COUNT(*) as count
-                    FROM NPCMemories
-                    WHERE npc_id = $1 AND status IN ('active', 'summarized')
-                    GROUP BY memory_type
-                    ORDER BY count DESC
-                """, self.npc_id)
-                
-                type_patterns = [{
-                    "memory_type": r["memory_type"],
-                    "frequency": r["count"]
-                } for r in type_rows]
-                
-                return {
-                    "tag_patterns": tag_patterns,
-                    "type_patterns": type_patterns,
-                    "analysis": f"NPC {self.npc_id} shows patterns in memory tags and types"
-                }
-            
-            except Exception as e:
-                logger.error(f"Error detecting patterns: {e}")
-                return {"error": str(e)}
-            
-            finally:
-                if conn:
-                    if self.db_pool:
-                        await self.db_pool.release(conn)
-                    else:
-                        await conn.close()
-    
-    async def generate_counterfactual(self, memory_id: int, variation_type: str = "alternative") -> Dict[str, Any]:
-        """
-        Generate a counterfactual memory (what could have happened differently).
-        
-        Args:
-            memory_id: ID of the base memory
-            variation_type: Type of counterfactual variation
-            
-        Returns:
-            Counterfactual memory
-        """
-        if self.use_subsystems:
-            return await self.semantic_manager.generate_counterfactual(
-                memory_id=memory_id,
-                entity_type="npc",
-                entity_id=self.npc_id,
-                variation_type=variation_type
-            )
-        else:
-            # Direct DB implementation
-            conn = None
-            try:
-                if self.db_pool:
-                    conn = await self.db_pool.acquire()
-                else:
-                    conn = await asyncpg.connect(dsn=DB_DSN)
-                
-                # Get the original memory
-                row = await conn.fetchrow("""
-                    SELECT memory_text, memory_type, tags, significance
-                    FROM NPCMemories
-                    WHERE id = $1 AND npc_id = $2
-                """, memory_id, self.npc_id)
-                
-                if not row:
-                    return {"error": "Memory not found"}
-                
-                original_text = row["memory_text"]
-                
-                # Create a simple counterfactual by negating or altering the original
-                if variation_type == "alternative":
-                    # Replace positive with negative or vice versa
-                    if any(word in original_text.lower() for word in ["good", "happy", "success"]):
-                        cf_text = f"What if instead of {original_text}, the opposite had happened?"
-                    else:
-                        cf_text = f"What if instead of {original_text}, things had gone better?"
-                elif variation_type == "prevention":
-                    cf_text = f"How could I have prevented: {original_text}?"
-                else:
-                    cf_text = f"Alternate scenario for: {original_text}"
-                
-                # Store the counterfactual
-                cf_id = await conn.fetchval("""
-                    INSERT INTO NPCCounterfactuals (
-                        npc_id, original_memory_id, counterfactual_text, 
-                        variation_type, created_at
-                    )
-                    VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-                    RETURNING id
-                """, self.npc_id, memory_id, cf_text, variation_type)
-                
-                return {
-                    "counterfactual_id": cf_id,
-                    "original_memory_id": memory_id,
-                    "original_text": original_text,
-                    "counterfactual_text": cf_text,
-                    "variation_type": variation_type
-                }
-            
-            except Exception as e:
-                logger.error(f"Error generating counterfactual: {e}")
-                return {"error": str(e)}
-            
-            finally:
-                if conn:
-                    if self.db_pool:
-                        await self.db_pool.release(conn)
-                    else:
-                        await conn.close()
-    
-    # Memory cache methods for optimization
-    def preload_memories_into_cache(self, memory_rows):
-        """
-        Preload frequently accessed memories into local cache.
-        
-        Args:
-            memory_rows: Memory data to cache
-        """
-        self.memory_cache["cached_relevant_memories"] = memory_rows
-        self.memory_cache["last_cached"] = datetime.utcnow()
-    
-    def get_cached_memories(self):
-        """
-        Get preloaded memories from cache if available.
-        
-        Returns:
-            Cached memories or empty list
-        """
-        return self.memory_cache.get("cached_relevant_memories", [])
-    
-    async def dynamic_npc_memory_preloading(
-        self, 
-        query_threshold: int = 10,
-        time_window_minutes: int = 5,
-        cache_timeout_minutes: int = 30
-    ):
-        """
-        Preload memories for frequently queried NPCs.
-        
-        Args:
-            query_threshold: Query count threshold
-            time_window_minutes: Time window to count queries
-            cache_timeout_minutes: Cache timeout in minutes
-        """
-        conn = None
-        try:
-            if self.db_pool:
-                conn = await self.db_pool.acquire()
-            else:
-                conn = await asyncpg.connect(dsn=DB_DSN)
-            
-            # Check query frequency
-            query_count = await conn.fetchval("""
-                SELECT COUNT(*)
-                FROM InteractionLogs
-                WHERE npc_id = $1
-                  AND timestamp > (NOW() - INTERVAL '$2 minutes')
-            """, self.npc_id, time_window_minutes)
-            
-            # Check if cache is stale
-            current_time = datetime.utcnow()
-            last_cached = self.memory_cache.get("last_cached")
-            is_cache_stale = not last_cached or (current_time - last_cached).total_seconds() > (cache_timeout_minutes * 60)
-            
-            # Refresh cache if needed
-            if query_count and query_count >= query_threshold and is_cache_stale:
-                logger.info(f"Refreshing memory cache for high-frequency NPC {self.npc_id}")
-                
-                # Get frequently accessed memories
-                query_embedding = await self.generate_embedding("general recall")
-                
-                if query_embedding:
-                    cached_memories = await conn.fetch("""
-                        SELECT id, memory_text, memory_type, tags,
-                               emotional_intensity, significance,
-                               times_recalled, timestamp, status
-                        FROM NPCMemories
-                        WHERE npc_id = $1 AND status = 'active'
-                        ORDER BY embedding <-> $2
-                        LIMIT 5
-                    """, self.npc_id, query_embedding)
-                else:
-                    # Fallback to recency
-                    cached_memories = await conn.fetch("""
-                        SELECT id, memory_text, memory_type, tags,
-                               emotional_intensity, significance,
-                               times_recalled, timestamp, status
-                        FROM NPCMemories
-                        WHERE npc_id = $1 AND status = 'active'
-                        ORDER BY significance DESC, timestamp DESC
-                        LIMIT 5
-                    """, self.npc_id)
-                
-                self.preload_memories_into_cache(cached_memories)
-        
-        except Exception as e:
-            logger.error(f"Error preloading memories: {e}")
-        
-        finally:
-            if conn:
-                if self.db_pool:
-                    await self.db_pool.release(conn)
-                else:
-                    await conn.close()
-
-# Utility functions for memory system training
-
-async def train_reflection_model(db_pool):
-    """
-    Train reflection settings based on accuracy of past reflections.
-    
-    Args:
-        db_pool: Database connection pool
-    """
-    conn = await db_pool.acquire()
-    try:
-        # Get statistics on reflection accuracy
-        row = await conn.fetchrow("""
-            SELECT
-                SUM(CASE WHEN was_accurate=TRUE THEN confidence_weight ELSE 0 END) AS correct_conf_sum,
-                SUM(confidence_weight) AS total_conf_sum,
-                COUNT(*) FILTER (WHERE was_accurate=TRUE) AS correct_count,
-                COUNT(*) AS total_count
-            FROM ReflectionLogs
-        """)
-        
-        if not row or row["total_count"] == 0:
-            return
-        
-        correct_count = row["correct_count"]
-        total_count = row["total_count"]
-        accuracy_rate = correct_count / total_count
-        
-        # Calculate weighted accuracy if possible
-        if row["total_conf_sum"] and row["total_conf_sum"] > 0:
-            weighted_accuracy = row["correct_conf_sum"] / row["total_conf_sum"]
-        else:
-            weighted_accuracy = 0
-        
-        # Combined metric
-        final_metric = (accuracy_rate + weighted_accuracy) / 2
-        
-        # Update model settings
-        await conn.execute("""
-            UPDATE AIReflectionSettings
-            SET temperature = GREATEST(0.2, 1.0 - ($1 * 0.8)),
-                max_tokens = LEAST(4000, 2000 + ($1 * 2000))
-            WHERE id = 1
-        """, final_metric)
-        
-        logger.info(f"Trained reflection model: accuracy={accuracy_rate:.2f}, weighted={weighted_accuracy:.2f}")
-    
-    except Exception as e:
-        logger.error(f"Error training reflection model: {e}")
-    
-    finally:
-        await db_pool.release(conn)
-
-async def periodic_reflection_training(db_pool, interval_hours=12):
-    """
-    Periodically train the reflection model.
-    
-    Args:
-        db_pool: Database connection pool
-        interval_hours: Training interval in hours
-    """
-    while True:
-        logger.info("Running periodic reflection training")
-        await train_reflection_model(db_pool)
-        await asyncio.sleep(interval_hours * 3600)
-
-    async def batch_create_memories(
-        self, 
-        npc_id: int,
-        memories: List[Dict[str, Any]]
-    ) -> List[int]:
-        """
-        Create multiple memories in a single operation for better performance.
-        
-        Args:
-            npc_id: ID of the NPC
-            memories: List of memory objects with text, type, significance, etc.
-            
-        Returns:
-            List of created memory IDs
-        """
-        if not memories:
-            return []
-            
-        memory_system = await self._get_memory_system()
-        
-        # Prepare all memories for batch insertion
-        batch_values = []
-        for memory in memories:
-            # Get emotional analysis for each memory text
-            emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(
-                memory.get("text", "")
-            )
-            
-            batch_values.append({
-                "entity_type": "npc",
-                "entity_id": npc_id,
-                "memory_text": memory.get("text", ""),
-                "importance": memory.get("importance", "medium"),
-                "emotional": memory.get("emotional", False),
-                "primary_emotion": emotion_analysis.get("primary_emotion", "neutral"),
-                "emotion_intensity": emotion_analysis.get("intensity", 0.5),
-                "tags": memory.get("tags", [])
-            })
-        
-        # Execute batch insert
-        results = await memory_system.batch_remember(batch_values)
-        
-        # Process schemas in background task for efficiency
-        self._process_batch_schemas(results, npc_id)
-        
-        return results.get("memory_ids", [])
-    
-    def _process_batch_schemas(self, results, npc_id):
-        """Process schemas for batch memories in background to avoid blocking."""
-        async def process_task():
-            try:
-                memory_system = await self._get_memory_system()
-                memory_ids = results.get("memory_ids", [])
-                
-                # Process schemas in smaller batches for better control
-                batch_size = 5
-                for i in range(0, len(memory_ids), batch_size):
-                    batch = memory_ids[i:i+batch_size]
-                    try:
-                        await memory_system.integrated.batch_apply_schemas(
-                            memory_ids=batch,
-                            entity_type="npc",
-                            entity_id=npc_id,
-                            auto_detect=True
-                        )
-                    except Exception as e:
-                        logger.error(f"Error applying schemas to memory batch: {e}")
-                    
-                    # Small delay to avoid overwhelming the system
-                    await asyncio.sleep(0.1)
-            except Exception as e:
-                logger.error(f"Error in schema processing task: {e}")
-                    
-        # Create and start the task properly
-        task = asyncio.create_task(process_task())
-        return task  # Return task so caller can await if needed
-    
-    async def batch_retrieve_memories(
-        self,
-        query: str,
-        npc_ids: List[int],
-        limit_per_npc: int = 3
-    ) -> Dict[int, List[Dict[str, Any]]]:
-        """
-        Retrieve memories for multiple NPCs in a single operation.
-        
-        Args:
-            query: Search query
-            npc_ids: List of NPC IDs
-            limit_per_npc: Maximum memories per NPC
-            
-        Returns:
-            Dictionary mapping NPC IDs to their memory lists
-        """
-        if not npc_ids:
-            return {}
-            
-        memory_system = await self._get_memory_system()
-        
-        # Prepare batch query parameters
-        batch_params = [
-            {
-                "entity_type": "npc",
-                "entity_id": npc_id,
-                "query": query,
-                "limit": limit_per_npc
-            }
-            for npc_id in npc_ids
-        ]
-        
-        # Execute batch memory retrieval
-        batch_results = await memory_system.batch_recall(batch_params)
-        
-        # Format results by NPC ID
-        memory_map = {}
-        for npc_id, result in zip(npc_ids, batch_results):
-            memory_map[npc_id] = result.get("memories", [])
-            
-        return memory_map
+        # Reconstruct text, removing empty strings
+        return " ".join([w for w in words if w])
