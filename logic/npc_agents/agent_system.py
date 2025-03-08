@@ -697,94 +697,94 @@ class NPCAgentSystem:
         
         return result
 
-async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
-    """
-    Process scheduled activities for all NPCs using the agent system.
-    Optimized for better performance with many NPCs through batching.
-    """
-    logger.info("Processing scheduled activities")
-    
-    try:
-        # Get current time information for context
-        year, month, day, time_of_day = await self.get_current_game_time()
+    async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
+        """
+        Process scheduled activities for all NPCs using the agent system.
+        Optimized for better performance with many NPCs through batching.
+        """
+        logger.info("Processing scheduled activities")
         
-        # Create base context for all NPCs
-        base_context = {
-            "year": year,
-            "month": month,
-            "day": day,
-            "time_of_day": time_of_day,
-            "activity_type": "scheduled"
-        }
-        
-        # Get all NPCs with their current locations - batch query for performance
-        npc_data = await self._fetch_all_npc_data_for_activities()
-        
-        # Count total NPCs to process
-        total_npcs = len(npc_data)
-        if total_npcs == 0:
-            return {"npc_responses": [], "count": 0}
-                
-        logger.info(f"Processing scheduled activities for {total_npcs} NPCs")
-        
-        # For very large NPC counts, process in batches rather than all at once
-        batch_size = 20  # Adjust based on system capabilities
-        npc_responses = []
-        
-        # Process in batches
-        for i in range(0, total_npcs, batch_size):
-            batch = list(npc_data.items())[i:i+batch_size]
-            
-            # Create tasks for this batch
-            batch_tasks = []
-            for npc_id, data in batch:
-                batch_tasks.append(
-                    self._process_single_npc_activity(npc_id, data, base_context)
-                )
-            
-            # Run batch concurrently
-            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-            
-            # Process batch results
-            for result in batch_results:
-                if isinstance(result, Exception):
-                    logger.error(f"Error processing scheduled activity: {result}")
-                elif result:  # Skip None results
-                    npc_responses.append(result)
-                
-            # If we have multiple batches, add a small delay between them to reduce system load
-            if i + batch_size < total_npcs:
-                await asyncio.sleep(0.1)
-            
-        # After all NPCs processed, do agent system coordination
         try:
-            # Call the internal coordination method instead of recursively calling this method
-            agent_responses = await self._process_coordination_activities(base_context)
-        except Exception as e:
-            logger.error(f"Error in agent system coordination: {e}")
-            agent_responses = []
-        
-        # Combined results from individual processing and agent system
-        combined_results = {
-            "npc_responses": npc_responses,
-            "agent_system_responses": agent_responses,
-            "count": len(npc_responses) + len(agent_responses)
-        }
-        
-        # Add summary statistics
-        combined_results["stats"] = {
-            "total_npcs": total_npcs,
-            "successful_activities": len(npc_responses),
-            "time_of_day": time_of_day,
-            "processing_time": None  # Could add timing info here
-        }
-        
-        return combined_results
+            # Get current time information for context
+            year, month, day, time_of_day = await self.get_current_game_time()
             
-    except Exception as e:
-        error_msg = f"Error processing NPC scheduled activities: {e}"
-        logger.error(error_msg)
-        raise NPCSystemError(error_msg)
+            # Create base context for all NPCs
+            base_context = {
+                "year": year,
+                "month": month,
+                "day": day,
+                "time_of_day": time_of_day,
+                "activity_type": "scheduled"
+            }
+            
+            # Get all NPCs with their current locations - batch query for performance
+            npc_data = await self._fetch_all_npc_data_for_activities()
+            
+            # Count total NPCs to process
+            total_npcs = len(npc_data)
+            if total_npcs == 0:
+                return {"npc_responses": [], "count": 0}
+                    
+            logger.info(f"Processing scheduled activities for {total_npcs} NPCs")
+            
+            # For very large NPC counts, process in batches rather than all at once
+            batch_size = 20  # Adjust based on system capabilities
+            npc_responses = []
+            
+            # Process in batches
+            for i in range(0, total_npcs, batch_size):
+                batch = list(npc_data.items())[i:i+batch_size]
+                
+                # Create tasks for this batch
+                batch_tasks = []
+                for npc_id, data in batch:
+                    batch_tasks.append(
+                        self._process_single_npc_activity(npc_id, data, base_context)
+                    )
+                
+                # Run batch concurrently
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                
+                # Process batch results
+                for result in batch_results:
+                    if isinstance(result, Exception):
+                        logger.error(f"Error processing scheduled activity: {result}")
+                    elif result:  # Skip None results
+                        npc_responses.append(result)
+                    
+                # If we have multiple batches, add a small delay between them to reduce system load
+                if i + batch_size < total_npcs:
+                    await asyncio.sleep(0.1)
+                
+            # After all NPCs processed, do agent system coordination
+            try:
+                # Call the internal coordination method instead of recursively calling this method
+                agent_responses = await self._process_coordination_activities(base_context)
+            except Exception as e:
+                logger.error(f"Error in agent system coordination: {e}")
+                agent_responses = []
+            
+            # Combined results from individual processing and agent system
+            combined_results = {
+                "npc_responses": npc_responses,
+                "agent_system_responses": agent_responses,
+                "count": len(npc_responses) + len(agent_responses)
+            }
+            
+            # Add summary statistics
+            combined_results["stats"] = {
+                "total_npcs": total_npcs,
+                "successful_activities": len(npc_responses),
+                "time_of_day": time_of_day,
+                "processing_time": None  # Could add timing info here
+            }
+            
+            return combined_results
+                
+        except Exception as e:
+            error_msg = f"Error processing NPC scheduled activities: {e}"
+            logger.error(error_msg)
+            raise NPCSystemError(error_msg)
 
     async def _process_coordination_activities(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
