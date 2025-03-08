@@ -239,6 +239,171 @@ class NPCAgentCoordinator:
         except Exception as e:
             logger.error(f"Error getting emotional state for NPC {npc_id}: {e}")
             return None
+
+    # Add to agent_coordinator.py
+    
+    async def _propagate_memory_subsystems(self, memory_text: str, tags: List[str], significance: int, emotional_intensity: int) -> None:
+        """
+        Propagate important memories to related NPCs through memory subsystems.
+        This function shares significant memories with NPCs that have relationships with this NPC.
+        
+        Args:
+            memory_text: The memory text to propagate
+            tags: Tags for the memory
+            significance: Importance of the memory
+            emotional_intensity: Emotional intensity of the memory
+        """
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # Find NPCs connected to this one
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT entity2_id, link_type, link_level
+                    FROM SocialLinks
+                    WHERE user_id = %s
+                      AND conversation_id = %s
+                      AND entity1_type = 'npc'
+                      AND entity1_id = %s
+                      AND entity2_type = 'npc'
+                """, (self.user_id, self.conversation_id, self.npc_id))
+                
+                connected_npcs = [(row[0], row[1], row[2]) for row in cursor.fetchall()]
+                
+                # Get the source NPC's name
+                cursor.execute("""
+                    SELECT npc_name
+                    FROM NPCStats
+                    WHERE npc_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                """, (self.npc_id, self.user_id, self.conversation_id))
+                
+                row = cursor.fetchone()
+                npc_name = row[0] if row else f"NPC_{self.npc_id}"
+            
+            # Process each connected NPC
+            for connected_id, link_type, link_level in connected_npcs:
+                # Adjust significance and emotional impact based on relationship
+                modified_significance = max(1, significance - 2)  # Reduce significance for secondhand info
+                modified_intensity = max(0, emotional_intensity - 20)  # Reduce emotional impact
+                
+                # Filter based on relationship - only propagate to strong relations
+                if link_level > 30:  # Only propagate to NPCs with meaningful relationships
+                    # Create the secondhand memory text
+                    secondhand_text = f"I heard that {npc_name} {memory_text}"
+                    
+                    # Different link types might distort the message differently
+                    if link_type == "hostile" and link_level < 20:
+                        # Hostile relationships may distort the memory negatively
+                        secondhand_text = f"I'm told that {npc_name} supposedly {memory_text}"
+                        modified_significance = max(1, modified_significance - 1)  # Less trusted
+                    
+                    # Create the secondhand memory for the connected NPC
+                    await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=connected_id,
+                        memory_text=secondhand_text,
+                        importance="low" if modified_significance < 3 else "medium",
+                        emotional=modified_intensity > 30,
+                        tags=[*tags, "secondhand", "rumor"]
+                    )
+        except Exception as e:
+            logger.error(f"Error propagating memory via subsystems: {e}")
+    
+    # Fix indentation error in batch_update_npcs
+    async def batch_update_npcs(
+        self,
+        npc_ids: List[int],
+        update_type: str,
+        update_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Update multiple NPCs in a single batch operation for better performance."""
+        results = {
+            "success_count": 0,
+            "error_count": 0,
+            "details": {}
+        }
+        
+        # Ensure all NPCs are loaded
+        await self.load_agents(npc_ids)
+        
+        # Process different update types
+        if update_type == "location_change":
+            # Batch location update
+            new_location = update_data.get("new_location")
+            if not new_location:
+                return {"error": "No location specified"}
+                
+            with get_db_connection() as conn:
+                conn.begin()
+                try:
+                    # Update all NPCs in a single query
+                    query = """
+                        UPDATE NPCStats
+                        SET current_location = $1
+                        WHERE npc_id = ANY($2)
+                        AND user_id = $3
+                        AND conversation_id = $4
+                        RETURNING npc_id
+                    """
+                    rows = await conn.fetch(
+                        query, 
+                        new_location, 
+                        npc_ids, 
+                        self.user_id, 
+                        self.conversation_id
+                    )
+                    
+                    results["success_count"] = len(rows)
+                    results["updated_npcs"] = [r["npc_id"] for r in rows]
+                    
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    raise e
+                    
+        elif update_type == "emotional_update":
+            # Batch emotional state update
+            emotion = update_data.get("emotion")
+            intensity = update_data.get("intensity", 0.5)
+            
+            if not emotion:
+                return {"error": "No emotion specified"}
+                
+            # Get memory system
+            memory_system = await self._get_memory_system()
+            
+            # Process in smaller batches for better control
+            batch_size = 5
+            for i in range(0, len(npc_ids), batch_size):
+                batch = npc_ids[i:i+batch_size]
+                
+                # Process each NPC in batch
+                batch_tasks = []
+                for npc_id in batch:
+                    task = memory_system.update_npc_emotion(
+                        npc_id=npc_id,
+                        emotion=emotion,
+                        intensity=intensity
+                    )
+                    batch_tasks.append(task)
+                    
+                # Execute batch concurrently
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                
+                # Process results
+                for npc_id, result in zip(batch, batch_results):
+                    if isinstance(result, Exception):
+                        results["error_count"] += 1
+                        results["details"][npc_id] = {"error": str(result)}
+                    else:
+                        results["success_count"] += 1
+                        results["details"][npc_id] = {"success": True}
+        
+        # Add other update types as needed
+            
+        return results
     
     async def _get_npc_mask(self, npc_id: int) -> Dict[str, Any]:
         """
