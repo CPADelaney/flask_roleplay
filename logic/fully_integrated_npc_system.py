@@ -120,6 +120,238 @@ class IntegratedNPCSystem:
     
     def __init__(self, user_id: int, conversation_id: int):
         """
+        Initialize the NPC system with enhanced connection pooling.
+        
+        Args:
+            user_id: The user ID
+            conversation_id: The conversation ID
+        """
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        
+        # Enhanced connection pool with better configuration
+        self._pool = None
+        self._pool_initialized = asyncio.Event()
+        # Start async initialization in the background
+        asyncio.create_task(self._initialize_pool())
+        
+        # Initialize caching structures with more granular control
+        self.npc_cache = {}  # Cache for NPC data
+        self.relationship_cache = {}  # Cache for relationship data
+        self.memory_cache = {}  # Cache for frequently accessed memories
+        self.last_cache_refresh = datetime.now()
+        self.cache_ttl = timedelta(minutes=5)  # Cache time-to-live
+        self.cache_hit_counts = {}  # Track cache effectiveness
+        
+        # Performance monitoring
+        self.perf_metrics = {
+            'db_queries': 0,
+            'cache_hits': 0,
+            'cache_misses': 0,
+            'avg_query_time': 0,
+            'query_times': [],
+        }
+        
+        # Initialize the activity manager
+        self.activity_manager = ActivityManager()
+        
+        # Initialize the agent system - core component for NPC agentic behavior
+        self.agent_system = NPCAgentSystem(user_id, conversation_id)
+        
+        logger.info(f"Initialized IntegratedNPCSystem for user={user_id}, conversation={conversation_id}")
+        
+        # Initialize memory system
+        self._memory_system = None
+        
+        # Set up periodic cache cleanup and metrics reporting
+        self._setup_cache_cleanup()
+        self._setup_metrics_reporting()
+    
+    async def _initialize_pool(self):
+        """Initialize the connection pool with optimized settings."""
+        try:
+            # Get connection string from environment
+            dsn = os.getenv("DB_DSN")
+            self._pool = await asyncpg.create_pool(
+                dsn=dsn,
+                min_size=5,      # Minimum connections in pool
+                max_size=20,     # Maximum connections in pool
+                command_timeout=60.0,
+                max_inactive_connection_lifetime=300.0,  # 5 minutes
+                max_queries=50000,
+                statement_cache_size=0,  # Disable statement cache for less memory usage
+            )
+            logger.info("Database connection pool initialized successfully")
+        except Exception as e:
+            logger.error(f"Error initializing connection pool: {e}")
+            # Create minimal pool as fallback
+            self._pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=5)
+        finally:
+            # Signal that initialization is complete
+            self._pool_initialized.set()
+    
+    async def get_connection_pool(self):
+        """Get the connection pool, waiting for initialization if needed."""
+        await self._pool_initialized.wait()
+        return self._pool
+    
+    async def execute_with_pool(self, query, *args, timeout=10.0):
+        """Execute a database query with the connection pool and error handling."""
+        start_time = datetime.now()
+        pool = await self.get_connection_pool()
+        self.perf_metrics['db_queries'] += 1
+        
+        try:
+            async with pool.acquire() as conn:
+                result = await conn.execute(query, *args)
+                
+                # Track query performance
+                query_time = (datetime.now() - start_time).total_seconds()
+                self.perf_metrics['query_times'].append(query_time)
+                self._update_avg_query_time(query_time)
+                
+                return result
+        except asyncpg.PostgresConnectionError:
+            # Connection error - try to reinitialize pool
+            logger.error("Database connection error, reinitializing pool...")
+            await self._initialize_pool()
+            # Retry once with fresh connection
+            async with pool.acquire() as conn:
+                return await conn.execute(query, *args)
+        except Exception as e:
+            logger.error(f"Database query error: {e}, Query: {query[:100]}...")
+            raise
+    
+    async def fetchrow_with_pool(self, query, *args, timeout=10.0):
+        """Fetch a single row with the connection pool and error handling."""
+        start_time = datetime.now()
+        pool = await self.get_connection_pool()
+        self.perf_metrics['db_queries'] += 1
+        
+        try:
+            async with pool.acquire() as conn:
+                result = await conn.fetchrow(query, *args)
+                
+                # Track query performance
+                query_time = (datetime.now() - start_time).total_seconds()
+                self.perf_metrics['query_times'].append(query_time)
+                self._update_avg_query_time(query_time)
+                
+                return result
+        except asyncpg.PostgresConnectionError:
+            # Connection error - try to reinitialize pool
+            logger.error("Database connection error, reinitializing pool...")
+            await self._initialize_pool()
+            # Retry once with fresh connection
+            async with pool.acquire() as conn:
+                return await conn.fetchrow(query, *args)
+        except Exception as e:
+            logger.error(f"Database query error: {e}, Query: {query[:100]}...")
+            raise
+    
+    async def fetch_with_pool(self, query, *args, timeout=10.0):
+        """Fetch multiple rows with the connection pool and error handling."""
+        start_time = datetime.now()
+        pool = await self.get_connection_pool()
+        self.perf_metrics['db_queries'] += 1
+        
+        try:
+            async with pool.acquire() as conn:
+                result = await conn.fetch(query, *args)
+                
+                # Track query performance
+                query_time = (datetime.now() - start_time).total_seconds()
+                self.perf_metrics['query_times'].append(query_time)
+                self._update_avg_query_time(query_time)
+                
+                return result
+        except asyncpg.PostgresConnectionError:
+            # Connection error - try to reinitialize pool
+            logger.error("Database connection error, reinitializing pool...")
+            await self._initialize_pool()
+            # Retry once with fresh connection
+            async with pool.acquire() as conn:
+                return await conn.fetch(query, *args)
+        except Exception as e:
+            logger.error(f"Database query error: {e}, Query: {query[:100]}...")
+            raise
+    
+    def _update_avg_query_time(self, new_time):
+        """Update the average query time metric."""
+        times = self.perf_metrics['query_times'][-100:]  # Only keep last 100 times
+        self.perf_metrics['avg_query_time'] = sum(times) / len(times)
+    
+    def _setup_cache_cleanup(self):
+        """Set up periodic cache cleanup task with improved granularity."""
+        async def cache_cleanup_task():
+            while True:
+                await asyncio.sleep(300)  # Run every 5 minutes
+                await self._cleanup_cache()
+        
+        # Start the task without waiting for it
+        asyncio.create_task(cache_cleanup_task())
+    
+    def _setup_metrics_reporting(self):
+        """Set up periodic metrics reporting for performance monitoring."""
+        async def metrics_reporting_task():
+            while True:
+                await asyncio.sleep(600)  # Report every 10 minutes
+                logger.info(f"Performance metrics: {self.perf_metrics}")
+                # Reset some counters
+                self.perf_metrics['db_queries'] = 0
+                self.perf_metrics['cache_hits'] = 0
+                self.perf_metrics['cache_misses'] = 0
+                self.perf_metrics['query_times'] = self.perf_metrics['query_times'][-100:]
+        
+        # Start the task without waiting for it
+        asyncio.create_task(metrics_reporting_task())
+    
+    async def _cleanup_cache(self):
+        """Clean up expired cache entries with granular control."""
+        now = datetime.now()
+        
+        # Check global TTL first
+        global_expired = now - self.last_cache_refresh > self.cache_ttl
+        if global_expired:
+            self.last_cache_refresh = now
+            logger.debug(f"Global cache TTL expired, clearing all caches")
+            
+            # Clear all caches
+            self.npc_cache.clear()
+            self.relationship_cache.clear()
+            self.memory_cache.clear()
+            return
+        
+        # Check individual entries for expiration
+        expired_npc_keys = []
+        for key, data in self.npc_cache.items():
+            if now - data.get("last_updated", datetime.min) > self.cache_ttl:
+                expired_npc_keys.append(key)
+        
+        expired_rel_keys = []
+        for key, data in self.relationship_cache.items():
+            if now - data.get("last_updated", datetime.min) > self.cache_ttl:
+                expired_rel_keys.append(key)
+        
+        expired_mem_keys = []
+        for key, data in self.memory_cache.items():
+            if now - data.get("last_updated", datetime.min) > self.cache_ttl:
+                expired_mem_keys.append(key)
+        
+        # Remove expired entries
+        for key in expired_npc_keys:
+            del self.npc_cache[key]
+        
+        for key in expired_rel_keys:
+            del self.relationship_cache[key]
+        
+        for key in expired_mem_keys:
+            del self.memory_cache[key]
+        
+        logger.debug(f"Cleaned up {len(expired_npc_keys)} NPC cache entries, " +
+                    f"{len(expired_rel_keys)} relationship cache entries, " +
+                    f"{len(expired_mem_keys)} memory cache entries")
+        """
         Initialize the NPC system with caching and connection pooling.
         
         Args:
@@ -187,39 +419,45 @@ class IntegratedNPCSystem:
     
     async def create_new_npc(self, environment_desc: str, day_names: List[str], sex: str = "female") -> int:
         """
-        Create a new NPC using the enhanced creation process.
-        
-        Args:
-            environment_desc: Description of the environment
-            day_names: List of day names used in the calendar
-            sex: Sex of the NPC ("female" by default)
-            
-        Returns:
-            The newly created NPC ID
-        
-        Raises:
-            NPCCreationError: If there's an issue during NPC creation
+        Create a new NPC with improved error recovery.
         """
         logger.info(f"Creating new NPC in environment: {environment_desc[:30]}...")
         
-        try:
-            # Step 1: Create the partial NPC (base data)
-            partial_npc = create_npc_partial(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id,
-                sex=sex,
-                total_archetypes=4,
-                environment_desc=environment_desc
-            )
-            
-            # Step 1.5: Integrate subtle femdom elements
-            partial_npc = await integrate_femdom_elements(partial_npc)
-            
-            # Step 2: Insert the partial NPC into the database
-            npc_id = await insert_npc_stub_into_db(
-                partial_npc, self.user_id, self.conversation_id
-            )
-            logger.info(f"Created NPC stub with ID {npc_id} and name {partial_npc['npc_name']}")
+        retry_count = 0
+        max_retries = 3
+        backoff_factor = 1.5
+        
+        while retry_count <= max_retries:
+            try:
+                # Step 1: Create the partial NPC (base data)
+                partial_npc = create_npc_partial(
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id,
+                    sex=sex,
+                    total_archetypes=4,
+                    environment_desc=environment_desc
+                )
+                
+                # Create a transaction for the entire NPC creation process
+                pool = await self.get_connection_pool()
+                async with pool.acquire() as conn:
+                    async with conn.transaction():
+                        # Step 2: Insert the partial NPC into the database
+                        insert_query = """
+                            INSERT INTO NPCStats (user_id, conversation_id, npc_name, sex, 
+                                                archetype_summary, archetypes, introduced)
+                            VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+                            RETURNING npc_id
+                        """
+                        npc_id = await conn.fetchval(
+                            insert_query,
+                            self.user_id, self.conversation_id,
+                            partial_npc['npc_name'], partial_npc['sex'],
+                            partial_npc['archetype_summary'], json.dumps(partial_npc.get('archetypes', []))
+                        )
+                        
+                        logger.info(f"Created NPC stub with ID {npc_id} and name {partial_npc['npc_name']}")
+
             
             # Step 3: Assign relationships (with more error handling)
             try:
@@ -377,19 +615,96 @@ class IntegratedNPCSystem:
                 logger.warning(f"Error initializing perception for NPC {npc_id}: {e}")
                 # Continue despite perception errors
             
-            # Update cache with new NPC
-            self.npc_cache[npc_id] = {
-                "npc_id": npc_id,
-                "npc_name": partial_npc["npc_name"],
-                "last_updated": datetime.now()
-            }
+                # Update cache with new NPC
+                self.npc_cache[npc_id] = {
+                    "npc_id": npc_id,
+                    "npc_name": partial_npc["npc_name"],
+                    "last_updated": datetime.now()
+                }
+                
+                return npc_id
+                
+            except asyncpg.PostgresConnectionError as e:
+                # Connection error - try to reconnect
+                retry_count += 1
+                if retry_count <= max_retries:
+                    # Exponential backoff
+                    wait_time = (backoff_factor ** retry_count) * 0.5
+                    logger.warning(f"Database connection error, retrying in {wait_time:.1f}s: {e}")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"Failed to create new NPC after {max_retries} retries: {e}")
+                    raise NPCCreationError(f"Database connection failure: {e}")
+                    
+            except Exception as e:
+                error_msg = f"Failed to create new NPC: {e}"
+                logger.error(error_msg)
+                
+                # Try to create a minimal viable NPC rather than failing completely
+                if retry_count == max_retries:
+                    logger.warning("Attempting to create minimal viable NPC as fallback")
+                    try:
+                        # Create minimal NPC with just the essential fields
+                        minimal_npc_id = await self._create_minimal_fallback_npc(
+                            partial_npc.get("npc_name", f"NPC_{datetime.now().timestamp()}"),
+                            sex
+                        )
+                        return minimal_npc_id
+                    except Exception as fallback_error:
+                        logger.error(f"Even fallback NPC creation failed: {fallback_error}")
+                        raise NPCCreationError(f"Complete NPC creation failure: {e}, fallback also failed: {fallback_error}")
+                
+                retry_count += 1
+                if retry_count <= max_retries:
+                    # Exponential backoff
+                    wait_time = (backoff_factor ** retry_count) * 0.5
+                    logger.warning(f"NPC creation error, retrying in {wait_time:.1f}s: {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    raise NPCCreationError(error_msg)
+    
+    async def _create_minimal_fallback_npc(self, npc_name: str, sex: str) -> int:
+        """
+        Create a minimal viable NPC as a fallback when full creation fails.
+        
+        Args:
+            npc_name: NPC name to use
+            sex: NPC sex
+            
+        Returns:
+            NPC ID of the created minimal NPC
+        """
+        pool = await self.get_connection_pool()
+        async with pool.acquire() as conn:
+            npc_id = await conn.fetchval("""
+                INSERT INTO NPCStats (
+                    user_id, conversation_id, npc_name, sex, 
+                    dominance, cruelty, introduced, 
+                    current_location
+                )
+                VALUES ($1, $2, $3, $4, 50, 50, FALSE, 'Unknown')
+                RETURNING npc_id
+            """, self.user_id, self.conversation_id, npc_name, sex)
+            
+            # Create a basic minimal schedule
+            basic_schedule = {}
+            for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]:
+                basic_schedule[day] = {
+                    "Morning": "Goes about their day",
+                    "Afternoon": "Continues their routine",
+                    "Evening": "Relaxes at home",
+                    "Night": "Sleeps"
+                }
+                
+            # Update with schedule
+            await conn.execute("""
+                UPDATE NPCStats
+                SET schedule = $1
+                WHERE npc_id = $2
+            """, json.dumps(basic_schedule), npc_id)
             
             return npc_id
-            
-        except Exception as e:
-            error_msg = f"Failed to create new NPC: {e}"
-            logger.error(error_msg)
-            raise NPCCreationError(error_msg)
     
     async def _extract_location_from_schedule(self, schedule, current_day_name, time_of_day):
         """
