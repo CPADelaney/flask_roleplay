@@ -945,7 +945,8 @@ async def manage_npc_memory_lifecycle(npc_system):
         "pruned_count": 0,
         "decayed_count": 0,
         "consolidated_count": 0,
-        "archived_count": 0
+        "archived_count": 0,
+        "emotional_tagging_count": 0  # New counter
     }
     
     try:
@@ -954,13 +955,19 @@ async def manage_npc_memory_lifecycle(npc_system):
         maintenance_result = await npc_system.run_memory_maintenance()
         tracker.end_phase()
         
+        # Apply emotional tagging - memories with strong emotion last longer
+        tracker.start_phase("emotional_tagging")
+        tagging_result = await npc_system.apply_emotional_tagging()
+        results["emotional_tagging_count"] = tagging_result.get("tagged_count", 0)
+        tracker.end_phase()
+        
         # Consolidate repetitive memories
         tracker.start_phase("consolidate_memories")
         consolidate_result = await npc_system.consolidate_repetitive_memories()
         results["consolidated_count"] = consolidate_result.get("consolidated_count", 0)
         tracker.end_phase()
         
-        # Process memory decay
+        # Process memory decay - consider intelligence factor for decay rate
         tracker.start_phase("memory_decay")
         decay_result = await npc_system.apply_memory_decay()
         results["decayed_count"] = decay_result.get("decayed_count", 0)
@@ -983,7 +990,6 @@ async def manage_npc_memory_lifecycle(npc_system):
             "error": str(e),
             "performance_metrics": tracker.get_metrics()
         }
-
 def build_aggregator_text(aggregator_data, rule_knowledge=None):
     """
     Merge aggregator_data into a text summary for ChatGPT.
