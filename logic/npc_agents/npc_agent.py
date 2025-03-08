@@ -492,7 +492,6 @@ class NPCAgent:
         relationships = {}
         
         with get_db_connection() as conn, conn.cursor() as cursor:
-            # Query all links from NPC to other entities
             cursor.execute("""
                 SELECT entity2_type, entity2_id, link_type, link_level
                 FROM SocialLinks
