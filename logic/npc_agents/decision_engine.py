@@ -414,11 +414,11 @@ class NPCDecisionEngine:
         return actions
 
     async def score_actions_with_memory(self, 
-                                       npc_data: Dict[str, Any], 
-                                       perception: Dict[str, Any],
-                                       actions: List[Dict[str, Any]],
-                                       emotional_state: Dict[str, Any],
-                                       mask: Dict[str, Any]) -> List[Dict[str, Any]]:
+                                      npc_data: Dict[str, Any], 
+                                      perception: Dict[str, Any],
+                                      actions: List[Dict[str, Any]],
+                                      emotional_state: Dict[str, Any],
+                                      mask: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Score actions with enhanced memory and emotion-based reasoning.
         
@@ -434,330 +434,223 @@ class NPCDecisionEngine:
         """
         scored_actions = []
         
-        # Get current emotion data
+        # Get emotion data for psychological realism
         current_emotion = emotional_state.get("current_emotion", {})
         primary_emotion = current_emotion.get("primary", {}).get("name", "neutral")
         emotion_intensity = current_emotion.get("primary", {}).get("intensity", 0.5)
         
-        # Get relevant memories
+        # Get relevant memories with recency weighting
         memories = perception.get("relevant_memories", [])
         
-        # Get mask integrity
+        # Get mask integrity - lower integrity means true nature shows more
         mask_integrity = mask.get("integrity", 100)
         presented_traits = mask.get("presented_traits", {})
         hidden_traits = mask.get("hidden_traits", {})
         
-        # Calculate how much the player knows about the NPC
-        player_knowledge = 0.0
+        # Calculate how much the player knows about the NPC (influences mask behavior)
+        player_knowledge = self._calculate_player_knowledge(perception, mask_integrity)
         
-        # More memories means player knows more about the NPC
-        if len(memories) > 5:
-            player_knowledge += 0.3
+        # Get flashback if present
+        flashback = perception.get("flashback")
+        traumatic_trigger = perception.get("traumatic_trigger")
         
-        # Lower mask integrity means player knows more about true nature
-        if mask_integrity < 50:
-            player_knowledge += 0.3
-        
-        # Longer relationship (more closeness) means player knows more
-        player_relationship = perception.get("relationships", {}).get("player", {})
-        if player_relationship:
-            link_level = player_relationship.get("link_level", 0)
-            if link_level > 50:
-                player_knowledge += 0.2
-        
+        # Score each action
         for action in actions:
             # Start with base score of 0
             score = 0.0
+            scoring_factors = {}
             
-            # 1. Personality alignment
-            score += await self._score_personality_alignment(npc_data, action)
+            # 1. Personality alignment - how well action aligns with NPC traits
+            personality_score = await self._score_personality_alignment(npc_data, action, mask_integrity, hidden_traits, presented_traits)
+            score += personality_score
+            scoring_factors["personality_alignment"] = personality_score
             
-            # 2. Memory influence
-            score += await self._score_memory_influence(memories, action)
+            # 2. Memory influence - how memories affect this action preference
+            memory_score = await self._score_memory_influence(memories, action)
+            score += memory_score
+            scoring_factors["memory_influence"] = memory_score
             
-            # 3. Relationship influence
-            score += await self._score_relationship_influence(
+            # 3. Relationship influence - how relationships affect action
+            relationship_score = await self._score_relationship_influence(
                 perception.get("relationships", {}), 
                 action
             )
+            score += relationship_score
+            scoring_factors["relationship_influence"] = relationship_score
             
-            # 4. Environmental context
-            score += await self._score_environmental_context(
+            # 4. Environmental context - how environment affects action choice
+            environment_score = await self._score_environmental_context(
                 perception.get("environment", {}), 
                 action
             )
+            score += environment_score
+            scoring_factors["environmental_context"] = environment_score
             
-            # 5. Emotional state influence
-            score += await self._score_emotional_influence(
+            # 5. Emotional state influence - how emotions affect decisions
+            emotional_score = await self._score_emotional_influence(
                 primary_emotion,
                 emotion_intensity,
                 action
             )
+            score += emotional_score
+            scoring_factors["emotional_influence"] = emotional_score
             
-            # 6. Mask influence (true nature shows more as mask deteriorates)
-            score += await self._score_mask_influence(
+            # 6. Mask influence - true nature shows more as mask deteriorates
+            mask_score = await self._score_mask_influence(
                 mask_integrity,
                 npc_data,
                 action,
                 hidden_traits,
                 presented_traits
             )
+            score += mask_score
+            scoring_factors["mask_influence"] = mask_score
             
-            # 7. For femdom context - special scoring for dominance/submission
-            score += await self._score_dominance_dynamics(
-                action,
-                npc_data,
-                player_knowledge
+            # 7. Flashback and trauma influence
+            trauma_score = 0.0
+            if flashback or traumatic_trigger:
+                trauma_score = await self._score_trauma_influence(
+                    action,
+                    flashback,
+                    traumatic_trigger
+                )
+                score += trauma_score
+            scoring_factors["trauma_influence"] = trauma_score
+            
+            # 8. Belief influence - how beliefs affect decisions
+            belief_score = await self._score_belief_influence(
+                perception.get("beliefs", []),
+                action
             )
+            score += belief_score
+            scoring_factors["belief_influence"] = belief_score
             
+            # 9. Decision history - consider past decisions for continuity
+            if hasattr(self, 'decision_history'):
+                history_score = await self._score_decision_history(action)
+                score += history_score
+                scoring_factors["decision_history"] = history_score
+            else:
+                scoring_factors["decision_history"] = 0.0
+            
+            # 10. Player knowledge influence - if player knows NPC well, behave differently
+            player_knowledge_score = await self._score_player_knowledge_influence(
+                action,
+                player_knowledge,
+                hidden_traits
+            )
+            score += player_knowledge_score
+            scoring_factors["player_knowledge"] = player_knowledge_score
+            
+            # Add to scored actions
             scored_actions.append({
                 "action": action, 
                 "score": score,
-                "reasoning": {
-                    "personality_alignment": await self._score_personality_alignment(npc_data, action),
-                    "memory_influence": await self._score_memory_influence(memories, action),
-                    "relationship_influence": await self._score_relationship_influence(perception.get("relationships", {}), action),
-                    "environmental_context": await self._score_environmental_context(perception.get("environment", {}), action),
-                    "emotional_influence": await self._score_emotional_influence(primary_emotion, emotion_intensity, action),
-                    "mask_influence": await self._score_mask_influence(mask_integrity, npc_data, action, hidden_traits, presented_traits),
-                    "dominance_dynamics": await self._score_dominance_dynamics(action, npc_data, player_knowledge)
-                }
+                "reasoning": scoring_factors
             })
         
         # Sort by score (descending)
         scored_actions.sort(key=lambda x: x["score"], reverse=True)
         
+        # Add thought process tracking for internal reasoning
+        self._record_decision_reasoning(scored_actions[:3])
+        
         return scored_actions
 
-    async def _score_personality_alignment(self, npc: Dict[str, Any], action: Dict[str, Any]) -> float:
-        """Score how well an action aligns with NPC's stats and traits."""
-        score = 0.0
-        
-        # Score based on stat alignment
-        stats_influenced = action.get("stats_influenced", {})
-        for stat, change in stats_influenced.items():
-            if stat in npc:
-                current_value = npc[stat]
-                if change > 0 and current_value > 50:
-                    score += 2
-                elif change < 0 and current_value < 50:
-                    score += 2
-        
-        # Score based on personality traits
-        personality_traits = npc.get("personality_traits", [])
-        trait_alignments = {
-            "commanding": {"command": 3, "test": 2, "direct": 2, "control": 3, "dominate": 4, "punish": 3},
-            "cruel": {"mock": 3, "express_anger": 2, "humiliate": 4},
-            "kind": {"talk": 2, "praise": 3, "teach": 2, "reward_submission": 3},
-            "shy": {"observe": 3, "leave": 2},
-            "confident": {"talk": 2, "command": 1, "deepen_relationship": 2, "seduce": 3},
-            "manipulative": {"confide": 3, "praise": 2, "control": 3, "test": 2},
-            "honest": {"confide": 2},
-            "suspicious": {"observe": 2, "act_defensive": 3},
-            "friendly": {"talk": 3, "talk_to": 2, "socialize": 3, "celebrate": 3},
-            "dominant": {"command": 3, "test": 3, "direct": 3, "control": 4, "dominate": 4, "punish": 3},
-            "submissive": {"observe": 2},
-            "analytical": {"observe": 3},
-            "impulsive": {"mock": 2, "leave": 1, "express_anger": 3},
-            "patient": {"teach": 3, "observe": 2},
-            "protective": {"direct": 2, "command": 1, "act_defensive": 2},
-            "sadistic": {"mock": 4, "test": 3, "express_anger": 3, "humiliate": 4, "punish": 4},
-            "playful": {"celebrate": 3, "discuss_topic": 2, "socialize": 2, "seduce": 2}
-        }
-        
-        action_type = action["type"]
-        for trait in personality_traits:
-            trait_lower = trait.lower()
-            if trait_lower in trait_alignments:
-                action_bonus_map = trait_alignments[trait_lower]
-                if action_type in action_bonus_map:
-                    score += action_bonus_map[action_type]
-        
-        # Score based on likes/dislikes
-        if "target" in action and action["target"] not in ["environment", "location"]:
-            likes = npc.get("likes", [])
-            dislikes = npc.get("dislikes", [])
-            target_name = action.get("target_name", "")
-            
-            # Check if target is liked
-            if any(like.lower() in target_name.lower() for like in likes):
-                if action_type in ["talk", "talk_to", "praise", "confide"]:
-                    score += 3
-            
-            # Check if target is disliked
-            if any(dl.lower() in target_name.lower() for dl in dislikes):
-                if action_type in ["mock", "leave", "observe"]:
-                    score += 3
-            
-            # Check for topic-based likes/dislikes
-            if "topic" in action:
-                topic = action["topic"].lower()
-                if any(like.lower() in topic for like in likes):
-                    score += 4
-                if any(dl.lower() in topic for dl in dislikes):
-                    score -= 4
-        
-        return score
-
     async def _score_memory_influence(self, memories: List[Dict[str, Any]], action: Dict[str, Any]) -> float:
-        """Score how memories influence action preference."""
+        """Score how memories influence action preference with enhanced weighting."""
         score = 0.0
         
         # If no memories, neutral influence
         if not memories:
             return score
-            
-        for memory in memories:
+        
+        # Track which memories affected this decision for later reflection
+        affected_by_memories = []
+        
+        # Weight by recency and emotional intensity
+        for i, memory in enumerate(memories):
             memory_text = memory.get("text", "").lower()
             memory_id = memory.get("id")
+            emotional_intensity = memory.get("emotional_intensity", 0) / 100.0  # Normalize to 0-1
+            recency_weight = 1.0 - (i * 0.15)  # More recent memories get more weight
+            significance = memory.get("significance", 3) / 10.0  # Normalize to 0-1
+            
+            # Calculate base memory importance 
+            memory_importance = (recency_weight + emotional_intensity + significance) / 3
             
             # Direct reference to memory
             if action.get("memory_id") == memory_id:
-                score += 5
-            
-            # Check for action type in memory
-            if action["type"] == "talk" and ("talked" in memory_text or "conversation" in memory_text):
-                score += 1
-            elif action["type"] == "command" and ("commanded" in memory_text or "ordered" in memory_text):
-                score += 1
-            elif action["type"] == "mock" and ("mocked" in memory_text or "laughed at" in memory_text):
-                score += 1
-            elif action["type"] == "dominate" and ("dominated" in memory_text or "controlled" in memory_text):
-                score += 1
-            elif action["type"] == "punish" and ("punished" in memory_text or "disciplined" in memory_text):
-                score += 1
-            elif action["type"] == "reward_submission" and ("submitted" in memory_text or "obeyed" in memory_text):
-                score += 2
-            elif action["type"] == "address_resistance" and ("resisted" in memory_text or "disobeyed" in memory_text):
-                score += 2
-            
-            # Check if action target appears in memory
+                memory_score = 5 * memory_importance
+                score += memory_score
+                affected_by_memories.append({"id": memory_id, "influence": memory_score})
+                
+            # Check for content relevance to the action
+            action_type = action["type"]
+            if action_type in memory_text:
+                memory_score = 2 * memory_importance
+                score += memory_score
+                affected_by_memories.append({"id": memory_id, "influence": memory_score})
+                
+            # Check target relevance
             if "target" in action:
-                target = str(action["target"])
+                target = str(action.get("target", ""))
                 target_name = action.get("target_name", "")
-                if target in memory_text or target_name.lower() in memory_text:
-                    score += 2
-            
-            # Check for topic matches
-            if "topic" in action and action["topic"].lower() in memory_text:
-                score += 3
-            
-            # Emotional valence influence
-            schema_interpretation = memory.get("schema_interpretation")
-            if schema_interpretation:
-                # Check if interpretation suggests certain action types based on theme patterns
-                lower_interpretation = schema_interpretation.lower()
-                
-                # For femdom dynamics
-                if "submissive" in lower_interpretation and action["type"] in ["command", "test", "dominate", "punish"]:
-                    score += 3
-                if "resistance" in lower_interpretation and action["type"] in ["punish", "address_resistance", "dominate"]:
-                    score += 2
-                if "willing" in lower_interpretation and action["type"] in ["reward_submission", "praise"]:
-                    score += 2
+                if target in memory_text or (target_name and target_name.lower() in memory_text):
+                    memory_score = 3 * memory_importance
+                    score += memory_score
+                    affected_by_memories.append({"id": memory_id, "influence": memory_score})
                     
-                # General patterns
-                if "controlling" in lower_interpretation and action["type"] in ["command", "test", "direct", "control"]:
-                    score += 3
-                elif "caring" in lower_interpretation and action["type"] in ["talk", "praise", "teach"]:
-                    score += 3
-                elif "intimate" in lower_interpretation and action["type"] in ["confide", "deepen_relationship", "seduce"]:
-                    score += 3
-        
-        return score
-
-    async def _score_relationship_influence(self, relationships: Dict[str, Any], action: Dict[str, Any]) -> float:
-        """Score based on NPC's relationships."""
-        score = 0.0
-        
-        if "target" in action and action["target"] not in ["environment", "location"]:
-            target_rel = None
-            
-            # Check for player relationship
-            if action["target"] == "player":
-                target_rel = relationships.get("player", {})
-            else:
-                # Check for NPC relationship
-                for ent_type, rel_data in relationships.items():
-                    if ent_type == "npc" and rel_data.get("entity_id") == action["target"]:
-                        target_rel = rel_data
-                        break
-            
-            if target_rel:
-                rel_type = target_rel.get("link_type", "")
-                rel_level = target_rel.get("link_level", 0)
+            # Check emotion relevance (actions aligned with memory emotions score higher)
+            memory_emotion = memory.get("primary_emotion", "").lower()
+            if memory_emotion:
+                emotion_aligned_actions = {
+                    "anger": ["express_anger", "mock", "attack", "challenge"],
+                    "fear": ["leave", "observe", "act_defensive"],
+                    "joy": ["celebrate", "praise", "talk", "confide"],
+                    "sadness": ["observe", "leave"],
+                    "disgust": ["mock", "leave", "observe"]
+                }
                 
-                # Score based on relationship type
-                if rel_type == "dominant" and action["type"] in ["command", "test", "direct", "control", "dominate", "punish"]:
-                    score += 3
-                elif rel_type == "friendly" and action["type"] in ["talk", "talk_to", "confide", "praise"]:
-                    score += 3
-                elif rel_type == "hostile" and action["type"] in ["mock", "leave", "observe", "express_anger", "humiliate"]:
-                    score += 3
-                elif rel_type == "romantic" and action["type"] in ["confide", "praise", "talk", "deepen_relationship", "seduce"]:
-                    score += 4
-                elif rel_type == "business" and action["type"] in ["talk", "command"]:
-                    score += 2
+                if action_type in emotion_aligned_actions.get(memory_emotion, []):
+                    emotion_score = 2 * memory_importance * emotional_intensity
+                    score += emotion_score
+                    affected_by_memories.append({"id": memory_id, "influence_type": "emotion", "influence": emotion_score})
+                    
+            # Check schema interpretations
+            schema = memory.get("schema_interpretation", "")
+            if schema:
+                schema_lower = schema.lower()
                 
-                # Score based on relationship level
-                if rel_level > 70:
-                    if action["type"] in ["talk", "talk_to", "confide", "praise", "deepen_relationship", "seduce"]:
-                        score += 2
-                    elif action["type"] in ["dominate", "punish"] and rel_type in ["dominant", "romantic"]:
-                        score += 3  # Especially in femdom context
-                elif rel_level < 30:
-                    if action["type"] in ["observe", "leave", "mock"]:
-                        score += 2
+                # Schema patterns that influence actions
+                if "betrayal" in schema_lower and action_type in ["observe", "leave", "act_defensive"]:
+                    schema_score = 3 * memory_importance
+                    score += schema_score
+                    affected_by_memories.append({"id": memory_id, "influence_type": "schema", "influence": schema_score})
+                    
+                elif "trust" in schema_lower and action_type in ["confide", "praise", "talk"]:
+                    schema_score = 3 * memory_importance
+                    score += schema_score
+                    affected_by_memories.append({"id": memory_id, "influence_type": "schema", "influence": schema_score})
+                    
+                elif "dominance" in schema_lower and action_type in ["command", "test", "dominate"]:
+                    schema_score = 3 * memory_importance
+                    score += schema_score
+                    affected_by_memories.append({"id": memory_id, "influence_type": "schema", "influence": schema_score})
         
-        return score
-
-    async def _score_environmental_context(self, environment: Dict[str, Any], action: Dict[str, Any]) -> float:
-        """Score based on environmental context."""
-        score = 0.0
-        
-        location = environment.get("location", "").lower()
-        time_of_day = environment.get("time_of_day", "").lower()
-        
-        # Location-based scoring
-        if any(loc in location for loc in ["restaurant", "cafe", "dining", "bar"]):
-            if action["type"] in ["talk", "socialize"]:
-                score += 2
-            
-            # Less appropriate for intense femdom actions in public
-            if action["type"] in ["punish", "humiliate", "dominate"]:
-                score -= 3
-        
-        if "bedroom" in location or "private" in location or "dungeon" in location:
-            if action["type"] in ["confide", "seduce"]:
-                score += 3
-                
-            # More appropriate for femdom actions in private
-            if action["type"] in ["dominate", "punish", "humiliate"]:
-                score += 4
-                
-        if any(loc in loc_str for loc in ["public", "crowded"]):
-            if action["type"] in ["observe", "socialize"]:
-                score += 2
-            elif action["type"] in ["confide", "express_anger", "punish", "humiliate"]:
-                score -= 3
-        
-        # Time-based scoring
-        if time_of_day in ["evening", "night"]:
-            if action["type"] in ["confide", "leave", "seduce"]:
-                score += 2
-                
-            # More appropriate for intense actions at night
-            if action["type"] in ["dominate", "punish"]:
-                score += 1
-                
-        elif time_of_day in ["morning", "afternoon"]:
-            if action["type"] in ["talk", "command", "socialize"]:
-                score += 1
+        # Store memory influence metadata in the action for future reflection
+        if affected_by_memories:
+            if "decision_metadata" not in action:
+                action["decision_metadata"] = {}
+            action["decision_metadata"]["memory_influences"] = affected_by_memories
         
         return score
 
     async def _score_emotional_influence(self, emotion: str, intensity: float, action: Dict[str, Any]) -> float:
-        """Score based on NPC's current emotional state."""
+        """
+        Score based on NPC's current emotional state with psychological realism.
+        Different emotions favor different action types with intensity scaling.
+        """
         score = 0.0
         
         # No significant emotional influence if intensity is low
@@ -768,7 +661,7 @@ class NPCDecisionEngine:
         emotion_action_affinities = {
             "anger": {
                 "express_anger": 4, "command": 2, "mock": 3, "test": 2, "leave": 1,
-                "punish": 4, "humiliate": 3, "dominate": 3,  # Femdom context
+                "punish": 4, "humiliate": 3, "dominate": 3,  
                 "praise": -3, "confide": -2, "socialize": -1
             },
             "fear": {
@@ -777,7 +670,7 @@ class NPCDecisionEngine:
             },
             "joy": {
                 "celebrate": 4, "talk": 3, "praise": 3, "socialize": 3, "confide": 2,
-                "reward_submission": 3,  # Femdom context
+                "reward_submission": 3,
                 "mock": -3, "leave": -2, "act_defensive": -1, "punish": -2
             },
             "sadness": {
@@ -788,25 +681,33 @@ class NPCDecisionEngine:
                 "mock": 3, "leave": 2, "act_defensive": 1, "humiliate": 3,
                 "praise": -3, "confide": -2, "talk": -1
             },
-            "arousal": {  # For femdom context
-                "seduce": 4, "dominate": 3, "test": 3, "reward_submission": 2,
-                "leave": -3, "observe": -2
-            },
-            "desire": {  # For femdom context
-                "seduce": 4, "dominate": 3, "confide": 2,
-                "leave": -3, "mock": -2
-            },
             "surprise": {
-                "observe": 2, "talk": 1, 
-                "leave": -1
+                "observe": 3, "act_defensive": 2, "leave": 1,
+                "confide": -2, "celebrate": -1
             },
             "trust": {
                 "confide": 3, "praise": 2, "talk": 2, "deepen_relationship": 3,
-                "reward_submission": 2,  # Femdom context
+                "reward_submission": 2,
                 "mock": -3, "act_defensive": -2
             },
             "anticipation": {
                 "talk": 2, "observe": 1, "discuss_topic": 3, "test": 2
+            },
+            "shame": {
+                "leave": 4, "observe": 2, "act_defensive": 1,
+                "celebrate": -4, "socialize": -3, "dominate": -3, "command": -2
+            },
+            "satisfaction": {
+                "praise": 3, "talk": 2, "reward_submission": 3, "confide": 2,
+                "mock": -2, "punish": -2
+            },
+            "curiosity": {
+                "observe": 4, "talk": 3, "discuss_topic": 4, "question": 3,
+                "leave": -2
+            },
+            "determination": {
+                "command": 3, "test": 3, "dominate": 2, "challenge": 3,
+                "leave": -2, "observe": -1
             }
         }
         
@@ -818,6 +719,16 @@ class NPCDecisionEngine:
         if action_type in action_affinities:
             affinity = action_affinities[action_type]
             score += affinity * intensity
+        
+        # Add decision metadata for reflection
+        if "decision_metadata" not in action:
+            action["decision_metadata"] = {}
+        action["decision_metadata"]["emotional_influence"] = {
+            "emotion": emotion,
+            "intensity": intensity,
+            "affinity": action_affinities.get(action_type, 0),
+            "score": score
+        }
         
         return score
 
@@ -837,90 +748,411 @@ class NPCDecisionEngine:
         # Calculate how much true nature is showing through
         true_nature_factor = (100 - mask_integrity) / 100
         
+        # Track mask influence details
+        mask_influences = []
+        
         # Score based on action alignment with presented vs hidden traits
         action_type = action["type"]
         
         # Check if action aligns with hidden traits that are starting to show
         for trait, trait_data in hidden_traits.items():
-            trait_intensity = trait_data.get("intensity", 50)
+            trait_intensity = trait_data.get("intensity", 50) / 100  # Normalize to 0-1
+            
+            # Calculate weight based on trait intensity and mask integrity
+            trait_weight = trait_intensity * true_nature_factor
             
             # Check alignment with hidden traits
+            trait_score = 0
+            
             if trait == "dominant" and action_type in ["command", "test", "dominate", "punish"]:
-                score += (trait_intensity / 100) * true_nature_factor * 5
+                trait_score = 5 * trait_weight
             elif trait == "cruel" and action_type in ["mock", "humiliate", "punish"]:
-                score += (trait_intensity / 100) * true_nature_factor * 5
+                trait_score = 5 * trait_weight
             elif trait == "sadistic" and action_type in ["punish", "humiliate", "mock"]:
-                score += (trait_intensity / 100) * true_nature_factor * 5
+                trait_score = 5 * trait_weight
             elif trait == "controlling" and action_type in ["command", "test", "direct"]:
-                score += (trait_intensity / 100) * true_nature_factor * 4
+                trait_score = 4 * trait_weight
+            elif trait == "manipulative" and action_type in ["confide", "praise", "direct"]:
+                trait_score = 4 * trait_weight
+            elif trait == "lustful" and action_type in ["seduce", "flirt", "observe"]:
+                trait_score = 4 * trait_weight
+            elif trait == "aggressive" and action_type in ["mock", "challenge", "express_anger"]:
+                trait_score = 4 * trait_weight
+                
+            if trait_score != 0:
+                score += trait_score
+                mask_influences.append({
+                    "trait": trait,
+                    "type": "hidden",
+                    "score": trait_score
+                })
         
         # Check if action conflicts with presented traits (should score lower as mask breaks)
         for trait, trait_data in presented_traits.items():
-            trait_confidence = trait_data.get("confidence", 50)
+            trait_confidence = trait_data.get("confidence", 50) / 100  # Normalize to 0-1
             
             # As mask breaks, these conflicts become more permissible
+            mask_factor = 1.0 - true_nature_factor
+            
+            # Check conflicts with presented traits
+            trait_score = 0
+            
             if trait == "kind" and action_type in ["mock", "humiliate", "punish"]:
-                score -= (trait_confidence / 100) * (1 - true_nature_factor) * 3
+                trait_score = -3 * trait_confidence * mask_factor
             elif trait == "gentle" and action_type in ["dominate", "express_anger", "punish"]:
-                score -= (trait_confidence / 100) * (1 - true_nature_factor) * 3
+                trait_score = -3 * trait_confidence * mask_factor
             elif trait == "submissive" and action_type in ["command", "dominate", "direct"]:
-                score -= (trait_confidence / 100) * (1 - true_nature_factor) * 4
-        
-        return score
-    
-    async def _score_dominance_dynamics(self, action: Dict[str, Any], 
-                                     npc_data: Dict[str, Any],
-                                     player_knowledge: float) -> float:
-        """
-        Special scoring function for femdom dynamics.
-        Considers dominance/submission, player knowledge of true nature.
-        """
-        score = 0.0
-        action_type = action["type"]
-        dominance = npc_data.get("dominance", 50)
-        cruelty = npc_data.get("cruelty", 50)
-        
-        # For highly dominant NPCs, femdom actions score higher
-        if dominance > 70:
-            if action_type in ["dominate", "punish", "command", "humiliate"]:
-                score += (dominance - 70) / 5
+                trait_score = -4 * trait_confidence * mask_factor
+            elif trait == "honest" and action_type in ["deceive", "manipulate", "lie"]:
+                trait_score = -4 * trait_confidence * mask_factor
+            elif trait == "patient" and action_type in ["express_anger", "mock", "punish"]:
+                trait_score = -3 * trait_confidence * mask_factor
                 
-                # If player doesn't know NPC well, more subtle dominance scores higher
-                if player_knowledge < 0.5:
-                    if action_type == "command":
-                        score += 2
-                    elif action_type == "test":
-                        score += 1
-                # If player knows NPC well, more direct dominance scores higher
-                else:
-                    if action_type == "dominate":
-                        score += 2
-                    elif action_type == "punish":
-                        score += 2
+            if trait_score != 0:
+                score += trait_score
+                mask_influences.append({
+                    "trait": trait,
+                    "type": "presented",
+                    "score": trait_score
+                })
         
-        # For cruel NPCs, humiliation actions score higher
-        if cruelty > 70:
-            if action_type in ["humiliate", "mock"]:
-                score += (cruelty - 70) / 5
-                
-                # More direct humiliation if player knowledge is high
-                if player_knowledge > 0.6 and action_type == "humiliate":
-                    score += 2
+        # Record mask influence details
+        if mask_influences and "decision_metadata" not in action:
+            action["decision_metadata"] = {}
         
-        # For NPCs with high dominance AND high cruelty, special dynamics
-        if dominance > 70 and cruelty > 70:
-            if action_type in ["punish", "humiliate", "dominate"]:
-                score += 2
-                
-                # If player knowledge high, more extreme actions score higher
-                if player_knowledge > 0.7:
-                    score += 1
+        if mask_influences:
+            action["decision_metadata"]["mask_influence"] = {
+                "integrity": mask_integrity,
+                "true_nature_factor": true_nature_factor,
+                "trait_influences": mask_influences
+            }
         
         return score
 
+    async def _score_trauma_influence(self, action: Dict[str, Any], 
+                                    flashback: Optional[Dict[str, Any]], 
+                                    traumatic_trigger: Optional[Dict[str, Any]]) -> float:
+        """
+        Score actions based on flashbacks or traumatic triggers.
+        Traumatic experiences strongly influence behavior when triggered.
+        """
+        score = 0.0
+        
+        if not flashback and not traumatic_trigger:
+            return score
+            
+        # Different action types for trauma responses
+        trauma_action_map = {
+            "traumatic_response": 5.0,  # Dedicated trauma response
+            "act_defensive": 4.0,       # Defensive behavior
+            "leave": 3.5,               # Flight response
+            "express_anger": 3.0,       # Fight response
+            "observe": 2.5,             # Freeze response
+            "emotional_outburst": 3.0,  # Emotional expression of trauma
+        }
+        
+        # Avoidance actions that trauma typically promotes
+        avoidance_actions = ["leave", "observe", "act_defensive"]
+        
+        # Determine action relevance to trauma
+        action_type = action["type"]
+        
+        # Direct trauma response scores highest
+        if action_type in trauma_action_map:
+            base_score = trauma_action_map[action_type]
+            
+            # Flashbacks have less influence than active triggers
+            if flashback and not traumatic_trigger:
+                score += base_score * 0.7  # 70% influence for flashbacks
+            elif traumatic_trigger:
+                score += base_score  # 100% influence for active triggers
+                
+                # If the trigger has a specific response type (fight/flight/freeze)
+                response_type = traumatic_trigger.get("response_type")
+                if response_type == "fight" and action_type in ["express_anger", "challenge"]:
+                    score += 2.0
+                elif response_type == "flight" and action_type == "leave":
+                    score += 2.0
+                elif response_type == "freeze" and action_type == "observe":
+                    score += 2.0
+        
+        # Penalize actions that expose vulnerability during trauma
+        vulnerability_actions = ["confide", "praise", "talk", "socialize"]
+        if action_type in vulnerability_actions:
+            if traumatic_trigger:
+                score -= 3.0
+            elif flashback:
+                score -= 2.0
+        
+        # Add trauma influence metadata
+        if flashback or traumatic_trigger:
+            if "decision_metadata" not in action:
+                action["decision_metadata"] = {}
+                
+            action["decision_metadata"]["trauma_influence"] = {
+                "has_flashback": flashback is not None,
+                "has_trigger": traumatic_trigger is not None,
+                "score": score
+            }
+        
+        return score
+
+    async def _score_belief_influence(self, beliefs: List[Dict[str, Any]], action: Dict[str, Any]) -> float:
+        """
+        Score actions based on how well they align with NPC's beliefs.
+        Beliefs strongly influence decision-making based on confidence.
+        """
+        score = 0.0
+        
+        if not beliefs:
+            return score
+            
+        action_type = action["type"]
+        target = action.get("target", "")
+        
+        belief_influences = []
+        
+        for belief in beliefs:
+            belief_text = belief.get("belief", "").lower()
+            confidence = belief.get("confidence", 0.5)
+            
+            # Skip low-confidence beliefs
+            if confidence < 0.3:
+                continue
+                
+            # Calculate belief relevance to this action
+            relevance = 0.0
+            align_score = 0.0
+            
+            # Player-related beliefs
+            if target == "player" or target == "group":
+                # Trust/friendship beliefs
+                if any(word in belief_text for word in ["trust", "friend", "ally", "like"]):
+                    if action_type in ["talk", "praise", "confide", "support"]:
+                        relevance = 0.8
+                        align_score = 3.0
+                    elif action_type in ["mock", "challenge", "leave", "punish"]:
+                        relevance = 0.7
+                        align_score = -3.0
+                
+                # Distrust/danger beliefs
+                elif any(word in belief_text for word in ["threat", "danger", "distrust", "wary"]):
+                    if action_type in ["observe", "act_defensive", "leave"]:
+                        relevance = 0.9
+                        align_score = 4.0
+                    elif action_type in ["confide", "praise", "support"]:
+                        relevance = 0.8
+                        align_score = -4.0
+                
+                # Submission beliefs
+                elif any(word in belief_text for word in ["submit", "obey", "follow"]):
+                    if action_type in ["command", "test", "dominate"]:
+                        relevance = 0.9
+                        align_score = 3.5
+                    elif action_type in ["observe", "act_defensive"]:
+                        relevance = 0.5
+                        align_score = -2.0
+                
+                # Rebellion beliefs
+                elif any(word in belief_text for word in ["rebel", "defy", "disobey"]):
+                    if action_type in ["punish", "test", "command"]:
+                        relevance = 0.8
+                        align_score = 3.0
+                    elif action_type in ["praise", "reward"]:
+                        relevance = 0.6
+                        align_score = -2.5
+                
+                # Look for direct action mentions in beliefs
+                elif action_type in belief_text:
+                    relevance = 0.9
+                    align_score = 4.0
+                
+                # Apply the influence scaled by confidence
+                if relevance > 0:
+                    belief_score = align_score * confidence * relevance
+                    score += belief_score
+                    
+                    belief_influences.append({
+                        "text": belief_text[:50] + "..." if len(belief_text) > 50 else belief_text,
+                        "confidence": confidence,
+                        "relevance": relevance,
+                        "align_score": align_score,
+                        "final_score": belief_score
+                    })
+        
+        # Add belief influence metadata
+        if belief_influences:
+            if "decision_metadata" not in action:
+                action["decision_metadata"] = {}
+                
+            action["decision_metadata"]["belief_influences"] = belief_influences
+        
+        return score
+
+    async def _score_decision_history(self, action: Dict[str, Any]) -> float:
+        """
+        Score actions based on decision history for psychological continuity.
+        This creates more consistent behavior over time.
+        """
+        score = 0.0
+        
+        if not hasattr(self, 'decision_history') or not self.decision_history:
+            return score
+            
+        action_type = action["type"]
+        
+        # Track patterns in decision history
+        # Recent actions are weighted more heavily
+        recent_actions = [d["action"]["type"] for d in self.decision_history[-3:]]
+        action_counts = {}
+        
+        for i, a_type in enumerate(recent_actions):
+            # More recent actions get more weight
+            weight = 1.0 - (i * 0.2)  # 1.0, 0.8, 0.6...
+            
+            if a_type not in action_counts:
+                action_counts[a_type] = 0
+                
+            action_counts[a_type] += weight
+        
+        # Psychological continuity - slight preference for consistent behavior
+        if action_type in action_counts:
+            # Prefer some consistency, but avoid excessive repetition
+            consistency_score = action_counts[action_type] * 1.5
+            
+            # But avoid doing the exact same thing more than twice in a row
+            if len(recent_actions) >= 2 and recent_actions[0] == recent_actions[1] == action_type:
+                # Penalize doing the same thing three times in a row
+                consistency_score -= 3.0
+                
+            score += consistency_score
+        
+        # Conversely, don't change behavior too rapidly
+        if len(recent_actions) >= 2:
+            if len(set(recent_actions)) == len(recent_actions) and action_type not in recent_actions:
+                # Penalize constantly changing behavior
+                score -= 1.0
+        
+        # Add history influence metadata
+        if "decision_metadata" not in action:
+            action["decision_metadata"] = {}
+            
+        action["decision_metadata"]["history_influence"] = {
+            "recent_actions": recent_actions,
+            "action_counts": action_counts,
+            "score": score
+        }
+        
+        return score
+
+    async def _score_player_knowledge_influence(self, action: Dict[str, Any], 
+                                              player_knowledge: float,
+                                              hidden_traits: Dict[str, Any]) -> float:
+        """
+        Score actions based on how much the player knows about the NPC.
+        NPCs behave differently when they know they're "seen through".
+        """
+        score = 0.0
+        
+        # No influence if player knowledge is low
+        if player_knowledge < 0.3:
+            return score
+            
+        action_type = action["type"]
+        
+        # For high player knowledge, the NPC may be more direct
+        if player_knowledge > 0.7:
+            # When player knows a lot, less need to maintain the mask
+            if "dominant" in hidden_traits and action_type in ["command", "dominate", "punish"]:
+                score += 2.0
+            elif "cruel" in hidden_traits and action_type in ["mock", "humiliate"]:
+                score += 2.0
+            elif "submissive" in hidden_traits and action_type in ["observe", "act_defensive"]:
+                score += 2.0
+                
+        # For medium player knowledge, mixed behaviors
+        elif player_knowledge > 0.4:
+            # Sometimes show true nature, sometimes maintain mask
+            if random.random() < 0.5:
+                # Show glimpses of true nature
+                if "dominant" in hidden_traits and action_type in ["command", "direct"]:
+                    score += 1.5
+                elif "cruel" in hidden_traits and action_type in ["mock"]:
+                    score += 1.5
+            else:
+                # Try to maintain facade
+                if "dominant" in hidden_traits and action_type in ["talk", "observe"]:
+                    score += 1.0
+        
+        # Add knowledge influence metadata
+        if player_knowledge > 0.3:
+            if "decision_metadata" not in action:
+                action["decision_metadata"] = {}
+                
+            action["decision_metadata"]["player_knowledge_influence"] = {
+                "knowledge_level": player_knowledge,
+                "score": score
+            }
+        
+        return score
+
+    def _calculate_player_knowledge(self, perception: Dict[str, Any], mask_integrity: float) -> float:
+        """
+        Calculate how much the player knows about the NPC's true nature.
+        Based on relationship level, memory count, and mask integrity.
+        """
+        player_knowledge = 0.0
+        
+        # Base knowledge from mask integrity
+        if mask_integrity < 50:
+            player_knowledge += 0.4  # If mask is damaged, player likely knows more
+        elif mask_integrity < 75:
+            player_knowledge += 0.2
+            
+        # Knowledge from memories
+        memories = perception.get("relevant_memories", [])
+        if len(memories) > 7:
+            player_knowledge += 0.3  # Many relevant memories means player knows NPC well
+        elif len(memories) > 3:
+            player_knowledge += 0.15
+            
+        # Knowledge from relationship
+        relationships = perception.get("relationships", {})
+        player_rel = relationships.get("player", {})
+        
+        if player_rel:
+            link_level = player_rel.get("link_level", 0)
+            if link_level > 70:
+                player_knowledge += 0.3  # Close relationship = more knowledge
+            elif link_level > 40:
+                player_knowledge += 0.15
+        
+        # Cap at 0.0-1.0 range
+        return min(1.0, max(0.0, player_knowledge))
+
+    def _record_decision_reasoning(self, top_actions: List[Dict[str, Any]]) -> None:
+        """Record decision reasoning for introspection and debugging."""
+        if not hasattr(self, '_decision_log'):
+            self._decision_log = []
+            
+        decision_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "top_actions": [{
+                "type": a["action"]["type"],
+                "score": a["score"],
+                "factors": a["reasoning"]
+            } for a in top_actions],
+            "chosen_action": top_actions[0]["action"]["type"] if top_actions else None
+        }
+        
+        # Add to history, keeping last 20 entries
+        self._decision_log.append(decision_entry)
+        if len(self._decision_log) > 20:
+            self._decision_log = self._decision_log[-20:]
+
     async def select_action(self, scored_actions: List[Dict[str, Any]], randomness: float = 0.2) -> Dict[str, Any]:
         """
-        Select an action from scored actions, with some randomness.
+        Select an action from scored actions, with some randomness and pattern breaking.
         
         Args:
             scored_actions: List of actions with scores
@@ -932,18 +1164,51 @@ class NPCDecisionEngine:
         if not scored_actions:
             return {"type": "idle", "description": "Do nothing"}
         
-        # Add randomness to scores
+        # Check for action weights overriding scores
+        weight_based_selection = False
         for sa in scored_actions:
-            sa["score"] += random.uniform(0, randomness * 10)
+            action = sa["action"]
+            if "weight" in action and action["weight"] > 2.0:
+                # High weight actions get priority
+                weight_based_selection = True
+                
+        if weight_based_selection:
+            # Use weights rather than scores
+            weighted_actions = [(sa["action"], sa["action"].get("weight", 1.0)) for sa in scored_actions]
+            
+            # Sort by weight, highest first
+            weighted_actions.sort(key=lambda x: x[1], reverse=True)
+            
+            # Select top weighted action
+            selected_action = weighted_actions[0][0]
+        else:
+            # Normal score-based selection with randomness
+            
+            # Add randomness to scores
+            for sa in scored_actions:
+                sa["score"] += random.uniform(0, randomness * 10)
+            
+            # Re-sort with randomness applied
+            scored_actions.sort(key=lambda x: x["score"], reverse=True)
+            
+            # Select top action
+            selected_action = scored_actions[0]["action"]
         
-        # Re-sort with randomness applied
-        scored_actions.sort(key=lambda x: x["score"], reverse=True)
+        # Add decision metadata to action for introspection
+        if len(scored_actions) > 1:
+            if "decision_metadata" not in selected_action:
+                selected_action["decision_metadata"] = {}
+                
+            selected_action["decision_metadata"]["alternative_actions"] = [
+                {"type": sa["action"]["type"], "score": sa["score"]} for sa in scored_actions[1:3]
+            ]
         
-        # Select top action
-        selected_action = scored_actions[0]["action"]
-        
-        # Add reasoning metadata to the action
-        selected_action["decision_factors"] = scored_actions[0]["reasoning"]
+        # Add reasoning if available
+        if len(scored_actions) > 0 and "reasoning" in scored_actions[0]:
+            if "decision_metadata" not in selected_action:
+                selected_action["decision_metadata"] = {}
+                
+            selected_action["decision_metadata"]["reasoning"] = scored_actions[0]["reasoning"]
         
         return selected_action
 
