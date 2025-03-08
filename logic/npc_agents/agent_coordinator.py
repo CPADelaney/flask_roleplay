@@ -9,6 +9,7 @@ import asyncio
 import random
 from typing import List, Dict, Any, Optional, Set, Tuple
 from dataclasses import dataclass
+from datetime import datetime
 
 from db.connection import get_db_connection
 from .npc_agent import NPCAgent
