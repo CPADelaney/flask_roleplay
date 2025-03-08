@@ -60,6 +60,121 @@ class NPCAgent:
         self._mask_manager = None
         self.current_emotional_state = None
         self.last_perception = None
+
+        # Enhanced cache management
+        self._cache = {
+            'perception': {},
+            'memories': {},
+            'relationships': {},
+            'emotional_state': None,
+            'mask': None
+        }
+        self._cache_timestamps = {
+            'perception': None,
+            'memories': {},
+            'relationships': None,
+            'emotional_state': None,
+            'mask': None
+        }
+        self._cache_ttls = {
+            'perception': timedelta(minutes=5),
+            'memories': timedelta(minutes=10),
+            'relationships': timedelta(minutes=15),
+            'emotional_state': timedelta(minutes=2),
+            'mask': timedelta(minutes=5)
+        }
+        
+        self.perf_metrics = {
+            'perception_time': [],
+            'decision_time': [],
+            'action_time': [],
+            'memory_retrieval_time': [],
+            'last_reported': datetime.now()
+        }
+        self._setup_performance_reporting()    
+
+    def invalidate_cache(self, cache_key=None):
+        """
+        Invalidate specific cache entries or all if key is None.
+        
+        Args:
+            cache_key: Specific cache to invalidate, or None for all
+        """
+        if cache_key is None:
+            # Invalidate all caches
+            self._cache = {
+                'perception': {},
+                'memories': {},
+                'relationships': {},
+                'emotional_state': None,
+                'mask': None
+            }
+            self._cache_timestamps = {
+                'perception': None,
+                'memories': {},
+                'relationships': None,
+                'emotional_state': None,
+                'mask': None
+            }
+            logger.debug(f"Invalidated all caches for NPC {self.npc_id}")
+        elif cache_key in self._cache:
+            # Invalidate specific cache
+            if isinstance(self._cache[cache_key], dict):
+                self._cache[cache_key] = {}
+            else:
+                self._cache[cache_key] = None
+                
+            self._cache_timestamps[cache_key] = None
+            logger.debug(f"Invalidated {cache_key} cache for NPC {self.npc_id}")
+
+    def invalidate_memory_cache(self, memory_query=None):
+        """
+        Invalidate memory cache, either completely or for a specific query.
+        
+        Args:
+            memory_query: Query string to invalidate, or None for all
+        """
+        if memory_query is None:
+            # Invalidate all memory caches
+            self._cache['memories'] = {}
+            self._cache_timestamps['memories'] = {}
+        elif memory_query in self._cache['memories']:
+            # Invalidate specific memory query
+            del self._cache['memories'][memory_query]
+            del self._cache_timestamps['memories'][memory_query]
+    
+    def is_cache_valid(self, cache_key, sub_key=None):
+        """
+        Check if a cache entry is still valid based on TTL.
+        
+        Args:
+            cache_key: Main cache key
+            sub_key: Optional sub-key for dict caches
+            
+        Returns:
+            True if cache is valid, False otherwise
+        """
+        now = datetime.now()
+        timestamp = None
+        
+        if cache_key not in self._cache_ttls:
+            return False
+            
+        if sub_key is not None:
+            # Check sub-key in dict cache
+            if cache_key not in self._cache_timestamps or not isinstance(self._cache_timestamps[cache_key], dict):
+                return False
+                
+            timestamp = self._cache_timestamps[cache_key].get(sub_key)
+        else:
+            # Check main cache key
+            timestamp = self._cache_timestamps.get(cache_key)
+            
+        if timestamp is None:
+            return False
+            
+        # Check if timestamp + TTL > now (cache still valid)
+        return timestamp + self._cache_ttls[cache_key] > now
     
     async def _get_memory_system(self):
         """Lazy-load the memory system."""
@@ -73,10 +188,50 @@ class NPCAgent:
             self._mask_manager = ProgressiveRevealManager(self.user_id, self.conversation_id)
         return self._mask_manager
 
+    def _setup_performance_reporting(self):
+        """Set up periodic performance reporting."""
+        async def report_metrics():
+            while True:
+                await asyncio.sleep(600)  # Report every 10 minutes
+                metrics_dict = {}
+                
+                # Calculate averages for each metric
+                for metric, values in self.perf_metrics.items():
+                    if metric != 'last_reported' and values:
+                        metrics_dict[f'avg_{metric}'] = sum(values) / len(values)
+                        # Keep only last 100 values to avoid memory growth
+                        self.perf_metrics[metric] = values[-100:]
+                
+                if metrics_dict:
+                    logger.info(f"NPC {self.npc_id} performance: {metrics_dict}")
+                self.perf_metrics['last_reported'] = datetime.now()
+        
+        # Start the task without waiting for it
+        asyncio.create_task(report_metrics())
+
     async def perceive_environment(self, current_context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Update the NPC's perception of the current environment & context.
-        Enhanced with memory-based perception.
+        """Measure performance of perceive_environment."""
+        start_time = datetime.now()
+        
+        try:
+            result = await self._perceive_environment_impl(current_context)
+            
+            # Record performance metric
+            elapsed = (datetime.now() - start_time).total_seconds()
+            self.perf_metrics['perception_time'].append(elapsed)
+            
+            # Log slow operations
+            if elapsed > 0.5:  # Log if taking more than 500ms
+                logger.warning(f"Slow perception for NPC {self.npc_id}: {elapsed:.2f}s")
+            
+            return result
+        except Exception as e:
+            # Record failure in metrics
+            elapsed = (datetime.now() - start_time).total_seconds()
+            logger.error(f"Perception error for NPC {self.npc_id} after {elapsed:.2f}s: {e}")
+            raise
+    
+    async def _perceive_environment_impl(self, current_context: Dict[str, Any]) -> Dict[str, Any]:
 
         Args:
             current_context: Dictionary that may contain location/time or relevant info
@@ -91,13 +246,20 @@ class NPCAgent:
               - timestamp
               - beliefs
               - flashback (if triggered)
-        """
+
         # Fetch basic environment data
         environment_data = await fetch_environment_data(
             self.user_id,
             self.conversation_id,
             current_context
         )
+
+        context_key = str(hash(json.dumps(current_context, sort_keys=True, default=str)))
+        
+        # Check if we have a valid cached perception
+        if 'perception' in self._cache and context_key in self._cache['perception'] and self.is_cache_valid('perception', context_key):
+            self.last_perception = self._cache['perception'][context_key]
+            return self.last_perception
 
         # Enhance perception with memory system
         memory_system = await self._get_memory_system()
@@ -173,12 +335,15 @@ class NPCAgent:
             "timestamp": datetime.now().isoformat()
         }
 
-        # Store the current perception
-        self.last_perception = perception
-
-        logger.debug("NPCAgent %s perceived environment with %d relevant memories", 
-                     self.npc_id, len(relevant_memories))
+        if 'perception' not in self._cache:
+            self._cache['perception'] = {}
+        self._cache['perception'][context_key] = perception
         
+        if 'perception' not in self._cache_timestamps:
+            self._cache_timestamps['perception'] = {}
+        self._cache_timestamps['perception'][context_key] = datetime.now()
+        
+        self.last_perception = perception
         return perception
 
     async def make_decision(self,
