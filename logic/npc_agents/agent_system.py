@@ -850,7 +850,7 @@ class NPCAgentSystem:
         except Exception as e:
             logger.error(f"Error in coordination activities: {e}")
             return []
-            
+                
     async def _find_dominant_npcs(self, npc_ids: List[int]) -> List[int]:
         """Find NPCs with high dominance that might initiate group activities."""
         dominant_npcs = []
