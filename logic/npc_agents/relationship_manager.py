@@ -315,9 +315,12 @@ class NPCRelationshipManager:
             
             # Create a connection and transaction
             try:
-                with get_db_connection() as conn, conn.cursor() as cursor:
-                # Begin transaction
-                conn.begin()
+                # Use connection with proper exception handling
+                with get_db_connection() as conn:
+                    with conn.cursor() as cursor:
+                        try:
+                            # Begin transaction
+                            conn.begin()
                 
                 # 1) Check if a social link record already exists
                 cursor.execute("""
@@ -471,8 +474,13 @@ class NPCRelationshipManager:
                 """, (json.dumps([event_text]), link_id))
     
                 # Commit the transaction
-                conn.commit()
-                result["success"] = True
+                            conn.commit()
+                            result["success"] = True
+                        except Exception as sql_error:
+                            # Roll back transaction on error
+                            conn.rollback()
+                            logger.error(f"Database error updating relationship: {sql_error}")
+                            result["error"] = str(sql_error)
                 
                 logger.debug(
                     "Updated relationship for NPC %s -> entity (%s:%s). "
