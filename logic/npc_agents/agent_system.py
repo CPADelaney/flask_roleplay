@@ -17,7 +17,10 @@ from memory.wrapper import MemorySystem
 
 logger = logging.getLogger(__name__)
 
-
+class NPCSystemError(Exception):
+    """Error in NPC system operations."""
+    pass
+    
 class NPCAgentSystem:
     """
     Main system that integrates individual NPC agents with the game loop.
