@@ -832,6 +832,53 @@ async def _propagate_memories_safely(self, npc_id: int, npc_name: str, memories:
                 npc_ids.append(result)
         
         return npc_ids
+
+async def batch_create_memories(
+    self, 
+    npc_id: int,
+    memories: List[Dict[str, Any]]
+) -> List[int]:
+    """
+    Create multiple memories in a single operation for better performance.
+    
+    Args:
+        npc_id: ID of the NPC
+        memories: List of memory objects with text, type, significance, etc.
+        
+    Returns:
+        List of created memory IDs
+    """
+    if not memories:
+        return []
+        
+    memory_system = await self._get_memory_system()
+    
+    # Prepare all memories for batch insertion
+    batch_values = []
+    for memory in memories:
+        # Get emotional analysis for each memory text
+        emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(
+            memory.get("text", "")
+        )
+        
+        batch_values.append({
+            "entity_type": "npc",
+            "entity_id": npc_id,
+            "memory_text": memory.get("text", ""),
+            "importance": memory.get("importance", "medium"),
+            "emotional": memory.get("emotional", False),
+            "primary_emotion": emotion_analysis.get("primary_emotion", "neutral"),
+            "emotion_intensity": emotion_analysis.get("intensity", 0.5),
+            "tags": memory.get("tags", [])
+        })
+    
+    # Execute batch insert
+    results = await memory_system.batch_remember(batch_values)
+    
+    # Process schemas in background task for efficiency
+    self._process_batch_schemas(results, npc_id)
+    
+    return results.get("memory_ids", [])
     
 async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
     """
