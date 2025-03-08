@@ -52,6 +52,31 @@ class NPCAgentSystem:
         self._last_flashback_times = {}
         self.initialize_agents()
 
+        self._setup_memory_maintenance_schedule()
+
+def _setup_memory_maintenance_schedule(self):
+    """Schedule periodic memory maintenance for all NPCs."""
+    async def run_maintenance_cycle():
+        while True:
+            try:
+                # Run maintenance every 15 minutes
+                await asyncio.sleep(900)  # 15 minutes in seconds
+                
+                # Log maintenance start
+                logger.info("Starting scheduled memory maintenance cycle")
+                
+                # Run maintenance
+                results = await self.run_memory_maintenance()
+                
+                # Log completion
+                logger.info(f"Completed memory maintenance: {results}")
+                
+            except Exception as e:
+                logger.error(f"Error in scheduled memory maintenance: {e}")
+    
+    # Start the maintenance task
+    asyncio.create_task(run_maintenance_cycle())
+
     async def _get_memory_system(self):
         """Lazy-load the memory system."""
         if self._memory_system is None:
