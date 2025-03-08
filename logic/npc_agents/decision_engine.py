@@ -439,6 +439,197 @@ class NPCDecisionEngine:
         actions.extend(memory_based_actions)
         
         return actions
+
+    # Add to decision_engine.py
+    
+    async def _apply_memory_biases(self, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Apply various psychological biases to memories to create more realistic recall.
+        Includes recency bias, emotional bias, and personality-specific memory biases.
+        
+        Args:
+            memories: List of memories to process
+            
+        Returns:
+            List of memories with bias-adjusted relevance scores
+        """
+        if not memories:
+            return []
+        
+        # Apply recency bias - more recent memories have higher relevance
+        memories = await self.apply_recency_bias(memories)
+        
+        # Apply emotional bias - emotionally charged memories have higher relevance
+        memories = await self.apply_emotional_bias(memories)
+        
+        # Apply personality-based bias - varies based on NPC personality traits
+        memories = await self.apply_personality_bias(memories)
+        
+        # Sort by adjusted relevance score
+        memories.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+        
+        return memories
+    
+    def _record_decision_reasoning(self, top_actions: List[Dict[str, Any]]) -> None:
+        """
+        Record decision reasoning for introspection, debugging, and memory formation.
+        Tracks why certain actions were preferred over others.
+        
+        Args:
+            top_actions: List of top-ranked actions with scores and reasoning
+        """
+        if not hasattr(self, '_decision_log'):
+            self._decision_log = []
+        
+        now = datetime.now()
+        
+        # Create reasoning entry
+        reasoning_entry = {
+            "timestamp": now.isoformat(),
+            "top_actions": []
+        }
+        
+        # Log detailed reasoning for top actions
+        for i, action_data in enumerate(top_actions[:3]):  # Log top 3 actions
+            action = action_data.get("action", {})
+            score = action_data.get("score", 0)
+            reasoning = action_data.get("reasoning", {})
+            
+            action_entry = {
+                "rank": i + 1,
+                "type": action.get("type", "unknown"),
+                "description": action.get("description", ""),
+                "score": score,
+                "reasoning_factors": reasoning
+            }
+            
+            reasoning_entry["top_actions"].append(action_entry)
+        
+        # Add chosen action details
+        if top_actions:
+            chosen_action = top_actions[0].get("action", {})
+            reasoning_entry["chosen_action"] = {
+                "type": chosen_action.get("type", "unknown"),
+                "description": chosen_action.get("description", ""),
+            }
+        
+        # Add to decision log, keeping maximum history
+        self._decision_log.append(reasoning_entry)
+        if len(self._decision_log) > 20:  # Keep last 20 decisions
+            self._decision_log = self._decision_log[-20:]
+        
+        # Log for debugging
+        logger.debug(f"NPC {self.npc_id} decision reasoning recorded")
+    
+    # Fix incomplete string in traumatic response
+    async def _create_trauma_response_action(self, trauma_trigger: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Create a psychologically realistic action in response to a traumatic trigger.
+        Features differentiated responses based on trauma type and emotional response.
+        
+        Args:
+            trauma_trigger: Information about the traumatic trigger
+            
+        Returns:
+            Trauma response action or None
+        """
+        try:
+            # Get emotional response from trigger
+            emotional_response = trauma_trigger.get("emotional_response", {})
+            primary_emotion = emotional_response.get("primary_emotion", "fear")
+            intensity = emotional_response.get("intensity", 0.5)
+            trigger_text = trauma_trigger.get("trigger_text", "")
+            
+            # Different responses based on trauma type and primary emotion
+            if primary_emotion == "fear":
+                # Fear typically triggers fight-flight-freeze responses
+                # Determine which based on NPC personality
+                
+                # Default to freeze response (most common)
+                response_type = "freeze"
+                
+                # Check for fight vs flight personality factors
+                with get_db_connection() as conn, conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT dominance, cruelty 
+                        FROM NPCStats
+                        WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                    """, (self.npc_id, self.user_id, self.conversation_id))
+                    
+                    row = cursor.fetchone()
+                    if row:
+                        dominance, cruelty = row
+                        
+                        # High dominance/cruelty NPCs tend to fight
+                        if dominance > 70 or cruelty > 70:
+                            response_type = "fight"
+                        # Low dominance NPCs tend to flee
+                        elif dominance < 30:
+                            response_type = "flight"
+                
+                # Create appropriate response based on type
+                if response_type == "fight":
+                    return {
+                        "type": "traumatic_response",
+                        "description": "react aggressively to a triggering memory",
+                        "target": "group",
+                        "weight": 2.0 * intensity,
+                        "stats_influenced": {"trust": -10, "fear": +5},
+                        "trauma_trigger": trigger_text
+                    }
+                elif response_type == "flight":
+                    return {
+                        "type": "traumatic_response",
+                        "description": "try to escape from a triggering situation",
+                        "target": "location",
+                        "weight": 2.0 * intensity,
+                        "stats_influenced": {"trust": -5},
+                        "trauma_trigger": trigger_text
+                    }
+                else:  # freeze
+                    return {
+                        "type": "traumatic_response",
+                        "description": "freeze in response to a triggering memory",
+                        "target": "self",
+                        "weight": 2.0 * intensity,
+                        "stats_influenced": {"trust": -5},
+                        "trauma_trigger": trigger_text
+                    }
+                    
+            elif primary_emotion == "anger":
+                # Anger typically leads to confrontational responses
+                return {
+                    "type": "traumatic_response",
+                    "description": "respond with anger to a triggering situation",
+                    "target": "group",
+                    "weight": 1.8 * intensity,
+                    "stats_influenced": {"trust": -5, "respect": -5},
+                    "trauma_trigger": trigger_text
+                }
+            elif primary_emotion == "sadness":
+                # Sadness typically leads to withdrawal
+                return {
+                    "type": "traumatic_response",
+                    "description": "become visibly downcast due to a painful memory",
+                    "target": "self",
+                    "weight": 1.7 * intensity,
+                    "stats_influenced": {"closeness": +2},  # Can create sympathy
+                    "trauma_trigger": trigger_text
+                }
+            else:
+                # Generic response for other emotions
+                return {
+                    "type": "traumatic_response",
+                    "description": f"respond emotionally to a trigger related to {trigger_text}",
+                    "target": "self",
+                    "weight": 1.5 * intensity,
+                    "stats_influenced": {},
+                    "trauma_trigger": trigger_text
+                }
+                
+        except Exception as e:
+            logger.error(f"Error creating trauma response: {e}")
+            return None
     
     async def initialize_long_term_goals(self, npc_data: Dict[str, Any]) -> None:
         """Initialize NPC's long-term goals based on personality and archetype."""
