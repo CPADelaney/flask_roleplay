@@ -7,6 +7,7 @@ Coordinates multiple NPC agents for group interactions, with improved memory int
 import logging
 import asyncio
 import random
+import json
 from typing import List, Dict, Any, Optional, Set, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta  # Add this line
