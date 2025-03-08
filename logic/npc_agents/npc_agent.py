@@ -768,7 +768,7 @@ class NPCAgent:
     async def _should_mask_slip(self, perception, chosen_action):
         """
         Determine if mask should slip based on complex psychological factors.
-        Features emotional state, action type, and recent history.
+        Enhanced with consistent behavior tracking for mask evolution.
         """
         # Get mask info
         mask_info = perception.get("mask", {})
@@ -796,6 +796,18 @@ class NPCAgent:
             dominance, cruelty = row[0], row[1]
             # Default self_control if not found
             self_control = row[2] if len(row) > 2 else 50
+        
+        # Get consistent behavior patterns (NEW)
+        behavior_patterns = await self._analyze_recent_behavior_patterns()
+        
+        # Adjust slip chance based on behavioral consistency
+        consistency_modifier = 0.0
+        if behavior_patterns.get("true_nature_acting", 0) > 3:
+            # If consistently acting according to true nature, mask starts to align
+            consistency_modifier -= 0.2  # Reduces slip chance
+        elif behavior_patterns.get("mask_reinforcing", 0) > 3:
+            # If actively reinforcing mask, less likely to slip
+            consistency_modifier -= 0.3
         
         # Personality modifiers
         personality_factor = 0.0
@@ -835,6 +847,8 @@ class NPCAgent:
             action_factor += 0.2
         elif action_type in ["emotional_outburst", "express_anger"]:
             action_factor += 0.3
+        elif action_type in ["mask_reinforcement", "self_control"]:
+            action_factor -= 0.4  # Actively maintaining mask
         
         # Context modifiers
         context_factor = 0.0
@@ -853,7 +867,8 @@ class NPCAgent:
             personality_factor + 
             emotion_factor + 
             action_factor +
-            context_factor
+            context_factor +
+            consistency_modifier  # NEW - behavior consistency impact
         )
         
         # Cap probability at 95%
@@ -861,6 +876,131 @@ class NPCAgent:
         
         # Make the roll
         return random.random() < final_probability
+    
+    async def _analyze_recent_behavior_patterns(self):
+        """
+        NEW: Analyze patterns in recent behavior to determine consistency 
+        with true nature vs. mask presentation.
+        """
+        patterns = {
+            "true_nature_acting": 0,  # Acts according to true nature
+            "mask_reinforcing": 0,    # Actively reinforces mask
+            "mixed_signals": 0        # Inconsistent behavior
+        }
+        
+        # Check past decisions
+        if hasattr(self, 'decision_history') and len(self.decision_history) >= 5:
+            # Get mask info to determine true nature vs. presented traits
+            memory_system = await self._get_memory_system()
+            mask_info = await memory_system.get_npc_mask(self.npc_id)
+            
+            if not mask_info:
+                return patterns
+                
+            hidden_traits = mask_info.get("hidden_traits", {})
+            presented_traits = mask_info.get("presented_traits", {})
+            
+            # Analyze last 5 decisions
+            recent_actions = [d["action"] for d in self.decision_history[-5:]]
+            
+            for action in recent_actions:
+                action_type = action.get("type", "")
+                
+                # Check if action aligns with hidden (true) traits
+                true_nature_alignment = 0
+                if "dominant" in hidden_traits and action_type in ["command", "dominate", "test"]:
+                    true_nature_alignment += 1
+                if "cruel" in hidden_traits and action_type in ["mock", "humiliate", "punish"]:
+                    true_nature_alignment += 1
+                if "sadistic" in hidden_traits and action_type in ["punish", "humiliate"]:
+                    true_nature_alignment += 1
+                    
+                # Check if action aligns with presented traits
+                mask_alignment = 0
+                if "kind" in presented_traits and action_type in ["praise", "support", "help"]:
+                    mask_alignment += 1
+                if "gentle" in presented_traits and action_type in ["talk", "observe", "support"]:
+                    mask_alignment += 1
+                if "submissive" in presented_traits and action_type in ["observe", "wait", "obey"]:
+                    mask_alignment += 1
+                    
+                # Determine primary alignment of this action
+                if true_nature_alignment > mask_alignment:
+                    patterns["true_nature_acting"] += 1
+                elif mask_alignment > true_nature_alignment:
+                    patterns["mask_reinforcing"] += 1
+                elif mask_alignment > 0 and true_nature_alignment > 0:
+                    patterns["mixed_signals"] += 1
+        
+        return patterns
+    
+    async def apply_mask_evolution(self):
+        """
+        NEW: Gradually evolve mask based on consistent behavior.
+        A mask that is consistently maintained or consistently broken will
+        eventually align with behavior.
+        """
+        # Get memory system
+        memory_system = await self._get_memory_system()
+        
+        # Get current mask info
+        mask_info = await memory_system.get_npc_mask(self.npc_id)
+        if not mask_info:
+            return {"status": "no_mask"}
+            
+        # Get current integrity
+        integrity = mask_info.get("integrity", 100)
+        
+        # Analyze recent behavior patterns
+        patterns = await self._analyze_recent_behavior_patterns()
+        
+        # Calculate adjustment based on patterns
+        adjustment = 0
+        
+        # If consistently acting according to true nature, mask weakens
+        if patterns["true_nature_acting"] >= 4:
+            adjustment -= 5
+        elif patterns["true_nature_acting"] >= 2:
+            adjustment -= 2
+            
+        # If actively reinforcing mask, integrity improves
+        if patterns["mask_reinforcing"] >= 4:
+            adjustment += 3
+        elif patterns["mask_reinforcing"] >= 2:
+            adjustment += 1
+            
+        # Mixed signals create strain
+        if patterns["mixed_signals"] >= 3:
+            adjustment -= 2
+            
+        # No change if behavior isn't consistent
+        if adjustment == 0:
+            return {"status": "no_change"}
+            
+        # Apply the adjustment
+        new_integrity = max(0, min(100, integrity + adjustment))
+        
+        # If significant change, update mask
+        if abs(new_integrity - integrity) >= 2:
+            trigger = "consistent behavior patterns" if adjustment < 0 else "active mask reinforcement"
+            severity = min(3, abs(adjustment) // 2)  # 1-3 severity based on adjustment size
+            
+            # Use existing mask system to apply the change
+            result = await memory_system.reveal_npc_trait(
+                npc_id=self.npc_id,
+                trigger=trigger,
+                severity=severity if adjustment < 0 else 0  # Only positive severity for slips
+            )
+            
+            return {
+                "status": "updated",
+                "old_integrity": integrity,
+                "new_integrity": new_integrity,
+                "adjustment": adjustment,
+                "result": result
+            }
+            
+        return {"status": "no_significant_change"}
     
     def _record_decision_history(self, action):
         """Record the decision in history for pattern analysis."""
