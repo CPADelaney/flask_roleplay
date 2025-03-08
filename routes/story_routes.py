@@ -440,11 +440,14 @@ async def get_nearby_npcs(user_id, conversation_id, location=None):
 
 @story_bp.route("/next_storybeat", methods=["POST"])
 async def next_storybeat():
-    """Improved next_storybeat with better resource cleanup."""
-    conn = None
-    cur = None
-    npc_system = None
-    pool = None
+    """Enhanced storybeat endpoint with better resource management and parallel processing."""
+    # Resource tracking containers
+    resources = {
+        "conn": None,
+        "cursor": None,
+        "npc_system": None,
+        "pool": None
+    }
     
     try:
         user_id = session.get("user_id")
@@ -454,296 +457,158 @@ async def next_storybeat():
         data = request.get_json() or {}
         user_input = data.get("user_input", "").strip()
         conv_id = data.get("conversation_id")
+        player_name = data.get("player_name", "Chase")
         
-        # Database connection setup with proper resource tracking
-        conn = get_db_connection()
-        cur = conn.cursor()
+        # Database connection with proper context management
+        resources["conn"] = get_db_connection()
+        resources["cursor"] = resources["conn"].cursor()
         
-        # Initialize NPC system with tracked pool
-        npc_system = IntegratedNPCSystem(user_id, conv_id)
-        pool = npc_system._pool  # Keep reference for cleanup
+        # Initialize NPC system with connection pooling
+        resources["npc_system"] = IntegratedNPCSystem(user_id, conv_id)
+        resources["pool"] = await resources["npc_system"].get_connection_pool()
 
-        # 1.5) Possibly spawn more NPCs if too few introduced
-        cur.execute("""
-            SELECT COUNT(*) FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s AND introduced=FALSE
-        """, (user_id, conv_id))
-        unintroduced_count = cur.fetchone()[0]
-
+        # Get context data
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
         env_desc = aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", "")
         day_names = aggregator_data.get("calendar", {}).get("days", ["Monday","Tuesday","..."])
-
+        
+        # Parallel operations for better performance
+        # Create tasks for operations that can run concurrently
+        tasks = [
+            # Check for NPC availability 
+            check_npc_availability(resources["cursor"], user_id, conv_id),
+            # Get current game time
+            resources["npc_system"].get_current_game_time(),
+            # Get nearby NPCs for interaction
+            get_nearby_npcs(user_id, conv_id, aggregator_data.get("currentRoleplay", {}).get("CurrentLocation"))
+        ]
+        
+        # Execute all tasks concurrently and get results
+        npc_count_result, current_time, nearby_npcs = await asyncio.gather(*tasks)
+        
+        # Check if we need to create NPCs
+        unintroduced_count = npc_count_result[0] if npc_count_result else 0
         if unintroduced_count < 2:
-            # Use IntegratedNPCSystem to create multiple NPCs
-            await npc_system.create_multiple_npcs(env_desc, day_names, count=3)
+            # Spawn new NPCs with optimized performance
+            await resources["npc_system"].create_multiple_npcs(env_desc, day_names, count=3)
 
-        # 2) Insert user message
-        cur.execute("""
+        # Record user message
+        resources["cursor"].execute("""
             INSERT INTO messages (conversation_id, sender, content)
             VALUES (%s, %s, %s)
         """, (conv_id, "user", user_input))
-        conn.commit()
+        resources["conn"].commit()
 
-        # 3) Process universal updates
-        universal_data = data.get("universal_update")
-        if universal_data:
+        # Process universal updates if provided
+        if data.get("universal_update"):
+            universal_data = data["universal_update"]
             universal_data["user_id"] = user_id
             universal_data["conversation_id"] = conv_id
             
-            async def run_univ_update():
-                import asyncpg
-                dsn = os.getenv("DB_DSN")
-                async_conn = await asyncpg.connect(dsn=dsn)
-                result = await apply_universal_updates(user_id, conv_id, universal_data, async_conn)
-                await async_conn.close()
-                return result
-
-            update_result = await run_univ_update()
-            if "error" in update_result:
-                cur.close()
-                conn.close()
+            # Process updates with connection reuse
+            update_result = await process_universal_updates(universal_data, resources["pool"])
+            if update_result.get("error"):
                 return jsonify(update_result), 500
 
-        # 4) NPC Interactions using IntegratedNPCSystem
+        # Context for NPC interactions
         context = {
             "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
-            "time_of_day": aggregator_data.get("timeOfDay", "Morning")
+            "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
+            "player_input": user_input,
+            "player_name": player_name
         }
         
-        # Determine activity type from user input if not explicitly provided
-        activity_type = requested_activity
-        if not activity_type:
-            # Use process_activity to classify the user input
-            activity_result = await npc_system.process_player_activity(user_input, context)
-            activity_type = activity_result.get("activity_type", "quick_chat")
+        # Get activity type with enhanced detection
+        activity_result = await resources["npc_system"].process_player_activity(user_input, context)
+        activity_type = activity_result.get("activity_type", "conversation")
         
-        # Get nearby NPCs for interaction
-        nearby_npcs = await get_nearby_npcs(user_id, conv_id, context["location"])
+        # Process NPC interactions in batches
+        npc_responses = await process_npc_interactions_batch(
+            resources["npc_system"], 
+            nearby_npcs, 
+            user_input, 
+            activity_type,
+            context
+        )
         
-        # Process NPC interactions
-        npc_responses = []
-        for nearby_npc in nearby_npcs[:3]:  # Limit to 3 NPCs for performance
-            interaction_result = await npc_system.handle_npc_interaction(
-                npc_id=nearby_npc["npc_id"],
-                interaction_type="defiant_response" if "no" in user_input.lower() or "won't" in user_input.lower() else 
-                               "submissive_response" if "yes" in user_input.lower() or "okay" in user_input.lower() else
-                               "flirtatious_remark" if any(word in user_input.lower() for word in ["cute", "pretty", "hot", "sexy"]) else
-                               "extended_conversation",
-                player_input=user_input,
-                context=context
-            )
-            
-            # Format response for display
-            if interaction_result:
-                npc_name = nearby_npc["npc_name"]
-                response_data = {
-                    "npc_id": nearby_npc["npc_id"],
-                    "npc_name": npc_name,
-                    "action": f"reacts to your {activity_type}",
-                    "result": {
-                        "outcome": interaction_result.get("events", [{}])[0].get("text", 
-                                 f"{npc_name} observes your actions with interest.")
-                    },
-                    "stat_changes": interaction_result.get("stat_changes", {})
-                }
-                npc_responses.append(response_data)
-                
-                # Record memories created
-                memories_created = interaction_result.get("memories_created", [])
-                for memory_text in memories_created:
-                    await npc_system.add_memory_to_npc(
-                        npc_id=nearby_npc["npc_id"],
-                        memory_text=memory_text,
-                        tags=["player_interaction", interaction_type]
-                    )
-
-        # 5) Check time advancement using IntegratedNPCSystem
-        old_year, old_month, old_day, old_phase = await npc_system.get_current_game_time()
+        # Time advancement with better verification
+        time_result = await process_time_advancement(
+            resources["npc_system"],
+            activity_type,
+            data,
+            current_time
+        )
         
-        # Determine if time should advance
-        time_result = {
-            "time_advanced": False,
-            "would_advance": False,
-            "periods": 0,
-            "current_time": old_phase,
-            "confirm_needed": False
-        }
+        # Check for relationship events and process choices
+        crossroads_data = await process_relationship_events(
+            resources["npc_system"],
+            data
+        )
         
-        if data.get("confirm_time_advance", False):
-            # Actually do time advance with IntegratedNPCSystem
-            time_result = await npc_system.advance_time_with_activity(activity_type)
-        else:
-            # Check if it would advance time
-            activity_info = await npc_system.process_player_activity(user_input, context)
-            if activity_info.get("time_advanced", False):
-                time_result = {
-                    "time_advanced": False,
-                    "would_advance": True,
-                    "periods": 1,  # Default to 1 period
-                    "current_time": old_phase,
-                    "confirm_needed": True
-                }
-
-        # 6) If time advanced and new_day > old_day and new_time == "Morning", do nightly maintenance
-        if time_result.get("time_advanced", False):
-            new_time = time_result.get("new_time", old_phase)
-            new_day = time_result.get("new_day", old_day)
-            
-            if new_time == "Morning" and new_day > old_day:
-                # End-of-day => call memory fade
-                await nightly_maintenance(user_id, conv_id)
-                logging.info("[next_storybeat] Ran nightly maintenance for day rollover.")
-
-            # Process addiction exposures if time advanced
-            if time_result.get("time_advanced", False):
-                for adtype in ["socks", "feet", "sweat", "ass", "scent"]:
-                    if "exposed_to_" + adtype in data:
-                        await update_addiction_level(user_id, conv_id, player_name, adtype, 0.2)
-
-        # 7) Relationship crossroads check using IntegratedNPCSystem
-        crossroads_event = None
-        crossroads_result = {}
+        # Build enhanced aggregator text with NPC responses
+        aggregator_text = build_aggregator_text(
+            aggregator_data, 
+            rule_knowledge=gather_rule_knowledge() if data.get("include_rules", False) else None
+        )
         
-        if data.get("check_crossroads", False):
-            # Use IntegratedNPCSystem to check for relationship events
-            relationship_events = await npc_system.check_for_relationship_events()
-            if relationship_events:
-                for event in relationship_events:
-                    if event.get("type") == "relationship_crossroads":
-                        crossroads_event = event.get("data")
-                        break
-                    
-            # Handle crossroads choice if provided
-            if data.get("crossroads_choice") is not None and data.get("crossroads_name") and data.get("link_id"):
-                choice_result = await npc_system.apply_crossroads_choice(
-                    int(data["link_id"]),
-                    data["crossroads_name"],
-                    int(data["crossroads_choice"])
-                )
-                
-                if isinstance(choice_result, dict) and "error" in choice_result:
-                    crossroads_result = {"error": choice_result["error"]}
-                else:
-                    crossroads_result = {
-                        "choice_applied": True,
-                        "outcome": choice_result.get("outcome_text", "Your choice was processed.")
-                    }
-
-        # 8) Build aggregator text with NPC responses
-        aggregator_text = build_aggregator_text(aggregator_data)
-        
-        npc_response_text = ""
-        for resp in npc_responses:
-            npc_name = resp.get("npc_name", "An NPC")
-            action = resp.get("action", "does something")
-            outcome = resp.get("result", {}).get("outcome", "")
-            npc_response_text += f"{npc_name} {action}. {outcome}\n"
-            
-        if npc_response_text:
+        if npc_responses:
+            npc_response_text = format_npc_responses(npc_responses)
             aggregator_text += "\n\n=== NPC RESPONSES ===\n" + npc_response_text
 
-        # Add addiction context
+        # Add addiction context if relevant
         addiction_status = await get_addiction_status(user_id, conv_id, player_name)
         if addiction_status and addiction_status.get("has_addictions"):
-            from logic.addiction_system import get_addiction_label
-            lines = ["\n\n=== ADDICTION STATUS ==="]
-            for adtp, lvl in addiction_status.get("addiction_levels", {}).items():
-                if lvl > 0:
-                    lines.append(f"{adtp.capitalize()}: {get_addiction_label(lvl)}")
-            aggregator_text += "\n".join(lines)
+            aggregator_text += format_addiction_status(addiction_status)
 
-        # 9) GPT response
+        # Get AI response with enhanced context
         response_data = get_chatgpt_response(conv_id, aggregator_text, user_input)
-        image_result = None
         
-        if response_data["type"] == "function_call":
-            # function_args => possibly do universal updates
-            ai_response = response_data["function_args"].get("narrative", "")
-            try:
-                if response_data["function_args"]:
-                    import asyncpg
-                    from logic.universal_updater import apply_universal_updates_async
-                    async def apply_updates():
-                        dsn = os.getenv("DB_DSN")
-                        c2 = await asyncpg.connect(dsn=dsn)
-                        try:
-                            await apply_universal_updates_async(
-                                user_id, conv_id,
-                                response_data["function_args"],
-                                c2
-                            )
-                        finally:
-                            await c2.close()
-                    await apply_updates()
-            except Exception as ex:
-                logging.error(f"[next_storybeat] Universal update error: {ex}")
+        # Process response and handle function calls if needed
+        final_response, image_result = await process_ai_response(
+            response_data, 
+            user_id, 
+            conv_id
+        )
 
-            # Possibly do image generation
-            should_gen, reason = should_generate_image_for_response(user_id, conv_id, response_data["function_args"])
-            if should_gen:
-                image_result = generate_roleplay_image_from_gpt(
-                    response_data["function_args"],
-                    user_id,
-                    conv_id
-                )
-        else:
-            ai_response = response_data.get("response", "")
-
-        # 10) Store GPT response
-        cur.execute("""
+        # Store the final response
+        resources["cursor"].execute("""
             INSERT INTO messages (conversation_id, sender, content)
             VALUES (%s, %s, %s)
-        """, (conv_id, "Nyx", ai_response))
-        conn.commit()
-        cur.close()
-        conn.close()
+        """, (conv_id, "Nyx", final_response))
+        resources["conn"].commit()
 
-        # 11) Prepare final JSON
-        final_resp = {
-            "message": ai_response,
+        # Assemble the complete response
+        response = {
+            "message": final_response,
             "time_result": time_result,
             "confirm_needed": time_result.get("would_advance", False) and not data.get("confirm_time_advance", False),
-            "npc_responses": [
-                {
-                    "npc_id": r.get("npc_id"),
-                    "npc_name": r.get("npc_name", "An NPC"),
-                    "action": r.get("action", ""),
-                    "result": r.get("result", {}).get("outcome", "")
-                } for r in npc_responses
-            ]
+            "npc_responses": format_npc_responses_for_client(npc_responses)
         }
         
+        # Add optional elements to response
         if addiction_status:
-            final_resp["addiction_effects"] = await process_addiction_effects(user_id, conv_id, player_name, addiction_status)
-
-        # If relationship crossroads
-        if crossroads_event:
-            final_resp["crossroads_event"] = crossroads_event
-        if data.get("crossroads_choice") is not None:
-            final_resp["crossroads_result"] = crossroads_result
-
-        # Include image if generated
+            response["addiction_effects"] = await process_addiction_effects(
+                user_id, conv_id, player_name, addiction_status
+            )
+            
+        if crossroads_data.get("event"):
+            response["crossroads_event"] = crossroads_data["event"]
+        if crossroads_data.get("result"):
+            response["crossroads_result"] = crossroads_data["result"]
+            
         if image_result and "image_urls" in image_result:
-            final_resp["image"] = {
+            response["image"] = {
                 "image_url": image_result["image_urls"][0],
                 "prompt_used": image_result.get("prompt_used", ""),
-                "reason": reason
+                "reason": image_result.get("reason", "")
             }
 
-        # Possibly add narrative_stage or anything else
+        # Add narrative stage information
         narrative_stage = await get_current_narrative_stage(user_id, conv_id)
         if narrative_stage:
-            final_resp["narrative_stage"] = narrative_stage.name
+            response["narrative_stage"] = narrative_stage.name
 
-        return jsonify(final_resp)
-
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
-            
-        return jsonify(final_resp)
+        return jsonify(response)
         
     except Exception as e:
         logger.exception("[next_storybeat] Error")
@@ -751,26 +616,194 @@ async def next_storybeat():
         
     finally:
         # Comprehensive resource cleanup
-        if cur:
-            try:
-                cur.close()
-            except Exception as cur_error:
-                logger.error(f"Error closing cursor: {cur_error}")
-                
-        if conn:
-            try:
-                conn.close()
-            except Exception as conn_error:
-                logger.error(f"Error closing connection: {conn_error}")
+        await cleanup_resources(resources)
+
+async def process_universal_updates(universal_data, pool):
+    """Process universal updates with connection reuse."""
+    try:
+        async with pool.acquire() as conn:
+            return await apply_universal_updates(
+                universal_data["user_id"],
+                universal_data["conversation_id"],
+                universal_data,
+                conn
+            )
+    except Exception as e:
+        logger.error(f"Error processing universal updates: {e}")
+        return {"error": str(e)}
+
+async def process_npc_interactions_batch(npc_system, nearby_npcs, user_input, activity_type, context):
+    """Process NPC interactions in efficient batches."""
+    if not nearby_npcs:
+        return []
+    
+    # Determine appropriate interaction type based on input content
+    interaction_type = determine_interaction_type(user_input, activity_type)
+    
+    # Process in batches of 3 for better performance
+    batch_size = 3
+    npc_responses = []
+    
+    # Process each batch concurrently
+    for i in range(0, len(nearby_npcs), batch_size):
+        batch = nearby_npcs[i:i+batch_size]
         
-        # Clean up pool and async resources
-        if pool and not pool.closed:
-            try:
-                await pool.close()
-            except Exception as pool_error:
-                logger.error(f"Error closing connection pool: {pool_error}")
+        # Create tasks for concurrent processing
+        batch_tasks = [
+            npc_system.handle_npc_interaction(
+                npc_id=npc["npc_id"],
+                interaction_type=interaction_type,
+                player_input=user_input,
+                context=context
+            ) for npc in batch
+        ]
+        
+        # Execute batch concurrently
+        batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+        
+        # Process results
+        for npc, result in zip(batch, batch_results):
+            if isinstance(result, Exception):
+                logger.error(f"Error processing interaction with NPC {npc['npc_id']}: {result}")
+                continue
+                
+            # Format response for display
+            if result:
+                npc_name = npc["npc_name"]
+                response_data = {
+                    "npc_id": npc["npc_id"],
+                    "npc_name": npc_name,
+                    "action": f"reacts to your {activity_type}",
+                    "result": {
+                        "outcome": get_response_outcome(result, npc_name, activity_type)
+                    },
+                    "stat_changes": result.get("stat_changes", {})
+                }
+                npc_responses.append(response_data)
+    
+    return npc_responses
 
+def determine_interaction_type(user_input, activity_type):
+    """Determine the most appropriate interaction type based on user input."""
+    lower_input = user_input.lower()
+    
+    if "no" in lower_input or "won't" in lower_input or "refuse" in lower_input:
+        return "defiant_response"
+    elif "yes" in lower_input or "okay" in lower_input or "sure" in lower_input:
+        return "submissive_response"
+    elif any(word in lower_input for word in ["cute", "pretty", "hot", "sexy", "beautiful"]):
+        return "flirtatious_remark"
+    elif activity_type in ["talk", "question", "conversation"]:
+        return "extended_conversation"
+    else:
+        return "standard_interaction"
 
+async def process_time_advancement(npc_system, activity_type, data, current_time):
+    """Process time advancement with proper verification."""
+    old_year, old_month, old_day, old_phase = current_time
+    
+    # Default time result
+    time_result = {
+        "time_advanced": False,
+        "would_advance": False,
+        "periods": 0,
+        "current_time": old_phase,
+        "confirm_needed": False
+    }
+    
+    # Handle direct confirmation
+    if data.get("confirm_time_advance", False):
+        # Actually perform time advance
+        time_result = await npc_system.advance_time_with_activity(activity_type)
+        
+        # If time advanced to a new day's morning, run maintenance
+        if time_result.get("time_advanced", False):
+            new_time = time_result.get("new_time", {})
+            if new_time.get("time_of_day") == "Morning" and new_time.get("day") > old_day:
+                await nightly_maintenance(npc_system.user_id, npc_system.conversation_id)
+                logger.info("[next_storybeat] Ran nightly maintenance for day rollover.")
+    else:
+        # Check if it would advance time
+        would_advance = await npc_system.would_advance_time(activity_type)
+        if would_advance:
+            time_result = {
+                "time_advanced": False,
+                "would_advance": True,
+                "periods": 1,  # Default to 1 period
+                "current_time": old_phase,
+                "confirm_needed": True
+            }
+    
+    return time_result
+
+async def process_relationship_events(npc_system, data):
+    """Process relationship events and crossroads."""
+    result = {
+        "event": None,
+        "result": None
+    }
+    
+    # Only check for events if requested
+    if data.get("check_crossroads", False):
+        events = await npc_system.check_for_relationship_events()
+        if events:
+            for event in events:
+                if event.get("type") == "relationship_crossroads":
+                    result["event"] = event.get("data")
+                    break
+    
+    # Process crossroads choice if provided
+    if data.get("crossroads_choice") is not None and data.get("crossroads_name") and data.get("link_id"):
+        choice_result = await npc_system.apply_crossroads_choice(
+            int(data["link_id"]),
+            data["crossroads_name"],
+            int(data["crossroads_choice"])
+        )
+        
+        if isinstance(choice_result, dict) and "error" in choice_result:
+            result["result"] = {"error": choice_result["error"]}
+        else:
+            result["result"] = {
+                "choice_applied": True,
+                "outcome": choice_result.get("outcome_text", "Your choice was processed.")
+            }
+    
+    return result
+
+async def cleanup_resources(resources):
+    """Comprehensive cleanup of all resources."""
+    # Close cursor
+    if resources.get("cursor"):
+        try:
+            resources["cursor"].close()
+        except Exception as e:
+            logger.error(f"Error closing cursor: {e}")
+    
+    # Close connection
+    if resources.get("conn"):
+        try:
+            resources["conn"].close()
+        except Exception as e:
+            logger.error(f"Error closing connection: {e}")
+    
+    # Release pool
+    if resources.get("pool") and not resources["pool"].closed:
+        try:
+            await resources["pool"].close()
+        except Exception as e:
+            logger.error(f"Error closing connection pool: {e}")
+
+async def check_npc_availability(cursor, user_id, conv_id):
+    """Check NPC availability with error handling."""
+    try:
+        cursor.execute("""
+            SELECT COUNT(*) FROM NPCStats
+            WHERE user_id=%s AND conversation_id=%s AND introduced=FALSE
+        """, (user_id, conv_id))
+        return cursor.fetchone()
+    except Exception as e:
+        logger.error(f"Error checking NPC availability: {e}")
+        return [0]  # Default to needing NPCs
 @story_bp.route("/relationship_summary", methods=["GET"])
 async def get_relationship_details():
     """
