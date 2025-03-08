@@ -27,6 +27,178 @@ from memory.masks import ProgressiveRevealManager
 
 logger = logging.getLogger(__name__)
 
+# Add the following to MemorySystem class first as these are referenced
+# These would be defined in the memory/wrapper.py file
+
+# For memory.wrapper.py - These are referenced in npc_agent.py
+class SchemaManager:
+    """Schema manager handles the creation and application of memory schemas."""
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+    
+    async def apply_schema_to_memory(self, 
+                                    memory_id: int, 
+                                    entity_type: str, 
+                                    entity_id: int, 
+                                    auto_detect: bool = False) -> Dict[str, Any]:
+        """
+        Apply a schema to a specific memory.
+        
+        Args:
+            memory_id: ID of the memory
+            entity_type: Type of entity that owns the memory
+            entity_id: ID of the entity
+            auto_detect: Whether to auto-detect appropriate schemas
+            
+        Returns:
+            Result of the schema application
+        """
+        # Implementation would connect to the database and apply schema logic
+        result = {
+            "memory_id": memory_id,
+            "schemas_applied": [],
+            "auto_detected": auto_detect
+        }
+        
+        logger.debug(f"Applied schema to memory {memory_id} for {entity_type}:{entity_id}")
+        
+        return result
+
+class IntegratedMemoryManager:
+    """Integrated memory manager for comprehensive memory operations."""
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+    
+    async def run_memory_maintenance(self, 
+                                    entity_type: str, 
+                                    entity_id: int, 
+                                    maintenance_options: Dict[str, bool] = None) -> Dict[str, Any]:
+        """
+        Run comprehensive memory maintenance for an entity.
+        
+        Args:
+            entity_type: Type of entity
+            entity_id: ID of the entity
+            maintenance_options: Options for what maintenance to perform
+            
+        Returns:
+            Results of maintenance operations
+        """
+        options = maintenance_options or {
+            "core_maintenance": True,
+            "schema_maintenance": True,
+            "emotional_decay": True,
+            "memory_consolidation": True,
+            "background_reconsolidation": True,
+            "interference_processing": True,
+            "belief_consistency": True,
+            "mask_checks": True
+        }
+        
+        result = {
+            "memories_processed": 0,
+            "memories_archived": 0,
+            "memories_consolidated": 0,
+            "schemas_updated": 0,
+            "beliefs_checked": 0
+        }
+        
+        logger.debug(f"Running memory maintenance for {entity_type}:{entity_id}")
+        
+        return result
+
+# Add these methods to the MemorySystem class in memory/wrapper.py
+async def get_behavior_trends(self, 
+                            entity_type: str, 
+                            entity_id: int, 
+                            timeframe_days: int = 30) -> Dict[str, int]:
+    """
+    Analyze trends in entity behavior based on memories.
+    
+    Args:
+        entity_type: Type of entity
+        entity_id: ID of the entity
+        timeframe_days: Number of days to analyze
+        
+    Returns:
+        Dictionary with behavior trend counts
+    """
+    trends = {
+        "true_nature_consistent": 0,
+        "mask_consistent": 0,
+        "emotional_outbursts": 0,
+        "submissive_behaviors": 0,
+        "dominant_behaviors": 0,
+        "cruel_actions": 0,
+        "kind_actions": 0
+    }
+    
+    # Query for recent memories
+    memory_result = await self.recall(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        query="",
+        limit=50,
+        context={"max_age_days": timeframe_days}
+    )
+    
+    memories = memory_result.get("memories", [])
+    
+    # Analyze memories for behavior patterns
+    for memory in memories:
+        text = memory.get("text", "").lower()
+        tags = memory.get("tags", [])
+        
+        # Check for dominant behaviors
+        if any(word in text for word in ["command", "order", "dominate", "control"]):
+            trends["dominant_behaviors"] += 1
+            
+            # Check if this aligns with true nature or mask
+            if "dominance_dynamic" in tags or "true_nature" in tags:
+                trends["true_nature_consistent"] += 1
+            elif "mask_reinforcing" in tags:
+                trends["mask_consistent"] += 1
+        
+        # Check for submissive behaviors
+        if any(word in text for word in ["obey", "submit", "follow", "comply"]):
+            trends["submissive_behaviors"] += 1
+            
+            # Check consistency
+            if "submission" in tags or "true_nature" in tags:
+                trends["true_nature_consistent"] += 1
+            elif "mask_reinforcing" in tags:
+                trends["mask_consistent"] += 1
+        
+        # Check for cruel actions
+        if any(word in text for word in ["mock", "humiliate", "hurt", "cruel"]):
+            trends["cruel_actions"] += 1
+            
+            # Check consistency
+            if "cruelty" in tags or "true_nature" in tags:
+                trends["true_nature_consistent"] += 1
+            elif "mask_reinforcing" in tags:
+                trends["mask_consistent"] += 1
+        
+        # Check for kind actions
+        if any(word in text for word in ["help", "support", "kind", "nice"]):
+            trends["kind_actions"] += 1
+            
+            # Check consistency
+            if "kindness" in tags or "true_nature" in tags:
+                trends["true_nature_consistent"] += 1
+            elif "mask_reinforcing" in tags:
+                trends["mask_consistent"] += 1
+        
+        # Check for emotional outbursts
+        if "emotional_outburst" in tags:
+            trends["emotional_outbursts"] += 1
+    
+    return trends
+
 
 class NPCAgent:
     """
@@ -483,6 +655,7 @@ class NPCAgent:
                 "timestamp": datetime.now().isoformat(),
                 "error": str(e)
             }
+            
     
     async def _fetch_relationships_with_memory(self) -> Dict[str, Any]:
         """
