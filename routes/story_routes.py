@@ -382,46 +382,58 @@ def fetch_interactions():
 # NEW FUNCTION: Get nearby NPCs for interactions
 async def get_nearby_npcs(user_id, conversation_id, location=None):
     """
-    Get NPCs that are at the current location or nearby
+    Get NPCs that are at the current location or nearby - with performance optimization
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    conn = None
+    cursor = None
     
-    if location:
-        # Get NPCs at the specific location
-        cursor.execute("""
-            SELECT npc_id, npc_name, current_location, dominance, cruelty
-            FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s 
-            AND current_location=%s
-            LIMIT 5
-        """, (user_id, conversation_id, location))
-    else:
-        # Get any NPCs (prioritize ones that are introduced)
-        cursor.execute("""
-            SELECT npc_id, npc_name, current_location, dominance, cruelty
-            FROM NPCStats
-            WHERE user_id=%s AND conversation_id=%s
-            ORDER BY introduced DESC
-            LIMIT 5
-        """, (user_id, conversation_id))
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-    nearby_npcs = []
-    for row in cursor.fetchall():
-        npc_id, npc_name, current_location, dominance, cruelty = row
-        nearby_npcs.append({
-            "npc_id": npc_id,
-            "npc_name": npc_name,
-            "current_location": current_location,
-            "dominance": dominance,
-            "cruelty": cruelty
-        })
-    
-    cursor.close()
-    conn.close()
-    
-    return nearby_npcs
-
+        if location:
+            # Use index hint for location lookup
+            cursor.execute("""
+                SELECT /*+ INDEX(NPCStats idx_npcstats_location) */ 
+                    npc_id, npc_name, current_location, dominance, cruelty
+                FROM NPCStats
+                WHERE user_id=%s AND conversation_id=%s 
+                AND current_location=%s
+                LIMIT 5
+            """, (user_id, conversation_id, location))
+        else:
+            # Get any NPCs (prioritize ones that are introduced)
+            cursor.execute("""
+                SELECT /*+ INDEX(NPCStats idx_npcstats_introduced) */
+                    npc_id, npc_name, current_location, dominance, cruelty
+                FROM NPCStats
+                WHERE user_id=%s AND conversation_id=%s
+                ORDER BY introduced DESC
+                LIMIT 5
+            """, (user_id, conversation_id))
+            
+        nearby_npcs = []
+        for row in cursor.fetchall():
+            npc_id, npc_name, current_location, dominance, cruelty = row
+            nearby_npcs.append({
+                "npc_id": npc_id,
+                "npc_name": npc_name,
+                "current_location": current_location,
+                "dominance": dominance,
+                "cruelty": cruelty
+            })
+        
+        return nearby_npcs
+        
+    except Exception as e:
+        logger.error(f"Error getting nearby NPCs: {e}")
+        return []
+        
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 # -------------------------------------------------------------------
 # ROUTE DEFINITION
 # -------------------------------------------------------------------
