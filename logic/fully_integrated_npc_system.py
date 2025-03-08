@@ -166,6 +166,112 @@ class IntegratedNPCSystem:
         # Set up periodic cache cleanup and metrics reporting
         self._setup_cache_cleanup()
         self._setup_metrics_reporting()
+
+    def _setup_cache_cleanup(self):
+    """Set up periodic cache cleanup task with memory pressure detection."""
+    async def cache_cleanup_task():
+        while True:
+            await asyncio.sleep(300)  # Run every 5 minutes
+            
+            # Check for memory pressure
+            memory_pressure = self._detect_memory_pressure()
+            await self._cleanup_cache(force=memory_pressure)
+    
+    # Start the task without waiting for it
+    asyncio.create_task(cache_cleanup_task())
+
+    def _detect_memory_pressure(self):
+        """Detect memory pressure in the application."""
+        try:
+            # Try to get memory info using psutil if available
+            import psutil
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_percent = process.memory_percent()
+            
+            # Log memory usage
+            logger.debug(f"Memory usage: {memory_info.rss / (1024 * 1024):.2f} MB ({memory_percent:.1f}%)")
+            
+            # Consider high pressure if memory usage is above 75%
+            if memory_percent > 75.0:
+                logger.warning(f"High memory pressure detected: {memory_percent:.1f}%")
+                return True
+                
+            # Check if we have too many cached items
+            cache_size = (
+                len(self.npc_cache) + 
+                len(self.relationship_cache) + 
+                len(self.memory_cache)
+            )
+            
+            if cache_size > 1000:  # Arbitrary threshold
+                logger.warning(f"Large cache size detected: {cache_size} items")
+                return True
+                
+            return False
+        except ImportError:
+            # If psutil isn't available, use a simpler heuristic based on cache size
+            cache_size = (
+                len(self.npc_cache) + 
+                len(self.relationship_cache) + 
+                len(self.memory_cache)
+            )
+            
+            return cache_size > 500  # Lower threshold when we can't check actual memory
+        except Exception as e:
+            logger.error(f"Error detecting memory pressure: {e}")
+            return False
+    
+    async def _cleanup_cache(self, force=False):
+        """
+        Clean up expired cache entries with granular control.
+        
+        Args:
+            force: Force cleanup regardless of TTL
+        """
+        now = datetime.now()
+        
+        # Check global TTL first
+        global_expired = now - self.last_cache_refresh > self.cache_ttl
+        if global_expired or force:
+            self.last_cache_refresh = now
+            logger.debug(f"{'Forced' if force else 'Global TTL expired'}, clearing all caches")
+            
+            # Clear all caches
+            self.npc_cache.clear()
+            self.relationship_cache.clear()
+            self.memory_cache.clear()
+            return
+        
+        # Check individual entries for expiration
+        expired_npc_keys = []
+        for key, data in self.npc_cache.items():
+            if now - data.get("last_updated", datetime.min) > self.cache_ttl:
+                expired_npc_keys.append(key)
+        
+        expired_rel_keys = []
+        for key, data in self.relationship_cache.items():
+            if now - data.get("last_updated", datetime.min) > self.cache_ttl:
+                expired_rel_keys.append(key)
+        
+        expired_mem_keys = []
+        for key, data in self.memory_cache.items():
+            if now - data.get("last_updated", datetime.min) > self.cache_ttl:
+                expired_mem_keys.append(key)
+        
+        # Remove expired entries
+        for key in expired_npc_keys:
+            del self.npc_cache[key]
+        
+        for key in expired_rel_keys:
+            del self.relationship_cache[key]
+        
+        for key in expired_mem_keys:
+            del self.memory_cache[key]
+        
+        logger.debug(f"Cleaned up {len(expired_npc_keys)} NPC cache entries, " +
+                    f"{len(expired_rel_keys)} relationship cache entries, " +
+                    f"{len(expired_mem_keys)} memory cache entries")
     
     async def _initialize_pool(self):
         """Initialize the connection pool with optimized settings."""
@@ -2600,201 +2706,603 @@ async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
             logger.error(error_msg)
             raise MemorySystemError(error_msg)
     
-async def retrieve_relevant_memories(
-    self, 
-    npc_id: int, 
-    query: str = None,
-    context: Dict[str, Any] = None,
-    limit: int = 5
-) -> List[Dict[str, Any]]:
-    """
-    Enhanced memory retrieval with semantic search and priority weighting.
-    
-    Args:
-        npc_id: ID of the NPC
-        query: Search query text
-        context: Additional context for retrieval
-        limit: Maximum memories to retrieve
+    async def retrieve_relevant_memories(self, context, limit=5, memory_types=None):
+        """
+        Unified memory retrieval method that delegates to appropriate implementation.
         
-    Returns:
-        List of relevant memories
-    """
-    # Create cache key based on parameters
-    cache_key = f"memories:{npc_id}:{hash(str(query))}:{hash(str(context))}"
-    
-    # Check cache first with 5-second TTL for very frequent queries
-    if hasattr(self, '_memory_cache'):
-        cache_entry = self._memory_cache.get(cache_key)
-        if cache_entry:
-            timestamp, memories = cache_entry
-            if (datetime.now() - timestamp).total_seconds() < 5:
-                self.perf_metrics['cache_hits'] += 1
-                return memories
-    else:
-        self._memory_cache = {}
-    
-    self.perf_metrics['cache_misses'] += 1
-    
-    try:
-        # Enhanced performance with connection reuse
-        return await self._execute_with_retry(
-            self._retrieve_memories_optimized,
-            npc_id,
-            query,
-            context,
-            limit
-        )
-    except Exception as e:
-        logger.error(f"Error retrieving relevant memories: {e}")
-        return []
-
-async def _retrieve_memories_optimized(
-    self,
-    npc_id: int,
-    query: str = None,
-    context: Dict[str, Any] = None,
-    limit: int = 5
-) -> List[Dict[str, Any]]:
-    """
-    Optimized implementation of memory retrieval with vector search.
-    
-    Args:
-        npc_id: ID of the NPC
-        query: Search query text
-        context: Additional context 
-        limit: Maximum memories to retrieve
+        Args:
+            context: Query context (text or dict)
+            limit: Maximum memories to retrieve
+            memory_types: Optional filter for memory types
+            
+        Returns:
+            List of relevant memories
+        """
+        memory_types = memory_types or ["observation", "reflection", "semantic", "secondhand"]
         
-    Returns:
-        List of relevant memories
-    """
-    # Start timing for performance metrics
-    start_time = datetime.now()
-    
-    # Get memory system
-    memory_system = await self._get_memory_system()
-    
-    # Process context to enhance recall
-    context_dict = {}
-    if isinstance(context, str):
-        context_dict = {"text": context}
-    elif isinstance(context, dict):
-        context_dict = context
-    
-    # Prepare query text
-    query_text = query or ""
-    if context_dict.get("text"):
-        query_text += " " + context_dict["text"]
-    
-    # Extract emotional state for mood-congruent retrieval
-    emotional_state = await memory_system.get_npc_emotion(npc_id)
-    current_emotion = None
-    if emotional_state and "current_emotion" in emotional_state:
-        current_emotion = emotional_state["current_emotion"]
-    
-    # For strong emotions, use mood-congruent recall
-    if current_emotion and current_emotion.get("intensity", 0.0) > 0.6:
-        primary_emotion = current_emotion.get("primary", {}).get("name", "neutral")
+        # Extract query text for cache key
+        query_text = self._extract_query_text(context)
+        cache_key = f"mem_{self.npc_id}_{hash(query_text)}_{limit}"
         
-        # Generate optimized recall query for mood-congruent memories
-        mood_memories = await memory_system.emotional_manager.retrieve_mood_congruent_memories(
+        # Check cache
+        cached_memories = self._check_memory_cache(cache_key)
+        if cached_memories:
+            return cached_memories
+        
+        try:
+            # Delegate to appropriate implementation
+            if self.use_subsystems:
+                memories = await self._retrieve_memories_subsystems(context, limit, memory_types)
+            else:
+                memories = await self._retrieve_memories_db(context, limit, memory_types)
+            
+            # Cache the result
+            self._cache_memories(cache_key, memories)
+            return memories
+        except Exception as e:
+            logger.error(f"Error retrieving memories: {e}")
+            # Return emergency fallback memories
+            return self._get_fallback_memories()
+    
+    def _extract_query_text(self, context):
+        """Extract query text from context."""
+        if isinstance(context, str):
+            return context
+        elif isinstance(context, dict):
+            return context.get("text", context.get("description", ""))
+        return ""
+    
+    def _check_memory_cache(self, cache_key):
+        """Check if memories are cached and still valid."""
+        if not hasattr(self, '_memory_cache'):
+            self._memory_cache = {}
+            self._memory_cache_times = {}
+            return None
+        
+        if cache_key in self._memory_cache:
+            cache_time = self._memory_cache_times.get(cache_key)
+            if cache_time and (datetime.now() - cache_time).seconds < 30:
+                return self._memory_cache[cache_key]
+        return None
+    
+    def _cache_memories(self, cache_key, memories):
+        """Cache memories for future use."""
+        if not hasattr(self, '_memory_cache'):
+            self._memory_cache = {}
+            self._memory_cache_times = {}
+        
+        self._memory_cache[cache_key] = memories
+        self._memory_cache_times[cache_key] = datetime.now()
+        
+        # Keep cache size reasonable
+        if len(self._memory_cache) > 100:
+            # Remove oldest entries
+            oldest_keys = sorted(
+                self._memory_cache_times.keys(),
+                key=lambda k: self._memory_cache_times[k]
+            )[:20]  # Remove 20 oldest
+            
+            for key in oldest_keys:
+                if key in self._memory_cache:
+                    del self._memory_cache[key]
+                if key in self._memory_cache_times:
+                    del self._memory_cache_times[key]
+    
+    def _get_fallback_memories(self):
+        """Get fallback memories when retrieval fails."""
+        # Create a basic fallback memory
+        return [{
+            "id": f"fallback_{datetime.now().timestamp()}",
+            "text": "I exist in this world.",
+            "type": "fallback",
+            "significance": 1
+        }]
+        
+    async def _retrieve_memories_with_vector_search(self, npc_id, query, context, limit):
+        """Retrieve memories using vector search."""
+        # Implementation of vector search retrieval
+        memory_system = await self._get_memory_system()
+        
+        # Build enhanced query incorporating context
+        enhanced_query = self._build_enhanced_query(query, context)
+        
+        # Use vector search through memory system
+        vector_results = await memory_system.recall(
             entity_type="npc",
             entity_id=npc_id,
-            current_mood=current_emotion,
+            query=enhanced_query,
+            limit=limit,
+            use_vector_search=True
+        )
+        
+        return vector_results.get("memories", [])
+
+    def _setup_metrics_reporting(self):
+        """Set up periodic metrics reporting for performance monitoring."""
+        async def metrics_reporting_task():
+            while True:
+                await asyncio.sleep(600)  # Report every 10 minutes
+                await self._report_performance_metrics()
+        
+        # Start the task without waiting for it
+        asyncio.create_task(metrics_reporting_task())
+    
+    async def _report_performance_metrics(self):
+        """Report detailed performance metrics."""
+        # Calculate additional derived metrics
+        db_metrics = {
+            "db_queries": self.perf_metrics['db_queries'],
+            "avg_query_time": self.perf_metrics['avg_query_time'],
+            "max_query_time": max(self.perf_metrics['query_times']) if self.perf_metrics['query_times'] else 0,
+            "min_query_time": min(self.perf_metrics['query_times']) if self.perf_metrics['query_times'] else 0,
+            "slow_query_count": sum(1 for t in self.perf_metrics['query_times'] if t > 0.5)
+        }
+        
+        cache_metrics = {
+            "cache_hits": self.perf_metrics['cache_hits'],
+            "cache_misses": self.perf_metrics['cache_misses'],
+            "hit_ratio": self.perf_metrics['cache_hits'] / (self.perf_metrics['cache_hits'] + self.perf_metrics['cache_misses']) 
+                if (self.perf_metrics['cache_hits'] + self.perf_metrics['cache_misses']) > 0 else 0,
+            "cache_size": {
+                "npc_cache": len(self.npc_cache),
+                "relationship_cache": len(self.relationship_cache),
+                "memory_cache": len(self.memory_cache)
+            }
+        }
+        
+        memory_metrics = {}
+        try:
+            # Try to get memory info using psutil if available
+            import psutil
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_percent = process.memory_percent()
+            
+            memory_metrics = {
+                "memory_usage_mb": memory_info.rss / (1024 * 1024),
+                "memory_percent": memory_percent,
+                "memory_vms_mb": memory_info.vms / (1024 * 1024)
+            }
+        except ImportError:
+            # Just log basic metrics if psutil isn't available
+            memory_metrics = {"note": "psutil not available for detailed memory metrics"}
+        
+        # Get pool statistics if available
+        pool_metrics = {}
+        try:
+            pool = await self.get_connection_pool()
+            pool_metrics = {
+                "pool_size": pool.get_size(),
+                "pool_free_size": pool.get_free_size(),
+                "pool_max_size": pool.get_max_size()
+            }
+        except Exception:
+            pool_metrics = {"note": "Unable to get pool statistics"}
+        
+        # Combine all metrics
+        full_metrics = {
+            "timestamp": datetime.now().isoformat(),
+            "npc_id": self.npc_id,
+            "db": db_metrics,
+            "cache": cache_metrics,
+            "memory": memory_metrics,
+            "pool": pool_metrics
+        }
+        
+        # Log metrics at appropriate level
+        if memory_metrics.get("memory_percent", 0) > 80 or db_metrics["slow_query_count"] > 10:
+            logger.warning(f"Performance metrics indicate issues: {full_metrics}")
+        else:
+            logger.info(f"Performance metrics: {full_metrics}")
+        
+        # Reset counters
+        self.perf_metrics['db_queries'] = 0
+        self.perf_metrics['cache_hits'] = 0
+        self.perf_metrics['cache_misses'] = 0
+        self.perf_metrics['query_times'] = self.perf_metrics['query_times'][-100:]
+    
+    async def _retrieve_memories_with_keyword_search(self, npc_id, query, context, limit):
+        """Retrieve memories using keyword search."""
+        memory_system = await self._get_memory_system()
+        
+        # Extract keywords from query and context
+        keywords = self._extract_keywords(query, context)
+        
+        if not keywords:
+            return []
+        
+        # Use regular recall with keywords
+        results = await memory_system.recall(
+            entity_type="npc",
+            entity_id=npc_id,
+            query=" OR ".join(keywords),
             limit=limit
         )
         
-        # If we got mood-congruent memories, use them
-        if mood_memories and len(mood_memories) >= limit // 2:
-            # Create cache entry for performance
-            cache_entry = (datetime.now(), mood_memories)
-            self._memory_cache[cache_key] = cache_entry
-            
-            # Update performance metrics
-            elapsed = (datetime.now() - start_time).total_seconds()
-            self.perf_metrics['memory_retrieval_time'].append(elapsed)
-            
-            return mood_memories
+        return results.get("memories", [])
     
-    # Use vector search for semantic retrieval
-    # Build a richer query incorporating context elements
-    enhanced_query = query_text
-    if context_dict:
-        # Add location if available
-        if "location" in context_dict:
-            enhanced_query += f" location:{context_dict['location']}"
+    async def _retrieve_memories_by_recency(self, npc_id, query, context, limit):
+        """Retrieve memories by recency as a fallback."""
+        memory_system = await self._get_memory_system()
         
-        # Add time info if available
-        if "time_of_day" in context_dict:
-            enhanced_query += f" time:{context_dict['time_of_day']}"
-        
-        # Add entity info if available
-        if "entities_present" in context_dict:
-            entities_str = " ".join(context_dict["entities_present"])
-            enhanced_query += f" entities:{entities_str}"
-    
-    # Use vector search through memory system
-    vector_results = await memory_system.recall(
-        entity_type="npc",
-        entity_id=npc_id,
-        query=enhanced_query,
-        limit=limit,
-        use_vector_search=True
-    )
-    
-    # Get relevant memories
-    memories = vector_results.get("memories", [])
-    
-    # If we have fewer than requested, try additional strategies
-    if len(memories) < limit:
-        # Try retrieving recent memories
-        recent_memories = await memory_system.recall(
+        # Just get recent memories
+        results = await memory_system.recall(
             entity_type="npc",
             entity_id=npc_id,
-            query="",
-            limit=limit - len(memories),
+            query="",  # Empty query
+            limit=limit,
             sort_by="recency"
         )
         
-        # Append unique recent memories
-        existing_ids = {m.get("id") for m in memories}
-        for memory in recent_memories.get("memories", []):
-            if memory.get("id") not in existing_ids:
-                memories.append(memory)
-                existing_ids.add(memory.get("id"))
+        return results.get("memories", [])
     
-    # Potentially add a flashback if the context is emotionally charged
-    if query and any(term in query.lower() for term in ["fear", "scary", "danger", "threat", "pain"]):
-        # 15% chance of flashback for emotionally charged queries
-        if random.random() < 0.15:
-            flashback = await memory_system.npc_flashback(
-                npc_id=npc_id,
-                context=query
+    async def _retrieve_memories_emergency_fallback(self, npc_id, query, context, limit):
+        """Emergency fallback for when all other retrieval methods fail."""
+        # Direct database query
+        pool = await self.get_connection_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, memory_text, memory_type, significance
+                FROM NPCMemories
+                WHERE npc_id = $1 AND status = 'active'
+                ORDER BY timestamp DESC
+                LIMIT $2
+            """, npc_id, limit)
+            
+            return [
+                {
+                    "id": row["id"],
+                    "text": row["memory_text"],
+                    "type": row["memory_type"],
+                    "significance": row["significance"]
+                }
+                for row in rows
+            ]
+
+    async def batch_retrieve_memories(
+        self,
+        query_text: str,
+        npc_ids: List[int],
+        limit_per_npc: int = 3
+    ) -> Dict[int, List[Dict[str, Any]]]:
+        """
+        Batch memory retrieval for multiple NPCs.
+        
+        Args:
+            query_text: Query text to search for
+            npc_ids: List of NPC IDs to query
+            limit_per_npc: Maximum memories per NPC
+            
+        Returns:
+            Dict mapping NPC IDs to their memories
+        """
+        if not npc_ids:
+            return {}
+        
+        # Generate vector embedding once for efficiency
+        embedding = None
+        try:
+            memory_system = await self._get_memory_system()
+            embedding = await memory_system.semantic_manager.generate_embedding(query_text)
+        except Exception as e:
+            logger.warning(f"Failed to generate embedding for batch retrieval: {e}")
+        
+        # Get connection for batch operations
+        pool = await self.get_connection_pool()
+        
+        # Process in efficient batches
+        batch_size = 5
+        result_dict = {}
+        
+        try:
+            async with pool.acquire() as conn:
+                for i in range(0, len(npc_ids), batch_size):
+                    batch = npc_ids[i:i+batch_size]
+                    
+                    # Use vector search if embedding is available
+                    if embedding:
+                        # Execute vector search for all NPCs in batch
+                        batch_queries = []
+                        for npc_id in batch:
+                            batch_queries.append("""
+                                SELECT id, memory_text, memory_type, tags, 
+                                       emotional_intensity, significance,
+                                       times_recalled, timestamp, status, confidence
+                                FROM NPCMemories
+                                WHERE npc_id = $1
+                                  AND status IN ('active', 'summarized')
+                                ORDER BY embedding <-> $2
+                                LIMIT $3
+                            """)
+                        
+                        # Prepare all query parameters
+                        batch_params = [(npc_id, embedding, limit_per_npc) for npc_id in batch]
+                        
+                        # Execute all queries concurrently
+                        tasks = [conn.fetch(query, *params) for query, params in zip(batch_queries, batch_params)]
+                        batch_results = await asyncio.gather(*tasks)
+                        
+                        # Process batch results
+                        for npc_id, rows in zip(batch, batch_results):
+                            result_dict[npc_id] = self._format_memory_rows(rows)
+                    else:
+                        # Fallback to keyword search
+                        # Split query into keywords
+                        keywords = query_text.lower().split()
+                        
+                        # Create parameterized query with each keyword as a parameter
+                        conditions = " OR ".join(f"LOWER(memory_text) LIKE '%' || ${i+2} || '%'" for i in range(len(keywords)))
+                        
+                        batch_queries = []
+                        for npc_id in batch:
+                            query = f"""
+                                SELECT id, memory_text, memory_type, tags,
+                                       emotional_intensity, significance,
+                                       times_recalled, timestamp, status, confidence
+                                FROM NPCMemories
+                                WHERE npc_id = $1
+                                  AND status IN ('active', 'summarized')
+                                  AND ({conditions})
+                                ORDER BY significance DESC, timestamp DESC
+                                LIMIT ${len(keywords) + 2}
+                            """
+                            batch_queries.append(query)
+                        
+                        # Prepare parameters for each query
+                        batch_params = [(npc_id,) + tuple(keywords) + (limit_per_npc,) for npc_id in batch]
+                        
+                        # Execute all queries concurrently
+                        tasks = [conn.fetch(query, *params) for query, params in zip(batch_queries, batch_params)]
+                        batch_results = await asyncio.gather(*tasks)
+                        
+                        # Process batch results
+                        for npc_id, rows in zip(batch, batch_results):
+                            result_dict[npc_id] = self._format_memory_rows(rows)
+                    
+                    # Add small delay between batches to avoid overwhelming the database
+                    if i + batch_size < len(npc_ids):
+                        await asyncio.sleep(0.05)
+            
+            return result_dict
+        
+        except Exception as e:
+            logger.error(f"Error in batch memory retrieval: {e}")
+            # Attempt individual fallback retrievals
+            return await self._individual_fallback_retrievals(npc_ids, query_text, limit_per_npc)
+    
+    def _format_memory_rows(self, rows):
+        """Format database rows into memory objects."""
+        memories = []
+        
+        for row in rows:
+            memories.append({
+                "id": row["id"],
+                "text": row["memory_text"],
+                "type": row["memory_type"],
+                "tags": row["tags"] if row["tags"] else [],
+                "emotional_intensity": row["emotional_intensity"],
+                "significance": row["significance"],
+                "times_recalled": row["times_recalled"],
+                "timestamp": row["timestamp"].isoformat() if isinstance(row["timestamp"], datetime) else row["timestamp"],
+                "confidence": row["confidence"]
+            })
+        
+        return memories
+    
+    async def _individual_fallback_retrievals(self, npc_ids, query_text, limit_per_npc):
+        """Individual fallback retrievals when batch retrieval fails."""
+        result_dict = {}
+        
+        # Process each NPC separately
+        for npc_id in npc_ids:
+            try:
+                # Use memory system for individual retrieval
+                memory_system = await self._get_memory_system()
+                
+                memory_result = await memory_system.recall(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    query=query_text,
+                    limit=limit_per_npc
+                )
+                
+                result_dict[npc_id] = memory_result.get("memories", [])
+            except Exception as e:
+                logger.error(f"Error in fallback retrieval for NPC {npc_id}: {e}")
+                result_dict[npc_id] = []
+        
+        return result_dict
+    
+    def _build_enhanced_query(self, query_text, context):
+        """Build enhanced query from text and context."""
+        enhanced_query = query_text or ""
+        
+        if isinstance(context, dict):
+            # Add location if available
+            if "location" in context:
+                enhanced_query += f" location:{context['location']}"
+            
+            # Add time info if available
+            if "time_of_day" in context:
+                enhanced_query += f" time:{context['time_of_day']}"
+            
+            # Add entity info if available
+            if "entities_present" in context:
+                entities_str = " ".join(context["entities_present"])
+                enhanced_query += f" entities:{entities_str}"
+        
+        return enhanced_query
+    
+    def _extract_keywords(self, query, context):
+        """Extract keywords from query and context."""
+        keywords = []
+        
+        # Add words from the query
+        if query:
+            # Split by spaces and punctuation
+            import re
+            words = re.findall(r'\w+', query.lower())
+            
+            # Filter out common stop words
+            stop_words = {'a', 'an', 'the', 'and', 'or', 'but', 'is', 'are', 'was', 'were'}
+            keywords.extend([w for w in words if w not in stop_words and len(w) > 2])
+        
+        # Add context keywords
+        if isinstance(context, dict):
+            if "location" in context:
+                keywords.append(context["location"])
+            if "time_of_day" in context:
+                keywords.append(context["time_of_day"])
+        
+        return keywords
+    
+    async def _retrieve_memories_optimized(
+        self,
+        npc_id: int,
+        query: str = None,
+        context: Dict[str, Any] = None,
+        limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Optimized implementation of memory retrieval with vector search.
+        
+        Args:
+            npc_id: ID of the NPC
+            query: Search query text
+            context: Additional context 
+            limit: Maximum memories to retrieve
+            
+        Returns:
+            List of relevant memories
+        """
+        # Start timing for performance metrics
+        start_time = datetime.now()
+        
+        # Get memory system
+        memory_system = await self._get_memory_system()
+        
+        # Process context to enhance recall
+        context_dict = {}
+        if isinstance(context, str):
+            context_dict = {"text": context}
+        elif isinstance(context, dict):
+            context_dict = context
+        
+        # Prepare query text
+        query_text = query or ""
+        if context_dict.get("text"):
+            query_text += " " + context_dict["text"]
+        
+        # Extract emotional state for mood-congruent retrieval
+        emotional_state = await memory_system.get_npc_emotion(npc_id)
+        current_emotion = None
+        if emotional_state and "current_emotion" in emotional_state:
+            current_emotion = emotional_state["current_emotion"]
+        
+        # For strong emotions, use mood-congruent recall
+        if current_emotion and current_emotion.get("intensity", 0.0) > 0.6:
+            primary_emotion = current_emotion.get("primary", {}).get("name", "neutral")
+            
+            # Generate optimized recall query for mood-congruent memories
+            mood_memories = await memory_system.emotional_manager.retrieve_mood_congruent_memories(
+                entity_type="npc",
+                entity_id=npc_id,
+                current_mood=current_emotion,
+                limit=limit
             )
             
-            if flashback:
-                # Insert flashback at beginning for emphasis
-                memories.insert(0, {
-                    "id": f"flashback_{datetime.now().timestamp()}",
-                    "text": flashback.get("text", ""),
-                    "type": "flashback",
-                    "significance": 5,
-                    "is_flashback": True
-                })
-    
-    # Update retrieval timestamps for each memory
-    memory_ids = [m.get("id") for m in memories if m.get("id")]
-    if memory_ids:
-        await memory_system.core_manager.update_memory_retrieval_timestamps(memory_ids)
-    
-    # Cache the result
-    cache_entry = (datetime.now(), memories)
-    self._memory_cache[cache_key] = cache_entry
-    
-    # Update performance metrics
-    elapsed = (datetime.now() - start_time).total_seconds()
-    self.perf_metrics['memory_retrieval_time'].append(elapsed)
-    
-    return memories
+            # If we got mood-congruent memories, use them
+            if mood_memories and len(mood_memories) >= limit // 2:
+                # Create cache entry for performance
+                cache_entry = (datetime.now(), mood_memories)
+                self._memory_cache[cache_key] = cache_entry
+                
+                # Update performance metrics
+                elapsed = (datetime.now() - start_time).total_seconds()
+                self.perf_metrics['memory_retrieval_time'].append(elapsed)
+                
+                return mood_memories
+        
+        # Use vector search for semantic retrieval
+        # Build a richer query incorporating context elements
+        enhanced_query = query_text
+        if context_dict:
+            # Add location if available
+            if "location" in context_dict:
+                enhanced_query += f" location:{context_dict['location']}"
+            
+            # Add time info if available
+            if "time_of_day" in context_dict:
+                enhanced_query += f" time:{context_dict['time_of_day']}"
+            
+            # Add entity info if available
+            if "entities_present" in context_dict:
+                entities_str = " ".join(context_dict["entities_present"])
+                enhanced_query += f" entities:{entities_str}"
+        
+        # Use vector search through memory system
+        vector_results = await memory_system.recall(
+            entity_type="npc",
+            entity_id=npc_id,
+            query=enhanced_query,
+            limit=limit,
+            use_vector_search=True
+        )
+        
+        # Get relevant memories
+        memories = vector_results.get("memories", [])
+        
+        # If we have fewer than requested, try additional strategies
+        if len(memories) < limit:
+            # Try retrieving recent memories
+            recent_memories = await memory_system.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                query="",
+                limit=limit - len(memories),
+                sort_by="recency"
+            )
+            
+            # Append unique recent memories
+            existing_ids = {m.get("id") for m in memories}
+            for memory in recent_memories.get("memories", []):
+                if memory.get("id") not in existing_ids:
+                    memories.append(memory)
+                    existing_ids.add(memory.get("id"))
+        
+        # Potentially add a flashback if the context is emotionally charged
+        if query and any(term in query.lower() for term in ["fear", "scary", "danger", "threat", "pain"]):
+            # 15% chance of flashback for emotionally charged queries
+            if random.random() < 0.15:
+                flashback = await memory_system.npc_flashback(
+                    npc_id=npc_id,
+                    context=query
+                )
+                
+                if flashback:
+                    # Insert flashback at beginning for emphasis
+                    memories.insert(0, {
+                        "id": f"flashback_{datetime.now().timestamp()}",
+                        "text": flashback.get("text", ""),
+                        "type": "flashback",
+                        "significance": 5,
+                        "is_flashback": True
+                    })
+        
+        # Update retrieval timestamps for each memory
+        memory_ids = [m.get("id") for m in memories if m.get("id")]
+        if memory_ids:
+            await memory_system.core_manager.update_memory_retrieval_timestamps(memory_ids)
+        
+        # Cache the result
+        cache_entry = (datetime.now(), memories)
+        self._memory_cache[cache_key] = cache_entry
+        
+        # Update performance metrics
+        elapsed = (datetime.now() - start_time).total_seconds()
+        self.perf_metrics['memory_retrieval_time'].append(elapsed)
+        
+        return memories
     
     async def propagate_memory_to_related_npcs(self, 
                                            source_npc_id: int,
