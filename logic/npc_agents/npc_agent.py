@@ -55,6 +55,8 @@ class NPCAgent:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.decision_engine = NPCDecisionEngine(npc_id, user_id, conversation_id)
+
+        self.lock = asyncio.Lock()
         
         # Lazy-loaded memory components
         self._memory_system = None
@@ -1914,7 +1916,7 @@ class NPCAgent:
                     tags=["mask_reinforcement", "self_improvement"]
                 )
 
-            await _evolve_personality_traits
+            await self._evolve_personality_traits()
             
             # Adjust mask based on behavior consistency with presented traits
             if behavior_trends:
