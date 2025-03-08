@@ -512,40 +512,89 @@ class EnhancedMemoryManager:
             logger.debug(f"Propagated memory to {len(related_npcs)} related NPCs")
         except Exception as e:
             logger.error(f"Error propagating memory: {e}")
-
+    
     async def categorize_memories_by_significance(self, retention_threshold=5):
-        """Separate core memories from passive ones based on significance and emotional impact."""
+        """
+        Separate core memories from passive ones based on significance, 
+        emotional impact, and frequency of recall (implements TO_DO.TXT strategies).
+        """
         active_count = 0
         archived_count = 0
         
         with get_db_connection() as conn, conn.cursor() as cursor:
             # Get all active memories for this NPC
             cursor.execute("""
-                SELECT id, significance, emotional_intensity, times_recalled
+                SELECT id, significance, emotional_intensity, times_recalled, 
+                       memory_text, tags
                 FROM NPCMemories
                 WHERE npc_id = %s AND status = 'active'
             """, (self.npc_id,))
             
             memories = cursor.fetchall()
             for memory in memories:
-                memory_id, significance, emotional_intensity, recall_count = memory
+                memory_id, significance, emotional_intensity, recall_count, memory_text, tags = memory
                 
-                # Calculate retention score - memories recalled more often or with 
-                # higher emotional/significance values should stay active
+                # Calculate retention score - memories recalled more often, with higher
+                # emotional/significance values, or tagged as emotional should stay active
                 retention_score = significance + (emotional_intensity / 20) + (recall_count * 0.5)
                 
+                # Intelligence modifier - smarter NPCs retain more
+                if hasattr(self, 'npc_intelligence') and self.npc_intelligence > 1.0:
+                    retention_score *= self.npc_intelligence
+                
+                # Emotional tagging bonus - emotional memories are "stickier"
+                if any(tag in tags for tag in ["emotional", "traumatic", "significant"]):
+                    retention_score += 2
+                    
+                # Context relevance - keep memories relevant to current environment
+                current_location = self._get_npc_current_location()
+                if current_location and current_location.lower() in memory_text.lower():
+                    retention_score += 1.5
+                
+                # Check if memory should be kept active or archived
                 if retention_score < retention_threshold:
-                    # Move to passive storage
+                    # Move to passive storage but remember it can be triggered by context
                     cursor.execute("""
                         UPDATE NPCMemories
-                        SET status = 'passive'
+                        SET status = 'passive', context_triggers = %s
                         WHERE id = %s
-                    """, (memory_id,))
+                    """, (json.dumps(self._extract_context_triggers(memory_text)), memory_id))
                     archived_count += 1
                 else:
                     active_count += 1
         
         return {"active": active_count, "archived": archived_count}
+    
+    def _extract_context_triggers(self, memory_text):
+        """Extract keywords that could trigger this passive memory when encountered."""
+        # Simple extraction of potentially important context triggers
+        triggers = []
+        
+        # Extract proper nouns and locations
+        for word in memory_text.split():
+            if word[0].isupper() and len(word) > 3 and word.lower() not in COMMON_WORDS:
+                triggers.append(word.lower())
+        
+        # Extract phrases related to emotions
+        for phrase in ["angry with", "afraid of", "happy about", "saddened by"]:
+            if phrase in memory_text.lower():
+                index = memory_text.lower().find(phrase)
+                # Try to get what comes after the phrase
+                remaining = memory_text[index + len(phrase):].split()
+                if remaining and len(remaining) > 0:
+                    triggers.append(phrase + " " + remaining[0])
+        
+        return triggers
+    
+    def _get_npc_current_location(self):
+        """Get the NPC's current location for context relevance checks."""
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT current_location FROM NPCStats
+                WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+            """, (self.npc_id, self.user_id, self.conversation_id))
+            row = cursor.fetchone()
+            return row[0] if row else None
     
     async def _propagate_memory_subsystems(self, memory_text: str, tags: List[str], significance: int, emotional_intensity: float):
         """
