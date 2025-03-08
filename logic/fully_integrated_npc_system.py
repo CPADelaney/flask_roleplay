@@ -1137,6 +1137,49 @@ async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
             error_msg = f"Error introducing NPC: {e}"
             logger.error(error_msg)
             return False
+
+    async def _execute_with_retry(self, func, *args, max_retries=3, **kwargs):
+    """
+    Execute a database function with retry logic.
+    
+    Args:
+        func: Async function to execute
+        *args: Arguments to pass to the function
+        max_retries: Maximum number of retries
+        **kwargs: Keyword arguments to pass to the function
+        
+    Returns:
+        Result of the function
+    """
+    retry_count = 0
+    last_error = None
+    backoff_factor = 1.5
+    
+    while retry_count <= max_retries:
+        try:
+            return await func(*args, **kwargs)
+        except asyncpg.PostgresConnectionError as e:
+            retry_count += 1
+            if retry_count <= max_retries:
+                wait_time = (backoff_factor ** retry_count) * 0.5
+                logger.warning(f"Database connection error, retrying in {wait_time:.1f}s: {e}")
+                await asyncio.sleep(wait_time)
+                continue
+            last_error = e
+        except Exception as e:
+            # For non-connection errors, only retry certain types
+            if isinstance(e, (asyncpg.PostgresError, asyncpg.InterfaceError)):
+                retry_count += 1
+                if retry_count <= max_retries:
+                    wait_time = (backoff_factor ** retry_count) * 0.5
+                    logger.warning(f"Database error, retrying in {wait_time:.1f}s: {e}")
+                    await asyncio.sleep(wait_time)
+                    continue
+            last_error = e
+            break
+    
+    # If we got here, all retries failed
+    raise last_error if last_error else RuntimeError("Maximum retries exceeded")
     
     #=================================================================
     # SOCIAL LINKS AND RELATIONSHIPS
@@ -2421,54 +2464,27 @@ async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
             logger.error(error_msg)
             raise MemorySystemError(error_msg)
     
-    async def retrieve_relevant_memories(self, 
-                                       npc_id: int, 
-                                       query: str = None,
-                                       context: Dict[str, Any] = None,
-                                       limit: int = 5) -> List[Dict[str, Any]]:
-        """
-        Retrieve memories relevant to a context.
-        
-        Args:
-            npc_id: ID of the NPC
-            query: Search query
-            context: Context dictionary
-            limit: Maximum number of memories to retrieve
-            
-        Returns:
-            List of memory objects
-            
-        Raises:
-            MemorySystemError: If there's an issue retrieving memories
-        """
-        try:
-            # Get or create NPC agent
-            if npc_id not in self.agent_system.npc_agents:
-                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
-            
-            agent = self.agent_system.npc_agents[npc_id]
-            memory_system = await agent._get_memory_system()
-            
-            # Prepare context for recall
-            context_obj = context or {}
-            if query:
-                context_obj["query"] = query
-            
-            # Retrieve memories using the agent's memory system
-            result = await memory_system.recall(
-                entity_type="npc",
-                entity_id=npc_id,
-                query=query,
-                context=context_obj,
-                limit=limit
-            )
-            
-            return result.get("memories", [])
-            
-        except Exception as e:
-            error_msg = f"Error retrieving relevant memories: {e}"
-            logger.error(error_msg)
-            raise MemorySystemError(error_msg)
+async def retrieve_relevant_memories(
+    self, 
+    npc_id: int, 
+    query: str = None,
+    context: Dict[str, Any] = None,
+    limit: int = 5
+) -> List[Dict[str, Any]]:
+    """
+    Retrieve memories relevant to a context with enhanced retry logic.
+    """
+    try:
+        return await self._execute_with_retry(
+            self._retrieve_memories_impl,
+            npc_id,
+            query,
+            context,
+            limit
+        )
+    except Exception as e:
+        logger.error(f"Error retrieving relevant memories: {e}")
+        return []
     
     async def generate_flashback(self, npc_id: int, current_context: str) -> Optional[Dict[str, Any]]:
         """
