@@ -506,6 +506,199 @@ class EnhancedMemoryManager:
             elapsed = time.time() - start_time
             self.performance.record_operation("retrieve_memories", elapsed)
             return {"memories": [], "error": str(e)}
+
+    # Add the following to the memory_manager.py file
+    
+    async def search_memories(self, 
+                             entity_type: str, 
+                             entity_id: int, 
+                             query: str, 
+                             limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Search memories with specific criteria beyond standard recall.
+        Allows for more complex memory search patterns.
+        
+        Args:
+            entity_type: Type of entity ('npc' or 'player')
+            entity_id: ID of the entity
+            query: Search query (can include tag:value format for tags)
+            limit: Maximum memories to return
+            
+        Returns:
+            List of matching memory dictionaries
+        """
+        memories = []
+        
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # Parse the query for special search terms
+            search_parts = query.split()
+            
+            # Extract tag filters
+            tag_filters = []
+            standard_terms = []
+            
+            for part in search_parts:
+                if ":" in part:
+                    tag, value = part.split(":", 1)
+                    tag_filters.append((tag, value))
+                else:
+                    standard_terms.append(part)
+            
+            # Rebuild standard query
+            standard_query = " ".join(standard_terms)
+            
+            # Get base memories using recall
+            result = await memory_system.recall(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                query=standard_query,
+                limit=limit * 2  # Get more than needed for filtering
+            )
+            
+            memories = result.get("memories", [])
+            
+            # Apply tag filters if any
+            if tag_filters:
+                filtered_memories = []
+                for memory in memories:
+                    memory_tags = memory.get("tags", [])
+                    if all(tag in memory_tags or (tag == "text" and value.lower() in memory.get("text", "").lower()) 
+                           for tag, value in tag_filters):
+                        filtered_memories.append(memory)
+                
+                memories = filtered_memories
+            
+            # Limit results
+            memories = memories[:limit]
+            
+            return memories
+        except Exception as e:
+            logger.error(f"Error searching memories: {e}")
+            return []
+    
+    async def generate_schemas(self,
+                             entity_type: str,
+                             entity_id: int) -> Dict[str, Any]:
+        """
+        Generate schemas for an entity's memories to organize them into meaningful patterns.
+        Schemas are high-level frameworks that connect related memories.
+        
+        Args:
+            entity_type: Type of entity ('npc' or 'player')
+            entity_id: ID of the entity
+            
+        Returns:
+            Dictionary with schema generation results
+        """
+        result = {
+            "schemas_generated": 0,
+            "memories_categorized": 0,
+            "detected_patterns": []
+        }
+        
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # Get recent active memories (last 30 days) to analyze
+            memory_results = await memory_system.recall(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                query="",  # Empty query to get all memories
+                limit=50,
+                context={"max_age_days": 30}
+            )
+            
+            memories = memory_results.get("memories", [])
+            
+            if not memories:
+                return result
+            
+            # Group memories by themes/patterns for schema detection
+            pattern_groups = {}
+            
+            # Group by relationships (memories about specific entities)
+            for memory in memories:
+                memory_text = memory.get("text", "").lower()
+                memory_tags = memory.get("tags", [])
+                
+                # Skip already categorized memories
+                if "schema_applied" in memory_tags:
+                    continue
+                
+                # Look for relationship patterns
+                entity_mentions = []
+                
+                # Check for player mentions
+                if "player" in memory_text or "chase" in memory_text:
+                    entity_mentions.append("player")
+                
+                # Check for NPC mentions
+                # This is simplified - in a real implementation, we'd extract NPC names
+                if "npc" in memory_text:
+                    entity_mentions.append("npc")
+                
+                # Look for action patterns
+                actions = []
+                action_keywords = {
+                    "conflict": ["argue", "fight", "disagree", "conflict", "dispute"],
+                    "helping": ["help", "assist", "support", "aid"],
+                    "teaching": ["teach", "learn", "train", "mentor"],
+                    "intimacy": ["intimate", "close", "personal", "private"],
+                    "submission": ["submit", "obey", "yield", "surrender"],
+                    "dominance": ["dominate", "command", "control", "rule"]
+                }
+                
+                for action_type, keywords in action_keywords.items():
+                    if any(keyword in memory_text for keyword in keywords):
+                        actions.append(action_type)
+                
+                # Assign to pattern groups
+                for entity in entity_mentions:
+                    for action in actions:
+                        pattern_key = f"{entity}_{action}"
+                        
+                        if pattern_key not in pattern_groups:
+                            pattern_groups[pattern_key] = []
+                        
+                        pattern_groups[pattern_key].append(memory)
+            
+            # Create schemas from detected patterns
+            for pattern_key, pattern_memories in pattern_groups.items():
+                # Only create schemas with multiple memories
+                if len(pattern_memories) < 2:
+                    continue
+                
+                # Create schema
+                entity, action = pattern_key.split("_")
+                schema_id = await memory_system.schema_manager.create_schema(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    name=f"{action.capitalize()} with {entity}",
+                    description=f"Pattern of {action} interactions with {entity}"
+                )
+                
+                # Apply schema to memories
+                memory_ids = [memory.get("id") for memory in pattern_memories]
+                await memory_system.schema_manager.apply_schema_to_memories(
+                    schema_id=schema_id,
+                    memory_ids=memory_ids
+                )
+                
+                # Update result tracking
+                result["schemas_generated"] += 1
+                result["memories_categorized"] += len(memory_ids)
+                result["detected_patterns"].append({
+                    "pattern": pattern_key,
+                    "memory_count": len(memory_ids),
+                    "schema_id": schema_id
+                })
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error generating schemas: {e}")
+            return {"error": str(e)}
     
     async def _retrieve_memories_subsystems(
         self, 
