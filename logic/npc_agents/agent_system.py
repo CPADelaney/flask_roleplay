@@ -730,7 +730,8 @@ class NPCAgentSystem:
             
             # After all NPCs processed, do agent system coordination
             try:
-                agent_system_result = await self.agent_system.process_npc_scheduled_activities()
+                # Direct call to self method instead of self.agent_system
+                agent_system_result = await self.process_npc_scheduled_activities()
                 agent_responses = agent_system_result.get("npc_responses", [])
             except Exception as e:
                 logger.error(f"Error in agent system coordination: {e}")
