@@ -201,6 +201,8 @@ class NPCAgentCoordinator:
         
         # 6) Check for mask slippage opportunities in group setting
         await self._check_for_mask_slippage(npc_ids, action_plan, shared_context)
+
+        await self._process_emotional_contagion(npc_ids, action_plan)
         
         return action_plan
 
@@ -439,6 +441,72 @@ class NPCAgentCoordinator:
             group_actions[npc_id] = actions
 
         return group_actions
+
+    async def _process_emotional_contagion(self, npc_ids: List[int], action_plan: Dict[str, Any]) -> None:
+        """Process emotional contagion between NPCs during group interactions."""
+        memory_system = await self._get_memory_system()
+        
+        # Get emotional states for all NPCs
+        emotional_states = {}
+        for npc_id in npc_ids:
+            emotional_state = await memory_system.get_npc_emotion(npc_id)
+            if emotional_state and "current_emotion" in emotional_state:
+                emotional_states[npc_id] = emotional_state
+        
+        # Calculate dominance factors (affects emotional influence)
+        dominance_factors = self._fetch_npc_dominance(npc_ids)
+        
+        # Process contagion for each NPC
+        for affected_id in npc_ids:
+            # Skip NPCs with no emotional data
+            if affected_id not in emotional_states:
+                continue
+                
+            affected_state = emotional_states[affected_id]
+            affected_dominance = dominance_factors.get(affected_id, 50)
+            
+            # Calculate susceptibility - lower dominance = more susceptible
+            susceptibility = max(0.1, 1.0 - (affected_dominance / 100))
+            
+            # Calculate weighted influence from other NPCs
+            new_emotion = None
+            max_influence = 0
+            
+            for influencer_id in npc_ids:
+                if influencer_id == affected_id or influencer_id not in emotional_states:
+                    continue
+                    
+                # Get influencer data
+                influencer_state = emotional_states[influencer_id]
+                influencer_dominance = dominance_factors.get(influencer_id, 50)
+                
+                # Skip if neutral emotion or low intensity
+                influencer_emotion = influencer_state["current_emotion"]
+                primary = influencer_emotion.get("primary", {})
+                emotion_name = primary.get("name", "neutral")
+                intensity = primary.get("intensity", 0.0)
+                
+                if emotion_name == "neutral" or intensity < 0.5:
+                    continue
+                    
+                # Calculate influence power based on dominance and emotion intensity
+                influence_power = (influencer_dominance / 100) * intensity * susceptibility
+                
+                # If this is the strongest influence so far, it affects the NPC
+                if influence_power > max_influence:
+                    max_influence = influence_power
+                    new_emotion = {
+                        "name": emotion_name,
+                        "intensity": intensity * susceptibility  # Weakened version of original
+                    }
+            
+            # Apply new emotion if sufficient influence
+            if new_emotion and max_influence > 0.3:
+                await memory_system.update_npc_emotion(
+                    npc_id=affected_id,
+                    emotion=new_emotion["name"],
+                    intensity=new_emotion["intensity"]
+                )
 
     async def resolve_decision_conflicts(
         self,
