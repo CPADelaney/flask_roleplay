@@ -498,6 +498,40 @@ class EnhancedMemoryManager:
             logger.debug(f"Propagated memory to {len(related_npcs)} related NPCs")
         except Exception as e:
             logger.error(f"Error propagating memory: {e}")
+
+    async def categorize_memories_by_significance(self, retention_threshold=5):
+        """Separate core memories from passive ones based on significance and emotional impact."""
+        active_count = 0
+        archived_count = 0
+        
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            # Get all active memories for this NPC
+            cursor.execute("""
+                SELECT id, significance, emotional_intensity, times_recalled
+                FROM NPCMemories
+                WHERE npc_id = %s AND status = 'active'
+            """, (self.npc_id,))
+            
+            memories = cursor.fetchall()
+            for memory in memories:
+                memory_id, significance, emotional_intensity, recall_count = memory
+                
+                # Calculate retention score - memories recalled more often or with 
+                # higher emotional/significance values should stay active
+                retention_score = significance + (emotional_intensity / 20) + (recall_count * 0.5)
+                
+                if retention_score < retention_threshold:
+                    # Move to passive storage
+                    cursor.execute("""
+                        UPDATE NPCMemories
+                        SET status = 'passive'
+                        WHERE id = %s
+                    """, (memory_id,))
+                    archived_count += 1
+                else:
+                    active_count += 1
+        
+        return {"active": active_count, "archived": archived_count}
     
     async def _propagate_memory_subsystems(self, memory_text: str, tags: List[str], significance: int, emotional_intensity: float):
         """
