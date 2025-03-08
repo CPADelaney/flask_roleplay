@@ -428,16 +428,11 @@ async def get_nearby_npcs(user_id, conversation_id, location=None):
 
 @story_bp.route("/next_storybeat", methods=["POST"])
 async def next_storybeat():
-    """
-    This route processes user input for the next story beat using IntegratedNPCSystem:
-      1) Possibly create conversation or spawn new NPCs if needed
-      2) Insert user message
-      3) Process universal updates
-      4) Use IntegratedNPCSystem for NPC interactions
-      5) Check if we should advance time
-      6) If day rolls over from 'Night' to 'Morning', do nightly_maintenance
-      7) Generate GPT response
-    """
+    """Improved next_storybeat with better resource cleanup."""
+    conn = None
+    cur = None
+    npc_system = None
+    
     try:
         user_id = session.get("user_id")
         if not user_id:
@@ -452,27 +447,33 @@ async def next_storybeat():
         if not user_input:
             return jsonify({"error": "No user_input provided"}), 400
 
-        # 1) Validate or create conversation
+        # 1) Validate or create conversation with proper resource management
         conn = get_db_connection()
         cur = conn.cursor()
-        if not conv_id:
-            cur.execute("""
-                INSERT INTO conversations (user_id, conversation_name)
-                VALUES (%s, %s) RETURNING id
-            """, (user_id, "New Chat"))
-            conv_id = cur.fetchone()[0]
-            conn.commit()
-        else:
-            cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
-            row = cur.fetchone()
-            if not row:
-                conn.close()
-                return jsonify({"error": f"Conversation {conv_id} not found"}), 404
-            if row[0] != user_id:
-                conn.close()
-                return jsonify({"error": "Conversation not owned by user"}), 403
+        
+        try:
+            if not conv_id:
+                cur.execute("""
+                    INSERT INTO conversations (user_id, conversation_name)
+                    VALUES (%s, %s) RETURNING id
+                """, (user_id, "New Chat"))
+                conv_id = cur.fetchone()[0]
+                conn.commit()
+            else:
+                cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
+                row = cur.fetchone()
+                if not row:
+                    return jsonify({"error": f"Conversation {conv_id} not found"}), 404
+                if row[0] != user_id:
+                    return jsonify({"error": "Conversation not owned by user"}), 403
+        except Exception as db_error:
+            # Handle database errors properly
+            if conn:
+                conn.rollback()
+            logger.error(f"Database error: {db_error}")
+            return jsonify({"error": f"Database error: {str(db_error)}"}), 500
 
-        # Initialize IntegratedNPCSystem
+        # Initialize IntegratedNPCSystem with proper cleanup
         npc_system = IntegratedNPCSystem(user_id, conv_id)
 
         # 1.5) Possibly spawn more NPCs if too few introduced
@@ -750,8 +751,39 @@ async def next_storybeat():
 
         return jsonify(final_resp)
 
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+            
+        return jsonify(final_resp)
+
     except Exception as e:
-        logging.exception("[next_storybeat] Error")
+        # Proper cleanup in error case
+        logger.exception("[next_storybeat] Error")
+        
+        # Ensure all resources are cleaned up
+        if cur:
+            try:
+                cur.close()
+            except Exception as cur_error:
+                logger.error(f"Error closing cursor: {cur_error}")
+                
+        if conn:
+            try:
+                conn.close()
+            except Exception as conn_error:
+                logger.error(f"Error closing connection: {conn_error}")
+        
+        # Clean up NPC system resources if needed
+        if npc_system:
+            try:
+                # Close any owned resources
+                if hasattr(npc_system, '_pool') and npc_system._pool:
+                    await npc_system._pool.close()
+            except Exception as cleanup_error:
+                logger.error(f"Error cleaning up NPC system: {cleanup_error}")
+        
         return jsonify({"error": str(e)}), 500
 
 
