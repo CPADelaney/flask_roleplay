@@ -192,6 +192,20 @@ class EnhancedMemoryManager:
                 memory_text, memory_type, significance,
                 emotional_intensity, tags, status, confidence
             )
+
+    async def _track_operation_performance(self, operation_name: str, start_time: float) -> None:
+        """Track performance of memory operations and log slow operations."""
+        from utils.performance import STATS
+        
+        # Calculate elapsed time
+        elapsed_ms = (time.time() - start_time) * 1000
+        
+        # Record in stats
+        STATS.record_memory_access_time(elapsed_ms)
+        
+        # Log slow operations
+        if elapsed_ms > 100:  # Threshold for slow operations (100ms)
+            logging.warning(f"Slow memory operation: {operation_name} took {elapsed_ms:.2f}ms for NPC {self.npc_id}")
     
     async def _add_memory_with_subsystems(
         self,
