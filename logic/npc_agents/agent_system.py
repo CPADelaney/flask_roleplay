@@ -48,6 +48,7 @@ class NPCAgentSystem:
         self.npc_agents: Dict[int, NPCAgent] = {}
         self._memory_system = None
         # Track when memory maintenance was last run
+        self.connection_pool = db_pool  # Store connection pool
         self._last_memory_maintenance = datetime.now() - timedelta(hours=1)  # Run on first init
         # Track NPC emotional states to detect significant changes
         self._npc_emotional_states = {}
@@ -56,7 +57,7 @@ class NPCAgentSystem:
         self.initialize_agents()
 
         self._setup_memory_maintenance_schedule()
-
+   
     def _setup_memory_maintenance_schedule(self):
         """Schedule periodic memory maintenance for all NPCs."""
         async def run_maintenance_cycle():
