@@ -461,9 +461,12 @@ class NPCAgentCoordinator:
             group_actions[npc_id] = actions
 
         return group_actions
-
+    
     async def _process_emotional_contagion(self, npc_ids: List[int], action_plan: Dict[str, Any]) -> None:
-        """Process emotional contagion between NPCs during group interactions."""
+        """
+        Process emotional contagion between NPCs during group interactions.
+        Enhanced with relationship factors and physical proximity.
+        """
         memory_system = await self._get_memory_system()
         
         # Get emotional states for all NPCs
@@ -476,6 +479,15 @@ class NPCAgentCoordinator:
         # Calculate dominance factors (affects emotional influence)
         dominance_factors = self._fetch_npc_dominance(npc_ids)
         
+        # Get relationship factors (affects influence strength)
+        relationship_factors = await self._get_group_relationship_factors(npc_ids)
+        
+        # Get physical proximity from environment (if available)
+        proximity_factors = await self._get_physical_proximity_factors(npc_ids, action_plan)
+        
+        # Get mental resilience stats (resistance to influence)
+        mental_resistance = await self._get_mental_resilience_factors(npc_ids)
+        
         # Process contagion for each NPC
         for affected_id in npc_ids:
             # Skip NPCs with no emotional data
@@ -485,12 +497,17 @@ class NPCAgentCoordinator:
             affected_state = emotional_states[affected_id]
             affected_dominance = dominance_factors.get(affected_id, 50)
             
-            # Calculate susceptibility - lower dominance = more susceptible
-            susceptibility = max(0.1, 1.0 - (affected_dominance / 100))
+            # Calculate base susceptibility - lower dominance = more susceptible
+            base_susceptibility = max(0.1, 1.0 - (affected_dominance / 100))
+            
+            # Adjust for mental resilience - higher resilience = less susceptible
+            resistance = mental_resistance.get(affected_id, 50) / 100
+            susceptibility = base_susceptibility * (1.0 - (resistance * 0.5))
             
             # Calculate weighted influence from other NPCs
             new_emotion = None
             max_influence = 0
+            best_influencer = None
             
             for influencer_id in npc_ids:
                 if influencer_id == affected_id or influencer_id not in emotional_states:
@@ -509,15 +526,39 @@ class NPCAgentCoordinator:
                 if emotion_name == "neutral" or intensity < 0.5:
                     continue
                     
-                # Calculate influence power based on dominance and emotion intensity
-                influence_power = (influencer_dominance / 100) * intensity * susceptibility
+                # Get relationship factor between these NPCs
+                relationship_factor = relationship_factors.get(
+                    (min(affected_id, influencer_id), max(affected_id, influencer_id)), 
+                    0.5  # Default to moderate influence if no relationship
+                )
+                
+                # Get proximity factor
+                proximity_factor = proximity_factors.get(
+                    (min(affected_id, influencer_id), max(affected_id, influencer_id)), 
+                    0.8  # Default to moderate proximity if unknown
+                )
+                
+                # Calculate base influence power based on dominance and emotion intensity
+                base_influence = (influencer_dominance / 100) * intensity
+                
+                # Apply modifiers
+                influence_power = base_influence * susceptibility * relationship_factor * proximity_factor
+                
+                # Special case: fear and anger are more contagious
+                if emotion_name in ["fear", "anger"]:
+                    influence_power *= 1.5
+                    
+                # Special case: intimate emotions transfer more between close NPCs
+                if emotion_name in ["arousal", "desire", "affection"] and relationship_factor > 0.7:
+                    influence_power *= 1.3
                 
                 # If this is the strongest influence so far, it affects the NPC
                 if influence_power > max_influence:
                     max_influence = influence_power
+                    best_influencer = influencer_id
                     new_emotion = {
                         "name": emotion_name,
-                        "intensity": intensity * susceptibility  # Weakened version of original
+                        "intensity": min(0.9, intensity * susceptibility)  # Cap at 0.9 intensity
                     }
             
             # Apply new emotion if sufficient influence
@@ -527,6 +568,108 @@ class NPCAgentCoordinator:
                     emotion=new_emotion["name"],
                     intensity=new_emotion["intensity"]
                 )
+                
+                # Create memory of being influenced
+                if best_influencer is not None:
+                    influencer_name = await self._get_npc_name(best_influencer)
+                    memory_text = f"I felt {new_emotion['name']} because of {influencer_name}'s emotional state"
+                    
+                    await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=affected_id,
+                        memory_text=memory_text,
+                        importance="low",
+                        tags=["emotional_contagion", "social_influence"]
+                    )
+    
+    async def _get_group_relationship_factors(self, npc_ids: List[int]) -> Dict[Tuple[int, int], float]:
+        """
+        Get relationship factors between all NPCs in the group.
+        Higher values mean stronger emotional influence.
+        """
+        relationship_factors = {}
+        
+        # Query all relationships between these NPCs
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            for i, npc1 in enumerate(npc_ids):
+                for npc2 in npc_ids[i+1:]:  # Only check each pair once
+                    # Get relationship level between these NPCs
+                    relationship_level = await self._get_relationship_level(npc1, npc2)
+                    
+                    if relationship_level is not None:
+                        # Convert to 0.1-2.0 range for relationship factor
+                        # Higher relationships = stronger influence
+                        factor = 0.1 + (relationship_level / 100) * 1.9
+                        
+                        # Store with consistent key ordering
+                        relationship_factors[(min(npc1, npc2), max(npc1, npc2))] = factor
+                    else:
+                        # Default if no relationship exists
+                        relationship_factors[(min(npc1, npc2), max(npc1, npc2))] = 0.5
+        
+        return relationship_factors
+    
+    async def _get_physical_proximity_factors(self, npc_ids: List[int], action_plan: Dict[str, Any]) -> Dict[Tuple[int, int], float]:
+        """
+        Calculate physical proximity factors based on group interaction.
+        Higher values mean closer physical proximity (stronger influence).
+        """
+        proximity_factors = {}
+        
+        # Default proximity is relatively high in group setting
+        default_proximity = 0.8
+        
+        # Extract interaction patterns from action plan
+        group_actions = action_plan.get("group_actions", [])
+        individual_actions = action_plan.get("individual_actions", {})
+        
+        # Set default proximity for all pairs
+        for i, npc1 in enumerate(npc_ids):
+            for npc2 in npc_ids[i+1:]:
+                proximity_factors[(min(npc1, npc2), max(npc1, npc2))] = default_proximity
+        
+        # Adjust based on interactions
+        for action in group_actions:
+            npc_id = action.get("npc_id")
+            action_data = action.get("action", {})
+            
+            # NPCs directly interacting have higher proximity
+            if action_data.get("type") in ["talk", "command", "emotional_outburst"]:
+                for other_id in npc_ids:
+                    if other_id != npc_id:
+                        proximity_factors[(min(npc_id, other_id), max(npc_id, other_id))] = 1.0
+        
+        # Individual actions indicate closer proximity for those specific pairs
+        for npc_id, actions in individual_actions.items():
+            for action in actions:
+                target = action.get("target")
+                if target and target.isdigit():
+                    target_id = int(target)
+                    proximity_factors[(min(npc_id, target_id), max(npc_id, target_id))] = 1.0
+        
+        return proximity_factors
+    
+    async def _get_mental_resilience_factors(self, npc_ids: List[int]) -> Dict[int, int]:
+        """Get mental resilience for all NPCs to determine contagion resistance."""
+        resistance_factors = {}
+        
+        # Query for mental resilience stats
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT npc_id, mental_resilience
+                FROM NPCStats
+                WHERE npc_id = ANY(%s)
+                AND user_id = %s
+                AND conversation_id = %s
+            """, (npc_ids, self.user_id, self.conversation_id))
+            
+            for row in cursor.fetchall():
+                npc_id, mental_resilience = row
+                
+                # Default to 50 if not specified
+                resistance_factors[npc_id] = mental_resilience if mental_resilience is not None else 50
+        
+        return resistance_factors
 
     async def resolve_decision_conflicts(
         self,
