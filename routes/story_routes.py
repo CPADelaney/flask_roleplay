@@ -432,6 +432,7 @@ async def next_storybeat():
     conn = None
     cur = None
     npc_system = None
+    pool = None
     
     try:
         user_id = session.get("user_id")
@@ -441,40 +442,14 @@ async def next_storybeat():
         data = request.get_json() or {}
         user_input = data.get("user_input", "").strip()
         conv_id = data.get("conversation_id")
-        player_name = data.get("player_name", "Chase")
-        requested_activity = data.get("activity_type")
-
-        if not user_input:
-            return jsonify({"error": "No user_input provided"}), 400
-
-        # 1) Validate or create conversation with proper resource management
+        
+        # Database connection setup with proper resource tracking
         conn = get_db_connection()
         cur = conn.cursor()
         
-        try:
-            if not conv_id:
-                cur.execute("""
-                    INSERT INTO conversations (user_id, conversation_name)
-                    VALUES (%s, %s) RETURNING id
-                """, (user_id, "New Chat"))
-                conv_id = cur.fetchone()[0]
-                conn.commit()
-            else:
-                cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conv_id,))
-                row = cur.fetchone()
-                if not row:
-                    return jsonify({"error": f"Conversation {conv_id} not found"}), 404
-                if row[0] != user_id:
-                    return jsonify({"error": "Conversation not owned by user"}), 403
-        except Exception as db_error:
-            # Handle database errors properly
-            if conn:
-                conn.rollback()
-            logger.error(f"Database error: {db_error}")
-            return jsonify({"error": f"Database error: {str(db_error)}"}), 500
-
-        # Initialize IntegratedNPCSystem with proper cleanup
+        # Initialize NPC system with tracked pool
         npc_system = IntegratedNPCSystem(user_id, conv_id)
+        pool = npc_system._pool  # Keep reference for cleanup
 
         # 1.5) Possibly spawn more NPCs if too few introduced
         cur.execute("""
@@ -757,14 +732,13 @@ async def next_storybeat():
             conn.close()
             
         return jsonify(final_resp)
-
+        
     except Exception as e:
-        # Proper cleanup in error case
         logger.exception("[next_storybeat] Error")
         return jsonify({"error": str(e)}), 500
         
     finally:
-        # Ensure all resources are properly cleaned up
+        # Comprehensive resource cleanup
         if cur:
             try:
                 cur.close()
@@ -777,14 +751,12 @@ async def next_storybeat():
             except Exception as conn_error:
                 logger.error(f"Error closing connection: {conn_error}")
         
-        # Clean up NPC system resources if needed
-        if npc_system:
+        # Clean up pool and async resources
+        if pool and not pool.closed:
             try:
-                # Close any owned resources
-                if hasattr(npc_system, '_pool') and npc_system._pool:
-                    await npc_system._pool.close()
-            except Exception as cleanup_error:
-                logger.error(f"Error cleaning up NPC system: {cleanup_error}")
+                await pool.close()
+            except Exception as pool_error:
+                logger.error(f"Error closing connection pool: {pool_error}")
 
 
 @story_bp.route("/relationship_summary", methods=["GET"])
