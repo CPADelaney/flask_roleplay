@@ -636,6 +636,134 @@ class NPCAgent:
             
             # Return a safe fallback action
             return {"type": "observe", "description": "observe quietly", "target": "environment"}
+
+    async def _evolve_personality_traits(self) -> Dict[str, Any]:
+        """Gradually evolve personality traits based on experiences and interactions."""
+        results = {
+            "traits_modified": 0,
+            "new_traits": 0,
+            "removed_traits": 0
+        }
+        
+        # Get current traits
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT personality_traits, dominance, cruelty
+                FROM NPCStats
+                WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+            """, (self.npc_id, self.user_id, self.conversation_id))
+            
+            row = cursor.fetchone()
+            if not row:
+                return {"error": "NPC not found"}
+                
+            traits_json, dominance, cruelty = row
+            
+            # Parse traits
+            if isinstance(traits_json, str):
+                try:
+                    traits = json.loads(traits_json)
+                except:
+                    traits = []
+            else:
+                traits = traits_json or []
+        
+        # Get memory system for analyzing experiences
+        memory_system = await self._get_memory_system()
+        
+        # Analyze recent significant memories for trait influences
+        memory_result = await memory_system.recall(
+            entity_type="npc",
+            entity_id=self.npc_id,
+            query="significant experience",
+            limit=10
+        )
+        
+        memories = memory_result.get("memories", [])
+        
+        # Count trait-influencing experiences
+        trait_influences = {}
+        for memory in memories:
+            text = memory.get("text", "").lower()
+            
+            # Check for positive experiences with dominance
+            if any(word in text for word in ["commanded", "controlled", "dominated", "power"]):
+                trait_influences["dominant"] = trait_influences.get("dominant", 0) + 1
+                
+            # Check for submission experiences
+            if any(word in text for word in ["obeyed", "submitted", "followed", "complied"]):
+                trait_influences["submissive"] = trait_influences.get("submissive", 0) + 1
+                
+            # Check for cruel experiences
+            if any(word in text for word in ["mocked", "humiliated", "hurt", "cruel"]):
+                trait_influences["cruel"] = trait_influences.get("cruel", 0) + 1
+                
+            # Check for kind experiences
+            if any(word in text for word in ["helped", "supported", "kind", "gentle"]):
+                trait_influences["kind"] = trait_influences.get("kind", 0) + 1
+        
+        # Modify traits based on influences
+        modified_traits = traits.copy()
+        
+        # Remove conflicting traits if strong influence in opposite direction
+        if "dominant" in trait_influences and trait_influences["dominant"] >= 3 and "submissive" in modified_traits:
+            modified_traits.remove("submissive")
+            results["removed_traits"] += 1
+            
+        if "submissive" in trait_influences and trait_influences["submissive"] >= 3 and "dominant" in modified_traits:
+            modified_traits.remove("dominant")
+            results["removed_traits"] += 1
+            
+        if "cruel" in trait_influences and trait_influences["cruel"] >= 3 and "kind" in modified_traits:
+            modified_traits.remove("kind")
+            results["removed_traits"] += 1
+            
+        if "kind" in trait_influences and trait_influences["kind"] >= 3 and "cruel" in modified_traits:
+            modified_traits.remove("cruel")
+            results["removed_traits"] += 1
+        
+        # Add new traits if strong influence and not already present
+        for trait, count in trait_influences.items():
+            if count >= 3 and trait not in modified_traits:
+                modified_traits.append(trait)
+                results["new_traits"] += 1
+        
+        # Update dominance and cruelty stats based on experiences
+        new_dominance = dominance
+        new_cruelty = cruelty
+        
+        if "dominant" in trait_influences:
+            new_dominance = min(100, dominance + trait_influences["dominant"])
+            results["traits_modified"] += 1
+            
+        if "submissive" in trait_influences:
+            new_dominance = max(0, dominance - trait_influences["submissive"])
+            results["traits_modified"] += 1
+            
+        if "cruel" in trait_influences:
+            new_cruelty = min(100, cruelty + trait_influences["cruel"])
+            results["traits_modified"] += 1
+            
+        if "kind" in trait_influences:
+            new_cruelty = max(0, cruelty - trait_influences["kind"])
+            results["traits_modified"] += 1
+        
+        # Save changes if any were made
+        if (modified_traits != traits or 
+            new_dominance != dominance or 
+            new_cruelty != cruelty):
+            
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE NPCStats
+                    SET personality_traits = %s,
+                        dominance = %s,
+                        cruelty = %s
+                    WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                """, (json.dumps(modified_traits), new_dominance, new_cruelty, 
+                      self.npc_id, self.user_id, self.conversation_id))
+        
+        return results
     
     async def _should_mask_slip(self, perception, chosen_action):
         """
@@ -1589,6 +1717,8 @@ class NPCAgent:
                     importance="medium",
                     tags=["mask_reinforcement", "self_improvement"]
                 )
+
+            await _evolve_personality_traits
             
             # Adjust mask based on behavior consistency with presented traits
             if behavior_trends:
