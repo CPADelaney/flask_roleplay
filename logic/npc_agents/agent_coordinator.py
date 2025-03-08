@@ -116,6 +116,17 @@ class NPCAgentCoordinator:
         await self._create_group_memory_effects(npc_ids, action_plan, shared_context)
         
         return action_plan
+
+    async def _create_empty_perception_future(self):
+        """Create an empty perception result for missing agents."""
+        return {
+            "environment": {},
+            "relevant_memories": [],
+            "relationships": {},
+            "timestamp": datetime.now().isoformat(),
+            "missing_agent": True  # Flag to identify this as a placeholder
+        }
+
     
     async def _prepare_group_context(self, npc_ids: List[int], shared_context: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare enhanced context for group interactions with memory."""
@@ -184,7 +195,7 @@ class NPCAgentCoordinator:
                     
                 perception_tasks.append(agent.perceive_environment(perception_context))
             else:
-                perception_tasks.append(asyncio.sleep(0))  # Filler if agent is missing
+                perception_tasks.append(self._create_empty_perception_future())
         
         # Gather results concurrently
         perceptions_list = await asyncio.gather(*perception_tasks)
