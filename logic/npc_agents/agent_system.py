@@ -300,7 +300,9 @@ class NPCAgentSystem:
             if not new_location:
                 return {"error": "No location specified"}
                 
-            async with db_transaction() as conn:
+            with get_db_connection() as conn:
+                conn.begin()
+                try:
                 # Update all NPCs in a single query
                 query = """
                     UPDATE NPCStats
@@ -361,6 +363,10 @@ class NPCAgentSystem:
         
         # Add other update types as needed
         
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    raise e        
         return results
 
     async def handle_single_npc_interaction(self, npc_id: int, player_action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
