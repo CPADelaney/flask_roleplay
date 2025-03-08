@@ -722,6 +722,54 @@ class NPCAgent:
         # Keep only the last 10 decisions
         if len(self.decision_history) > 10:
             self.decision_history = self.decision_history[-10:]
+
+    async def _check_for_mask_reinforcement_behaviors(self) -> float:
+        """
+        Check for behaviors that would help reinforce an NPC's mask.
+        Returns a reinforcement score (0 = none, higher = more reinforcement).
+        """
+        reinforcement_score = 0.0
+        
+        # Check recent actions from decision history
+        if hasattr(self, 'decision_history') and self.decision_history:
+            # Get most recent actions (up to 5)
+            recent_actions = self.decision_history[-5:]
+            
+            for decision in recent_actions:
+                action = decision.get("action", {})
+                action_type = action.get("type", "")
+                
+                # Actions that reinforce mask
+                if action_type in ["observe", "talk"]:
+                    reinforcement_score += 0.2  # Mild reinforcement
+                elif action_type in ["leave", "act_defensive"]:
+                    reinforcement_score += 0.3  # Moderate reinforcement
+                elif action_type == "mask_reinforcement":
+                    reinforcement_score += 1.0  # Strong reinforcement
+        
+        # Check if NPC is alone (easier to reinforce mask when alone)
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT current_location 
+                FROM NPCStats 
+                WHERE npc_id = %s
+            """, (self.npc_id,))
+            location = cursor.fetchone()[0] if cursor.rowcount > 0 else None
+            
+            if location:
+                # Check if others are present
+                cursor.execute("""
+                    SELECT COUNT(*) 
+                    FROM NPCStats 
+                    WHERE current_location = %s AND npc_id != %s
+                """, (location, self.npc_id))
+                other_count = cursor.fetchone()[0] if cursor.rowcount > 0 else 0
+                
+                if other_count == 0:
+                    # Alone - easier to reinforce
+                    reinforcement_score += 0.5
+        
+        return reinforcement_score
     
     async def _apply_belief_weights_to_actions(self, 
                                               available_actions: List[Dict[str, Any]], 
@@ -1492,6 +1540,29 @@ class NPCAgent:
                 entity_id=self.npc_id,
                 timeframe_days=30
             )
+
+            mask_manager = await self._get_mask_manager()
+            reinforcement_score = await self._check_for_mask_reinforcement_behaviors()
+            
+            if reinforcement_score > 0:
+                # Calculate recovery amount based on reinforcement behaviors
+                recovery_amount = min(5, reinforcement_score * 2)
+                
+                await mask_manager.adjust_mask_integrity(
+                    npc_id=self.npc_id,
+                    adjustment=recovery_amount,
+                    reason="Mask reinforcement behaviors"
+                )
+                
+                # Create memory of the reinforcement
+                memory_system = await self._get_memory_system()
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    memory_text=f"I spent time reinforcing my mask to hide my true nature",
+                    importance="medium",
+                    tags=["mask_reinforcement", "self_improvement"]
+                )
             
             # Adjust mask based on behavior consistency with presented traits
             if behavior_trends:
