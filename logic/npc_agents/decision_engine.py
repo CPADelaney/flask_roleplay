@@ -383,6 +383,187 @@ class NPCDecisionEngine:
         actions.extend(memory_based_actions)
         
         return actions
+    
+    async def initialize_long_term_goals(self, npc_data: Dict[str, Any]) -> None:
+        """Initialize NPC's long-term goals based on personality and archetype."""
+        self.long_term_goals = []
+        
+        # Extract personality factors
+        dominance = npc_data.get("dominance", 50)
+        cruelty = npc_data.get("cruelty", 50)
+        traits = npc_data.get("personality_traits", [])
+        archetypes = npc_data.get("archetypes", [])
+        
+        # Default importance levels
+        default_importance = 0.7
+        
+        # Create goals based on dominance level (femdom-specific)
+        if dominance > 75:
+            self.long_term_goals.append({
+                "type": "dominance",
+                "description": "Assert complete control over submissives",
+                "importance": 0.9,
+                "progress": 0,
+                "target_entity": "player"  # Usually focused on player
+            })
+        elif dominance > 60:
+            self.long_term_goals.append({
+                "type": "dominance",
+                "description": "Establish authority in social hierarchy",
+                "importance": 0.8,
+                "progress": 0,
+                "target_entity": None  # General goal
+            })
+        elif dominance < 30:
+            self.long_term_goals.append({
+                "type": "submission",
+                "description": "Find strong dominant to serve",
+                "importance": 0.8,
+                "progress": 0,
+                "target_entity": None
+            })
+        
+        # Create goals based on cruelty (femdom-specific)
+        if cruelty > 70:
+            self.long_term_goals.append({
+                "type": "sadism",
+                "description": "Break down resistances through humiliation",
+                "importance": 0.85,
+                "progress": 0,
+                "target_entity": "player"
+            })
+        elif cruelty < 30 and dominance > 60:
+            self.long_term_goals.append({
+                "type": "guidance",
+                "description": "Guide submissives to growth through gentle dominance",
+                "importance": 0.75,
+                "progress": 0,
+                "target_entity": "player"
+            })
+        
+        # Create goals based on personality traits
+        if "ambitious" in traits:
+            self.long_term_goals.append({
+                "type": "power",
+                "description": "Increase social influence and control",
+                "importance": 0.85,
+                "progress": 0,
+                "target_entity": None
+            })
+        
+        if "protective" in traits:
+            self.long_term_goals.append({
+                "type": "protection",
+                "description": "Ensure the safety and well-being of those in care",
+                "importance": 0.8,
+                "progress": 0,
+                "target_entity": "player" if dominance > 50 else None
+            })
+    
+        # Create archetype-specific goals
+        if "mentor" in archetypes:
+            self.long_term_goals.append({
+                "type": "development",
+                "description": "Guide the development of the player's submissive nature",
+                "importance": 0.9,
+                "progress": 0,
+                "target_entity": "player"
+            })
+        elif "seductress" in archetypes:
+            self.long_term_goals.append({
+                "type": "seduction",
+                "description": "Gradually increase player's dependency and devotion",
+                "importance": 0.9,
+                "progress": 0,
+                "target_entity": "player"
+            })
+    
+    async def _score_long_term_goals(self, action: Dict[str, Any]) -> float:
+        """Score actions based on how they advance long-term goals."""
+        if not hasattr(self, 'long_term_goals') or not self.long_term_goals:
+            return 0.0
+            
+        total_score = 0.0
+        
+        for goal in self.long_term_goals:
+            goal_type = goal.get("type", "")
+            importance = goal.get("importance", 0.7)
+            target_entity = goal.get("target_entity")
+            
+            # Skip if action target doesn't match goal target
+            if (target_entity and 
+                action.get("target") != target_entity and 
+                not (target_entity == "player" and action.get("target") == "group")):
+                continue
+                
+            # Score based on goal type and action alignment
+            if goal_type == "dominance":
+                if action["type"] in ["command", "dominate", "test", "punish"]:
+                    total_score += 2.0 * importance
+                elif action["type"] in ["praise", "reward_submission"]:
+                    total_score += 1.5 * importance
+                    
+            elif goal_type == "submission":
+                if action["type"] in ["observe", "obey", "assist"]:
+                    total_score += 2.0 * importance
+                    
+            elif goal_type == "sadism":
+                if action["type"] in ["punish", "humiliate", "mock"]:
+                    total_score += 2.0 * importance
+                    
+            elif goal_type == "guidance":
+                if action["type"] in ["teach", "praise", "correct"]:
+                    total_score += 2.0 * importance
+                    
+            elif goal_type == "seduction":
+                if action["type"] in ["seduce", "flirt", "intimate_touch"]:
+                    total_score += 2.0 * importance
+        
+        return total_score
+    
+    async def _update_goal_progress(self, action: Dict[str, Any], outcome: Dict[str, Any]) -> None:
+        """Update progress on long-term goals based on action outcomes."""
+        if not hasattr(self, 'long_term_goals') or not self.long_term_goals:
+            return
+            
+        # Get outcome data
+        success = "success" in outcome.get("result", "").lower()
+        emotional_impact = outcome.get("emotional_impact", 0)
+        
+        for i, goal in enumerate(self.long_term_goals):
+            goal_type = goal.get("type", "")
+            target_entity = goal.get("target_entity")
+            current_progress = goal.get("progress", 0)
+            
+            # Skip if action target doesn't match goal target
+            if (target_entity and 
+                action.get("target") != target_entity and 
+                not (target_entity == "player" and action.get("target") == "group")):
+                continue
+                
+            # Calculate progress update based on action type and success
+            progress_update = 0
+            
+            if goal_type == "dominance":
+                if action["type"] in ["command", "dominate", "test"]:
+                    if success:
+                        progress_update = 5
+                    else:
+                        progress_update = -2
+                        
+            elif goal_type == "submission":
+                if action["type"] in ["observe", "obey", "assist"]:
+                    progress_update = 3 if success else 1
+                    
+            elif goal_type == "seduction":
+                if action["type"] in ["seduce", "flirt"]:
+                    # Emotional impact is key for seduction
+                    if emotional_impact > 0:
+                        progress_update = emotional_impact
+            
+            # Update progress (capped at 0-100)
+            if progress_update != 0:
+                self.long_term_goals[i]["progress"] = max(0, min(100, current_progress + progress_update))
 
     async def _score_time_context_influence(self, time_context: Dict[str, Any], action: Dict[str, Any]) -> float:
         """Score actions based on time of day appropriateness."""
