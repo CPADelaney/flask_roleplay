@@ -340,12 +340,7 @@ class EnhancedMemoryManager:
     async def analyze_memory_content(self, memory_text: str) -> List[str]:
         """
         Analyze memory text content to extract relevant tags.
-        
-        Args:
-            memory_text: The memory text to analyze
-            
-        Returns:
-            List of tags extracted from the content
+        Enhanced with femdom-specific categories and themes.
         """
         tags = []
         lower_text = memory_text.lower()
@@ -355,6 +350,10 @@ class EnhancedMemoryManager:
             tags.append("negative_emotion")
         if any(word in lower_text for word in ["happy", "pleased", "joy", "delighted", "thrilled"]):
             tags.append("positive_emotion")
+        if any(word in lower_text for word in ["afraid", "scared", "fearful", "terrified"]):
+            tags.append("fear")
+        if any(word in lower_text for word in ["aroused", "excited", "turned on", "desire"]):
+            tags.append("arousal")
         
         # Player-related
         if "player" in lower_text or "user" in lower_text or "chase" in lower_text:
@@ -369,6 +368,64 @@ class EnhancedMemoryManager:
             tags.append("positive_interaction")
         if any(word in lower_text for word in ["betrayed", "attacked", "deceived", "tricked"]):
             tags.append("negative_interaction")
+        
+        # FEMDOM SPECIFIC TAGS
+        
+        # Dominance dynamics
+        if any(word in lower_text for word in ["command", "ordered", "instructed", "demanded"]):
+            tags.append("dominance_assertion")
+        if any(word in lower_text for word in ["obey", "comply", "submit", "kneel", "bow"]):
+            tags.append("submission_behavior")
+        
+        # Punishment/discipline
+        if any(word in lower_text for word in ["punish", "discipline", "correct", "consequences"]):
+            tags.append("discipline")
+        if any(word in lower_text for word in ["spank", "whip", "paddle", "impact"]):
+            tags.append("physical_discipline")
+        
+        # Humiliation
+        if any(word in lower_text for word in ["humiliate", "embarrass", "shame", "mock"]):
+            tags.append("humiliation")
+        
+        # Training/conditioning
+        if any(word in lower_text for word in ["train", "condition", "learn", "lesson", "teach"]):
+            tags.append("training")
+        
+        # Control
+        if any(word in lower_text for word in ["control", "restrict", "limit", "permission"]):
+            tags.append("control")
+        
+        # Worship/service
+        if any(word in lower_text for word in ["worship", "serve", "service", "please", "satisfy"]):
+            tags.append("service")
+        
+        # Devotion/loyalty
+        if any(word in lower_text for word in ["devoted", "loyal", "faithful", "belonging"]):
+            tags.append("devotion")
+        
+        # Resistance
+        if any(word in lower_text for word in ["resist", "disobey", "refuse", "defy"]):
+            tags.append("resistance")
+        
+        # Power exchange
+        if any(word in lower_text for word in ["power", "exchange", "protocol", "dynamic", "role"]):
+            tags.append("power_exchange")
+        
+        # Praise
+        if any(word in lower_text for word in ["praise", "good", "well done", "proud"]):
+            tags.append("praise")
+        
+        # Rituals
+        if any(word in lower_text for word in ["ritual", "ceremony", "protocol", "procedure"]):
+            tags.append("ritual")
+        
+        # Collaring and ownership
+        if any(word in lower_text for word in ["collar", "own", "belong", "possess", "property"]):
+            tags.append("ownership")
+        
+        # Psychological
+        if any(word in lower_text for word in ["mind", "psyche", "thoughts", "mental", "mindset"]):
+            tags.append("psychological")
         
         return tags
     
