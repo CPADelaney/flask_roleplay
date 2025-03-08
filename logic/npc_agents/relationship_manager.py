@@ -144,6 +144,77 @@ class NPCRelationshipManager:
 
         return relationships
 
+async def apply_relationship_decay(self, days_since_interaction: int = 1) -> Dict[str, Any]:
+    """Apply natural decay to relationships based on time without interaction."""
+    results = {"decayed_count": 0, "links_processed": 0}
+    
+    # Get all relationships for this NPC
+    with get_db_connection() as conn, conn.cursor() as cursor:
+        cursor.execute("""
+            SELECT link_id, link_type, link_level, entity2_type, entity2_id, last_interaction
+            FROM SocialLinks
+            WHERE entity1_type = 'npc'
+              AND entity1_id = %s
+              AND user_id = %s
+              AND conversation_id = %s
+        """, (self.npc_id, self.user_id, self.conversation_id))
+        
+        links = cursor.fetchall()
+        results["links_processed"] = len(links)
+        
+        for link in links:
+            link_id, link_type, link_level, entity2_type, entity2_id, last_interaction = link
+            
+            # Skip if interaction was recent
+            if last_interaction and (datetime.now() - last_interaction).days < days_since_interaction:
+                continue
+                
+            # Calculate decay amount - closer relationships decay slower
+            decay_amount = 1  # Base decay
+            if link_level > 75:  # Close relationships
+                decay_amount = 0.5
+            elif link_level > 50:  # Friendly relationships
+                decay_amount = 0.7
+            elif link_level < 25:  # Hostile relationships
+                decay_amount = 0.3  # Hostility fades slower
+                
+            # Apply days multiplier
+            total_decay = decay_amount * days_since_interaction
+            
+            # Don't decay below minimum threshold
+            new_level = max(0, link_level - total_decay)
+            
+            # Update only if significant change
+            if abs(new_level - link_level) >= 0.5:
+                # Update the link
+                cursor.execute("""
+                    UPDATE SocialLinks
+                    SET link_level = %s
+                    WHERE link_id = %s
+                """, (new_level, link_id))
+                
+                results["decayed_count"] += 1
+                
+                # Check if type needs to change
+                new_type = link_type
+                if new_level > 75:
+                    new_type = "close"
+                elif new_level > 50:
+                    new_type = "friendly"
+                elif new_level < 25:
+                    new_type = "hostile"
+                else:
+                    new_type = "neutral"
+                    
+                if new_type != link_type:
+                    cursor.execute("""
+                        UPDATE SocialLinks
+                        SET link_type = %s
+                        WHERE link_id = %s
+                    """, (new_type, link_id))
+    
+    return results
+
 async def update_relationship_from_interaction(
     self,
     entity_type: str,
