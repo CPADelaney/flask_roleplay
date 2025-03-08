@@ -127,6 +127,13 @@ class NPCAgentCoordinator:
             "missing_agent": True  # Flag to identify this as a placeholder
         }
 
+    async def _resolve_group_conflicts(self, decisions, npc_ids, perceptions):
+        """
+        Resolve conflicts in group decisions.
+        """
+        # This should call the existing method with proper parameters
+        return await self.resolve_decision_conflicts(decisions, npc_ids, perceptions)
+
     async def _process_memory_subsystems(self, memory_text: str, tags: List[str], 
                                        significance: int, emotional_intensity: float):
         """
