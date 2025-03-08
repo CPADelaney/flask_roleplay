@@ -382,58 +382,171 @@ def fetch_interactions():
 # NEW FUNCTION: Get nearby NPCs for interactions
 async def get_nearby_npcs(user_id, conversation_id, location=None):
     """
-    Get NPCs that are at the current location or nearby - with performance optimization
+    Get NPCs that are at the current location with enhanced caching and filtering.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        location: Optional location to filter by
+        
+    Returns:
+        List of nearby NPCs with relevant details
     """
+    # Initialize cache if not exists
+    if not hasattr(get_nearby_npcs, "cache"):
+        get_nearby_npcs.cache = {}
+        get_nearby_npcs.cache_timestamps = {}
+    
+    # Create cache key
+    cache_key = f"{user_id}:{conversation_id}:{location or 'all'}"
+    
+    # Check cache first (30 second TTL)
+    cache_timestamp = get_nearby_npcs.cache_timestamps.get(cache_key)
+    if cache_timestamp and (datetime.now() - cache_timestamp).total_seconds() < 30:
+        return get_nearby_npcs.cache.get(cache_key, [])
+    
     conn = None
     cursor = None
     
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        if location:
-            # Use index hint for location lookup
-            cursor.execute("""
-                SELECT /*+ INDEX(NPCStats idx_npcstats_location) */ 
-                    npc_id, npc_name, current_location, dominance, cruelty
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s 
-                AND current_location=%s
-                LIMIT 5
-            """, (user_id, conversation_id, location))
-        else:
-            # Get any NPCs (prioritize ones that are introduced)
-            cursor.execute("""
-                SELECT /*+ INDEX(NPCStats idx_npcstats_introduced) */
-                    npc_id, npc_name, current_location, dominance, cruelty
-                FROM NPCStats
-                WHERE user_id=%s AND conversation_id=%s
-                ORDER BY introduced DESC
-                LIMIT 5
-            """, (user_id, conversation_id))
+        # Get connection pool with async driver if available
+        try:
+            import asyncpg
+            dsn = os.getenv("DB_DSN")
+            conn = await asyncpg.connect(dsn=dsn)
             
-        nearby_npcs = []
-        for row in cursor.fetchall():
-            npc_id, npc_name, current_location, dominance, cruelty = row
-            nearby_npcs.append({
-                "npc_id": npc_id,
-                "npc_name": npc_name,
-                "current_location": current_location,
-                "dominance": dominance,
-                "cruelty": cruelty
-            })
-        
-        return nearby_npcs
+            # Use more efficient async query
+            if location:
+                query = """
+                    SELECT npc_id, npc_name, current_location, dominance, cruelty, 
+                           archetypes, memory
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2 
+                    AND current_location=$3
+                    ORDER BY introduced DESC
+                    LIMIT 5
+                """
+                rows = await conn.fetch(query, user_id, conversation_id, location)
+            else:
+                query = """
+                    SELECT npc_id, npc_name, current_location, dominance, cruelty,
+                           archetypes, memory
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2
+                    ORDER BY introduced DESC
+                    LIMIT 5
+                """
+                rows = await conn.fetch(query, user_id, conversation_id)
+            
+            # Process results
+            nearby_npcs = []
+            for row in rows:
+                # Process JSON fields with error handling
+                try:
+                    archetypes = json.loads(row["archetypes"]) if isinstance(row["archetypes"], str) else row["archetypes"] or []
+                except (json.JSONDecodeError, TypeError):
+                    archetypes = []
+                    
+                try:
+                    memories = json.loads(row["memory"]) if isinstance(row["memory"], str) else row["memory"] or []
+                except (json.JSONDecodeError, TypeError):
+                    memories = []
+                
+                # Add NPC data with selected memories
+                nearby_npcs.append({
+                    "npc_id": row["npc_id"],
+                    "npc_name": row["npc_name"],
+                    "current_location": row["current_location"],
+                    "dominance": row["dominance"],
+                    "cruelty": row["cruelty"],
+                    "archetypes": archetypes,
+                    "recent_memories": memories[:3] if memories else []
+                })
+            
+            # Cache the results
+            get_nearby_npcs.cache[cache_key] = nearby_npcs
+            get_nearby_npcs.cache_timestamps[cache_key] = datetime.now()
+            
+            return nearby_npcs
+            
+        except (ImportError, Exception) as async_error:
+            # Fall back to synchronous connection if async fails
+            logger.warning(f"Falling back to sync connection: {async_error}")
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            if location:
+                cursor.execute("""
+                    SELECT npc_id, npc_name, current_location, dominance, cruelty
+                    FROM NPCStats
+                    WHERE user_id=%s AND conversation_id=%s 
+                    AND current_location=%s
+                    ORDER BY introduced DESC
+                    LIMIT 5
+                """, (user_id, conversation_id, location))
+            else:
+                cursor.execute("""
+                    SELECT npc_id, npc_name, current_location, dominance, cruelty
+                    FROM NPCStats
+                    WHERE user_id=%s AND conversation_id=%s
+                    ORDER BY introduced DESC
+                    LIMIT 5
+                """, (user_id, conversation_id))
+                
+            nearby_npcs = []
+            for row in cursor.fetchall():
+                npc_id, npc_name, current_location, dominance, cruelty = row
+                nearby_npcs.append({
+                    "npc_id": npc_id,
+                    "npc_name": npc_name,
+                    "current_location": current_location,
+                    "dominance": dominance,
+                    "cruelty": cruelty
+                })
+            
+            # Cache the results
+            get_nearby_npcs.cache[cache_key] = nearby_npcs
+            get_nearby_npcs.cache_timestamps[cache_key] = datetime.now()
+            
+            return nearby_npcs
         
     except Exception as e:
         logger.error(f"Error getting nearby NPCs: {e}")
         return []
         
     finally:
+        # Clean up resources
         if cursor:
-            cursor.close()
+            try:
+                cursor.close()
+            except Exception:
+                pass
+                
         if conn:
-            conn.close()
+            try:
+                # Different close methods for different connection types
+                if hasattr(conn, 'close'):
+                    if asyncio.iscoroutinefunction(conn.close):
+                        asyncio.create_task(conn.close())
+                    else:
+                        conn.close()
+            except Exception:
+                pass
+                
+    # Keep cache size reasonable - clean up if more than 20 entries
+    if len(get_nearby_npcs.cache) > 20:
+        # Find oldest cache entries
+        old_keys = sorted(
+            get_nearby_npcs.cache_timestamps.keys(),
+            key=lambda k: get_nearby_npcs.cache_timestamps[k]
+        )[:5]  # Remove 5 oldest
+        
+        # Remove old entries
+        for old_key in old_keys:
+            if old_key in get_nearby_npcs.cache:
+                del get_nearby_npcs.cache[old_key]
+            if old_key in get_nearby_npcs.cache_timestamps:
+                del get_nearby_npcs.cache_timestamps[old_key]
 # -------------------------------------------------------------------
 # ROUTE DEFINITION
 # -------------------------------------------------------------------
