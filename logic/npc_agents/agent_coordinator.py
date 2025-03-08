@@ -550,6 +550,23 @@ class NPCAgentCoordinator:
                         npc_dominance[npc_id] = max(0, npc_dominance.get(npc_id, 50) - int(intensity * 15))
             except Exception as e:
                 logger.error(f"Error applying emotional modifiers for NPC {npc_id}: {e}")
+
+            coalitions = await self._detect_potential_coalitions(npc_ids, perceptions)
+        
+        # When sorting NPCs by dominance, modify to consider coalitions
+        if coalitions:
+            # Boost dominance for coalition members
+            for coalition in coalitions:
+                coalition_boost = 15 * coalition["strength"]  # 0-15 point boost
+                leader = coalition["leader"]
+                
+                for member in coalition["members"]:
+                    if member != leader:
+                        # Followers get smaller boost
+                        npc_dominance[member] = min(100, npc_dominance.get(member, 50) + (coalition_boost * 0.5))
+                    else:
+                        # Leader gets full boost
+                        npc_dominance[member] = min(100, npc_dominance.get(member, 50) + coalition_boost)
                 
         # Apply mask integrity modifiers
         for npc_id in npc_ids:
@@ -636,6 +653,122 @@ class NPCAgentCoordinator:
 
         logger.info("Resolved action plan: %s", action_plan)
         return action_plan
+
+    async def _detect_potential_coalitions(
+        self,
+        npc_ids: List[int],
+        perceptions: Dict[int, Any]
+    ) -> List[Dict[str, Any]]:
+        """Detect potential coalitions between NPCs based on aligned interests."""
+        coalitions = []
+        
+        # Get relationships between all NPCs
+        relationships = {}
+        for npc_id in npc_ids:
+            for other_id in npc_ids:
+                if npc_id != other_id:
+                    # Get relationship level
+                    link_level = await self._get_relationship_level(npc_id, other_id)
+                    if link_level:
+                        relationships[(npc_id, other_id)] = link_level
+        
+        # Identify potential pairs with strong relationships (above 60)
+        potential_pairs = []
+        for (npc1, npc2), level in relationships.items():
+            if level > 60:
+                potential_pairs.append((npc1, npc2, level))
+        
+        # Sort pairs by relationship strength
+        potential_pairs.sort(key=lambda x: x[2], reverse=True)
+        
+        # Form coalitions from these pairs
+        assigned_npcs = set()
+        for npc1, npc2, level in potential_pairs:
+            # Skip if either NPC is already in a coalition
+            if npc1 in assigned_npcs or npc2 in assigned_npcs:
+                continue
+                
+            # Check for compatible goals/traits
+            traits_compatible = await self._check_trait_compatibility(npc1, npc2)
+            
+            if traits_compatible:
+                coalition = {
+                    "members": [npc1, npc2],
+                    "strength": level / 100,  # Normalize to 0-1
+                    "leader": npc1 if self._fetch_npc_dominance([npc1]).get(npc1, 0) > 
+                               self._fetch_npc_dominance([npc2]).get(npc2, 0) else npc2
+                }
+                coalitions.append(coalition)
+                assigned_npcs.add(npc1)
+                assigned_npcs.add(npc2)
+        
+        return coalitions
+
+      async def _check_trait_compatibility(self, npc1: int, npc2: int) -> bool:
+        """Check if two NPCs have compatible traits for coalition formation."""
+        compatible = False
+        
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            # Get traits for both NPCs
+            cursor.execute("""
+                SELECT npc_id, dominance, cruelty, personality_traits
+                FROM NPCStats
+                WHERE npc_id IN (%s, %s)
+                AND user_id = %s
+                AND conversation_id = %s
+            """, (npc1, npc2, self.user_id, self.conversation_id))
+            
+            trait_data = {}
+            for row in cursor.fetchall():
+                npc_id, dominance, cruelty, personality_traits = row
+                
+                # Parse traits
+                if isinstance(personality_traits, str):
+                    try:
+                        traits = json.loads(personality_traits)
+                    except:
+                        traits = []
+                else:
+                    traits = personality_traits or []
+                    
+                trait_data[npc_id] = {
+                    "dominance": dominance,
+                    "cruelty": cruelty,
+                    "traits": traits
+                }
+        
+        # Check basic compatibility rules
+        if npc1 in trait_data and npc2 in trait_data:
+            data1 = trait_data[npc1]
+            data2 = trait_data[npc2]
+            
+            # Rule 1: Very similar dominance levels often don't work well together
+            dom_diff = abs(data1["dominance"] - data2["dominance"])
+            if dom_diff < 20 or dom_diff > 40:
+                # Either clear hierarchy or too similar
+                compatible = True
+                
+            # Rule 2: Shared cruelty trait creates bonds
+            if abs(data1["cruelty"] - data2["cruelty"]) < 20:
+                compatible = True
+                
+            # Rule 3: Check for complementary traits
+            trait_pairs = [
+                ("dominant", "submissive"),
+                ("leader", "follower"),
+                ("teacher", "student"),
+                ("sadistic", "masochistic")
+            ]
+            
+            for trait1, trait2 in trait_pairs:
+                if trait1 in data1["traits"] and trait2 in data2["traits"]:
+                    compatible = True
+                    break
+                if trait1 in data2["traits"] and trait2 in data1["traits"]:
+                    compatible = True
+                    break
+        
+        return compatible  
 
     async def update_relationship_from_interaction(
         self,
