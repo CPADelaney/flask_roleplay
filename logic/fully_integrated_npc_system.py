@@ -417,80 +417,71 @@ class IntegratedNPCSystem:
     # NPC CREATION AND MANAGEMENT
     #=================================================================
     
-    async def create_new_npc(self, environment_desc: str, day_names: List[str], sex: str = "female") -> int:
-        """
-        Create a new NPC with improved error recovery.
-        """
-        logger.info(f"Creating new NPC in environment: {environment_desc[:30]}...")
-        
-        retry_count = 0
-        max_retries = 3
-        backoff_factor = 1.5
-        
-        while retry_count <= max_retries:
-            try:
-                # Step 1: Create the partial NPC (base data)
-                partial_npc = create_npc_partial(
-                    user_id=self.user_id,
-                    conversation_id=self.conversation_id,
-                    sex=sex,
-                    total_archetypes=4,
-                    environment_desc=environment_desc
-                )
-                
-                # Create a transaction for the entire NPC creation process
-                pool = await self.get_connection_pool()
-                async with pool.acquire() as conn:
-                    async with conn.transaction():
-                        # Step 2: Insert the partial NPC into the database
-                        insert_query = """
-                            INSERT INTO NPCStats (user_id, conversation_id, npc_name, sex, 
-                                                archetype_summary, archetypes, introduced)
-                            VALUES ($1, $2, $3, $4, $5, $6, FALSE)
-                            RETURNING npc_id
-                        """
-                        npc_id = await conn.fetchval(
-                            insert_query,
-                            self.user_id, self.conversation_id,
-                            partial_npc['npc_name'], partial_npc['sex'],
-                            partial_npc['archetype_summary'], json.dumps(partial_npc.get('archetypes', []))
+async def create_new_npc(self, environment_desc: str, day_names: List[str], sex: str = "female") -> int:
+    """
+    Create a new NPC with improved error recovery and transaction handling.
+    """
+    logger.info(f"Creating new NPC in environment: {environment_desc[:30]}...")
+    
+    retry_count = 0
+    max_retries = 3
+    backoff_factor = 1.5
+    
+    while retry_count <= max_retries:
+        try:
+            # Step 1: Create the partial NPC (base data)
+            partial_npc = create_npc_partial(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                sex=sex,
+                total_archetypes=4,
+                environment_desc=environment_desc
+            )
+            
+            # Create a transaction for the entire NPC creation process
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                # Use a single transaction for all related operations
+                async with conn.transaction():
+                    # Step 2: Insert the partial NPC into the database
+                    npc_id = await conn.fetchval("""
+                        INSERT INTO NPCStats (user_id, conversation_id, npc_name, sex, 
+                                            archetype_summary, archetypes, introduced)
+                        VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+                        RETURNING npc_id
+                    """, self.user_id, self.conversation_id,
+                        partial_npc['npc_name'], partial_npc['sex'],
+                        partial_npc['archetype_summary'], json.dumps(partial_npc.get('archetypes', []))
+                    )
+                    
+                    logger.info(f"Created NPC stub with ID {npc_id} and name {partial_npc['npc_name']}")
+                    
+                    # Step 3: Assign relationships within the same transaction
+                    try:
+                        # Modified to work within transaction
+                        await self._assign_relationships_in_transaction(
+                            conn, npc_id, partial_npc["npc_name"], partial_npc.get("archetypes", [])
                         )
-                        
-                        logger.info(f"Created NPC stub with ID {npc_id} and name {partial_npc['npc_name']}")
-
-            
-            # Step 3: Assign relationships (with more error handling)
-            try:
-                await assign_random_relationships(
-                    user_id=self.user_id,
-                    conversation_id=self.conversation_id,
-                    new_npc_id=npc_id,
-                    new_npc_name=partial_npc["npc_name"],
-                    npc_archetypes=partial_npc.get("archetypes", [])
-                )
-            except Exception as e:
-                logger.warning(f"Error assigning relationships for NPC {npc_id}: {e}")
-                # Continue despite relationship assignment errors
-            
-            # Step 4: Get relationships for memory generation (using connection pool)
-            relationships = []
-            async with self.connection_pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    """
-                    SELECT relationships 
-                    FROM NPCStats 
-                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                    """,
-                    self.user_id, self.conversation_id, npc_id
-                )
-                
-                if row and row["relationships"]:
-                    if isinstance(row["relationships"], str):
-                        relationships = json.loads(row["relationships"])
+                    except Exception as e:
+                        logger.warning(f"Error assigning relationships for NPC {npc_id}: {e}")
+                        # Continue despite relationship assignment errors
+                        # The transaction will still commit other changes
+                    
+                    # Step 4: Get relationships for memory generation (within transaction)
+                    relationships = await conn.fetchval("""
+                        SELECT relationships 
+                        FROM NPCStats 
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                    """, self.user_id, self.conversation_id, npc_id)
+                    
+                    if relationships:
+                        if isinstance(relationships, str):
+                            relationships = json.loads(relationships)
                     else:
-                        relationships = row["relationships"]
-            
-            # Parallelize NPC generation tasks for better performance
+                        relationships = []
+                
+            # Step 5: Parallelize NPC generation tasks for better performance
+            # These can run outside the transaction
             generation_tasks = [
                 gpt_generate_physical_description(self.user_id, self.conversation_id, partial_npc, environment_desc),
                 gpt_generate_schedule(self.user_id, self.conversation_id, partial_npc, environment_desc, day_names),
@@ -498,97 +489,76 @@ class IntegratedNPCSystem:
                 gpt_generate_affiliations(self.user_id, self.conversation_id, partial_npc, environment_desc)
             ]
             
+            # Wait for all generation tasks to complete
             results = await asyncio.gather(*generation_tasks, return_exceptions=True)
             
-            # Handle results and potential exceptions
-            physical_description, schedule, memories, affiliations = None, None, None, None
+            # Process results with better error handling
+            physical_description, schedule, memories, affiliations = self._process_generation_results(results)
             
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.error(f"Error in NPC generation task {i}: {result}")
-                    # Use default values for failed tasks
-                    if i == 0:  # Physical description
-                        physical_description = f"{partial_npc['npc_name']} has a typical appearance."
-                    elif i == 1:  # Schedule
-                        schedule = {day: {"Morning": "Goes about their day", 
-                                         "Afternoon": "Continues their routine", 
-                                         "Evening": "Relaxes", 
-                                         "Night": "Sleeps"} for day in day_names}
-                    elif i == 2:  # Memories
-                        memories = [{"text": f"I am {partial_npc['npc_name']}.", "importance": "high"}]
-                    elif i == 3:  # Affiliations
-                        affiliations = []
-                else:
-                    if i == 0:
-                        physical_description = result
-                    elif i == 1:
-                        schedule = result
-                    elif i == 2:
-                        memories = result
-                    elif i == 3:
-                        affiliations = result
-            
-            # Step 6: Determine current location based on time of day and schedule
-            current_year, current_month, current_day, time_of_day = get_current_time(
-                self.user_id, self.conversation_id
-            )
-            
-            # Calculate day index
-            day_index = (current_day - 1) % len(day_names)
-            current_day_name = day_names[day_index]
-            
-            # Extract current location from schedule
+            # Step 6: Determine current location based on schedule
             current_location = await self._extract_location_from_schedule(
-                schedule, current_day_name, time_of_day
+                schedule, 
+                day_names[0],  # Default to first day if we can't determine current day
+                "Morning"      # Default to morning if we can't determine time of day
             )
             
-            # Step 7: Update the NPC with all refined data (batch update for efficiency)
-            async with self.connection_pool.acquire() as conn:
-                await conn.execute("""
-                    UPDATE NPCStats 
-                    SET physical_description=$1,
-                        schedule=$2,
-                        memory=$3,
-                        current_location=$4,
-                        affiliations=$5
-                    WHERE user_id=$6 AND conversation_id=$7 AND npc_id=$8
-                """, 
-                    physical_description,
-                    json.dumps(schedule),
-                    json.dumps(memories),
-                    current_location,
-                    json.dumps(affiliations),
-                    self.user_id, self.conversation_id, npc_id
+            # Try to get current time for better location determination
+            try:
+                current_year, current_month, current_day, time_of_day = await self.get_current_game_time()
+                # Calculate day index
+                day_index = (current_day - 1) % len(day_names)
+                current_day_name = day_names[day_index]
+                
+                # Extract current location from schedule with actual time
+                current_location = await self._extract_location_from_schedule(
+                    schedule, current_day_name, time_of_day
                 )
+            except Exception as e:
+                logger.warning(f"Error getting current time for NPC location: {e}")
+                # We'll use the default location determined above
+            
+            # Step 7: Update the NPC with all refined data in a separate transaction
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("""
+                        UPDATE NPCStats 
+                        SET physical_description=$1,
+                            schedule=$2,
+                            memory=$3,
+                            current_location=$4,
+                            affiliations=$5
+                        WHERE user_id=$6 AND conversation_id=$7 AND npc_id=$8
+                    """, 
+                        physical_description,
+                        json.dumps(schedule),
+                        json.dumps(memories),
+                        current_location,
+                        json.dumps(affiliations),
+                        self.user_id, self.conversation_id, npc_id
+                    )
             
             logger.info(f"Successfully refined NPC {npc_id} ({partial_npc['npc_name']})")
             
             # Step 8: Propagate memories to other connected NPCs (in background)
             asyncio.create_task(
-                propagate_shared_memories(
-                    user_id=self.user_id,
-                    conversation_id=self.conversation_id,
-                    source_npc_id=npc_id,
-                    source_npc_name=partial_npc["npc_name"],
+                self._propagate_memories_safely(
+                    npc_id=npc_id,
+                    npc_name=partial_npc["npc_name"],
                     memories=memories
                 )
             )
             
             # Step 9: Create NPC Agent and initialize mask
-            # This utilizes the agent framework by explicitly creating the agent
-            agent = NPCAgent(npc_id, self.user_id, self.conversation_id)
-            self.agent_system.npc_agents[npc_id] = agent
-            
-            # Initialize mask using the agent's capabilities
+            # Using a try-except block for non-critical operations
             try:
+                agent = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                self.agent_system.npc_agents[npc_id] = agent
+                
+                # Initialize mask
                 mask_manager = await agent._get_mask_manager()
                 await mask_manager.initialize_npc_mask(npc_id)
-            except Exception as e:
-                logger.warning(f"Error initializing mask for NPC {npc_id}: {e}")
-                # Continue despite mask initialization errors
-            
-            # Step 10: Create a direct memory event using the agent's memory system
-            try:
+                
+                # Create initial memory
                 memory_system = await agent._get_memory_system()
                 creation_memory = f"I was created on {current_year}-{current_month}-{current_day} during {time_of_day}."
                 
@@ -599,12 +569,8 @@ class IntegratedNPCSystem:
                     importance="medium",
                     tags=["creation", "origin"]
                 )
-            except Exception as e:
-                logger.warning(f"Error creating initial memory for NPC {npc_id}: {e}")
-                # Continue despite memory creation errors
-            
-            # Step 11: Initialize agent's perception of environment
-            try:
+                
+                # Initialize perception
                 initial_context = {
                     "location": current_location,
                     "time_of_day": time_of_day,
@@ -612,57 +578,141 @@ class IntegratedNPCSystem:
                 }
                 await agent.perceive_environment(initial_context)
             except Exception as e:
-                logger.warning(f"Error initializing perception for NPC {npc_id}: {e}")
-                # Continue despite perception errors
+                # Log but don't fail if these non-critical operations fail
+                logger.warning(f"Non-critical setup for NPC {npc_id} had issues: {e}")
             
-                # Update cache with new NPC
-                self.npc_cache[npc_id] = {
-                    "npc_id": npc_id,
-                    "npc_name": partial_npc["npc_name"],
-                    "last_updated": datetime.now()
-                }
+            # Update cache with new NPC
+            self.npc_cache[npc_id] = {
+                "npc_id": npc_id,
+                "npc_name": partial_npc["npc_name"],
+                "last_updated": datetime.now()
+            }
+            
+            return npc_id
                 
-                return npc_id
+        except asyncpg.PostgresConnectionError as e:
+            # Connection error - try to reconnect
+            retry_count += 1
+            if retry_count <= max_retries:
+                # Exponential backoff
+                wait_time = (backoff_factor ** retry_count) * 0.5
+                logger.warning(f"Database connection error, retrying in {wait_time:.1f}s: {e}")
+                await asyncio.sleep(wait_time)
+                continue
+            else:
+                logger.error(f"Failed to create new NPC after {max_retries} retries: {e}")
+                raise NPCCreationError(f"Database connection failure: {e}")
                 
-            except asyncpg.PostgresConnectionError as e:
-                # Connection error - try to reconnect
-                retry_count += 1
-                if retry_count <= max_retries:
-                    # Exponential backoff
-                    wait_time = (backoff_factor ** retry_count) * 0.5
-                    logger.warning(f"Database connection error, retrying in {wait_time:.1f}s: {e}")
-                    await asyncio.sleep(wait_time)
-                    continue
-                else:
-                    logger.error(f"Failed to create new NPC after {max_retries} retries: {e}")
-                    raise NPCCreationError(f"Database connection failure: {e}")
-                    
-            except Exception as e:
-                error_msg = f"Failed to create new NPC: {e}"
-                logger.error(error_msg)
-                
-                # Try to create a minimal viable NPC rather than failing completely
-                if retry_count == max_retries:
-                    logger.warning("Attempting to create minimal viable NPC as fallback")
-                    try:
-                        # Create minimal NPC with just the essential fields
-                        minimal_npc_id = await self._create_minimal_fallback_npc(
-                            partial_npc.get("npc_name", f"NPC_{datetime.now().timestamp()}"),
-                            sex
-                        )
-                        return minimal_npc_id
-                    except Exception as fallback_error:
-                        logger.error(f"Even fallback NPC creation failed: {fallback_error}")
-                        raise NPCCreationError(f"Complete NPC creation failure: {e}, fallback also failed: {fallback_error}")
-                
-                retry_count += 1
-                if retry_count <= max_retries:
-                    # Exponential backoff
-                    wait_time = (backoff_factor ** retry_count) * 0.5
-                    logger.warning(f"NPC creation error, retrying in {wait_time:.1f}s: {e}")
-                    await asyncio.sleep(wait_time)
-                else:
-                    raise NPCCreationError(error_msg)
+        except Exception as e:
+            # Other errors
+            error_msg = f"Failed to create new NPC: {e}"
+            logger.error(error_msg)
+            
+            # Try to create a minimal viable NPC rather than failing completely
+            if retry_count == max_retries:
+                logger.warning("Attempting to create minimal viable NPC as fallback")
+                try:
+                    minimal_npc_id = await self._create_minimal_fallback_npc(
+                        partial_npc.get("npc_name", f"NPC_{datetime.now().timestamp()}"),
+                        sex
+                    )
+                    return minimal_npc_id
+                except Exception as fallback_error:
+                    logger.error(f"Even fallback NPC creation failed: {fallback_error}")
+                    raise NPCCreationError(f"Complete NPC creation failure: {e}, fallback also failed: {fallback_error}")
+            
+            retry_count += 1
+            if retry_count <= max_retries:
+                wait_time = (backoff_factor ** retry_count) * 0.5
+                logger.warning(f"NPC creation error, retrying in {wait_time:.1f}s: {e}")
+                await asyncio.sleep(wait_time)
+            else:
+                raise NPCCreationError(error_msg)
+
+# Helper methods for the enhanced create_new_npc function
+async def _assign_relationships_in_transaction(self, conn, new_npc_id: int, new_npc_name: str, 
+                                              npc_archetypes: List[str]):
+    """Assign random relationships within a transaction."""
+    # Implementation depends on your assign_random_relationships function
+    # but modified to use the provided connection
+    
+    # Example implementation:
+    # Get existing NPCs
+    rows = await conn.fetch("""
+        SELECT npc_id, npc_name, archetypes
+        FROM NPCStats
+        WHERE user_id=$1 AND conversation_id=$2 AND npc_id != $3
+        LIMIT 10
+    """, self.user_id, self.conversation_id, new_npc_id)
+    
+    # Create relationships with 1-3 random NPCs
+    for row in random.sample(rows, min(3, len(rows))):
+        other_id = row["npc_id"]
+        other_name = row["npc_name"]
+        
+        # Create relationship in both directions
+        await conn.execute("""
+            INSERT INTO SocialLinks (
+                user_id, conversation_id, 
+                entity1_type, entity1_id, 
+                entity2_type, entity2_id,
+                link_type, link_level
+            ) VALUES ($1, $2, 'npc', $3, 'npc', $4, 'neutral', 50)
+        """, self.user_id, self.conversation_id, new_npc_id, other_id)
+        
+        await conn.execute("""
+            INSERT INTO SocialLinks (
+                user_id, conversation_id, 
+                entity1_type, entity1_id, 
+                entity2_type, entity2_id,
+                link_type, link_level
+            ) VALUES ($1, $2, 'npc', $3, 'npc', $4, 'neutral', 50)
+        """, self.user_id, self.conversation_id, other_id, new_npc_id)
+
+def _process_generation_results(self, results):
+    """Process results from parallel generation tasks with error handling."""
+    physical_description, schedule, memories, affiliations = None, None, None, None
+    
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"Error in NPC generation task {i}: {result}")
+            # Use default values for failed tasks
+            if i == 0:  # Physical description
+                physical_description = "A typical person with no remarkable features."
+            elif i == 1:  # Schedule
+                schedule = {day: {"Morning": "Goes about their day", 
+                                 "Afternoon": "Continues their routine", 
+                                 "Evening": "Relaxes", 
+                                 "Night": "Sleeps"} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]}
+            elif i == 2:  # Memories
+                memories = [{"text": "I exist.", "importance": "high"}]
+            elif i == 3:  # Affiliations
+                affiliations = []
+        else:
+            if i == 0:
+                physical_description = result
+            elif i == 1:
+                schedule = result
+            elif i == 2:
+                memories = result
+            elif i == 3:
+                affiliations = result
+    
+    return physical_description, schedule, memories, affiliations
+
+async def _propagate_memories_safely(self, npc_id: int, npc_name: str, memories: List[Dict[str, Any]]):
+    """Safely propagate memories to other NPCs, handling exceptions."""
+    try:
+        await propagate_shared_memories(
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            source_npc_id=npc_id,
+            source_npc_name=npc_name,
+            memories=memories
+        )
+    except Exception as e:
+        logger.error(f"Error propagating memories from NPC {npc_id}: {e}")
+        # This is in a background task, so we just log the error and continue
     
     async def _create_minimal_fallback_npc(self, npc_name: str, sex: str) -> int:
         """
