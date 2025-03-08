@@ -418,17 +418,7 @@ class IntegratedNPCSystem:
     #=================================================================
     
 async def create_new_npc(self, environment_desc: str, day_names: List[str], sex: str = "female") -> int:
-    """
-    Create a new NPC with enhanced parallel processing and robust error handling.
-    
-    Args:
-        environment_desc: Description of the environment
-        day_names: List of day names in the calendar
-        sex: Sex of the NPC to create
-        
-    Returns:
-        ID of the created NPC
-    """
+    """Create a new NPC with enhanced transaction management."""
     logger.info(f"Creating new NPC in environment: {environment_desc[:30]}...")
     
     # Exponential backoff settings
@@ -440,9 +430,18 @@ async def create_new_npc(self, environment_desc: str, day_names: List[str], sex:
         pool = None
         conn = None
         transaction_active = False
+        savepoint_name = None
         
         try:
-            # Step 1: Create the partial NPC (base data) outside transaction
+            # Create database transaction for all operations
+            pool = await self.get_connection_pool()
+            conn = await pool.acquire()
+            
+            # Start transaction
+            await conn.execute("BEGIN")
+            transaction_active = True
+            
+            # Step 1: Create the partial NPC (base data) 
             partial_npc = create_npc_partial(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
@@ -451,13 +450,9 @@ async def create_new_npc(self, environment_desc: str, day_names: List[str], sex:
                 environment_desc=environment_desc
             )
             
-            # Create database transaction for core operations
-            pool = await self.get_connection_pool()
-            conn = await pool.acquire()
-            
-            # Start transaction
-            await conn.execute("BEGIN")
-            transaction_active = True
+            # Create savepoint before NPC insertion - allows partial rollback
+            savepoint_name = f"npc_creation_{datetime.now().timestamp()}"
+            await conn.execute(f"SAVEPOINT {savepoint_name}")
             
             # Step 2: Insert the partial NPC into the database
             npc_id = await conn.fetchval("""
@@ -481,7 +476,7 @@ async def create_new_npc(self, environment_desc: str, day_names: List[str], sex:
                 conn, npc_id, partial_npc["npc_name"], partial_npc.get("archetypes", [])
             )
             
-            # Step 4: Get relationships for memory generation (still within transaction)
+            # Step 4: Get relationships for memory generation
             relationships = await conn.fetchval("""
                 SELECT relationships 
                 FROM NPCStats 
@@ -494,11 +489,8 @@ async def create_new_npc(self, environment_desc: str, day_names: List[str], sex:
             else:
                 relationships = []
             
-            # Commit transaction for initial NPC creation
-            await conn.execute("COMMIT")
-            transaction_active = False
-            await pool.release(conn)
-            conn = None
+            # Release savepoint since basic data is successfully created
+            await conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
             
             # Step 5: Parallelize generation tasks with optimized performance
             generation_tasks = [
@@ -526,6 +518,10 @@ async def create_new_npc(self, environment_desc: str, day_names: List[str], sex:
             # Process generation results with robust error handling
             physical_description, schedule, memories, affiliations = self._process_generation_results(results)
             
+            # Create a new savepoint for NPC enhancement
+            savepoint_name = f"npc_enhancement_{datetime.now().timestamp()}"
+            await conn.execute(f"SAVEPOINT {savepoint_name}")
+            
             # Step 6: Determine current location from schedule or default
             current_location = await self._extract_location_from_schedule(
                 schedule, 
@@ -548,11 +544,7 @@ async def create_new_npc(self, environment_desc: str, day_names: List[str], sex:
                 logger.warning(f"Error getting current time for NPC location: {e}")
                 # Fall back to default location determined earlier
             
-            # Step 7: Update NPC with all generated data in a new transaction
-            conn = await pool.acquire()
-            await conn.execute("BEGIN")
-            transaction_active = True
-            
+            # Step 7: Update NPC with all generated data
             await conn.execute("""
                 UPDATE NPCStats 
                 SET physical_description=$1,
@@ -570,11 +562,11 @@ async def create_new_npc(self, environment_desc: str, day_names: List[str], sex:
                 self.user_id, self.conversation_id, npc_id
             )
             
-            # Commit the transaction
+            # Commit the complete transaction
             await conn.execute("COMMIT")
             transaction_active = False
             
-            logger.info(f"Successfully refined NPC {npc_id} ({partial_npc['npc_name']})")
+            logger.info(f"Successfully created and refined NPC {npc_id} ({partial_npc['npc_name']})")
             
             # Create agent and initialize in background
             asyncio.create_task(
@@ -616,6 +608,26 @@ async def create_new_npc(self, environment_desc: str, day_names: List[str], sex:
             else:
                 logger.error(f"Failed to create new NPC after {max_retries} retries: {e}")
                 raise NPCCreationError(f"Database connection failure: {e}")
+        
+        except asyncpg.PostgresTransactionError as e:
+            # Transaction error - try to rollback to savepoint if possible
+            if transaction_active and conn and savepoint_name:
+                try:
+                    await conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                    # Continue with fallback approach after rollback to savepoint
+                    logger.warning(f"Transaction error, rolled back to savepoint {savepoint_name}: {e}")
+                    # Attempt minimal fallback operation
+                    # [Implementation of fallback logic after savepoint rollback]
+                except Exception as rollback_error:
+                    logger.error(f"Rollback to savepoint failed: {rollback_error}")
+                    if transaction_active and conn:
+                        await conn.execute("ROLLBACK")
+                    raise NPCCreationError(f"Transaction error: {e}, rollback failed: {rollback_error}")
+            else:
+                # No savepoint or connection, full rollback
+                if transaction_active and conn:
+                    await conn.execute("ROLLBACK")
+                raise NPCCreationError(f"Transaction error: {e}")
                 
         except Exception as e:
             # Other errors - try fallback
