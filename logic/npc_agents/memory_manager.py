@@ -2106,3 +2106,118 @@ async def periodic_reflection_training(db_pool, interval_hours=12):
         logger.info("Running periodic reflection training")
         await train_reflection_model(db_pool)
         await asyncio.sleep(interval_hours * 3600)
+
+    async def batch_create_memories(
+        self, 
+        npc_id: int,
+        memories: List[Dict[str, Any]]
+    ) -> List[int]:
+        """
+        Create multiple memories in a single operation for better performance.
+        
+        Args:
+            npc_id: ID of the NPC
+            memories: List of memory objects with text, type, significance, etc.
+            
+        Returns:
+            List of created memory IDs
+        """
+        if not memories:
+            return []
+            
+        memory_system = await self._get_memory_system()
+        
+        # Prepare all memories for batch insertion
+        batch_values = []
+        for memory in memories:
+            # Get emotional analysis for each memory text
+            emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(
+                memory.get("text", "")
+            )
+            
+            batch_values.append({
+                "entity_type": "npc",
+                "entity_id": npc_id,
+                "memory_text": memory.get("text", ""),
+                "importance": memory.get("importance", "medium"),
+                "emotional": memory.get("emotional", False),
+                "primary_emotion": emotion_analysis.get("primary_emotion", "neutral"),
+                "emotion_intensity": emotion_analysis.get("intensity", 0.5),
+                "tags": memory.get("tags", [])
+            })
+        
+        # Execute batch insert
+        results = await memory_system.batch_remember(batch_values)
+        
+        # Process schemas in background task for efficiency
+        self._process_batch_schemas(results, npc_id)
+        
+        return results.get("memory_ids", [])
+    
+    def _process_batch_schemas(self, results, npc_id):
+        """Process schemas for batch memories in background to avoid blocking."""
+        async def process_task():
+            memory_system = await self._get_memory_system()
+            memory_ids = results.get("memory_ids", [])
+            
+            # Process schemas in smaller batches for better control
+            batch_size = 5
+            for i in range(0, len(memory_ids), batch_size):
+                batch = memory_ids[i:i+batch_size]
+                try:
+                    await memory_system.integrated.batch_apply_schemas(
+                        memory_ids=batch,
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        auto_detect=True
+                    )
+                except Exception as e:
+                    logger.error(f"Error applying schemas to memory batch: {e}")
+                
+                # Small delay to avoid overwhelming the system
+                await asyncio.sleep(0.1)
+                
+        asyncio.create_task(process_task())
+    
+    async def batch_retrieve_memories(
+        self,
+        query: str,
+        npc_ids: List[int],
+        limit_per_npc: int = 3
+    ) -> Dict[int, List[Dict[str, Any]]]:
+        """
+        Retrieve memories for multiple NPCs in a single operation.
+        
+        Args:
+            query: Search query
+            npc_ids: List of NPC IDs
+            limit_per_npc: Maximum memories per NPC
+            
+        Returns:
+            Dictionary mapping NPC IDs to their memory lists
+        """
+        if not npc_ids:
+            return {}
+            
+        memory_system = await self._get_memory_system()
+        
+        # Prepare batch query parameters
+        batch_params = [
+            {
+                "entity_type": "npc",
+                "entity_id": npc_id,
+                "query": query,
+                "limit": limit_per_npc
+            }
+            for npc_id in npc_ids
+        ]
+        
+        # Execute batch memory retrieval
+        batch_results = await memory_system.batch_recall(batch_params)
+        
+        # Format results by NPC ID
+        memory_map = {}
+        for npc_id, result in zip(npc_ids, batch_results):
+            memory_map[npc_id] = result.get("memories", [])
+            
+        return memory_map
