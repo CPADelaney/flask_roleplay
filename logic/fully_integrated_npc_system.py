@@ -783,132 +783,144 @@ class IntegratedNPCSystem:
         
         return npc_ids
     
-    async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Get detailed information about an NPC, enhanced with agent-based data.
-        Uses caching for performance optimization.
-        
-        Args:
-            npc_id: The ID of the NPC to retrieve
+async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Get detailed information about an NPC, enhanced with agent-based data.
+    Uses caching for performance optimization and connection reuse.
+    """
+    # Check cache first
+    cache_key = f"npc:{npc_id}"
+    if cache_key in self.npc_cache and (datetime.now() - self.npc_cache[cache_key].get("last_updated", datetime.min)).seconds < 300:
+        self.perf_metrics['cache_hits'] += 1
+        return self.npc_cache[cache_key]
+    
+    self.perf_metrics['cache_misses'] += 1
+    
+    # Get or create NPC agent
+    if npc_id not in self.agent_system.npc_agents:
+        self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+    
+    agent = self.agent_system.npc_agents[npc_id]
+    
+    try:
+        # Use connection pool for better performance
+        async with self.connection_pool.acquire() as conn:
+            # Use a single connection for all related queries
+            start_time = datetime.now()
             
-        Returns:
-            Dictionary with NPC details or None if not found
+            npc_data = await self._fetch_npc_basic_data(conn, npc_id)
+            if not npc_data:
+                error_msg = f"NPC with ID {npc_id} not found"
+                logger.error(error_msg)
+                raise NPCNotFoundError(error_msg)
             
-        Raises:
-            NPCNotFoundError: If the NPC cannot be found
-        """
-        # Check cache first
-        cache_key = f"npc:{npc_id}"
-        if cache_key in self.npc_cache and (datetime.now() - self.npc_cache[cache_key].get("last_updated", datetime.min)).seconds < 300:
-            return self.npc_cache[cache_key]
-        
-        # Get or create NPC agent
-        if npc_id not in self.agent_system.npc_agents:
-            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
-        
-        agent = self.agent_system.npc_agents[npc_id]
-        
-        try:
-            # Use connection pool for better performance
-            async with self.connection_pool.acquire() as conn:
-                row = await conn.fetchrow("""
-                    SELECT npc_id, npc_name, introduced, sex, dominance, cruelty, 
-                           closeness, trust, respect, intensity, archetype_summary,
-                           physical_description, current_location, memory
-                    FROM NPCStats
-                    WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-                """, self.user_id, self.conversation_id, npc_id)
-                
-                if not row:
-                    error_msg = f"NPC with ID {npc_id} not found"
-                    logger.error(error_msg)
-                    raise NPCNotFoundError(error_msg)
-                
-                # Parse memory with error handling
-                memories = []
-                if row["memory"]:
-                    try:
-                        if isinstance(row["memory"], str):
-                            memories = json.loads(row["memory"])
-                        else:
-                            memories = row["memory"]
-                    except json.JSONDecodeError:
-                        logger.warning(f"Error parsing memory for NPC {npc_id}")
-                        memories = []
-                
-                # Get enhanced memory from the agent's memory system
-                memory_system = await agent._get_memory_system()
-                memory_result = await memory_system.recall(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    limit=5
-                )
-                
-                agent_memories = memory_result.get("memories", [])
-                
-                # Get mask information using agent
-                mask_info = await agent._get_mask_manager().get_npc_mask(npc_id)
-                
-                # Get emotional state using agent
-                emotional_state = await memory_system.get_npc_emotion(npc_id)
-                
-                # Get beliefs using agent
-                beliefs = await memory_system.get_beliefs(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    topic="player"
-                )
-                
-                # Get current perception through agent
-                current_perception = None
-                if agent.last_perception:
-                    current_perception = {
-                        "location": agent.last_perception.get("environment", {}).get("location"),
-                        "time_of_day": agent.last_perception.get("environment", {}).get("time_of_day"),
-                        "entities_present": agent.last_perception.get("environment", {}).get("entities_present", [])
-                    }
-                
-                # Get social links (with batched query for performance)
-                links = await self._fetch_npc_relationships(npc_id, conn)
-                
-                # Build enhanced response with agent-based data
-                npc_details = {
-                    "npc_id": row["npc_id"],
-                    "npc_name": row["npc_name"],
-                    "introduced": row["introduced"],
-                    "sex": row["sex"],
-                    "stats": {
-                        "dominance": row["dominance"],
-                        "cruelty": row["cruelty"],
-                        "closeness": row["closeness"],
-                        "trust": row["trust"],
-                        "respect": row["respect"],
-                        "intensity": row["intensity"]
-                    },
-                    "archetype_summary": row["archetype_summary"],
-                    "physical_description": row["physical_description"],
-                    "current_location": row["current_location"],
-                    "memories": agent_memories or memories[:5],  # Prefer agent memories
-                    "memory_count": len(memories),
-                    "mask": mask_info if mask_info and "error" not in mask_info else {"integrity": 100},
-                    "emotional_state": emotional_state,
-                    "beliefs": beliefs,
-                    "current_perception": current_perception,
-                    "relationships": links
+            # Get social links (with single query for performance)
+            links = await self._fetch_npc_relationships(npc_id, conn)
+            
+            query_time = (datetime.now() - start_time).total_seconds()
+            self.perf_metrics['query_times'].append(query_time)
+            self.perf_metrics['db_queries'] += 1
+            
+            # Get enhanced memory from the agent's memory system
+            memory_system = await agent._get_memory_system()
+            memory_result = await memory_system.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                limit=5
+            )
+            
+            agent_memories = memory_result.get("memories", [])
+            
+            # Get mask information using agent
+            mask_info = await agent._get_mask_manager().get_npc_mask(npc_id)
+            
+            # Get emotional state using agent
+            emotional_state = await memory_system.get_npc_emotion(npc_id)
+            
+            # Get beliefs using agent
+            beliefs = await memory_system.get_beliefs(
+                entity_type="npc",
+                entity_id=npc_id,
+                topic="player"
+            )
+            
+            # Get current perception through agent
+            current_perception = None
+            if agent.last_perception:
+                current_perception = {
+                    "location": agent.last_perception.get("environment", {}).get("location"),
+                    "time_of_day": agent.last_perception.get("environment", {}).get("time_of_day"),
+                    "entities_present": agent.last_perception.get("environment", {}).get("entities_present", [])
                 }
-                
-                # Update cache
-                self.npc_cache[cache_key] = npc_details
-                self.npc_cache[cache_key]["last_updated"] = datetime.now()
-                
-                return npc_details
+            
+            # Build enhanced response with agent-based data
+            npc_details = {
+                **npc_data,  # Merge basic data
+                "memories": agent_memories or npc_data.get("memories", [])[:5],  # Prefer agent memories
+                "memory_count": len(npc_data.get("memories", [])),
+                "mask": mask_info if mask_info and "error" not in mask_info else {"integrity": 100},
+                "emotional_state": emotional_state,
+                "beliefs": beliefs,
+                "current_perception": current_perception,
+                "relationships": links
+            }
+            
+            # Update cache
+            self.npc_cache[cache_key] = npc_details
+            self.npc_cache[cache_key]["last_updated"] = datetime.now()
+            
+            return npc_details
+    
+    except NPCNotFoundError:
+        raise
+    except Exception as e:
+        error_msg = f"Error getting NPC details: {e}"
+        logger.error(error_msg)
+        return None
+
+    async def _fetch_npc_basic_data(self, conn, npc_id: int) -> Dict[str, Any]:
+        """Fetch basic NPC data from database using provided connection."""
+        row = await conn.fetchrow("""
+            SELECT npc_id, npc_name, introduced, sex, dominance, cruelty, 
+                   closeness, trust, respect, intensity, archetype_summary,
+                   physical_description, current_location, memory
+            FROM NPCStats
+            WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+        """, self.user_id, self.conversation_id, npc_id)
         
-        except NPCNotFoundError:
-            raise
-        except Exception as e:
-            error_msg = f"Error getting NPC details: {e}"
-            logger.error(error_msg)
+        if not row:
             return None
+            
+        # Parse memory with error handling
+        memories = []
+        if row["memory"]:
+            try:
+                if isinstance(row["memory"], str):
+                    memories = json.loads(row["memory"])
+                else:
+                    memories = row["memory"]
+            except json.JSONDecodeError:
+                logger.warning(f"Error parsing memory for NPC {npc_id}")
+                memories = []
+        
+        return {
+            "npc_id": row["npc_id"],
+            "npc_name": row["npc_name"],
+            "introduced": row["introduced"],
+            "sex": row["sex"],
+            "stats": {
+                "dominance": row["dominance"],
+                "cruelty": row["cruelty"],
+                "closeness": row["closeness"],
+                "trust": row["trust"],
+                "respect": row["respect"],
+                "intensity": row["intensity"]
+            },
+            "archetype_summary": row["archetype_summary"],
+            "physical_description": row["physical_description"],
+            "current_location": row["current_location"],
+            "memories": memories
+        }
     
     async def _fetch_npc_relationships(self, npc_id: int, conn) -> List[Dict[str, Any]]:
         """
