@@ -159,6 +159,37 @@ class NPCAgent:
             del self._cache_timestamps['memories'][memory_query]
             logger.debug(f"Invalidated memory cache for query '{memory_query}'")
 
+    def _update_cache(self, cache_key, sub_key=None, value=None):
+        """
+        Update agent cache with new values.
+        
+        Args:
+            cache_key: Main cache category
+            sub_key: Optional sub-key for dict caches
+            value: New value to store
+        """
+        now = datetime.now()
+        
+        # Handle dict type caches
+        if sub_key is not None:
+            # Initialize dict if needed
+            if cache_key not in self._cache:
+                self._cache[cache_key] = {}
+            if cache_key not in self._cache_timestamps:
+                self._cache_timestamps[cache_key] = {}
+                
+            # Update the value and timestamp
+            self._cache[cache_key][sub_key] = value
+            self._cache_timestamps[cache_key][sub_key] = now
+        else:
+            # Simple cache key update
+            self._cache[cache_key] = value
+            self._cache_timestamps[cache_key] = now
+        
+        # Log for debugging high-value caches
+        if cache_key in ["perception", "emotional_state", "mask"]:
+            logger.debug(f"Updated {cache_key} cache for NPC {self.npc_id}")
+
     # Add an implementation:
     async def execute_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the chosen action and return the result."""
