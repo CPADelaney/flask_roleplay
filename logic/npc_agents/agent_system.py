@@ -369,6 +369,182 @@ class NPCAgentSystem:
                     raise e        
         return results
 
+    # Add to agent_system.py
+    
+    async def get_current_game_time(self) -> Tuple[int, str, int, str]:
+        """
+        Get the current in-game time information.
+        
+        Returns:
+            Tuple of (year, month, day, time_of_day)
+        """
+        year, month, day, time_of_day = None, None, None, None
+        
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT key, value FROM CurrentRoleplay 
+                    WHERE key IN ('CurrentYear', 'CurrentMonth', 'CurrentDay', 'TimeOfDay')
+                    AND user_id = %s AND conversation_id = %s
+                """, (self.user_id, self.conversation_id))
+                
+                for row in cursor.fetchall():
+                    key, value = row
+                    if key == "CurrentYear": year = int(value) if value.isdigit() else value
+                    elif key == "CurrentMonth": month = value
+                    elif key == "CurrentDay": day = int(value) if value.isdigit() else value
+                    elif key == "TimeOfDay": time_of_day = value
+                
+                # Set defaults if values are missing
+                if year is None: year = 2023
+                if month is None: month = "January"
+                if day is None: day = 1
+                if time_of_day is None: time_of_day = "afternoon"
+                
+                return year, month, day, time_of_day
+        except Exception as e:
+            logger.error(f"Error getting game time: {e}")
+            # Return defaults if query fails
+            return 2023, "January", 1, "afternoon"
+
+    async def _process_single_npc_activity(self, npc_id: int, data: Dict[str, Any], base_context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Process a scheduled activity for a single NPC.
+        
+        Args:
+            npc_id: ID of the NPC
+            data: NPC data including location, schedule, etc.
+            base_context: Base context for the activity
+            
+        Returns:
+            Activity result or None if processing failed
+        """
+        try:
+            # Get the NPC agent
+            agent = self.npc_agents.get(npc_id)
+            if not agent:
+                # Try to load the agent
+                self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                agent = self.npc_agents[npc_id]
+            
+            # Create NPC-specific context
+            npc_context = base_context.copy()
+            npc_context.update({
+                "npc_name": data.get("name"),
+                "location": data.get("location"),
+                "dominance": data.get("dominance", 50),
+                "cruelty": data.get("cruelty", 50)
+            })
+            
+            # Get schedule entry for current time if available
+            schedule = data.get("schedule", {})
+            time_of_day = base_context.get("time_of_day", "afternoon")
+            current_schedule = None
+            
+            if schedule and isinstance(schedule, dict):
+                # Check for time-specific schedule
+                current_schedule = schedule.get(time_of_day)
+                
+                # If no time-specific entry, check for default
+                if not current_schedule and "default" in schedule:
+                    current_schedule = schedule.get("default")
+            
+            # Create scheduled activity perception
+            perception = await agent.perceive_environment(npc_context)
+            
+            # Determine available actions based on schedule
+            available_actions = []
+            
+            if current_schedule:
+                # Schedule suggests specific activities
+                activity_type = current_schedule.get("activity", "idle")
+                description = current_schedule.get("description", f"perform {activity_type} activity")
+                
+                available_actions.append({
+                    "type": "scheduled",
+                    "description": description,
+                    "target": "environment",
+                    "weight": 2.0  # Prioritize scheduled activities
+                })
+            
+            # Always add some default actions
+            default_actions = [
+                {
+                    "type": "idle",
+                    "description": "spend time in current location",
+                    "target": "environment"
+                },
+                {
+                    "type": "observe",
+                    "description": "observe surroundings",
+                    "target": "environment"
+                }
+            ]
+            
+            available_actions.extend(default_actions)
+            
+            # Make a decision
+            action = await agent.make_decision(perception, available_actions)
+            
+            # Execute the action
+            result = await agent.execute_action(action, npc_context)
+            
+            # Determine if the activity is significant enough for player to know about
+            significance = self._determine_activity_significance(action, result)
+            
+            if significance >= 2:  # Only report significant activities
+                memory_system = await self._get_memory_system()
+                
+                # Create a memory for the player of this NPC activity
+                memory_text = f"{data.get('name')} {action.get('description', 'did something')} at {data.get('location', 'somewhere')}"
+                
+                await memory_system.remember(
+                    entity_type="player",
+                    entity_id=self.user_id,
+                    memory_text=memory_text,
+                    importance="low" if significance < 3 else "medium",
+                    tags=["npc_activity", action.get("type", "unknown")]
+                )
+            
+            return {
+                "npc_id": npc_id,
+                "npc_name": data.get("name"),
+                "location": data.get("location"),
+                "action": action,
+                "result": result,
+                "significance": significance
+            }
+        except Exception as e:
+            logger.error(f"Error processing activity for NPC {npc_id}: {e}")
+            return None
+    
+    def _fetch_current_location(self) -> Optional[str]:
+        """
+        Attempt to retrieve the current location from the CurrentRoleplay table.
+    
+        Returns:
+            The current location string, or None if not found or on error.
+        """
+        logger.debug("Fetching current location from CurrentRoleplay")
+    
+        query = """
+            SELECT value
+            FROM CurrentRoleplay
+            WHERE user_id = %s
+              AND conversation_id = %s
+              AND key = 'CurrentLocation'
+        """
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            try:
+                cursor.execute(query, (self.user_id, self.conversation_id))
+                row = cursor.fetchone()
+                if row:
+                    return row[0]
+                return None
+            except Exception as e:
+                logger.error("Error getting CurrentLocation: %s", e)
+                return None
+
     async def handle_single_npc_interaction(self, npc_id: int, player_action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle a player action directed at a single NPC with enhanced memory integration.
