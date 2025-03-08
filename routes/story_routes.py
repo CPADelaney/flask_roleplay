@@ -761,8 +761,10 @@ async def next_storybeat():
     except Exception as e:
         # Proper cleanup in error case
         logger.exception("[next_storybeat] Error")
+        return jsonify({"error": str(e)}), 500
         
-        # Ensure all resources are cleaned up
+    finally:
+        # Ensure all resources are properly cleaned up
         if cur:
             try:
                 cur.close()
@@ -783,8 +785,6 @@ async def next_storybeat():
                     await npc_system._pool.close()
             except Exception as cleanup_error:
                 logger.error(f"Error cleaning up NPC system: {cleanup_error}")
-        
-        return jsonify({"error": str(e)}), 500
 
 
 @story_bp.route("/relationship_summary", methods=["GET"])
