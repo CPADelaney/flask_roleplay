@@ -1202,22 +1202,100 @@ class EnhancedMemoryManager:
     async def run_memory_maintenance(self, include_femdom_maintenance: bool = True) -> Dict[str, Any]:
         """
         Run maintenance tasks on this NPC's memory system (consolidation, decay, etc.).
+        Optimized with batched DB operations.
         """
         start_time = time.time()
+        results = {
+            "memories_processed": 0,
+            "memories_archived": 0,
+            "memories_updated": 0,
+            "batch_operations": 0
+        }
+        
         try:
             memory_system = await self._get_memory_system()
-            results = await memory_system.maintain(
+            
+            # Collect IDs for memory operations
+            memory_ids_to_archive = []
+            memory_ids_to_consolidate = []
+            memory_ids_to_decay = []
+            
+            # Get candidate memories
+            old_memories = await memory_system.search_memories(
                 entity_type="npc",
-                entity_id=self.npc_id
+                entity_id=self.npc_id,
+                query="age_days:>90",  # Memories older than 90 days
+                limit=100
             )
             
+            low_importance_memories = await memory_system.search_memories(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                query="importance:low age_days:>30",  # Low importance memories older than 30 days
+                limit=100
+            )
+            
+            # Process memory sets
+            for memory in old_memories:
+                results["memories_processed"] += 1
+                significance = memory.get("significance", 0)
+                if significance < 4:  # Low significance threshold
+                    memory_ids_to_archive.append(memory.get("id"))
+            
+            for memory in low_importance_memories:
+                if memory.get("id") not in memory_ids_to_archive:  # Avoid duplicates
+                    memory_ids_to_archive.append(memory.get("id"))
+                    results["memories_processed"] += 1
+            
+            # Find candidates for consolidation (similar memories)
+            duplicate_candidates = await memory_system.search_memories(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                query="duplicate_score:>0.7",  # Memories with high similarity
+                limit=50
+            )
+            
+            # Group by similarity for consolidation
+            similarity_groups = {}
+            for memory in duplicate_candidates:
+                topic = memory.get("topic", "general")
+                if topic not in similarity_groups:
+                    similarity_groups[topic] = []
+                similarity_groups[topic].append(memory)
+            
+            # Collect IDs for each group with more than 2 similar memories
+            for topic, memories in similarity_groups.items():
+                if len(memories) >= 3:  # Need at least 3 to consolidate
+                    memory_ids = [m.get("id") for m in memories]
+                    memory_ids_to_consolidate.extend(memory_ids)
+            
+            # Execute batch operations
+            if memory_ids_to_archive:
+                await memory_system.update_memory_status_batch(
+                    entity_type="npc",
+                    entity_id=self.npc_id,
+                    memory_ids=memory_ids_to_archive,
+                    new_status="archived"
+                )
+                results["memories_archived"] = len(memory_ids_to_archive)
+                results["batch_operations"] += 1
+            
+            if memory_ids_to_consolidate:
+                # Group by topic for meaningful consolidation
+                for topic, mems in similarity_groups.items():
+                    if len(mems) >= 3:
+                        ids = [m.get("id") for m in mems]
+                        await memory_system.consolidate_memories_batch(
+                            entity_type="npc",
+                            entity_id=self.npc_id,
+                            memory_ids=ids,
+                            consolidated_text=f"I have several similar memories about {topic}"
+                        )
+                        results["batch_operations"] += 1
+            
             if include_femdom_maintenance:
-                try:
-                    femdom_results = await self._run_femdom_maintenance()
-                    results["femdom_maintenance"] = femdom_results
-                except Exception as e:
-                    logger.error(f"Error in femdom maintenance: {e}")
-                    results["femdom_maintenance"] = {"error": str(e)}
+                femdom_results = await self._run_femdom_maintenance()
+                results["femdom_maintenance"] = femdom_results
             
             # Clear caches after maintenance
             self._invalidate_memory_cache()
@@ -1227,7 +1305,9 @@ class EnhancedMemoryManager:
             
             elapsed = time.time() - start_time
             logger.info(f"Memory maintenance completed in {elapsed:.2f}s")
+            results["execution_time"] = elapsed
             return results
+            
         except Exception as e:
             logger.error(f"Error running memory maintenance: {e}")
             elapsed = time.time() - start_time
