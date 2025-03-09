@@ -1463,18 +1463,21 @@ class NPCAgent:
     def _record_decision_history(self, action: Dict[str, Any]) -> None:
         """
         Record a decision in the agent's decision history for pattern analysis.
-
+    
         Args:
             action: The action the NPC decided on.
         """
         if not hasattr(self, 'decision_history'):
             self.decision_history = []
+            
         self.decision_history.append({
             "action": action,
             "timestamp": datetime.now().isoformat()
         })
-        if len(self.decision_history) > 10:
-            self.decision_history = self.decision_history[-10:]
+        
+        # Limit size to prevent memory leaks
+        if len(self.decision_history) > 20:  # Choose appropriate limit
+            self.decision_history = self.decision_history[-20:]
 
     def _create_trauma_response_action(
         self,
