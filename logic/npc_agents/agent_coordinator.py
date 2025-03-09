@@ -120,6 +120,11 @@ class NPCAgentCoordinator:
         # Ensure all NPCs are loaded
         await self.load_agents(npc_ids)
         
+        # Fetch all NPC data in parallel
+        fetch_tasks = [self._fetch_npc_data(npc_id) for npc_id in npc_ids]
+        npc_data_list = await asyncio.gather(*fetch_tasks)
+        npc_data = {npc_id: data for npc_id, data in zip(npc_ids, npc_data_list)}
+        
         # 1. Prepare enhanced group context with memory integration
         enhanced_context = await self._prepare_group_context(npc_ids, shared_context)
         
@@ -140,6 +145,25 @@ class NPCAgentCoordinator:
         await self._create_group_memory_effects(npc_ids, action_plan, shared_context)
         
         return action_plan
+    
+    # Add this helper method:
+    async def _fetch_npc_data(self, npc_id: int) -> Dict[str, Any]:
+        """Fetch NPC data from the database."""
+        try:
+            async with self.connection_pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT npc_name, dominance, cruelty, personality_traits, 
+                           current_location, mask_integrity, emotional_state
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                    """, npc_id, self.user_id, self.conversation_id)
+                
+                if row:
+                    return dict(row)
+                return {}
+        except Exception as e:
+            logger.error(f"Error fetching NPC data for {npc_id}: {e}")
+            return {}
 
     async def _prepare_group_context(self, npc_ids: List[int], shared_context: Dict[str, Any]) -> Dict[str, Any]:
         """
