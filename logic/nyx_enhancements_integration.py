@@ -13,6 +13,26 @@ from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from logic.universal_updater import apply_universal_updates_async
 from logic.nyx_memory import NyxMemoryManager, perform_memory_maintenance
+from nyx.nyx_memory_system import initialize_nyx_memory_tables
+from nyx.nyx_model_manager import initialize_user_model_tables
+
+async def initialize_nyx_memory_system():
+    """
+    Initialize all necessary database tables for the Nyx agent.
+    
+    This should be called during application startup.
+    """
+    try:
+        # Initialize memory tables
+        await initialize_nyx_memory_tables()
+        
+        # Initialize user model tables
+        await initialize_user_model_tables()
+        
+        logging.info("Successfully initialized Nyx memory system")
+    except Exception as e:
+        logging.error(f"Error initializing Nyx memory system: {e}", exc_info=True)
+        raise
 
 logger = logging.getLogger(__name__)
 
