@@ -42,7 +42,32 @@ asyncio.run(initialize_nyx_memory_system())
 
 
 async def background_chat_task(conversation_id, user_input, universal_update=None):
-    return await enhanced_background_chat_task(conversation_id, user_input, universal_update)
+    """
+    Background task for processing chat messages using the enhanced Nyx agent.
+    """
+    try:
+        # Get user_id for this conversation
+        async with asyncio.Pool.create_pool(dsn=get_db_connection()) as pool:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT user_id FROM conversations WHERE id = $1", 
+                    conversation_id
+                )
+                if not row:
+                    logging.error(f"No conversation found with id {conversation_id}")
+                    return
+                user_id = row['user_id']
+        
+        # Use the enhanced background chat task which leverages Nyx agent
+        await enhanced_background_chat_task(
+            conversation_id, 
+            user_input, 
+            universal_update,
+            user_id=user_id  # Pass user_id explicitly
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in background_chat_task: {str(e)}", exc_info=True)
 
 def create_flask_app():
     """
