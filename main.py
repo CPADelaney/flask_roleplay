@@ -27,6 +27,7 @@ from logic.gpt_image_decision import should_generate_image_for_response
 from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from logic.nyx_enhancements_integration import initialize_nyx_memory_system, enhanced_background_chat_task
+from routes.nyx_agent_routes import nyx_agent_bp
 
 # DB connection helper
 from db.connection import get_db_connection
@@ -62,6 +63,7 @@ def create_flask_app():
     app.register_blueprint(knowledge_bp, url_prefix="/knowledge")
     app.register_blueprint(story_bp, url_prefix="/story")
     app.register_blueprint(debug_bp, url_prefix="/debug")
+    app.register_blueprint(nyx_agent_bp, url_prefix="/nyx")
     app.register_blueprint(universal_bp, url_prefix="/universal")
     app.register_blueprint(multiuser_bp, url_prefix="/multiuser")
     
