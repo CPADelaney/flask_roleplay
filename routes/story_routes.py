@@ -819,45 +819,51 @@ async def process_npc_responses(npc_system, user_input, context):
         context
     )
 
-@timed_function(name="process_ai_response")
-async def process_ai_response(aggregator_data, user_input, npc_responses, user_id, conv_id):
+@timed_function(name="process_ai_response_with_nyx")
+async def process_ai_response_with_nyx(user_id, conv_id, user_input, context, aggregator_data):
     """
-    Process AI response with enhanced context and feedback.
+    Process AI response using the Nyx agent instead of direct GPT calls.
     
     Args:
-        aggregator_data: Context data from aggregator
-        user_input: User's input message
-        npc_responses: NPC response data
         user_id: User ID
         conv_id: Conversation ID
+        user_input: User's input message
+        context: Context dictionary
+        aggregator_data: Aggregated context data
         
     Returns:
         Tuple of (final_response, image_result)
     """
-    # Build aggregator text with NPC responses
-    aggregator_text = build_aggregator_text(
-        aggregator_data, 
-        rule_knowledge=None  # Only include rules when specifically requested
+    # Initialize Nyx agent
+    from nyx.nyx_agent import NyxAgent
+    nyx_agent = NyxAgent(user_id, conv_id)
+    
+    # Process with Nyx agent
+    response_data = await nyx_agent.process_input(
+        user_input,
+        context=context
     )
     
-    if npc_responses:
-        npc_response_text = format_npc_responses(npc_responses)
-        aggregator_text += "\n\n=== NPC RESPONSES ===\n" + npc_response_text
-    
-    # Get AI response
-    response_data = get_chatgpt_response(conv_id, aggregator_text, user_input)
-    
-    # Process function calls if present
-    final_response = response_data.get("content", "")
+    final_response = response_data.get("text", "")
     
     # Check for image generation
     image_result = None
-    should_generate = await should_generate_image_for_response(final_response, user_input)
+    should_generate = response_data.get("generate_image", False)
     
     if should_generate:
         try:
+            # Generate image based on the response
             image_result = await generate_roleplay_image_from_gpt(
-                final_response,
+                {
+                    "narrative": final_response,
+                    "image_generation": {
+                        "generate": True,
+                        "priority": "medium",
+                        "focus": "balanced",
+                        "framing": "medium_shot",
+                        "reason": "Narrative moment"
+                    }
+                },
                 user_id,
                 conv_id
             )
@@ -865,7 +871,6 @@ async def process_ai_response(aggregator_data, user_input, npc_responses, user_i
             logging.error(f"Error generating image: {e}")
     
     return final_response, image_result
-
 def format_npc_responses(npc_responses):
     """Format NPC responses for the AI context."""
     if not npc_responses:
