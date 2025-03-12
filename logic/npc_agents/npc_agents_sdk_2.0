@@ -104,6 +104,245 @@ class NPCConfig:
 # ------------------------------
 # Base Models
 # ------------------------------
+class NPCAgent:
+    """Main interface for an individual NPC with integrated capabilities."""
+    
+    def __init__(self, npc_id: int, user_id: int, conversation_id: int):
+        self.npc_id = npc_id
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.cache_manager = CacheManager()
+        
+        # Initialize all required managers
+        self.memory_manager = MemoryManager(user_id, conversation_id, self.cache_manager)
+        self.emotion_manager = EmotionManager(user_id, conversation_id, self.cache_manager)
+        self.mask_manager = MaskManager(user_id, conversation_id, self.cache_manager)
+        self.perception_manager = PerceptionManager(user_id, conversation_id, self.cache_manager)
+        self.goal_manager = GoalManager(user_id, conversation_id, self.cache_manager)
+        self.decision_engine = DecisionEngine(user_id, conversation_id, self.cache_manager)
+        self.action_executor = ActionExecutor(user_id, conversation_id, self.cache_manager)
+        self.hooks = NPCAgentHooks(npc_id, user_id, conversation_id)
+        
+    async def perceive_environment(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Perceive the environment with psychological depth."""
+        return await self.perception_manager.perceive_environment_detailed(self.npc_id, context)
+    
+    async def process_player_action(self, action: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Process a player action directed at this NPC."""
+        processor = PlayerActionProcessor(
+            self.user_id, self.conversation_id, self.cache_manager,
+            self.decision_engine, self.action_executor
+        )
+        return await processor.process_player_action(self.npc_id, action, context)
+    
+    async def make_decision(self, perception: Dict[str, Any], available_actions: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """Make a decision based on perception."""
+        return await self.decision_engine.decide(self.npc_id, perception, available_actions)
+    
+    async def execute_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute an action."""
+        return await self.action_executor.execute_action(self.npc_id, action, context)
+    
+    async def run_maintenance(self) -> Dict[str, Any]:
+        """Run maintenance operations on this NPC."""
+        memory_result = await self.memory_manager.run_memory_maintenance(self.npc_id)
+        emotion_result = await self.emotion_manager.process_emotional_decay(self.npc_id)
+        mask_result = await self.mask_manager.evolve_mask_integrity(self.npc_id)
+        
+        return {
+            "memory_maintenance": memory_result,
+            "emotional_decay": emotion_result,
+            "mask_evolution": mask_result
+        }
+
+class NPCAgentSystem:
+    """Central system for managing multiple NPC agents and their interactions."""
+    
+    def __init__(self, user_id: int, conversation_id: int, connection_pool):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.connection_pool = connection_pool
+        self.cache_manager = CacheManager()
+        self.npc_agents = {}
+        self.group_handler = GroupInteractionHandler(user_id, conversation_id, self.cache_manager)
+        self._last_maintenance = datetime.now() - timedelta(hours=1)
+        
+    async def initialize_agents(self) -> None:
+        """Initialize NPCAgent objects for all NPCs in the conversation."""
+        try:
+            async with self.connection_pool.acquire() as conn:
+                query = """
+                    SELECT npc_id
+                    FROM NPCStats
+                    WHERE user_id=$1
+                      AND conversation_id=$2
+                """
+                rows = await conn.fetch(query, self.user_id, self.conversation_id)
+                
+                for row in rows:
+                    npc_id = row["npc_id"]
+                    self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                
+                logger.info(f"Loaded {len(self.npc_agents)} NPC agents")
+        except Exception as e:
+            logger.error(f"Error initializing agents: {e}")
+            raise
+    
+    async def handle_player_action(self, player_action: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Handle a player action and determine NPC responses."""
+        if context is None:
+            context = {}
+        
+        # Determine which NPCs are affected by the action
+        affected_npcs = await self.determine_affected_npcs(player_action, context)
+        
+        if not affected_npcs:
+            return {"npc_responses": []}
+        
+        # Single NPC path
+        if len(affected_npcs) == 1:
+            npc_id = affected_npcs[0]
+            agent = self.npc_agents.get(npc_id)
+            if not agent:
+                agent = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                self.npc_agents[npc_id] = agent
+                
+            response = await agent.process_player_action(player_action, context)
+            return {"npc_responses": [response]}
+        
+        # Multiple NPCs => group logic
+        return await self.handle_group_npc_interaction(affected_npcs, player_action, context)
+
+    async def process_scheduled_activities(self) -> Dict[str, Any]:
+        """Process scheduled activities for all NPCs."""
+        logger.info("Processing scheduled activities")
+        
+        try:
+            # Get current game time
+            year, month, day, time_of_day = await self.get_current_game_time()
+            
+            base_context = {
+                "year": year,
+                "month": month,
+                "day": day,
+                "time_of_day": time_of_day,
+                "activity_type": "scheduled"
+            }
+            
+            # Fetch all NPCs with their data
+            npc_data = await self._fetch_all_npc_data_for_activities()
+            total_npcs = len(npc_data)
+            
+            if total_npcs == 0:
+                return {"npc_responses": [], "count": 0}
+            
+            # Process activities in batches
+            batch_size = 20
+            npc_responses = []
+            
+            for i in range(0, total_npcs, batch_size):
+                batch = list(npc_data.items())[i:i + batch_size]
+                batch_tasks = []
+                
+                for npc_id, data in batch:
+                    batch_tasks.append(self._process_single_npc_activity(npc_id, data, base_context))
+                
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                
+                for result in batch_results:
+                    if isinstance(result, Exception):
+                        logger.error(f"Error processing scheduled activity: {result}")
+                    elif result:
+                        npc_responses.append(result)
+            
+            # Process group coordination activities
+            agent_responses = await self._process_coordination_activities(base_context)
+            
+            return {
+                "npc_responses": npc_responses,
+                "agent_system_responses": agent_responses,
+                "count": len(npc_responses) + len(agent_responses)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing NPC scheduled activities: {e}")
+            raise
+
+    async def batch_update_npcs(self, npc_ids: List[int], update_type: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Update multiple NPCs in a single batch operation."""
+        results = {
+            "success_count": 0,
+            "error_count": 0,
+            "details": {}
+        }
+        
+        # Ensure all NPCs are loaded
+        for npc_id in npc_ids:
+            if npc_id not in self.npc_agents:
+                self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        
+        if update_type == "location_change":
+            # Handle location update
+            new_location = update_data.get("new_location")
+            if not new_location:
+                return {"error": "No location specified"}
+            
+            # Use transaction to update all NPCs
+            async with self.connection_pool.acquire() as conn:
+                async with conn.transaction():
+                    rows = await conn.fetch(
+                        """
+                        UPDATE NPCStats
+                        SET current_location = $1
+                        WHERE npc_id = ANY($2)
+                          AND user_id = $3
+                          AND conversation_id = $4
+                        RETURNING npc_id
+                        """,
+                        new_location, npc_ids, self.user_id, self.conversation_id
+                    )
+                    
+                    results["success_count"] = len(rows)
+                    results["updated_npcs"] = [r["npc_id"] for r in rows]
+                    
+                    # Invalidate perception caches
+                    for npc_id in results["updated_npcs"]:
+                        self.npc_agents[npc_id].cache_manager.invalidate('perception')
+        
+        elif update_type == "emotional_update":
+            # Handle emotional state update
+            emotion = update_data.get("emotion")
+            intensity = update_data.get("intensity", 0.5)
+            
+            if not emotion:
+                return {"error": "No emotion specified"}
+            
+            # Process in parallel using tasks
+            batch_size = 5
+            for i in range(0, len(npc_ids), batch_size):
+                batch = npc_ids[i:i + batch_size]
+                batch_tasks = []
+                
+                for npc_id in batch:
+                    task = self.npc_agents[npc_id].emotion_manager.update_emotion(
+                        npc_id=npc_id,
+                        emotion=emotion,
+                        intensity=intensity
+                    )
+                    batch_tasks.append(task)
+                
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                
+                # Process results
+                for npc_id, result in zip(batch, batch_results):
+                    if isinstance(result, Exception):
+                        results["error_count"] += 1
+                        results["details"][npc_id] = {"error": str(result)}
+                    else:
+                        results["success_count"] += 1
+                        results["details"][npc_id] = {"success": True}
+        
+        return results
 
 class PlayerAction(BaseModel):
     """Structured representation of a player's action."""
@@ -2969,7 +3208,7 @@ class GoalManager:
 
 
 class NPCAgentHooks(AgentHooks):
-    """Hooks for better NPC agent lifecycle management."""
+    """Enhanced hooks for NPC agent lifecycle management."""
     
     def __init__(self, npc_id: int, user_id: int, conversation_id: int):
         self.npc_id = npc_id
@@ -2978,6 +3217,35 @@ class NPCAgentHooks(AgentHooks):
         self.decision_history = []
         self.start_time = None
         self.end_time = None
+        self.initialized = False
+        self.last_maintenance = None
+        
+    async def on_initialize(self, agent) -> None:
+        """Called when agent is first initialized."""
+        with trace(f"Agent Initialization: {agent.name}", group_id=f"npc_{self.npc_id}"):
+            # Load persistent state from database
+            await self._load_agent_state()
+            self.initialized = True
+    
+    async def on_shutdown(self, agent) -> None:
+        """Called when agent is being shut down."""
+        with trace(f"Agent Shutdown: {agent.name}", group_id=f"npc_{self.npc_id}"):
+            # Save final state
+            await self._save_agent_state(agent, None)
+            
+            # Clear caches
+            if hasattr(agent, "cache_manager"):
+                agent.cache_manager.invalidate()
+    
+    async def on_maintenance(self, agent) -> None:
+        """Called during maintenance cycle."""
+        with trace(f"Agent Maintenance: {agent.name}", group_id=f"npc_{self.npc_id}"):
+            # Run maintenance tasks
+            if hasattr(agent, "run_maintenance"):
+                await agent.run_maintenance()
+            
+            # Update maintenance timestamp
+            self.last_maintenance = datetime.now()
     
     async def on_start(self, context, agent):
         """Called when agent starts processing."""
@@ -9669,3 +9937,110 @@ class ConversationGenerationSystem:
         except Exception as e:
             logger.error(f"Error getting relationship: {e}", exc_info=True)
             return None
+
+    async def initialize_maintenance_schedule(self) -> None:
+        """Set up scheduled maintenance for the agent system."""
+        async def run_maintenance_cycle():
+            """Background task for scheduled maintenance."""
+            while True:
+                try:
+                    # Sleep for the maintenance interval
+                    await asyncio.sleep(NPCConfig.MAINTENANCE['cycle_minutes'] * 60)
+                    
+                    # Log maintenance start
+                    logger.info("Starting scheduled maintenance cycle")
+                    
+                    # Run system maintenance
+                    results = await self.run_system_maintenance()
+                    
+                    # Log completion
+                    logger.info(f"Completed maintenance: {len(results['npcs'])} NPCs processed")
+                    
+                    # Update maintenance timestamp
+                    self._last_maintenance = datetime.now()
+                    
+                except Exception as e:
+                    logger.error(f"Error in scheduled maintenance: {e}")
+                    # Wait a bit before retrying on error
+                    await asyncio.sleep(300)  # 5 minutes
+        
+        # Start the maintenance task
+        asyncio.create_task(run_maintenance_cycle())
+
+    async def run_comprehensive_memory_maintenance(self, npc_id: int) -> Dict[str, Any]:
+        """Run comprehensive memory maintenance for an NPC."""
+        results = {}
+        
+        try:
+            memory_system = await self.get_memory_system()
+            
+            # Basic memory maintenance (decay, pruning)
+            basic_result = await memory_system.maintain(
+                entity_type="npc",
+                entity_id=npc_id
+            )
+            results["basic_maintenance"] = basic_result
+            
+            # Schema detection and application
+            schema_result = await memory_system.generate_schemas(
+                entity_type="npc",
+                entity_id=npc_id
+            )
+            results["schema_generation"] = schema_result
+            
+            # Belief updates and consolidation
+            beliefs = await memory_system.get_beliefs(
+                entity_type="npc",
+                entity_id=npc_id
+            )
+            
+            belief_updates = 0
+            for belief in beliefs:
+                belief_id = belief.get("id")
+                if belief_id and random.random() < 0.3:
+                    confidence_change = random.uniform(-0.05, 0.05)
+                    new_confidence = max(0.1, min(0.95, belief.get("confidence", 0.5) + confidence_change))
+                    
+                    await memory_system.update_belief_confidence(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        belief_id=belief_id,
+                        new_confidence=new_confidence,
+                        reason="Regular belief reassessment"
+                    )
+                    belief_updates += 1
+                    
+            results["belief_updates"] = belief_updates
+            
+            # Emotional state decay
+            emotional_state = await memory_system.get_npc_emotion(npc_id)
+            if emotional_state and "current_emotion" in emotional_state:
+                current = emotional_state["current_emotion"]
+                emotion_name = current.get("primary", "neutral")
+                intensity = current.get("intensity", 0.0)
+                
+                if emotion_name != "neutral" and intensity > 0.3:
+                    decay_amount = NPCConfig.MAINTENANCE['emotion_decay_amount']
+                    new_intensity = max(0.1, intensity - decay_amount)
+                    
+                    if new_intensity < 0.25:
+                        emotion_name = "neutral"
+                        new_intensity = 0.1
+                    
+                    await memory_system.update_npc_emotion(
+                        npc_id=npc_id,
+                        emotion=emotion_name,
+                        intensity=new_intensity
+                    )
+                    
+                    results["emotional_decay"] = {
+                        "old_intensity": intensity,
+                        "new_intensity": new_intensity,
+                        "decayed": True
+                    }
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in memory maintenance for NPC {npc_id}: {e}")
+            return {"error": str(e)}
