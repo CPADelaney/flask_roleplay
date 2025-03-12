@@ -231,6 +231,42 @@ def create_all_tables():
         );
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerResources (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name TEXT NOT NULL DEFAULT 'Chase',
+            money INTEGER NOT NULL DEFAULT 100,
+            supplies INTEGER NOT NULL DEFAULT 20,
+            influence INTEGER NOT NULL DEFAULT 10,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (user_id, conversation_id, player_name),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
+    
+    # 2. Add ResourceHistoryLog table for auditing resource changes
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ResourceHistoryLog (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name TEXT NOT NULL DEFAULT 'Chase',
+            resource_type TEXT NOT NULL,
+            old_value INTEGER NOT NULL,
+            new_value INTEGER NOT NULL,
+            amount_changed INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            description TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
+
+
     #
     # ---------- CONFLICT SYSTEM TABLES ----------
     #
@@ -1013,6 +1049,34 @@ def seed_initial_data():
     insert_default_player_stats_chase()
     print("All default data seeded successfully.")
 
+def seed_initial_resources():
+    """Seed initial player resources."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Get all user/conversation pairs
+        cursor.execute("""
+            SELECT DISTINCT user_id, conversation_id, player_name FROM PlayerStats
+        """)
+        
+        rows = cursor.fetchall()
+        
+        # Create default resources for each pair
+        for user_id, conversation_id, player_name in rows:
+            cursor.execute("""
+                INSERT INTO PlayerResources (user_id, conversation_id, player_name, money, supplies, influence)
+                VALUES (%s, %s, %s, 100, 20, 10)
+                ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
+            """, (user_id, conversation_id, player_name))
+        
+        conn.commit()
+        logging.info(f"Initial resources seeded for {len(rows)} players.")
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Error seeding initial resources: {e}")
+    finally:
+        conn.close()
 
 def initialize_all_data():
     """
@@ -1021,6 +1085,8 @@ def initialize_all_data():
     """
     create_all_tables()
     seed_initial_data()
+    seed_initial_vitals()
+    seed_initial_resources()  # Add this line
     initialize_conflict_system()
     print("All tables created & default data seeded successfully!")
 
