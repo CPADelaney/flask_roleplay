@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 
 class GameEventManager:
     """Manages events that both Nyx and NPCs should be aware of"""
+
+    player_action = {
+        "type": "talk",
+        "description": user_input
+    }
     
     def __init__(self, user_id, conversation_id):
         self.user_id = user_id
@@ -547,7 +552,7 @@ class NyxNPCIntegrationManager:
         
         # First, get Nyx's guidance for the scene
         nyx_input = f"I need guidance for a group interaction with the following NPCs: {npc_ids}"
-        nyx_response = await self.nyx_agent_sdk.process_user_input(nyx_input, shared_context)
+        nyx_response = await self.nyx_agent_sdk.process_user_input(self.user_id, self.conversation_id, nyx_input, shared_context)
         
         # Extract guidance
         nyx_guidance = nyx_response.get("text", "")
@@ -891,19 +896,38 @@ class NyxNPCIntegrationManager:
     
     async def _get_memory_system(self, npc_id):
         """Get memory system for an NPC"""
-        # This would need to be implemented based on your memory system architecture
-        pass
-
+        from memory.wrapper import MemorySystem
+        
+        try:
+            # First check if NPC has an active agent
+            coordinator = self._get_npc_coordinator()
+            if npc_id in coordinator.active_agents:
+                agent = coordinator.active_agents[npc_id]
+                if hasattr(agent, "context") and hasattr(agent.context, "memory_system"):
+                    return agent.context.memory_system
+            
+            # Otherwise create a new memory system instance
+            return await MemorySystem.get_instance(
+                self.user_id, 
+                self.conversation_id,
+                entity_type="npc",
+                entity_id=npc_id
+            )
+        except Exception as e:
+            logger.error(f"Error getting memory system for NPC {npc_id}: {e}")
+            # Fallback to creating a new memory system
+            return await MemorySystem.get_instance(
+                self.user_id, 
+                self.conversation_id
+            )
     async def process_user_input(self, user_input: str, context: Dict[str, Any]):
-        """Process user input through both systems with enhanced bidirectional feedback"""
-        logger.info(f"Processing user input through Nyx and NPC integration")
-        
-        # First, get key NPC states to enrich Nyx's context
-        npc_context = await self._gather_npc_context(context)
-        enhanced_context = {**context, "npc_states": npc_context}
-        
         # Get Nyx's response with enhanced NPC awareness
-        nyx_response = await self.nyx_agent_sdk.process_user_input(user_input, enhanced_context)
+        nyx_response = await self.nyx_agent_sdk.process_user_input(
+            self.user_id, 
+            self.conversation_id,
+            user_input, 
+            enhanced_context
+        )
         
         # Extract NPC guidance from Nyx's response
         npc_guidance = self._extract_npc_guidance(nyx_response)
@@ -916,33 +940,32 @@ class NyxNPCIntegrationManager:
         npc_system = await self.get_npc_system()
         npc_responses = []
         
-        # Process NPCs in batches
-        batch_size = 3
-        for i in range(0, len(npc_guidance["responding_npcs"]), batch_size):
-            batch = npc_guidance["responding_npcs"][i:i+batch_size]
-            batch_context = npc_context.copy()
-            batch_context["batch_npcs"] = batch
+        # Only process if there are NPCs to respond
+        if "responding_npcs" in npc_guidance and npc_guidance["responding_npcs"]:
+            # Create player action from user input
+            player_action = {
+                "description": user_input,
+                "type": "talk"
+            }
             
-            batch_result = await npc_system.handle_player_action(
-                player_action,
-                batch_context
-            )
-            
-            if "npc_responses" in batch_result:
-                npc_responses.extend(batch_result["npc_responses"])
-            
-            # Add a small delay between batches
-            if i + batch_size < len(npc_guidance["responding_npcs"]):
-                await asyncio.sleep(0.1)
-            
-            # Process through NPC system
-            npc_system = await self.get_npc_system()
-            npc_result = await npc_system.handle_player_action(
-                player_action,
-                npc_context
-            )
-            
-            npc_responses = npc_result.get("npc_responses", [])
+            # Process NPCs in batches
+            batch_size = 3
+            for i in range(0, len(npc_guidance["responding_npcs"]), batch_size):
+                batch = npc_guidance["responding_npcs"][i:i+batch_size]
+                batch_context = npc_context.copy()
+                batch_context["batch_npcs"] = batch
+                
+                batch_result = await npc_system.handle_player_action(
+                    player_action,
+                    batch_context
+                )
+                
+                if "npc_responses" in batch_result:
+                    npc_responses.extend(batch_result["npc_responses"])
+                
+                # Small delay between batches
+                if i + batch_size < len(npc_guidance["responding_npcs"]):
+                    await asyncio.sleep(0.1)
         
         # Combine responses
         combined_response = self._combine_responses(nyx_response, npc_responses)
