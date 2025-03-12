@@ -668,7 +668,114 @@ def create_all_tables():
             rating >= 4
         GROUP BY 
             user_id, npc_name
+        );
     ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Conflicts (
+            conflict_id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            conflict_name VARCHAR(255) NOT NULL,
+            conflict_type VARCHAR(50) NOT NULL, -- 'major', 'minor', 'standard', 'catastrophic'
+            parent_conflict_id INTEGER NULL, -- For minor conflicts linked to major ones
+            description TEXT NOT NULL,
+            brewing_description TEXT NOT NULL,
+            active_description TEXT NOT NULL,
+            climax_description TEXT NOT NULL,
+            resolution_description TEXT NOT NULL,
+            progress FLOAT NOT NULL DEFAULT 0, -- 0-100 percentage
+            phase VARCHAR(50) NOT NULL DEFAULT 'brewing', -- 'brewing', 'active', 'climax', 'resolution'
+            start_day INTEGER NOT NULL,
+            estimated_duration INTEGER NOT NULL DEFAULT 7, -- Duration in days
+            faction_a_name VARCHAR(255) NOT NULL,
+            faction_b_name VARCHAR(255) NOT NULL,
+            resources_required JSONB NOT NULL DEFAULT '{"money": 0, "supplies": 0, "influence": 0}'::jsonb,
+            success_rate FLOAT NOT NULL DEFAULT 0, -- 0-100 percentage
+            outcome VARCHAR(50) NOT NULL DEFAULT 'pending', -- 'pending', 'success', 'partial_success', 'failure', 'ignored'
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (user_id, conversation_id, conflict_id)
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ConflictConsequences (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER NOT NULL,
+            consequence_type VARCHAR(50) NOT NULL, -- 'relationship', 'stat', 'unlock', 'permanent'
+            entity_type VARCHAR(50) NOT NULL, -- 'player', 'npc', 'location', 'faction'
+            entity_id INTEGER NULL, -- NULL for player
+            description TEXT NOT NULL,
+            applied BOOLEAN NOT NULL DEFAULT FALSE,
+            applied_at TIMESTAMP NULL,
+            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ConflictNPCs (
+            conflict_id INTEGER NOT NULL,
+            npc_id INTEGER NOT NULL,
+            faction VARCHAR(10) NOT NULL, -- 'a', 'b', 'neutral'
+            role VARCHAR(50) NOT NULL, -- 'leader', 'member', 'supporter', 'observer'
+            influence_level INTEGER NOT NULL DEFAULT 50, -- 0-100
+            PRIMARY KEY (conflict_id, npc_id),
+            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerConflictInvolvement (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
+            involvement_level VARCHAR(50) NOT NULL DEFAULT 'none', -- 'none', 'observing', 'participating', 'leading'
+            faction VARCHAR(10) NOT NULL DEFAULT 'neutral', -- 'a', 'b', 'neutral'
+            money_committed INTEGER NOT NULL DEFAULT 0,
+            supplies_committed INTEGER NOT NULL DEFAULT 0,
+            influence_committed INTEGER NOT NULL DEFAULT 0,
+            actions_taken JSONB NOT NULL DEFAULT '[]'::jsonb,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (conflict_id, user_id, conversation_id),
+            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ConflictMemoryEvents (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER NOT NULL,
+            memory_text TEXT NOT NULL,
+            significance INTEGER NOT NULL DEFAULT 5, -- 1-10
+            entity_type VARCHAR(50) NOT NULL, -- 'player', 'npc'
+            entity_id INTEGER NULL, -- NULL for player
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerVitals (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
+            energy INTEGER NOT NULL DEFAULT 100, -- 0-100
+            hunger INTEGER NOT NULL DEFAULT 100, -- 0-100
+            last_update TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (user_id, conversation_id, player_name)
+        );
+    ''')
+
+CREATE INDEX IF NOT EXISTS idx_conflicts_user_conv ON Conflicts(user_id, conversation_id);
+CREATE INDEX IF NOT EXISTS idx_conflict_npcs ON ConflictNPCs(conflict_id);
+CREATE INDEX IF NOT EXISTS idx_player_involvement ON PlayerConflictInvolvement(conflict_id, user_id, conversation_id);
+CREATE INDEX IF NOT EXISTS idx_active_conflicts ON Conflicts(is_active) WHERE is_active = TRUE;
 
     #
     # ---------- (OPTIONAL) Additional NPCMemory Associations ----------
