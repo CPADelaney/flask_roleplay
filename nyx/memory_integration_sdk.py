@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from db.connection import get_db_connection
 from nyx.nyx_memory_system import NyxMemorySystem
+from logic.npc_agents.agent_coordinator import NPCAgentCoordinator
 from utils.caching import MEMORY_CACHE
 
 logger = logging.getLogger(__name__)
