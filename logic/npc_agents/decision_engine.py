@@ -1,4 +1,4 @@
-# npc_agents/decision_engine_sdk.py
+# npc_agents/decision_engine.py
 
 """
 Decision-making engine for NPCs using OpenAI Agents SDK.
@@ -115,6 +115,95 @@ class DecisionContext:
             self.decision_log = self.decision_log[-20:]
 
 # -------------------------------------------------------
+# GPT-based Action Generation
+# -------------------------------------------------------
+
+gpt_action_agent = Agent(
+    name="NPC GPT Action Generator",
+    instructions="""
+    You are a creative system that, given an NPC's personality (dominance, cruelty, etc.), 
+    emotional state, memories, and environment context, proposes a list of 3-6 possible 
+    actions the NPC might take. Each action should be realistic, psychologically consistent, 
+    and reflect the NPC's character.
+
+    Output format (JSON):
+    {
+      "actions": [
+        {
+          "type": "string",
+          "description": "string - short textual description",
+          "target": "string - e.g. 'player', 'environment', or NPC ID',
+          "stats_influenced": {...}  # optional
+        },
+        ...
+      ]
+    }
+    """,
+    # Could specify model="gpt-4" or "gpt-3.5-turbo" as desired
+)
+
+async def generate_dynamic_actions_with_gpt(
+    npc_data: Dict[str, Any], 
+    perception: Dict[str, Any],
+    top_n: int = 6
+) -> List[Dict[str, Any]]:
+    """
+    Calls GPT to generate candidate actions for the NPC, 
+    based on their stats, emotions, relationships, and environment.
+    
+    Args:
+        npc_data: E.g. your NPCStats dict (dominance, cruelty, npc_name, etc.).
+        perception: The dictionary from perceive_environment or your existing logic 
+                    (with emotional_state, relevant_memories, relationships, etc.)
+        top_n: Max number of actions to keep from GPT output
+
+    Returns:
+        A list of action dicts in your standard format:
+        [
+          {
+            "type": "mock",
+            "description": "Mock the player harshly",
+            "target": "player",
+            "stats_influenced": {"cruelty": 2}
+          },
+          ...
+        ]
+    """
+    with function_span("generate_dynamic_actions_with_gpt"):
+        # Prepare prompt
+        prompt_context = {
+            "npc_data": npc_data,
+            "perception": perception
+        }
+        prompt_str = json.dumps(prompt_context, indent=2)
+
+        # Run the GPT Action agent
+        try:
+            result = await Runner.run(gpt_action_agent, prompt_str)
+            raw_output = result.final_output
+
+            # Attempt to parse as JSON
+            parsed = {}
+            try:
+                parsed = json.loads(raw_output)
+            except json.JSONDecodeError:
+                # If GPT doesn't return valid JSON, fallback
+                parsed = {"actions": []}
+
+            actions = parsed.get("actions", [])
+            if not isinstance(actions, list):
+                actions = []
+            
+            # Limit to top_n
+            actions = actions[:top_n]
+
+            return actions
+
+        except Exception as e:
+            logger.error(f"Error generating GPT actions: {e}")
+            return []
+
+# -------------------------------------------------------
 # Tool Functions
 # -------------------------------------------------------
 
@@ -199,14 +288,15 @@ async def get_default_actions(
     perception: NPCPerception
 ) -> List[NPCAction]:
     """
-    Generate a base set of actions for the NPC to consider.
-    Enhanced with memory and emotional context.
+    Generate a base set of actions for the NPC to consider,
+    merging hard-coded actions and GPT-based dynamic suggestions.
     
     Args:
         npc_data: The NPC's stats and traits
         perception: The NPC's current perception
     """
     with function_span("get_default_actions"):
+        # 1. Hard-coded baseline actions
         actions = [
             NPCAction(
                 type="talk",
@@ -228,19 +318,19 @@ async def get_default_actions(
             )
         ]
         
-        # Add dominance-based actions - important for femdom context
+        # 2. Additional logic for dominance, cruelty, etc.
         dominance = npc_data.dominance
+        cruelty = npc_data.cruelty
         mask = perception.mask
         presented_traits = mask.get("presented_traits", {})
         hidden_traits = mask.get("hidden_traits", {})
         mask_integrity = mask.get("integrity", 100)
         
-        # If NPC presents as submissive but is actually dominant
+        # Example: submissive-presented but hidden-dominant
         submissive_presented = "submissive" in presented_traits or "gentle" in presented_traits
         dominant_hidden = "dominant" in hidden_traits or "controlling" in hidden_traits
         
         if submissive_presented and dominant_hidden and mask_integrity < 70:
-            # As mask integrity deteriorates, show some dominant actions
             actions.append(NPCAction(
                 type="assertive",
                 description="Show an unexpected hint of assertiveness",
@@ -276,8 +366,6 @@ async def get_default_actions(
                     stats_influenced={"fear": 3, "obedience": 2}
                 ))
         
-        # Cruelty-based actions
-        cruelty = npc_data.cruelty
         if cruelty > 60 or "cruel" in presented_traits:
             actions.append(NPCAction(
                 type="mock",
@@ -285,7 +373,6 @@ async def get_default_actions(
                 target="player",
                 stats_influenced={"cruelty": 1, "closeness": -2}
             ))
-            
             if cruelty > 70:
                 actions.append(NPCAction(
                     type="humiliate",
@@ -294,7 +381,6 @@ async def get_default_actions(
                     stats_influenced={"cruelty": 2, "fear": 2}
                 ))
         
-        # Trust-based actions
         trust = npc_data.trust
         if trust > 60:
             actions.append(NPCAction(
@@ -304,7 +390,6 @@ async def get_default_actions(
                 stats_influenced={"trust": 3, "closeness": 2}
             ))
         
-        # Respect-based actions
         respect = npc_data.respect
         if respect > 60:
             actions.append(NPCAction(
@@ -314,12 +399,11 @@ async def get_default_actions(
                 stats_influenced={"respect": 2, "closeness": 1}
             ))
         
-        # Add emotion-specific actions
+        # Emotional-state-based examples
         current_emotion = perception.emotional_state.get("current_emotion", {})
         if current_emotion:
             primary_emotion = current_emotion.get("primary", {}).get("name", "neutral")
             intensity = current_emotion.get("primary", {}).get("intensity", 0.0)
-            
             if intensity > 0.7:
                 if primary_emotion == "anger":
                     actions.append(NPCAction(
@@ -361,7 +445,7 @@ async def get_default_actions(
                 stats_influenced={"closeness": 1}
             ))
         
-        # Check for other NPCs
+        # Check for other NPCs in location
         for entity in environment_data.get("entities_present", []):
             if entity.get("type") == "npc":
                 t_id = entity.get("id")
@@ -380,9 +464,21 @@ async def get_default_actions(
                         stats_influenced={"dominance": 1}
                     ))
         
-        # Add memory-based actions
+        # Memory-based expansions
         memory_based_actions = await generate_memory_based_actions(ctx, perception)
         actions.extend(memory_based_actions)
+
+        # 3. Use GPT to generate a few dynamic candidate actions
+        npc_data_dict = npc_data.model_dump()
+        perception_dict = perception.model_dump()
+        gpt_candidates = await generate_dynamic_actions_with_gpt(npc_data_dict, perception_dict, top_n=6)
+        for candidate in gpt_candidates:
+            # Convert GPT's dict into NPCAction
+            try:
+                actions.append(NPCAction(**candidate))
+            except:
+                # If GPT gave partial data, skip
+                pass
         
         return actions
 
@@ -547,9 +643,7 @@ async def score_actions(
             scoring_factors["trauma_influence"] = trauma_score
             
             # 8. Belief influence
-            belief_score = score_belief_influence(
-                perception.beliefs, action
-            )
+            belief_score = score_belief_influence(perception.beliefs, action)
             score += belief_score
             scoring_factors["belief_influence"] = belief_score
             
@@ -906,7 +1000,7 @@ async def update_goal_progress(
         return result
 
 # -------------------------------------------------------
-# Helper Functions
+# Helper Functions for Memory Bias & Scoring
 # -------------------------------------------------------
 
 async def apply_memory_biases(
@@ -964,7 +1058,7 @@ async def apply_emotional_bias(memories: List[Dict[str, Any]]) -> List[Dict[str,
         
         mem["relevance_score"] = mem.get("relevance_score", 0) + base_score
         
-        # Femdom tags
+        # Example: Additional boost for femdom-related tags
         tags = mem.get("tags", [])
         femdom_tags = [
             "dominance_dynamic", "power_exchange", "discipline",
@@ -982,7 +1076,6 @@ async def apply_personality_bias(
     """
     Apply personality bias to memories.
     """
-    # Get NPC data to determine personality
     npc_data = await get_npc_data(ctx)
     personality_type = "neutral"
     
@@ -1028,7 +1121,7 @@ def score_personality_alignment(
     presented_traits: Dict[str, Any]
 ) -> float:
     """
-    Score how well an action aligns with NPC's personality, accounting for mask.
+    Score how well an action aligns with the NPC's personality, accounting for mask.
     """
     score = 0.0
     action_type = action.type
@@ -1074,7 +1167,6 @@ async def score_memory_influence(
     if not memories:
         return score
     
-    # Track references
     affected_by_memories = []
     action_type = action.type
     
@@ -1084,13 +1176,13 @@ async def score_memory_influence(
         emotional_intensity = memory.get("emotional_intensity", 0) / 100.0
         relevance = memory.get("relevance_score", 1.0)
         
-        # If action directly references memory
+        # If action references a memory by ID
         if action.decision_metadata and action.decision_metadata.get("memory_id") == memory_id:
             memory_score = 5 * relevance
             score += memory_score
             affected_by_memories.append({"id": memory_id, "influence": memory_score})
         
-        # Check content
+        # Check content for direct mention
         if action_type in memory_text:
             memory_score = 2 * relevance
             score += memory_score
@@ -1140,16 +1232,14 @@ def score_relationship_influence(
     action_type = action.type
     
     # Example: if relationship with player is high trust,
-    # reduce likelihood of "punish" or "mock".
+    # penalize or reward certain behaviors
     player_rel = relationships.get("player", {})
-    link_level = player_rel.get("link_level", 0)  # 0-100 perhaps
+    link_level = player_rel.get("link_level", 0)
     
     if action_type in ["punish", "mock", "humiliate"]:
-        # penalize these actions if link_level is high
         if link_level > 60:
             score -= 3.0
     elif action_type in ["confide", "talk", "praise"]:
-        # encourage these actions if link_level is high
         if link_level > 60:
             score += 2.0
     
@@ -1166,12 +1256,11 @@ def score_environmental_context(
     loc_str = environment.get("location", "").lower()
     action_type = action.type
     
-    # Example: if location is 'library' or 'church', reduce score for loud or violent actions
+    # Example: library/church => discourage loud or violent
     if "library" in loc_str or "church" in loc_str:
         if action_type in ["express_anger", "mock", "shout", "celebrate", "dominate"]:
             score -= 2.0
     
-    # Another example: if location is 'bar' or 'party', more social
     if "bar" in loc_str or "party" in loc_str:
         if action_type in ["socialize", "talk", "celebrate"]:
             score += 2.0
@@ -1329,7 +1418,6 @@ def score_trauma_influence(
             score += base_score * 0.7
         elif traumatic_trigger:
             score += base_score
-            # Check the trigger's response_type
             response_type = traumatic_trigger.get("response_type")
             if response_type == "fight" and action_type in ["express_anger", "challenge"]:
                 score += 2.0
@@ -1464,7 +1552,7 @@ def score_decision_history(
     
     if action_type in action_counts:
         consistency_score = action_counts[action_type] * 1.5
-        # Penalize repetitiveness
+        # Penalize repetitiveness if last two actions are the same
         if len(recent_actions) >= 2 and recent_actions[0] == recent_actions[1] == action_type:
             consistency_score -= 3.0
         score += consistency_score
@@ -1506,6 +1594,7 @@ def score_player_knowledge_influence(
         elif "submissive" in hidden_traits and action_type in ["observe", "act_defensive"]:
             score += 2.0
     elif player_knowledge > 0.4:
+        # A bit of randomness
         if random.random() < 0.5:
             if "dominant" in hidden_traits and action_type in ["command", "direct"]:
                 score += 1.5
@@ -1634,7 +1723,7 @@ decision_agent = Agent(
     
     For each decision, follow this process:
     1. Analyze the NPC's stats and current state
-    2. Generate possible actions
+    2. Generate possible actions (both hard-coded logic and GPT-based suggestions)
     3. Score each action based on multiple factors
     4. Select the best action, incorporating some randomness for realism
     5. Enhance the chosen action with additional context if needed
@@ -1715,18 +1804,15 @@ class DecisionEngineSDK:
         
         # If someone constructs this without the factory, they can still get goals in the background
         if initialize_goals:
-            # This runs in the background and might race with usage:
             asyncio.create_task(self._initialize_goals())
     
     async def _initialize_goals(self) -> None:
         """Initialize goals after getting NPC data."""
         try:
-            # Get NPC data
             ctx_wrapper = RunContextWrapper(self.context)
             npc_data = await get_npc_data(ctx_wrapper)
             
             if npc_data:
-                # Initialize goals
                 await self.initialize_long_term_goals(npc_data.model_dump())
         except Exception as e:
             logger.error(f"Error initializing goals: {e}")
@@ -1737,23 +1823,25 @@ class DecisionEngineSDK:
         available_actions: Optional[List[dict]] = None
     ) -> dict:
         """
-        Evaluate the NPC's current state, context, personality, memories and emotional state
+        Evaluate the NPC's current state, context, personality, memories, and emotional state
         to pick an action.
         
         Args:
             perception: NPC's perception of the environment
-            available_actions: Actions the NPC could take, or None to generate options
+            available_actions: Optional list of action dicts the NPC could take;
+                               if None, the system will generate them dynamically.
             
         Returns:
-            The chosen action
+            The chosen action (dict format)
         """
-        # Store perception in context
+        # Store perception
         self.context.perception = perception
         
         # Convert available_actions to NPCAction objects if provided
-        action_options = None
         if available_actions:
-            action_options = [NPCAction(**action) for action in available_actions]
+            action_options = [NPCAction(**act) for act in available_actions]
+        else:
+            action_options = None
         
         # Run the decision agent
         result = await Runner.run(
@@ -1762,17 +1850,19 @@ class DecisionEngineSDK:
             context=self.context
         )
         
-        # Get the chosen action
+        # Grab the final action
         chosen_action = result.final_output
         
-        # Convert back to dict for compatibility
+        # Convert back to dict for external usage
         if isinstance(chosen_action, NPCAction):
             return chosen_action.model_dump()
         else:
             return chosen_action
     
     async def initialize_long_term_goals(self, npc_data: Dict[str, Any]) -> None:
-        """Initialize NPC's long-term goals based on personality and archetype."""
+        """
+        Initialize NPC's long-term goals based on personality and archetype.
+        """
         self.context.long_term_goals = []
         
         dominance = npc_data.get("dominance", 50)
@@ -1861,7 +1951,9 @@ class DecisionEngineSDK:
             })
     
     async def store_decision(self, action: Dict[str, Any], context: Dict[str, Any]):
-        """Store the final decision in NPCAgentState."""
+        """
+        Store the final decision in NPCAgentState.
+        """
         def _store():
             with get_db_connection() as conn, conn.cursor() as cursor:
                 cursor.execute(
@@ -1874,7 +1966,7 @@ class DecisionEngineSDK:
                 exists = cursor.fetchone() is not None
                 
                 action_copy = action.copy()
-                # Clean up any ephemeral keys you don't want to store
+                # Clean up ephemeral keys
                 for ephemeral_key in ["decision_factors", "mask_slippage"]:
                     if ephemeral_key in action_copy:
                         del action_copy[ephemeral_key]
