@@ -1,16 +1,19 @@
 # logic/npc_agents/agent_system.py
 
 """
-Main system that integrates NPC agents with the game loop, enhanced with memory integration.
+Main system that integrates NPC agents with the game loop, using OpenAI Agents SDK.
 """
 
 import logging
 import asyncio
 import random
-from typing import List, Dict, Any, Optional, Set, Tuple
+from typing import List, Dict, Any, Optional, Set, Tuple, Union
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pydantic import BaseModel
 
 import asyncpg
+from agents import Agent, Runner, function_tool, handoff, trace, ModelSettings, TraceProvider, input_guardrail, GuardrailFunctionOutput
 
 from .npc_agent import NPCAgent
 from .agent_coordinator import NPCAgentCoordinator
@@ -18,15 +21,29 @@ from memory.wrapper import MemorySystem
 
 logger = logging.getLogger(__name__)
 
-
 class NPCSystemError(Exception):
     """Error in NPC system operations."""
     pass
 
+class SystemInput(BaseModel):
+    """Input for the system agent."""
+    command: str
+    parameters: Dict[str, Any]
+
+class SystemOutput(BaseModel):
+    """Output from the system agent."""
+    result: Dict[str, Any]
+    status: str
+    message: str
+
+class ModerationCheck(BaseModel):
+    """Output for moderation guardrail check."""
+    is_appropriate: bool
+    reasoning: str
 
 class NPCAgentSystem:
     """
-    Main system that integrates individual NPC agents with the game loop.
+    Main system that integrates individual NPC agents with the game loop using the OpenAI Agents SDK.
 
     Responsibilities:
     - Load and store a reference to each NPC agent (NPCAgent).
@@ -57,6 +74,7 @@ class NPCAgentSystem:
         self.npc_agents: Dict[int, NPCAgent] = {}
         self._memory_system = None
         self.connection_pool = connection_pool  # Store asyncpg connection pool
+        self._system_agent = None
 
         # Track when memory maintenance was last run
         self._last_memory_maintenance = datetime.now() - timedelta(hours=1)  # Run on first init
@@ -65,9 +83,7 @@ class NPCAgentSystem:
         # Track last flashback times to prevent too-frequent occurrences
         self._last_flashback_times = {}
 
-        # Will initialize agents asynchronously
-        # (You can call await self.initialize_agents() after creating the instance if desired.)
-
+        # Schedule periodic memory maintenance
         self._setup_memory_maintenance_schedule()
 
     def _setup_memory_maintenance_schedule(self):
@@ -101,9 +117,94 @@ class NPCAgentSystem:
             )
         return self._memory_system
 
-    async def initialize_agents(self) -> None:
+    async def _get_system_agent(self):
+        """Lazy-load the system agent."""
+        if self._system_agent is None:
+            # Set up the moderation check agent
+            moderation_agent = Agent(
+                name="Content_Moderator",
+                instructions="""
+                Your job is to check if content is appropriate and doesn't violate content policies.
+                Flag any content that:
+                1. Contains explicit or graphic violence
+                2. Contains explicit sexual content
+                3. Promotes illegal activities
+                4. Contains hate speech or discriminatory content
+                
+                Output true for is_appropriate if the content is appropriate, false otherwise.
+                """,
+                output_type=ModerationCheck
+            )
+            
+            async def moderation_guardrail(
+                ctx, 
+                agent: Agent, 
+                input_data: Union[str, Dict[str, Any]]
+            ) -> GuardrailFunctionOutput:
+                # Extract text from input
+                text = ""
+                if isinstance(input_data, str):
+                    text = input_data
+                elif isinstance(input_data, dict):
+                    if "command" in input_data and input_data["command"] == "process_player_action":
+                        if "parameters" in input_data and "player_action" in input_data["parameters"]:
+                            player_action = input_data["parameters"]["player_action"]
+                            text = player_action.get("description", "")
+                
+                # Check moderation if we have text
+                if text:
+                    result = await Runner.run(moderation_agent, text, context=ctx.context)
+                    final_output = result.final_output_as(ModerationCheck)
+                    return GuardrailFunctionOutput(
+                        output_info=final_output,
+                        tripwire_triggered=not final_output.is_appropriate
+                    )
+                
+                # Default to appropriate if no text to check
+                return GuardrailFunctionOutput(
+                    output_info=ModerationCheck(is_appropriate=True, reasoning="No text to check"),
+                    tripwire_triggered=False
+                )
+            
+            # Create the main system agent
+            self._system_agent = Agent(
+                name="NPC_System_Agent",
+                instructions="""
+                You are the main coordinator for an NPC agent system. You handle requests related to:
+                
+                1. Processing player actions directed at NPCs
+                2. Managing scheduled activities for NPCs
+                3. Coordinating memory operations
+                4. Loading and initializing NPC agents
+                
+                Your responses should be efficient and focused on the specific task requested.
+                """,
+                model="gpt-4o",
+                model_settings=ModelSettings(temperature=0.2),
+                tools=[
+                    function_tool(self.handle_player_action),
+                    function_tool(self.process_npc_scheduled_activities),
+                    function_tool(self.run_memory_maintenance),
+                    function_tool(self.initialize_agents),
+                    function_tool(self.batch_update_npcs),
+                    function_tool(self.generate_npc_flashback)
+                ],
+                input_guardrails=[input_guardrail(moderation_guardrail)],
+                output_type=SystemOutput
+            )
+        
+        return self._system_agent
+
+    @function_tool
+    async def initialize_agents(self, npc_ids: Optional[List[int]] = None) -> Dict[str, Any]:
         """
-        Initialize NPCAgent objects for all NPCs in the conversation.
+        Initialize NPCAgent objects for specified NPCs or all NPCs in the conversation.
+        
+        Args:
+            npc_ids: Optional list of specific NPC IDs to initialize
+            
+        Returns:
+            Dictionary with initialization results
         """
         logger.info(
             "Initializing NPC agents for user=%s, conversation=%s",
@@ -116,14 +217,39 @@ class NPCAgentSystem:
             WHERE user_id=$1
               AND conversation_id=$2
         """
+        params = [self.user_id, self.conversation_id]
+        
+        if npc_ids:
+            query += " AND npc_id = ANY($3)"
+            params.append(npc_ids)
+
         async with self.connection_pool.acquire() as conn:
-            rows = await conn.fetch(query, self.user_id, self.conversation_id)
+            rows = await conn.fetch(query, *params)
+            
+            # Create tasks to initialize agents concurrently
+            init_tasks = []
             for row in rows:
                 npc_id = row["npc_id"]
-                self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                if npc_id not in self.npc_agents:
+                    self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                    init_tasks.append(self.npc_agents[npc_id].initialize())
+                else:
+                    # Already initialized
+                    pass
+            
+            # Wait for all initializations to complete
+            if init_tasks:
+                await asyncio.gather(*init_tasks)
 
-        logger.info("Loaded %d NPC agents", len(self.npc_agents))
+        npc_count = len(self.npc_agents)
+        logger.info("Loaded %d NPC agents", npc_count)
+        
+        return {
+            "npc_count": npc_count,
+            "initialized_ids": list(self.npc_agents.keys())
+        }
 
+    @function_tool
     async def handle_player_action(
         self,
         player_action: Dict[str, Any],
@@ -140,46 +266,51 @@ class NPCAgentSystem:
             context: Optional additional context (like current location/time)
 
         Returns:
-            A dictionary { "npc_responses": [...] }
-            or for multi-npc, a different structure
+            A dictionary with NPC responses
         """
         if context is None:
             context = {}
 
-        # Get memory system for creating player action memories
-        memory_system = await self._get_memory_system()
+        # Create trace for debugging and monitoring
+        with trace(
+            f"player_action_{self.user_id}_{self.conversation_id}", 
+            group_id=f"user_{self.user_id}_conv_{self.conversation_id}"
+        ):
+            # Get memory system for creating player action memories
+            memory_system = await self._get_memory_system()
+    
+            # Create a memory of this action from the player's perspective
+            player_memory_text = f"I {player_action.get('description', 'did something')}"
+    
+            # Determine emotional content based on action type
+            action_type = player_action.get("type", "unknown")
+            is_emotional = action_type in ["express_emotion", "shout", "cry", "laugh", "threaten"]
+    
+            # Add memory with appropriate tags
+            await memory_system.remember(
+                entity_type="player",
+                entity_id=self.user_id,
+                memory_text=player_memory_text,
+                importance="medium",
+                emotional=is_emotional,
+                tags=["player_action", action_type]
+            )
+    
+            # Determine which NPCs are affected by the action
+            affected_npcs = await self.determine_affected_npcs(player_action, context)
+            if not affected_npcs:
+                logger.debug("No NPCs were affected by this action: %s", player_action)
+                return {"npc_responses": []}
+    
+            # Single NPC path
+            if len(affected_npcs) == 1:
+                npc_id = affected_npcs[0]
+                return await self.handle_single_npc_interaction(npc_id, player_action, context)
+    
+            # Multiple NPCs => group logic
+            return await self.handle_group_npc_interaction(affected_npcs, player_action, context)
 
-        # Create a memory of this action from the player's perspective
-        player_memory_text = f"I {player_action.get('description', 'did something')}"
-
-        # Determine emotional content based on action type
-        action_type = player_action.get("type", "unknown")
-        is_emotional = action_type in ["express_emotion", "shout", "cry", "laugh", "threaten"]
-
-        # Add memory with appropriate tags
-        await memory_system.remember(
-            entity_type="player",
-            entity_id=self.user_id,
-            memory_text=player_memory_text,
-            importance="medium",
-            emotional=is_emotional,
-            tags=["player_action", action_type]
-        )
-
-        # Determine which NPCs are affected by the action
-        affected_npcs = await self.determine_affected_npcs(player_action, context)
-        if not affected_npcs:
-            logger.debug("No NPCs were affected by this action: %s", player_action)
-            return {"npc_responses": []}
-
-        # Single NPC path
-        if len(affected_npcs) == 1:
-            npc_id = affected_npcs[0]
-            return await self.handle_single_npc_interaction(npc_id, player_action, context)
-
-        # Multiple NPCs => group logic
-        return await self.handle_group_npc_interaction(affected_npcs, player_action, context)
-
+    @function_tool
     async def determine_affected_npcs(
         self,
         player_action: Dict[str, Any],
@@ -303,6 +434,7 @@ class NPCAgentSystem:
 
         return []
 
+    @function_tool
     async def batch_update_npcs(
         self,
         npc_ids: List[int],
@@ -311,6 +443,14 @@ class NPCAgentSystem:
     ) -> Dict[str, Any]:
         """
         Update multiple NPCs in a single batch operation for better performance.
+        
+        Args:
+            npc_ids: List of NPC IDs to update
+            update_type: Type of update (location_change, emotional_update, etc.)
+            update_data: Data for the update
+            
+        Returns:
+            Results of the batch update
         """
         results = {
             "success_count": 0,
@@ -318,241 +458,8 @@ class NPCAgentSystem:
             "details": {}
         }
 
-        # Ensure all NPCs are loaded
-        await self.load_agents(npc_ids)
-
-        if update_type == "location_change":
-            # Batch location update
-            new_location = update_data.get("new_location")
-            if not new_location:
-                return {"error": "No location specified"}
-
-            # Use async transaction approach for all updates
-            async with self.connection_pool.acquire() as conn:
-                async with conn.transaction():
-                    try:
-                        rows = await conn.fetch(
-                            """
-                            UPDATE NPCStats
-                            SET current_location = $1
-                            WHERE npc_id = ANY($2)
-                              AND user_id = $3
-                              AND conversation_id = $4
-                            RETURNING npc_id
-                            """,
-                            new_location,
-                            npc_ids,
-                            self.user_id,
-                            self.conversation_id
-                        )
-                        results["success_count"] = len(rows)
-                        results["updated_npcs"] = [r["npc_id"] for r in rows]
-                    except Exception as e:
-                        logger.error("Error updating NPC locations: %s", e)
-                        results["error_count"] = len(npc_ids)
-                        return results
-
-        elif update_type == "emotional_update":
-            # Batch emotional state update
-            emotion = update_data.get("emotion")
-            intensity = update_data.get("intensity", 0.5)
-
-            if not emotion:
-                return {"error": "No emotion specified"}
-
-            # Get memory system
-            memory_system = await self._get_memory_system()
-
-            batch_size = 5
-            for i in range(0, len(npc_ids), batch_size):
-                batch = npc_ids[i:i + batch_size]
-                batch_tasks = []
-                for npc_id in batch:
-                    task = memory_system.update_npc_emotion(
-                        npc_id=npc_id,
-                        emotion=emotion,
-                        intensity=intensity
-                    )
-                    batch_tasks.append(task)
-
-                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-
-                # Process results
-                for npc_id, result in zip(batch, batch_results):
-                    if isinstance(result, Exception):
-                        results["error_count"] += 1
-                        results["details"][npc_id] = {"error": str(result)}
-                    else:
-                        results["success_count"] += 1
-                        results["details"][npc_id] = {"success": True}
-
-        # Add other update types as needed
-
-        return results
-
-    async def load_agents(self, npc_ids: List[int]) -> None:
-        """
-        Load NPCAgent instances if not already loaded.
-        """
-        missing_ids = [npc_id for npc_id in npc_ids if npc_id not in self.npc_agents]
-        if not missing_ids:
-            return
-
-        for npc_id in missing_ids:
-            self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
-
-    async def get_current_game_time(self) -> Tuple[int, str, int, str]:
-        """
-        Get the current in-game time information.
-
-        Returns:
-            Tuple of (year, month, day, time_of_day)
-        """
-        year, month, day, time_of_day = None, None, None, None
-        try:
-            async with self.connection_pool.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT key, value
-                    FROM CurrentRoleplay
-                    WHERE key IN ('CurrentYear', 'CurrentMonth', 'CurrentDay', 'TimeOfDay')
-                      AND user_id = $1
-                      AND conversation_id = $2
-                    """,
-                    self.user_id, self.conversation_id
-                )
-                for row in rows:
-                    key = row["key"]
-                    value = row["value"]
-                    if key == "CurrentYear":
-                        year = int(value) if value.isdigit() else value
-                    elif key == "CurrentMonth":
-                        month = value
-                    elif key == "CurrentDay":
-                        day = int(value) if value.isdigit() else value
-                    elif key == "TimeOfDay":
-                        time_of_day = value
-
-                # Set defaults if values are missing
-                if year is None:
-                    year = 2023
-                if month is None:
-                    month = "January"
-                if day is None:
-                    day = 1
-                if time_of_day is None:
-                    time_of_day = "afternoon"
-
-        except Exception as e:
-            logger.error(f"Error getting game time: {e}")
-            # Return defaults if query fails
-            return 2023, "January", 1, "afternoon"
-
-        return year, month, day, time_of_day
-
-    async def _process_single_npc_activity(
-        self,
-        npc_id: int,
-        data: Dict[str, Any],
-        base_context: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Process a scheduled activity for a single NPC.
-
-        Args:
-            npc_id: ID of the NPC
-            data: NPC data including location, schedule, etc.
-            base_context: Base context for the activity
-
-        Returns:
-            Activity result or None if processing failed
-        """
-        try:
-            # Get the NPC agent
-            agent = self.npc_agents.get(npc_id)
-            if not agent:
-                self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
-                agent = self.npc_agents[npc_id]
-
-            # Create NPC-specific context
-            npc_context = base_context.copy()
-            npc_context.update({
-                "npc_name": data.get("name"),
-                "location": data.get("location"),
-                "dominance": data.get("dominance", 50),
-                "cruelty": data.get("cruelty", 50)
-            })
-
-            # Get schedule entry for current time if available
-            schedule = data.get("schedule", {})
-            time_of_day = base_context.get("time_of_day", "afternoon")
-            current_schedule = None
-
-            if schedule and isinstance(schedule, dict):
-                current_schedule = schedule.get(time_of_day)
-                if not current_schedule and "default" in schedule:
-                    current_schedule = schedule.get("default")
-
-            # Create scheduled activity perception
-            perception = await agent.perceive_environment(npc_context)
-
-            # Determine available actions based on schedule
-            available_actions = []
-            if current_schedule:
-                activity_type = current_schedule.get("activity", "idle")
-                description = current_schedule.get("description", f"perform {activity_type} activity")
-                available_actions.append({
-                    "type": "scheduled",
-                    "description": description,
-                    "target": "environment",
-                    "weight": 2.0  # Prioritize scheduled activities
-                })
-
-            # Always add some default actions
-            default_actions = [
-                {
-                    "type": "idle",
-                    "description": "spend time in current location",
-                    "target": "environment"
-                },
-                {
-                    "type": "observe",
-                    "description": "observe surroundings",
-                    "target": "environment"
-                }
-            ]
-            available_actions.extend(default_actions)
-
-            # Make a decision
-            action = await agent.make_decision(perception, available_actions)
-
-            # Execute the action
-            result = await agent.execute_action(action, npc_context)
-
-            significance = self._determine_activity_significance(action, result)
-            if significance >= 2:
-                memory_system = await self._get_memory_system()
-                memory_text = f"{data.get('name')} {action.get('description', 'did something')} at {data.get('location', 'somewhere')}"
-
-                await memory_system.remember(
-                    entity_type="player",
-                    entity_id=self.user_id,
-                    memory_text=memory_text,
-                    importance="low" if significance < 3 else "medium",
-                    tags=["npc_activity", action.get("type", "unknown")]
-                )
-
-            return {
-                "npc_id": npc_id,
-                "npc_name": data.get("name"),
-                "location": data.get("location"),
-                "action": action,
-                "result": result,
-                "significance": significance
-            }
-        except Exception as e:
-            logger.error(f"Error processing activity for NPC {npc_id}: {e}")
-            return None
+        # Delegate to coordinator for batch updates
+        return await self.coordinator.batch_update_npcs(npc_ids, update_type, update_data)
 
     async def _fetch_current_location(self) -> Optional[str]:
         """
@@ -596,132 +503,13 @@ class NPCAgentSystem:
         """
         logger.info("Handling single NPC interaction with npc_id=%s", npc_id)
 
+        # Make sure the NPC agent is loaded and initialized
         if npc_id not in self.npc_agents:
             self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+            await self.npc_agents[npc_id].initialize()
 
-        memory_system = await self._get_memory_system()
-        enhanced_context = context.copy()
-
-        # Add emotional state
-        try:
-            emotional_state = await memory_system.get_npc_emotion(npc_id)
-            enhanced_context["npc_emotional_state"] = emotional_state
-            self._npc_emotional_states[npc_id] = emotional_state
-        except Exception as e:
-            logger.error(f"Error getting NPC emotional state: {e}")
-
-        # Add mask information
-        try:
-            mask_info = await memory_system.get_npc_mask(npc_id)
-            enhanced_context["npc_mask"] = mask_info
-        except Exception as e:
-            logger.error(f"Error getting NPC mask: {e}")
-
-        # Add beliefs about the player
-        try:
-            beliefs = await memory_system.get_beliefs(
-                entity_type="npc",
-                entity_id=npc_id,
-                topic="player"
-            )
-            enhanced_context["npc_beliefs_about_player"] = beliefs
-        except Exception as e:
-            logger.error(f"Error getting NPC beliefs: {e}")
-
-        # Check flashbacks
-        try:
-            last_flashback_time = self._last_flashback_times.get(
-                npc_id,
-                datetime.now() - timedelta(hours=1)
-            )
-            time_since_last = (datetime.now() - last_flashback_time).total_seconds()
-            if time_since_last > 600:  # 10 minutes
-                if random.random() < 0.15:
-                    flashback = await memory_system.npc_flashback(
-                        npc_id, player_action.get("description", "")
-                    )
-                    if flashback:
-                        enhanced_context["triggered_flashback"] = flashback
-                        self._last_flashback_times[npc_id] = datetime.now()
-        except Exception as e:
-            logger.error(f"Error checking for flashbacks: {e}")
-
-        # Check for relevant memories
-        try:
-            relevant_memories = await memory_system.recall(
-                entity_type="npc",
-                entity_id=npc_id,
-                query=player_action.get("description", "interaction with player"),
-                context={"action_type": player_action.get("type", "unknown")},
-                limit=3
-            )
-            if relevant_memories and "memories" in relevant_memories:
-                enhanced_context["relevant_memories"] = relevant_memories["memories"]
-        except Exception as e:
-            logger.error(f"Error fetching relevant memories: {e}")
-
-        # Process the player action
-        agent = self.npc_agents[npc_id]
-        response = await agent.process_player_action(player_action, enhanced_context)
-
-        # Create a memory of this interaction from the player's perspective
-        try:
-            npc_name = await self.get_npc_name(npc_id)
-            result_info = response.get("result", {})
-            outcome_text = result_info.get("outcome", "responded")
-            player_memory_text = (
-                f"I {player_action.get('description', 'did something')} to {npc_name} "
-                f"and they {outcome_text}"
-            )
-            await memory_system.remember(
-                entity_type="player",
-                entity_id=self.user_id,
-                memory_text=player_memory_text,
-                importance="medium",
-                tags=["npc_interaction", player_action.get("type", "unknown")]
-            )
-        except Exception as e:
-            logger.error(f"Error creating player memory: {e}")
-
-        # Check for emotion changes
-        try:
-            if self._should_update_emotion(player_action, response):
-                new_emotion = await self._determine_new_emotion(
-                    npc_id,
-                    player_action,
-                    response,
-                    emotional_state
-                )
-                if new_emotion:
-                    await memory_system.update_npc_emotion(
-                        npc_id=npc_id,
-                        emotion=new_emotion["name"],
-                        intensity=new_emotion["intensity"]
-                    )
-        except Exception as e:
-            logger.error(f"Error updating NPC emotional state: {e}")
-
-        # Check for mask slippage
-        try:
-            if self._should_check_mask_slippage(player_action, response, mask_info):
-                slippage_chance = self._calculate_mask_slippage_chance(
-                    player_action,
-                    response,
-                    mask_info
-                )
-                if random.random() < slippage_chance:
-                    await memory_system.reveal_npc_trait(
-                        npc_id=npc_id,
-                        trigger=player_action.get("description", "")
-                    )
-        except Exception as e:
-            logger.error(f"Error processing mask slippage: {e}")
-
-        # Update or create beliefs
-        try:
-            self._process_belief_updates(npc_id, player_action, response, beliefs)
-        except Exception as e:
-            logger.error(f"Error updating beliefs: {e}")
+        # Process the player action with the NPC agent
+        response = await self.npc_agents[npc_id].process_player_action(player_action, context)
 
         return {"npc_responses": [response]}
 
@@ -732,7 +520,7 @@ class NPCAgentSystem:
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Handle a player action directed at multiple NPCs, delegating to the coordinator with memory integration.
+        Handle a player action directed at multiple NPCs, delegating to the coordinator.
 
         Args:
             npc_ids: List of NPC IDs that are all affected
@@ -744,170 +532,82 @@ class NPCAgentSystem:
         """
         logger.info("Handling group NPC interaction: %s", npc_ids)
 
-        memory_system = await self._get_memory_system()
-        enhanced_context = context.copy()
-        enhanced_context["is_group_interaction"] = True
+        # Delegate to the coordinator
+        return await self.coordinator.handle_player_action(player_action, context, npc_ids)
 
-        # Recall last group interaction memory
-        group_context = {"participants": npc_ids, "type": "group_interaction"}
-        player_group_memories = await memory_system.recall(
-            entity_type="player",
-            entity_id=self.user_id,
-            query="group interaction",
-            context=group_context,
-            limit=1
-        )
-        if player_group_memories.get("memories"):
-            enhanced_context["previous_group_interaction"] = player_group_memories["memories"][0]
+    @function_tool
+    async def get_current_game_time(self) -> Dict[str, Any]:
+        """
+        Get the current in-game time information.
 
-        # Add emotional states
-        emotional_states = {}
-        for npc_id in npc_ids:
-            try:
-                emotional_state = await memory_system.get_npc_emotion(npc_id)
-                if emotional_state:
-                    emotional_states[npc_id] = emotional_state
-                    self._npc_emotional_states[npc_id] = emotional_state
-            except Exception as e:
-                logger.error(f"Error getting emotional state for NPC {npc_id}: {e}")
-        enhanced_context["emotional_states"] = emotional_states
-
-        # Add mask info
-        mask_states = {}
-        for npc_id in npc_ids:
-            try:
-                mask_info = await memory_system.get_npc_mask(npc_id)
-                if mask_info:
-                    mask_states[npc_id] = mask_info
-            except Exception as e:
-                logger.error(f"Error getting mask info for NPC {npc_id}: {e}")
-        enhanced_context["mask_states"] = mask_states
-
-        # Add beliefs
-        npc_beliefs = {}
-        for npc_id in npc_ids:
-            try:
-                beliefs = await memory_system.get_beliefs(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    topic="player"
-                )
-                if beliefs:
-                    npc_beliefs[npc_id] = beliefs
-            except Exception as e:
-                logger.error(f"Error getting beliefs for NPC {npc_id}: {e}")
-        enhanced_context["npc_beliefs"] = npc_beliefs
-
-        # Check flashbacks
-        flashbacks = {}
-        for npc_id in npc_ids:
-            try:
-                last_flashback_time = self._last_flashback_times.get(
-                    npc_id,
-                    datetime.now() - timedelta(hours=1)
-                )
-                time_since_last = (datetime.now() - last_flashback_time).total_seconds()
-                if time_since_last > 600 and random.random() < 0.1:
-                    flashback = await memory_system.npc_flashback(
-                        npc_id,
-                        player_action.get("description", "")
-                    )
-                    if flashback:
-                        flashbacks[npc_id] = flashback
-                        self._last_flashback_times[npc_id] = datetime.now()
-            except Exception as e:
-                logger.error(f"Error checking flashback for NPC {npc_id}: {e}")
-        enhanced_context["flashbacks"] = flashbacks
-
-        # Coordinator handles group action
-        result = await self.coordinator.handle_player_action(player_action, enhanced_context, npc_ids)
-
-        # Create memory of group interaction for the player
+        Returns:
+            Dictionary with year, month, day, time_of_day
+        """
+        year, month, day, time_of_day = None, None, None, None
         try:
-            npc_names = []
-            for npc_id in npc_ids:
-                npc_name = await self.get_npc_name(npc_id)
-                npc_names.append(npc_name)
-            npc_list = ", ".join(npc_names)
+            async with self.connection_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT key, value
+                    FROM CurrentRoleplay
+                    WHERE key IN ('CurrentYear', 'CurrentMonth', 'CurrentDay', 'TimeOfDay')
+                      AND user_id = $1
+                      AND conversation_id = $2
+                    """,
+                    self.user_id, self.conversation_id
+                )
+                for row in rows:
+                    key = row["key"]
+                    value = row["value"]
+                    if key == "CurrentYear":
+                        year = int(value) if value.isdigit() else value
+                    elif key == "CurrentMonth":
+                        month = value
+                    elif key == "CurrentDay":
+                        day = int(value) if value.isdigit() else value
+                    elif key == "TimeOfDay":
+                        time_of_day = value
 
-            player_memory_text = (
-                f"I {player_action.get('description', 'interacted with')} a group including {npc_list}"
-            )
-            await memory_system.remember(
-                entity_type="player",
-                entity_id=self.user_id,
-                memory_text=player_memory_text,
-                importance="medium",
-                tags=["group_interaction", player_action.get("type", "unknown")]
-            )
+                # Set defaults if values are missing
+                if year is None:
+                    year = 2023
+                if month is None:
+                    month = "January"
+                if day is None:
+                    day = 1
+                if time_of_day is None:
+                    time_of_day = "afternoon"
+
         except Exception as e:
-            logger.error(f"Error creating player group memory: {e}")
+            logger.error(f"Error getting game time: {e}")
+            # Return defaults if query fails
+            return {"year": 2023, "month": "January", "day": 1, "time_of_day": "afternoon"}
 
-        # Post-process emotional changes, mask slippage, etc.
-        for npc_id in npc_ids:
-            try:
-                npc_response = None
-                for response in result.get("npc_responses", []):
-                    if response.get("npc_id") == npc_id:
-                        npc_response = response
-                        break
+        return {"year": year, "month": month, "day": day, "time_of_day": time_of_day}
 
-                if npc_response:
-                    # Check emotion changes
-                    if self._should_update_emotion(player_action, npc_response):
-                        new_emotion = await self._determine_new_emotion(
-                            npc_id,
-                            player_action,
-                            npc_response,
-                            emotional_states.get(npc_id)
-                        )
-                        if new_emotion:
-                            await memory_system.update_npc_emotion(
-                                npc_id=npc_id,
-                                emotion=new_emotion["name"],
-                                intensity=new_emotion["intensity"]
-                            )
-
-                    # Check mask slippage
-                    if self._should_check_mask_slippage(
-                        player_action,
-                        npc_response,
-                        mask_states.get(npc_id)
-                    ):
-                        slippage_chance = self._calculate_mask_slippage_chance(
-                            player_action,
-                            npc_response,
-                            mask_states.get(npc_id)
-                        )
-                        if random.random() < (slippage_chance * 1.2):
-                            await memory_system.reveal_npc_trait(
-                                npc_id=npc_id,
-                                trigger=(
-                                    f"group interaction about {player_action.get('description', 'something')}"
-                                )
-                            )
-            except Exception as e:
-                logger.error(f"Error processing group interaction effects for NPC {npc_id}: {e}")
-
-        return result
-
+    @function_tool
     async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
         """
         Process scheduled activities for all NPCs using the agent system.
         Optimized for better performance with many NPCs through batching.
+        
+        Returns:
+            Results of the scheduled activities
         """
         logger.info("Processing scheduled activities")
 
         try:
-            year, month, day, time_of_day = await self.get_current_game_time()
+            # Get current game time
+            time_data = await self.get_current_game_time()
             base_context = {
-                "year": year,
-                "month": month,
-                "day": day,
-                "time_of_day": time_of_day,
+                "year": time_data["year"],
+                "month": time_data["month"],
+                "day": time_data["day"],
+                "time_of_day": time_data["time_of_day"],
                 "activity_type": "scheduled"
             }
 
+            # Fetch all NPC data for activities
             npc_data = await self._fetch_all_npc_data_for_activities()
             total_npcs = len(npc_data)
             if total_npcs == 0:
@@ -915,6 +615,7 @@ class NPCAgentSystem:
 
             logger.info(f"Processing scheduled activities for {total_npcs} NPCs")
 
+            # Process NPCs in batches
             batch_size = 20
             npc_responses = []
             for i in range(0, total_npcs, batch_size):
@@ -930,179 +631,246 @@ class NPCAgentSystem:
                     elif result:
                         npc_responses.append(result)
 
+                # Small delay between batches to prevent resource contention
                 if i + batch_size < total_npcs:
                     await asyncio.sleep(0.1)
 
-            # Agent system coordination
-            try:
-                agent_responses = await self._process_coordination_activities(base_context)
-            except Exception as e:
-                logger.error(f"Error in agent system coordination: {e}")
-                agent_responses = []
+            # Process group interactions
+            group_responses = await self._process_group_activities(base_context)
 
-            combined_results = {
+            return {
                 "npc_responses": npc_responses,
-                "agent_system_responses": agent_responses,
-                "count": len(npc_responses) + len(agent_responses),
-                "stats": {
-                    "total_npcs": total_npcs,
-                    "successful_activities": len(npc_responses),
-                    "time_of_day": time_of_day,
-                    "processing_time": None  # could add timing info
-                }
+                "group_responses": group_responses,
+                "count": len(npc_responses) + len(group_responses),
+                "time_of_day": time_data["time_of_day"]
             }
-            return combined_results
 
         except Exception as e:
             error_msg = f"Error processing NPC scheduled activities: {e}"
             logger.error(error_msg)
             raise NPCSystemError(error_msg)
 
-    async def _process_coordination_activities(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _process_single_npc_activity(
+        self,
+        npc_id: int,
+        data: Dict[str, Any],
+        base_context: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
         """
-        Process NPC coordination activities - handling group interactions and influences.
-        This separates the coordination logic from the main activity processing to avoid recursion.
+        Process a scheduled activity for a single NPC.
 
         Args:
-            context: Base context for activities
+            npc_id: ID of the NPC
+            data: NPC data including location, schedule, etc.
+            base_context: Base context for the activity
 
         Returns:
-            List of coordination activity responses
+            Activity result or None if processing failed
         """
-        logger.info("Processing NPC coordination activities")
-
         try:
-            location_groups = await self._get_npcs_by_location()
-            coordination_responses = []
+            # Make sure the NPC agent is loaded and initialized
+            if npc_id not in self.npc_agents:
+                self.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                await self.npc_agents[npc_id].initialize()
+            
+            agent = self.npc_agents[npc_id]
 
-            for location, npc_ids in location_groups.items():
-                # Only process groups with multiple NPCs
-                if len(npc_ids) < 2:
-                    continue
+            # Create NPC-specific context
+            npc_context = base_context.copy()
+            npc_context.update({
+                "npc_name": data.get("name"),
+                "location": data.get("location"),
+                "dominance": data.get("dominance", 50),
+                "cruelty": data.get("cruelty", 50)
+            })
 
-                dominant_npcs = await self._find_dominant_npcs(npc_ids)
-                for dom_npc_id in dominant_npcs:
+            # Get schedule entry for current time if available
+            schedule = data.get("schedule", {})
+            time_of_day = base_context.get("time_of_day", "afternoon")
+            current_schedule = None
+
+            if schedule and isinstance(schedule, dict):
+                current_schedule = schedule.get(time_of_day)
+                if not current_schedule and "default" in schedule:
+                    current_schedule = schedule.get("default")
+
+            # Create perception of environment
+            perception = await agent.perceive_environment(npc_context)
+
+            # Determine available actions based on schedule
+            available_actions = []
+            if current_schedule:
+                activity_type = current_schedule.get("activity", "idle")
+                description = current_schedule.get("description", f"perform {activity_type} activity")
+                available_actions.append({
+                    "type": "scheduled",
+                    "description": description,
+                    "target": "environment",
+                    "weight": 2.0  # Prioritize scheduled activities
+                })
+
+            # Always add some default actions
+            default_actions = [
+                {
+                    "type": "idle",
+                    "description": "spend time in current location",
+                    "target": "environment"
+                },
+                {
+                    "type": "observe",
+                    "description": "observe surroundings",
+                    "target": "environment"
+                }
+            ]
+            available_actions.extend(default_actions)
+
+            # Make a decision using the agent
+            action = await agent.make_decision(perception, available_actions)
+
+            # Execute the action
+            result = await agent.execute_action(action, npc_context)
+
+            # Determine significance for memory formation
+            significance = self._determine_activity_significance(action, result)
+            if significance >= 2:
+                memory_system = await self._get_memory_system()
+                memory_text = f"{data.get('name')} {action.description} at {data.get('location', 'somewhere')}"
+
+                await memory_system.remember(
+                    entity_type="player",
+                    entity_id=self.user_id,
+                    memory_text=memory_text,
+                    importance="low" if significance < 3 else "medium",
+                    tags=["npc_activity", action.type]
+                )
+
+            return {
+                "npc_id": npc_id,
+                "npc_name": data.get("name"),
+                "location": data.get("location"),
+                "action": action,
+                "result": result,
+                "significance": significance
+            }
+        except Exception as e:
+            logger.error(f"Error processing activity for NPC {npc_id}: {e}")
+            return None
+
+    async def _process_group_activities(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Process group interactions between NPCs.
+        
+        Args:
+            context: Shared context for group activities
+            
+        Returns:
+            List of group activity results
+        """
+        # Group NPCs by location
+        location_groups = await self._get_npcs_by_location()
+        group_results = []
+        
+        for location, npc_ids in location_groups.items():
+            # Only process locations with multiple NPCs
+            if len(npc_ids) < 2:
+                continue
+                
+            # Determine if a group interaction should occur (random chance)
+            if random.random() < 0.3:  # 30% chance of group interaction
+                try:
+                    # Create location-specific context
                     group_context = context.copy()
                     group_context["location"] = location
-                    group_context["group_members"] = npc_ids
-                    group_context["initiator_id"] = dom_npc_id
-
-                    if await self._should_group_interact(dom_npc_id, npc_ids, group_context):
-                        group_result = await self.coordinator.make_group_decisions(npc_ids, group_context)
-                        if group_result:
-                            coordination_responses.append({
-                                "type": "group_interaction",
-                                "location": location,
-                                "initiator": dom_npc_id,
-                                "participants": npc_ids,
-                                "result": group_result
-                            })
-
-            return coordination_responses
-        except Exception as e:
-            logger.error(f"Error in coordination activities: {e}")
-            return []
-
-    async def _find_dominant_npcs(self, npc_ids: List[int]) -> List[int]:
-        """Find NPCs with high dominance that might initiate group activities."""
-        query = """
-            SELECT npc_id
-            FROM NPCStats
-            WHERE npc_id = ANY($1)
-              AND dominance > 65
-            ORDER BY dominance DESC
-        """
-        async with self.connection_pool.acquire() as conn:
-            rows = await conn.fetch(query, npc_ids)
-            return [row["npc_id"] for row in rows]
-
-    async def _should_group_interact(
-        self,
-        initiator_id: int,
-        group_members: List[int],
-        context: Dict[str, Any]
-    ) -> bool:
-        """Determine if a group interaction should occur based on social dynamics."""
-        interaction_chance = 0.3
-        time_of_day = context.get("time_of_day", "")
-        if time_of_day == "evening":
-            interaction_chance += 0.2
-
-        query = """
-            SELECT dominance, cruelty
-            FROM NPCStats
-            WHERE npc_id=$1
-        """
-        async with self.connection_pool.acquire() as conn:
-            row = await conn.fetchrow(query, initiator_id)
-            if row:
-                dominance, cruelty = row["dominance"], row["cruelty"]
-                if dominance > 80:
-                    interaction_chance += 0.2
-                if cruelty > 70:
-                    interaction_chance += 0.15
-
-        return random.random() < interaction_chance
+                    
+                    # Use the coordinator to process group decisions
+                    result = await self.coordinator.make_group_decisions(npc_ids, group_context)
+                    
+                    # Add to results
+                    group_results.append({
+                        "location": location,
+                        "npc_ids": npc_ids,
+                        "group_actions": result.get("group_actions", []),
+                        "individual_actions": result.get("individual_actions", {})
+                    })
+                except Exception as e:
+                    logger.error(f"Error processing group activity at {location}: {e}")
+        
+        return group_results
 
     async def _get_npcs_by_location(self) -> Dict[str, List[int]]:
         """
         Group NPCs by their current location.
+        
+        Returns:
+            Dictionary mapping locations to lists of NPC IDs
         """
-        location_groups: Dict[str, List[int]] = {}
-        query = """
-            SELECT npc_id, current_location
-            FROM NPCStats
-            WHERE user_id=$1
-              AND conversation_id=$2
-              AND current_location IS NOT NULL
-        """
-        async with self.connection_pool.acquire() as conn:
-            rows = await conn.fetch(query, self.user_id, self.conversation_id)
-            for row in rows:
-                npc_id = row["npc_id"]
-                location = row["current_location"]
-                if location not in location_groups:
-                    location_groups[location] = []
-                location_groups[location].append(npc_id)
+        location_groups = {}
+        
+        try:
+            async with self.connection_pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT npc_id, current_location
+                    FROM NPCStats
+                    WHERE user_id = $1
+                      AND conversation_id = $2
+                      AND current_location IS NOT NULL
+                """, self.user_id, self.conversation_id)
+                
+                for row in rows:
+                    npc_id = row["npc_id"]
+                    location = row["current_location"]
+                    if location not in location_groups:
+                        location_groups[location] = []
+                    location_groups[location].append(npc_id)
+        except Exception as e:
+            logger.error(f"Error grouping NPCs by location: {e}")
+            
         return location_groups
 
     async def _fetch_all_npc_data_for_activities(self) -> Dict[int, Dict[str, Any]]:
         """
         Batch fetch NPC data needed for scheduled activities.
-        Returns {npc_id: {data}} dictionary.
+        
+        Returns:
+            Dictionary mapping NPC IDs to NPC data
         """
         npc_data = {}
-        query = """
-            SELECT npc_id, npc_name, current_location, schedule,
-                   dominance, cruelty, introduced
-            FROM NPCStats
-            WHERE user_id=$1 AND conversation_id=$2
-        """
-        async with self.connection_pool.acquire() as conn:
-            rows = await conn.fetch(query, self.user_id, self.conversation_id)
-            for row in rows:
-                npc_id = row["npc_id"]
-
-                schedule_value = row["schedule"]
-                if schedule_value is not None:
-                    # schedule can be JSON or text
-                    if isinstance(schedule_value, str):
-                        import json
-                        try:
-                            schedule_value = json.loads(schedule_value)
-                        except:
-                            schedule_value = {}
-                else:
-                    schedule_value = {}
-
-                npc_data[npc_id] = {
-                    "name": row["npc_name"],
-                    "location": row["current_location"],
-                    "schedule": schedule_value,
-                    "dominance": row["dominance"],
-                    "cruelty": row["cruelty"],
-                    "introduced": row["introduced"]
-                }
+        
+        try:
+            async with self.connection_pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT npc_id, npc_name, current_location, schedule,
+                           dominance, cruelty, introduced
+                    FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                """, self.user_id, self.conversation_id)
+                
+                import json
+                for row in rows:
+                    npc_id = row["npc_id"]
+                    
+                    # Parse schedule JSON
+                    schedule_value = row["schedule"]
+                    if schedule_value is not None:
+                        if isinstance(schedule_value, str):
+                            try:
+                                schedule_value = json.loads(schedule_value)
+                            except json.JSONDecodeError:
+                                schedule_value = {}
+                    else:
+                        schedule_value = {}
+                    
+                    npc_data[npc_id] = {
+                        "name": row["npc_name"],
+                        "location": row["current_location"],
+                        "schedule": schedule_value,
+                        "dominance": row["dominance"],
+                        "cruelty": row["cruelty"],
+                        "introduced": row["introduced"]
+                    }
+        except Exception as e:
+            logger.error(f"Error fetching NPC data for activities: {e}")
+            
         return npc_data
 
     def _determine_activity_significance(self, action: Dict[str, Any], result: Dict[str, Any]) -> int:
@@ -1129,10 +897,14 @@ class NPCAgentSystem:
             return 2
         return 1
 
+    @function_tool
     async def run_memory_maintenance(self) -> Dict[str, Any]:
         """
         Run comprehensive maintenance tasks on all NPCs' memory systems.
         This includes consolidation, decay, schema formation, and belief updates.
+        
+        Returns:
+            Results of memory maintenance tasks
         """
         results = {}
         try:
@@ -1164,6 +936,9 @@ class NPCAgentSystem:
                 logger.error(f"Error in Nyx memory maintenance: {e}")
                 results["nyx_maintenance"] = {"error": str(e)}
 
+            # Update last maintenance time
+            self._last_memory_maintenance = datetime.now()
+            
             return results
         except Exception as e:
             logger.error(f"Error in system-wide memory maintenance: {e}")
@@ -1172,6 +947,12 @@ class NPCAgentSystem:
     async def _run_comprehensive_npc_maintenance(self, npc_id: int) -> Dict[str, Any]:
         """
         Run comprehensive memory maintenance for a single NPC.
+        
+        Args:
+            npc_id: ID of the NPC
+            
+        Returns:
+            Results of maintenance tasks
         """
         results = {}
         memory_system = await self._get_memory_system()
@@ -1202,7 +983,6 @@ class NPCAgentSystem:
         try:
             beliefs = await memory_system.get_beliefs(entity_type="npc", entity_id=npc_id)
             belief_updates = 0
-            import random
             for belief in beliefs:
                 belief_id = belief.get("id")
                 if belief_id and random.random() < 0.3:
@@ -1229,8 +1009,15 @@ class NPCAgentSystem:
             emotional_state = await memory_system.get_npc_emotion(npc_id)
             if emotional_state and "current_emotion" in emotional_state:
                 current = emotional_state["current_emotion"]
-                emotion_name = current.get("primary")
-                intensity = current.get("intensity", 0.0)
+                
+                # Handle different data structures
+                if isinstance(current.get("primary"), dict):
+                    emotion_name = current.get("primary", {}).get("name", "neutral")
+                    intensity = current.get("primary", {}).get("intensity", 0.0)
+                else:
+                    emotion_name = current.get("primary", "neutral")
+                    intensity = current.get("intensity", 0.0)
+                
                 if emotion_name != "neutral" and intensity > 0.3:
                     decay_amount = 0.1 if intensity > 0.7 else 0.05
                     new_intensity = max(0.1, intensity - decay_amount)
@@ -1290,27 +1077,137 @@ class NPCAgentSystem:
 
         return results
 
+    @function_tool
+    async def generate_npc_flashback(
+        self, 
+        npc_id: int, 
+        context_text: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Generate a flashback for an NPC based on specific context.
+        
+        Args:
+            npc_id: ID of the NPC
+            context_text: Context to trigger flashback
+            
+        Returns:
+            Flashback data or None if no flashback triggered
+        """
+        try:
+            # Check if we've recently triggered a flashback for this NPC
+            last_flashback_time = self._last_flashback_times.get(
+                npc_id, 
+                datetime.now() - timedelta(hours=1)
+            )
+            time_since_last = (datetime.now() - last_flashback_time).total_seconds()
+            if time_since_last < 300:  # 5 minutes minimum between flashbacks
+                return {
+                    "triggered": False,
+                    "reason": "too_soon",
+                    "time_since_last_seconds": time_since_last
+                }
+
+            memory_system = await self._get_memory_system()
+            flashback = await memory_system.npc_flashback(npc_id, context_text)
+            
+            if flashback:
+                self._last_flashback_times[npc_id] = datetime.now()
+
+                # Update emotional state based on flashback content
+                emotional_state = await memory_system.get_npc_emotion(npc_id)
+                if emotional_state:
+                    # Determine appropriate emotion from flashback content
+                    emotion = "fear"  # Default
+                    intensity = 0.7
+                    text_lower = flashback.get("text", "").lower()
+                    
+                    if "happy" in text_lower or "joy" in text_lower or "good" in text_lower:
+                        emotion = "joy"
+                    elif "anger" in text_lower or "angr" in text_lower or "rage" in text_lower:
+                        emotion = "anger"
+                    elif "sad" in text_lower or "sorrow" in text_lower:
+                        emotion = "sadness"
+
+                    await memory_system.update_npc_emotion(
+                        npc_id=npc_id,
+                        emotion=emotion,
+                        intensity=intensity
+                    )
+                    
+                    flashback["triggered_emotion"] = emotion
+                    flashback["emotion_intensity"] = intensity
+                
+                flashback["triggered"] = True
+                return flashback
+            else:
+                return {
+                    "triggered": False,
+                    "reason": "no_relevant_memory"
+                }
+        except Exception as e:
+            logger.error(f"Error generating flashback for NPC {npc_id}: {e}")
+            return {
+                "triggered": False,
+                "error": str(e)
+            }
+
+    async def process_command(self, command: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process a command from the game system using the system agent.
+        
+        Args:
+            command: Command to process
+            parameters: Parameters for the command
+            
+        Returns:
+            Result of the command
+        """
+        # Get the system agent
+        system_agent = await self._get_system_agent()
+        
+        # Create input data
+        input_data = {
+            "command": command,
+            "parameters": parameters
+        }
+        
+        # Create trace for debugging
+        with trace(
+            f"system_command_{self.user_id}_{self.conversation_id}", 
+            group_id=f"user_{self.user_id}_conv_{self.conversation_id}"
+        ):
+            # Run the system agent
+            result = await Runner.run(system_agent, input_data)
+            
+            # Return the result
+            return result.final_output.result
+
     async def get_npc_name(self, npc_id: int) -> str:
         """
         Get the name of an NPC by ID.
-        """
-        query = """
-            SELECT npc_name
-            FROM NPCStats
-            WHERE npc_id=$1
-              AND user_id=$2
-              AND conversation_id=$3
+        
+        Args:
+            npc_id: ID of the NPC
+            
+        Returns:
+            Name of the NPC
         """
         try:
             async with self.connection_pool.acquire() as conn:
-                row = await conn.fetchrow(query, npc_id, self.user_id, self.conversation_id)
+                row = await conn.fetchrow("""
+                    SELECT npc_name
+                    FROM NPCStats
+                    WHERE npc_id = $1
+                      AND user_id = $2
+                      AND conversation_id = $3
+                """, npc_id, self.user_id, self.conversation_id)
+                
                 if row:
                     return row["npc_name"]
                 return f"NPC_{npc_id}"
         except Exception as e:
-            logger.error("Error getting NPC name for npc_id=%s: %s", npc_id, e)
+            logger.error(f"Error getting NPC name: {e}")
             return f"NPC_{npc_id}"
-
     async def get_all_npc_beliefs_about_player(self) -> Dict[int, List[Dict[str, Any]]]:
         """
         Get all NPCs' beliefs about the player.
