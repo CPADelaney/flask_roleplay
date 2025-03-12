@@ -2052,9 +2052,11 @@ async def generate_conversation():
 @timed_function
 async def end_of_day():
     """
-    Example route that the front-end calls when 
-    the player chooses to finish the day or go to sleep. 
-    This triggers our nightly_maintenance across all NPCs.
+    Process end of day actions, including:
+    - Nightly maintenance for NPCs
+    - Memory lifecycle management
+    - Daily income and resource changes
+    - Conflict updates
     """
     try:
         user_id = session.get("user_id")
@@ -2081,6 +2083,41 @@ async def end_of_day():
         
         # Run comprehensive memory lifecycle management
         maintenance_result = await manage_npc_memory_lifecycle(npc_system)
+        
+        # Process daily income and resource changes
+        resource_manager = ResourceManager(user_id, int(conv_id))
+        
+        # Base daily income
+        money_income = 10
+        supplies_income = 5
+        influence_income = 2
+        
+        # Apply income
+        money_result = await resource_manager.modify_money(
+            money_income, "daily_income", "Daily income"
+        )
+        
+        supplies_result = await resource_manager.modify_supplies(
+            supplies_income, "daily_income", "Daily supplies"
+        )
+        
+        influence_result = await resource_manager.modify_influence(
+            influence_income, "daily_income", "Daily influence gain"
+        )
+        
+        # Recover some energy overnight
+        energy_result = await resource_manager.modify_energy(
+            20, "rest", "Overnight rest"  # Recover 20 energy overnight
+        )
+        
+        # Decrease hunger (negative value = more hungry)
+        hunger_result = await resource_manager.modify_hunger(
+            -15, "metabolism", "Overnight metabolism"  # Lose 15 hunger overnight
+        )
+        
+        # Process conflict daily updates
+        conflict_integration = ConflictSystemIntegration(user_id, int(conv_id))
+        conflict_update = await conflict_integration.run_daily_update()
 
         # Clear caches for new day
         NPC_CACHE.clear()
@@ -2088,39 +2125,23 @@ async def end_of_day():
         AGGREGATOR_CACHE.clear()
         TIME_CACHE.clear()
 
+        # Add everything to the response
+        resource_changes = {
+            "money": money_result,
+            "supplies": supplies_result,
+            "influence": influence_result,
+            "energy": energy_result,
+            "hunger": hunger_result
+        }
+
         return jsonify({
             "status": "Nightly maintenance complete",
-            "memory_maintenance": maintenance_result
+            "memory_maintenance": maintenance_result,
+            "resource_changes": resource_changes,
+            "conflict_update": conflict_update,
+            "current_resources": await resource_manager.get_resources(),
+            "current_vitals": await resource_manager.get_vitals()
         })
     except Exception as e:
         logging.exception("Error in end_of_day route")
-        return jsonify({"error": str(e)}), 500
-
-@story_bp.route("/performance_stats", methods=["GET"])
-@timed_function
-async def get_performance_stats():
-    """
-    Get performance statistics for monitoring.
-    Development/admin use only.
-    """
-    try:
-        # Only available in development mode
-        if os.getenv("FLASK_ENV") != "development":
-            return jsonify({"error": "Not available in production mode"}), 403
-            
-        # Get stats
-        stats = {
-            "system_stats": STATS.get_stats(),
-            "cache_stats": {
-                "npc": NPC_CACHE.stats(),
-                "location": LOCATION_CACHE.stats(),
-                "aggregator": AGGREGATOR_CACHE.stats(),
-                "time": TIME_CACHE.stats()
-            }
-        }
-        
-        return jsonify(stats)
-        
-    except Exception as e:
-        logging.exception("[get_performance_stats] Error")
         return jsonify({"error": str(e)}), 500
