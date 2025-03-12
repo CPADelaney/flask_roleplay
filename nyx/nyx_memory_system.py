@@ -8,6 +8,7 @@ from typing import Dict, List, Any, Optional, Tuple
 import asyncpg
 import numpy as np
 
+from logic.npc_agents.agent_coordinator import NPCAgentCoordinator
 from db.connection import get_db_connection
 from embedding.vector_store import generate_embedding, vector_similarity
 
