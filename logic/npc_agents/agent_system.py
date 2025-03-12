@@ -86,6 +86,27 @@ class NPCAgentSystem:
         # Schedule periodic memory maintenance
         self._setup_memory_maintenance_schedule()
 
+        self._setup_evolution_schedule()
+
+    def _setup_evolution_schedule(self):
+        """Schedule periodic calls to evaluate NPC scheming."""
+        async def run_evolution_cycle():
+            while True:
+                try:
+                    # Evaluate scheming every 2 hours, for example
+                    await asyncio.sleep(7200)  # 2 hours in seconds
+
+                    # 1. Get all NPCs for user_id + conversation_id
+                    npc_ids = await self.coordinator.load_agents()  # or however you load all NPCs
+
+                    # 2. Run evolution
+                    results = await self.coordinator.evaluate_npc_scheming_for_all(npc_ids)
+                    logger.info(f"NPC scheming evolution results: {results}")
+                except Exception as e:
+                    logger.error(f"Error in scheming evolution cycle: {e}")
+
+        asyncio.create_task(run_evolution_cycle())
+
     def _setup_memory_maintenance_schedule(self):
         """Schedule periodic memory maintenance for all NPCs."""
         async def run_maintenance_cycle():
