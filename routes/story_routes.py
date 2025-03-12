@@ -59,6 +59,8 @@ from logic.addiction_system import (
     get_addiction_status, get_addiction_label
 )
 
+from nyx.nyx_agent_sdk import process_user_input
+
 story_bp = Blueprint("story_bp", __name__)
 
 # -------------------------------------------------------------------
@@ -1330,19 +1332,16 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
 @story_bp.route("/next_storybeat", methods=["POST"])
 async def next_storybeat():
     """Enhanced storybeat endpoint with better resource management and parallel processing."""
-    # Performance tracking
     tracker = PerformanceTracker("next_storybeat")
     tracker.start_phase("initialization")
-    
-    # Record request for monitoring
+
     STATS.record_request("/next_storybeat")
-    
-    # Resource tracking containers
+
     resources = {
         "npc_system": None,
         "pool": None
     }
-    
+
     try:
         user_id = session.get("user_id")
         if not user_id:
@@ -1352,215 +1351,240 @@ async def next_storybeat():
         user_input = data.get("user_input", "").strip()
         conv_id = data.get("conversation_id")
         player_name = data.get("player_name", "Chase")
-        
-        # Use context manager for resource handling
+
+        # Acquire NPC system resources within a context manager
         async with npc_system_context(user_id, conv_id) as resources:
-        
-        # Initialize NPC system with connection pooling
-        resources["npc_system"] = IntegratedNPCSystem(user_id, conv_id)
-        resources["pool"] = await resources["npc_system"].get_connection_pool()
-        tracker.end_phase()
-        
-        # Process user message
-        tracker.start_phase("store_message")
-        await process_user_message(user_id, conv_id, user_input)
-        tracker.end_phase()
-        
-        # Get context data
-        tracker.start_phase("get_context")
-        aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
-        
-        # Create context dictionary
-        context = {
-            "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
-            "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
-            "player_input": user_input,
-            "player_name": player_name
-        }
-        tracker.end_phase()
-        
-        # Parallel operations for better performance
-        tracker.start_phase("parallel_tasks")
-        tasks = [
-            # Check for NPC availability 
-            check_npc_availability(resources["pool"], user_id, conv_id),
-            # Get current game time
-            resources["npc_system"].get_current_game_time(),
-            # Get nearby NPCs for interaction
-            get_nearby_npcs(user_id, conv_id, context["location"])
-        ]
-        
-        # Execute all tasks concurrently and get results
-        npc_count_result, current_time, nearby_npcs = await asyncio.gather(*tasks)
-        tracker.end_phase()
-        
-        # Check if we need to create NPCs
-        tracker.start_phase("spawn_npcs")
-        unintroduced_count = npc_count_result[0] if npc_count_result else 0
-        if unintroduced_count < 2:
-            # Spawn new NPCs with optimized performance
-            await resources["npc_system"].create_multiple_npcs(
-                aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", ""),
-                aggregator_data.get("calendar", {}).get("days", ["Monday","Tuesday","..."]),
-                count=3
-            )
-        tracker.end_phase()
-        
-        # Process universal updates if provided
-        if data.get("universal_update"):
-            tracker.start_phase("universal_updates")
-            universal_data = data["universal_update"]
-            universal_data["user_id"] = user_id
-            universal_data["conversation_id"] = conv_id
-            
-            # Process updates with connection reuse
-            update_result = await process_universal_updates(universal_data, resources["pool"])
-            if update_result.get("error"):
-                return jsonify(update_result), 500
+            # Initialize NPC system + connection pool
+            resources["npc_system"] = IntegratedNPCSystem(user_id, conv_id)
+            resources["pool"] = await resources["npc_system"].get_connection_pool()
+            tracker.end_phase()  # initialization phase
+
+            # 1) Store the user message
+            tracker.start_phase("store_message")
+            await process_user_message(user_id, conv_id, user_input)
             tracker.end_phase()
-        
-        # Process NPC interactions
-        tracker.start_phase("npc_interactions")
-        npc_responses = await process_npc_responses(
-            resources["npc_system"], 
-            user_input, 
-            context
-        )
-        tracker.end_phase()
-        
-        # Time advancement with better verification
-        tracker.start_phase("time_advancement")
-        time_result = await process_time_advancement(
-            resources["npc_system"],
-            npc_responses[0].get("action_type", "conversation") if npc_responses else "conversation",
-            data,
-            current_time
-        )
-        tracker.end_phase()
-        
-        # Check for relationship events and process choices
-        tracker.start_phase("relationship_events")
-        crossroads_data = await process_relationship_events(
-            resources["npc_system"],
-            data
-        )
-        tracker.end_phase()
-        
-        # Get AI response
-        tracker.start_phase("ai_response")
-        final_response, image_result = await process_ai_response(
-            aggregator_data, 
-            user_input, 
-            npc_responses,
-            user_id, 
-            conv_id
-        )
-        tracker.end_phase()
-        
-        # Store AI response
-        tracker.start_phase("store_ai_response")
-        async with db_transaction() as conn:
-            await conn.execute("""
-                INSERT INTO messages (conversation_id, sender, content)
-                VALUES ($1, $2, $3)
-            """, conv_id, "Nyx", final_response)
-        tracker.end_phase()
-        
-        # Run memory maintenance if appropriate time has passed
-        tracker.start_phase("memory_maintenance")
-        # Get elapsed time since last maintenance
-        maintenance_key = f"last_maintenance:{user_id}:{conv_id}"
-        last_maintenance = TIME_CACHE.get(maintenance_key)
-        current_time = time.time()
-        
-        # Run if enough time has passed (30 minutes) or random chance
-        elapsed_time = float('inf') if last_maintenance is None else current_time - last_maintenance
-        should_run_maintenance = (elapsed_time > 1800) or (random.random() < 0.1)
-        
-        if should_run_maintenance:
-            # Run maintenance and store timestamp
-            asyncio.create_task(manage_npc_memory_lifecycle(resources["npc_system"]))
-            TIME_CACHE.set(maintenance_key, current_time, 3600)  # Cache for 1 hour
-            logging.info(f"Scheduled memory lifecycle management (elapsed: {elapsed_time:.1f}s)")
-        tracker.end_phase()
-        
-        # Assemble the complete response
-        tracker.start_phase("build_response")
-        response = {
-            "message": final_response,
-            "time_result": time_result,
-            "confirm_needed": time_result.get("would_advance", False) and not data.get("confirm_time_advance", False),
-            "npc_responses": format_npc_responses_for_client(npc_responses),
-            "performance_metrics": tracker.get_metrics()
-        }
-        
-        # Add optional elements to response
-        addiction_status = await get_addiction_status(user_id, conv_id, player_name)
-        if addiction_status and addiction_status.get("has_addictions"):
-            response["addiction_effects"] = await process_addiction_effects(
-                user_id, conv_id, player_name, addiction_status
+
+            # 2) Build aggregator context
+            tracker.start_phase("get_context")
+            aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
+            context = {
+                "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
+                "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
+                "player_input": user_input,
+                "player_name": player_name,
+                # You can pass the entire aggregator if desired:
+                "aggregator_data": aggregator_data
+            }
+            tracker.end_phase()
+
+            # 3) Parallel tasks: check NPC availability, current time, nearby NPCs
+            tracker.start_phase("parallel_tasks")
+            tasks = [
+                check_npc_availability(resources["pool"], user_id, conv_id),
+                resources["npc_system"].get_current_game_time(),
+                # possibly other tasks
+            ]
+            npc_count_result, current_time = await asyncio.gather(*tasks)
+            tracker.end_phase()
+
+            # 4) Possibly spawn new NPCs if needed
+            tracker.start_phase("spawn_npcs")
+            unintroduced_count = npc_count_result[0] if npc_count_result else 0
+            if unintroduced_count < 2:
+                await resources["npc_system"].create_multiple_npcs(
+                    aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", ""),
+                    aggregator_data.get("calendar", {}).get("days", ["Monday","Tuesday","..."]),
+                    count=3
+                )
+            tracker.end_phase()
+
+            # 5) Process universal updates if present
+            if data.get("universal_update"):
+                tracker.start_phase("universal_updates")
+                universal_data = data["universal_update"]
+                universal_data["user_id"] = user_id
+                universal_data["conversation_id"] = conv_id
+
+                update_result = await process_universal_updates(universal_data, resources["pool"])
+                if update_result.get("error"):
+                    return jsonify(update_result), 500
+                tracker.end_phase()
+
+            # 6) (Optional) NPC interactions if you want them before Nyx's response
+            # If you do want to do “process_npc_responses” with the old approach:
+            tracker.start_phase("npc_interactions")
+            npc_responses = await process_npc_responses(
+                resources["npc_system"], 
+                user_input, 
+                context
             )
-            
-        if crossroads_data.get("event"):
-            response["crossroads_event"] = crossroads_data["event"]
-        if crossroads_data.get("result"):
-            response["crossroads_result"] = crossroads_data["result"]
-            
-        if image_result and "image_urls" in image_result:
-            response["image"] = {
-                "image_url": image_result["image_urls"][0],
-                "prompt_used": image_result.get("prompt_used", ""),
-                "reason": image_result.get("reason", "")
+            tracker.end_phase()
+
+            # 7) Time advancement
+            tracker.start_phase("time_advancement")
+            action_type = npc_responses[0].get("action_type", "conversation") if npc_responses else "conversation"
+            time_result = await process_time_advancement(
+                resources["npc_system"],
+                action_type,
+                data,
+                current_time
+            )
+            tracker.end_phase()
+
+            # 8) Relationship events & crossroads
+            tracker.start_phase("relationship_events")
+            crossroads_data = await process_relationship_events(
+                resources["npc_system"], data
+            )
+            tracker.end_phase()
+
+            # 9) *** Call your Nyx agent instead of direct GPT. ***
+            tracker.start_phase("ai_response")
+            # This calls your Agents-based function with aggregator_data in 'context'
+            agent_output = await process_user_input(
+                user_id=user_id,
+                conversation_id=conv_id,
+                user_input=user_input,
+                context_data=context
+            )
+            tracker.end_phase()
+
+            # The agent_output is e.g.:
+            # {
+            #   "message": "...",
+            #   "generate_image": True/False,
+            #   "image_prompt": "...",
+            #   "tension_level": ...,
+            #   ...
+            # }
+
+            final_response = agent_output.get("message", "")
+            generate_img_flag = agent_output.get("generate_image", False)
+            image_prompt = agent_output.get("image_prompt", "")
+
+            # 10) Store the final Nyx message in messages table
+            tracker.start_phase("store_ai_response")
+            async with db_transaction() as conn:
+                await conn.execute("""
+                    INSERT INTO messages (conversation_id, sender, content)
+                    VALUES ($1, $2, $3)
+                """, conv_id, "Nyx", final_response)
+            tracker.end_phase()
+
+            # 11) Memory maintenance scheduling
+            tracker.start_phase("memory_maintenance")
+            maintenance_key = f"last_maintenance:{user_id}:{conv_id}"
+            last_maintenance = TIME_CACHE.get(maintenance_key)
+            now_time = time.time()
+
+            elapsed_time = float('inf') if last_maintenance is None else now_time - last_maintenance
+            should_run_maintenance = (elapsed_time > 1800) or (random.random() < 0.1)
+
+            if should_run_maintenance:
+                asyncio.create_task(manage_npc_memory_lifecycle(resources["npc_system"]))
+                TIME_CACHE.set(maintenance_key, now_time, 3600)
+                logging.info(f"Scheduled memory lifecycle management (elapsed: {elapsed_time:.1f}s)")
+            tracker.end_phase()
+
+            # 12) If the agent asked for an image, generate it
+            tracker.start_phase("image_generation")
+            image_result = None
+            if generate_img_flag:
+                try:
+                    # You can pass agent_output["image_prompt"] or final_response
+                    # or a combination.
+                    generation_data = {
+                        "narrative": final_response,
+                        "image_generation": {
+                            "generate": True,
+                            "priority": "medium",
+                            "focus": "balanced",
+                            "framing": "medium_shot",
+                            "reason": "Nyx requested image"
+                        }
+                    }
+                    image_result = await generate_roleplay_image_from_gpt(
+                        generation_data, user_id, conv_id
+                    )
+                except Exception as e:
+                    logging.error(f"Image generation error: {e}")
+            tracker.end_phase()
+
+            # 13) Build final JSON
+            tracker.start_phase("build_response")
+            response = {
+                "message": final_response,
+                "time_result": time_result,
+                "confirm_needed": time_result.get("would_advance", False) and not data.get("confirm_time_advance", False),
+                "npc_responses": format_npc_responses_for_client(npc_responses),
+                "performance_metrics": tracker.get_metrics()
             }
 
-        # Add narrative stage information
-        narrative_stage = await get_current_narrative_stage(user_id, conv_id)
-        if narrative_stage:
-            response["narrative_stage"] = narrative_stage.name
-            
-        # Add cache stats to response in dev mode
-        if os.getenv("FLASK_ENV") == "development":
-            response["cache_stats"] = {
-                "npc_cache": NPC_CACHE.stats(),
-                "location_cache": LOCATION_CACHE.stats()
-            }
-        tracker.end_phase()
+            # Optional: If agent provided tension level or environment changes, etc.
+            if "tension_level" in agent_output:
+                response["tension_level"] = agent_output["tension_level"]
+            if "environment_update" in agent_output:
+                response["environment_update"] = agent_output["environment_update"]
 
-        return jsonify(response)
-        
+            # Add addiction status if relevant
+            addiction_status = await get_addiction_status(user_id, conv_id, player_name)
+            if addiction_status and addiction_status.get("has_addictions"):
+                response["addiction_effects"] = await process_addiction_effects(
+                    user_id, conv_id, player_name, addiction_status
+                )
+
+            # Add crossroads event data if any
+            if crossroads_data.get("event"):
+                response["crossroads_event"] = crossroads_data["event"]
+            if crossroads_data.get("result"):
+                response["crossroads_result"] = crossroads_data["result"]
+
+            # If we got an image, attach it
+            if image_result and "image_urls" in image_result:
+                response["image"] = {
+                    "image_url": image_result["image_urls"][0],
+                    "prompt_used": image_result.get("prompt_used", ""),
+                    "reason": image_result.get("reason", "")
+                }
+
+            # Possibly add the narrative stage
+            narrative_stage = await get_current_narrative_stage(user_id, conv_id)
+            if narrative_stage:
+                response["narrative_stage"] = narrative_stage.name
+
+            # In dev mode, show cache stats
+            if os.getenv("FLASK_ENV") == "development":
+                response["cache_stats"] = {
+                    "npc_cache": NPC_CACHE.stats(),
+                    "location_cache": LOCATION_CACHE.stats()
+                }
+            tracker.end_phase()
+
+            return jsonify(response)
+
     except Exception as e:
-        # End current phase
         if tracker.current_phase:
             tracker.end_phase()
-            
-        # Record error for monitoring
         STATS.record_error(type(e).__name__)
         logging.exception("[next_storybeat] Error")
-        
+
         return jsonify({
             "error": str(e),
             "performance": tracker.get_metrics()
         }), 500
-        
+
     finally:
-        # Comprehensive resource cleanup
         await cleanup_resources(resources)
 
 @contextlib.asynccontextmanager
 async def npc_system_context(user_id, conv_id):
     """Context manager for NPC system resources."""
-    resources = {
-        "npc_system": None,
-        "pool": None
-    }
-    
+    resources = {"npc_system": None, "pool": None}
     try:
-        # Initialize resources
         resources["npc_system"] = IntegratedNPCSystem(user_id, conv_id)
         resources["pool"] = await resources["npc_system"].get_connection_pool()
         yield resources
     finally:
-        # Cleanup resources
         if resources.get("pool") and not resources["pool"].closed:
             await resources["pool"].close()
 
