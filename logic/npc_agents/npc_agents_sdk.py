@@ -120,6 +120,30 @@ Respond to player actions in character, making decisions based on your personali
         # Use trace for debugging and visualization
         with trace(workflow_name="Player Action Processing", group_id=str(self.conversation_id)):
             return await self.handle_player_action(player_action, context_obj)
+
+    @function_tool
+    async def update_emotion(self, npc_id: int, emotion: str, intensity: float, 
+                           trigger: str = None) -> str:
+        """Update an NPC's emotional state with full context and side effects."""
+        memory_system = await self._get_memory_system()
+        
+        # Add the emotional state influence logic from your old framework
+        # including propagation to relationships and decision making
+        result = await memory_system.update_npc_emotion(
+            npc_id=npc_id, emotion=emotion, intensity=intensity, trigger=trigger
+        )
+        
+        # Create emotional memory if significant
+        if intensity > 0.7:
+            await self.create_memory(
+                npc_id=npc_id,
+                memory_text=f"I felt strong {emotion}" + (f" due to {trigger}" if trigger else ""),
+                importance="medium",
+                emotional=True,
+                tags=["emotional_state", emotion]
+            )
+        
+        return json.dumps(result)
     
     async def _parse_player_action(self, input_text: str) -> Dict[str, Any]:
         """Parse player's text input into a structured action."""
@@ -176,37 +200,26 @@ Extract the action type and description from the player's text.""",
             tripwire_triggered=False  # We don't want to stop processing, just inform
         )
     
-      async def handle_group_interaction(self, npc_ids: list[int], 
-                                      player_action: dict, 
-                                      context: dict) -> dict:
-        """
-        Handle a player's action that affects multiple NPCs.
+    async def handle_group_interaction(self, npc_ids: list[int], 
+                                     player_action: dict, 
+                                     context: dict) -> dict:
+        """Handle a player's action that affects multiple NPCs with full coordination."""
+        # Create the coordinator with more detailed instructions
+        coordinator_instructions = """You coordinate responses from multiple NPCs.
+    Consider dominance hierarchy, social dynamics, and emotional states.
+    More dominant NPCs (higher dominance values) should have more influence.
+    Look for potential coalitions between NPCs with similar goals.
+    Ensure the group response maintains psychological realism.
+    """
         
-        Args:
-            npc_ids: List of affected NPC IDs
-            player_action: Player action data
-            context: Additional context
-            
-        Returns:
-            Dictionary with group responses
-        """
-        # Create or get all required agents
-        agents = []
-        for npc_id in npc_ids:
-            if npc_id in self.npc_agents:
-                agents.append(self.npc_agents[npc_id])
-            else:
-                npc_data = await self._get_npc_data(npc_id)
-                agent = await self.create_npc_agent(npc_id, npc_data)
-                agents.append(agent)
+        # Add dominance information to context for better coordination
+        enhanced_context = await self._add_dominance_info(npc_ids, context)
         
-        # Create a coordinator agent that will delegate to NPC agents
+        # Create coordinator with enhanced instructions
         coordinator = Agent(
             name="Group Coordinator",
-            instructions="""You coordinate responses from multiple NPCs to a player action.
-    Consider each NPC's personality and determine which NPCs should respond and in what order.
-    Use handoffs to let each relevant NPC respond in character.""",
-            handoffs=agents,
+            instructions=coordinator_instructions,
+            handoffs=[self.npc_agents[npc_id] for npc_id in npc_ids if npc_id in self.npc_agents],
             model="gpt-4o"
         )
         
@@ -230,48 +243,71 @@ Extract the action type and description from the player's text.""",
         
         return {"npc_responses": responses}
     
-      async def handle_player_action(self, player_action: dict, context: dict = None) -> dict:
-        """
-        Handle a player's action directed at one or more NPCs.
+    @function_tool
+    async def run_memory_maintenance(self, npc_id: int) -> str:
+        """Run comprehensive memory maintenance for an NPC."""
+        memory_system = await self._get_memory_system()
         
-        Args:
-            player_action: Information about the player's action
-            context: Additional context
-            
-        Returns:
-            Dictionary with NPC responses
-        """
-        context_obj = context or {}
+        # Implement the detailed maintenance from your old framework
+        maintenance_result = await memory_system.integrated.run_memory_maintenance(
+            entity_type="npc",
+            entity_id=npc_id,
+            maintenance_options={
+                "core_maintenance": True,
+                "schema_maintenance": True,
+                "emotional_decay": True,
+                "memory_consolidation": True,
+                "background_reconsolidation": True,
+                "interference_processing": True,
+                "belief_consistency": True,
+                "mask_checks": True
+            }
+        )
         
-        # Determine which NPCs are affected
-        affected_npcs = await self.determine_affected_npcs(player_action, context_obj)
-        if not affected_npcs:
-            return {"npc_responses": []}
-        
-        # Process single NPC case differently than group
-        if len(affected_npcs) == 1:
-            npc_id = affected_npcs[0]
-            agent = self.npc_agents.get(npc_id)
+        return json.dumps(maintenance_result)
+    
+    async def handle_player_action(self, player_action: dict, context: dict = None) -> dict:
+       """
+       Handle a player's action directed at one or more NPCs.
+       
+       Args:
+           player_action: Information about the player's action
+           context: Additional context
+           
+       Returns:
+           Dictionary with NPC responses
+       """
+       context_obj = context or {}
+       
+       # Determine which NPCs are affected
+       affected_npcs = await self.determine_affected_npcs(player_action, context_obj)
+       if not affected_npcs:
+           return {"npc_responses": []}
+       
+       # Process single NPC case differently than group
+       if len(affected_npcs) == 1:
+          npc_id = affected_npcs[0]
+           agent = self.npc_agents.get(npc_id)
+           
+           if not agent:
+               agent = await self.create_npc_agent(npc_id, await self._get_npc_data(npc_id))
+           
+           # Create input for the agent
+           input_text = f"The player {player_action.get('description', 'did something')}. How do you respond?"
             
-            if not agent:
-                agent = await self.create_npc_agent(npc_id, await self._get_npc_data(npc_id))
-            
-            # Create input for the agent
-            input_text = f"The player {player_action.get('description', 'did something')}. How do you respond?"
-            
-            # Use the Runner to get a response
-            result = await Runner.run(agent, input_text, context=context_obj)
-            
-            # Process response
-            return {"npc_responses": [
-                {
-                    "npc_id": npc_id,
-                    "response": result.final_output
-                }
-            ]}
-        else:
-            # For multiple NPCs, use group coordination
-            return await self.handle_group_interaction(affected_npcs, player_action, context_obj)
+           # Use the Runner to get a response
+           result = await Runner.run(agent, input_text, context=context_obj)
+           
+           # Process response
+           return {"npc_responses": [
+               {
+                   "npc_id": npc_id,
+                   "response": result.final_output
+               }
+           ]}
+       else:
+           # For multiple NPCs, use group coordination
+           return await self.handle_group_interaction(affected_npcs, player_action, context_obj)
     
     @function_tool
     async def get_relationships(self, npc_id: int) -> str:
@@ -424,3 +460,31 @@ Extract the action type and description from the player's text.""",
             output_info=analysis,
             tripwire_triggered=not analysis["is_appropriate"]
         )
+
+class NPCAgentHooks:
+    """Hooks for better NPC agent lifecycle management."""
+    
+    def __init__(self, npc_id, user_id, conversation_id):
+        self.npc_id = npc_id
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.decision_history = []
+    
+    async def on_start(self, context, agent):
+        """Called when agent starts processing."""
+        # Log start of processing
+        # Prepare context with history
+        return
+    
+    async def on_end(self, context, agent, output):
+        """Called when agent produces output."""
+        # Record decision in history for continuity
+        self.decision_history.append({
+            "action": output,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # Limit history size
+        if len(self.decision_history) > 20:
+            self.decision_history = self.decision_history[-20:]
+        return
