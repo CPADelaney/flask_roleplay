@@ -144,6 +144,17 @@ class MemoryContext:
                 self.conversation_id
             )
         return self.memory_system
+
+    async def retrieve_nyx_memories(self, query, limit=5):
+        """Access Nyx's memories for NPC awareness"""
+        nyx_memory = NyxMemorySystem(self.user_id, self.conversation_id)
+        return await nyx_memory.retrieve_memories(
+            query=query,
+            scopes=["game"],
+            memory_types=["observation", "reflection"],
+            limit=limit
+        )
+
     
     def record_operation(self, operation_type: str, duration: float) -> None:
         """Record an operation's duration and track slow operations."""
