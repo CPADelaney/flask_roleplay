@@ -6,8 +6,6 @@ import asyncio
 from typing import Dict, List, Any, Optional
 import asyncpg
 
-from nyx.nyx_agent_sdk import NyxAgent 
-from logic.npc_agents.agent_coordinator import NPCAgentCoordinator
 from logic.npc_agents.agent_system import NPCAgentSystem
 from db.connection import get_db_connection
 
@@ -52,6 +50,14 @@ class GameEventManager:
             "npcs_notified": len(affected_npcs) if affected_npcs else 0,
             "aware_npcs": affected_npcs
         }
+
+    def get_nyx_agent(user_id, conversation_id):
+        from nyx.nyx_agent_sdk import NyxAgent
+        return NyxAgent(user_id, conversation_id)
+        
+    def get_npc_coordinator(user_id, conversation_id):
+        from logic.npc_agents.agent_coordinator import NPCAgentCoordinator
+        return NPCAgentCoordinator(user_id, conversation_id)
     
     async def _determine_aware_npcs(self, event_type, event_data):
         """
@@ -186,42 +192,6 @@ class NyxNPCIntegrationManager:
             await self.npc_system.initialize_agents()
         return self.npc_system
     
-    async def process_user_input(self, user_input: str, context: Dict[str, Any]):
-        """Process user input through both systems in an integrated way"""
-        logger.info(f"Processing user input through Nyx and NPC integration")
-        
-        # First get Nyx's response
-        nyx_response = await self.nyx_agent_sdk.process_input(user_input, context)
-        
-        # Extract NPC guidance from Nyx's response
-        npc_guidance = self._extract_npc_guidance(nyx_response)
-        
-        # Add Nyx's guidance to context
-        npc_context = context.copy()
-        npc_context["nyx_guidance"] = npc_guidance
-        
-        # Get NPC responses with Nyx's guidance
-        npc_responses = []
-        if "responding_npcs" in npc_guidance and npc_guidance["responding_npcs"]:
-            # Convert to player action for NPC system
-            player_action = {
-                "description": user_input,
-                "type": "talk"
-            }
-            
-            # Process through NPC system
-            npc_system = await self.get_npc_system()
-            npc_result = await npc_system.handle_player_action(
-                player_action,
-                npc_context
-            )
-            
-            npc_responses = npc_result.get("npc_responses", [])
-        
-        # Combine responses
-        combined_response = self._combine_responses(nyx_response, npc_responses)
-        return combined_response
-
     def get_npc_coordinator(user_id, conversation_id):
         """Lazy-load NPCAgentCoordinator to avoid circular imports."""
         from logic.npc_agents.agent_coordinator import NPCAgentCoordinator
@@ -943,13 +913,27 @@ class NyxNPCIntegrationManager:
         npc_context["nyx_guidance"] = npc_guidance
         
         # Get NPC responses with Nyx's guidance
+        npc_system = await self.get_npc_system()
         npc_responses = []
-        if "responding_npcs" in npc_guidance and npc_guidance["responding_npcs"]:
-            # Convert to player action for NPC system
-            player_action = {
-                "description": user_input,
-                "type": "talk"
-            }
+        
+        # Process NPCs in batches
+        batch_size = 3
+        for i in range(0, len(npc_guidance["responding_npcs"]), batch_size):
+            batch = npc_guidance["responding_npcs"][i:i+batch_size]
+            batch_context = npc_context.copy()
+            batch_context["batch_npcs"] = batch
+            
+            batch_result = await npc_system.handle_player_action(
+                player_action,
+                batch_context
+            )
+            
+            if "npc_responses" in batch_result:
+                npc_responses.extend(batch_result["npc_responses"])
+            
+            # Add a small delay between batches
+            if i + batch_size < len(npc_guidance["responding_npcs"]):
+                await asyncio.sleep(0.1)
             
             # Process through NPC system
             npc_system = await self.get_npc_system()
