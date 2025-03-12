@@ -4,6 +4,7 @@ import logging
 import json
 from db.connection import get_db_connection
 from datetime import datetime
+from logic.currency_generator import CurrencyGenerator
 
 class ResourceManager:
     """
@@ -16,7 +17,8 @@ class ResourceManager:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.player_name = player_name
-    
+
+
     async def get_resources(self):
         """Get current resources for the player."""
         conn = get_db_connection()
@@ -83,6 +85,26 @@ class ResourceManager:
             cursor.close()
             conn.close()
     
+    async def get_formatted_money(self, amount=None):
+        """
+        Get the player's money formatted according to the current currency system.
+        
+        Args:
+            amount: Optional specific amount to format. If None, uses current balance.
+        
+        Returns:
+            Formatted currency string
+        """
+        if amount is None:
+            # Get current balance
+            resources = await self.get_resources()
+            amount = resources.get("money", 0)
+        
+        # Use CurrencyGenerator to format it
+        currency_generator = CurrencyGenerator(self.user_id, self.conversation_id)
+        return await currency_generator.format_currency(amount)
+    
+    # Update the modify_money method to return formatted currency
     async def modify_money(self, amount, source, description=None):
         """
         Modify player's money.
@@ -91,9 +113,9 @@ class ResourceManager:
             amount: Amount to add (positive) or remove (negative)
             source: Source of the change (e.g., "quest", "conflict", "work")
             description: Optional description of the transaction
-            
+                
         Returns:
-            Dict with success status and new balance
+            Dict with success status, new balance, and formatted amounts
         """
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -142,16 +164,16 @@ class ResourceManager:
                 "change": amount
             }
             
-        except Exception as e:
-            conn.rollback()
-            logging.error(f"Error modifying money: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-        finally:
-            cursor.close()
-            conn.close()
+        if "success" in result and result["success"]:
+            # Initialize currency generator
+            currency_generator = CurrencyGenerator(self.user_id, self.conversation_id)
+            
+            # Add formatted values
+            result["formatted_old_value"] = await currency_generator.format_currency(result["old_value"])
+            result["formatted_new_value"] = await currency_generator.format_currency(result["new_value"])
+            result["formatted_change"] = await currency_generator.format_currency(result["change"])
+        
+        return result
     
     async def modify_supplies(self, amount, source, description=None):
         """
