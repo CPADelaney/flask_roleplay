@@ -84,6 +84,24 @@ class NPCAgentCoordinator:
                     self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
         return self._memory_system
 
+    # In NPCAgentCoordinator
+    async def make_group_decisions_with_nyx(
+        self,
+        npc_ids: List[int],
+        shared_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Make group decisions with Nyx's guidance"""
+        # Get Nyx's guidance for the scene
+        nyx_agent = NyxAgent(self.user_id, self.conversation_id)
+        nyx_guidance = await nyx_agent.get_scene_guidance(shared_context)
+        
+        # Add Nyx's guidance to the context
+        enhanced_context = await self._prepare_group_context(npc_ids, shared_context)
+        enhanced_context["nyx_guidance"] = nyx_guidance
+        
+        # Make decisions with Nyx's influence
+        return await self.make_group_decisions(npc_ids, enhanced_context)
+
     async def _get_coordinator_agent(self):
         """Lazy-load the coordinator agent with synchronization."""
         if self._coordinator_agent is None:
