@@ -13,6 +13,10 @@ import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple, Union, TypedDict
 from pydantic import BaseModel, Field
+import os
+import psutil
+import gc
+from collections import OrderedDict
 
 from agents import Agent, Runner, RunContextWrapper, trace, function_tool, handoff
 from agents.tracing import custom_span, generation_span, function_span
@@ -24,9 +28,159 @@ from memory.wrapper import MemorySystem
 
 logger = logging.getLogger(__name__)
 
-# -------------------------------------------------------
-# Pydantic models for tool inputs/outputs
-# -------------------------------------------------------
+class ResourcePool:
+    """Manages shared resources with limits to prevent overwhelming systems."""
+    
+    def __init__(self, max_concurrent=10, timeout=30.0):
+        self.semaphore = asyncio.Semaphore(max_concurrent)
+        self.timeout = timeout
+        self.stats = {
+            "total_requests": 0,
+            "timeouts": 0,
+            "current_usage": 0,
+            "peak_usage": 0
+        }
+    
+    async def acquire(self):
+        """Acquire resource from pool with timeout."""
+        self.stats["total_requests"] += 1
+        try:
+            acquired = await asyncio.wait_for(
+                self.semaphore.acquire(),
+                timeout=self.timeout
+            )
+            
+            if acquired:
+                self.stats["current_usage"] += 1
+                self.stats["peak_usage"] = max(
+                    self.stats["peak_usage"],
+                    self.stats["current_usage"]
+                )
+            
+            return acquired
+        except asyncio.TimeoutError:
+            self.stats["timeouts"] += 1
+            return False
+    
+    def release(self):
+        """Release resource back to pool."""
+        self.semaphore.release()
+        self.stats["current_usage"] -= 1
+
+class LRUCache:
+    """
+    LRU Cache implementation with TTL support.
+    Evicts least recently used items when capacity is reached.
+    """
+    
+    def __init__(self, capacity=100, default_ttl=300):
+        self.capacity = capacity
+        self.default_ttl = default_ttl
+        self.cache = OrderedDict()  # key -> (value, timestamp, ttl)
+        self.hits = 0
+        self.misses = 0
+    
+    def get(self, key):
+        """Get item from cache with LRU tracking."""
+        if key not in self.cache:
+            self.misses += 1
+            return None
+        
+        value, timestamp, ttl = self.cache[key]
+        
+        # Check if expired
+        if time.time() - timestamp > ttl:
+            self.cache.pop(key)
+            self.misses += 1
+            return None
+        
+        # Move to end to mark as recently used
+        self.cache.move_to_end(key)
+        self.hits += 1
+        return value
+    
+    def put(self, key, value, ttl=None):
+        """Add item to cache with LRU tracking."""
+        # Remove if exists to move it to the end
+        if key in self.cache:
+            self.cache.pop(key)
+        
+        # Evict if full
+        if len(self.cache) >= self.capacity:
+            self.cache.popitem(last=False)  # Remove least recently used
+        
+        actual_ttl = ttl if ttl is not None else self.default_ttl
+        self.cache[key] = (value, time.time(), actual_ttl)
+    
+    def invalidate(self, key=None):
+        """Invalidate cache entries."""
+        if key is None:
+            count = len(self.cache)
+            self.cache.clear()
+            return count
+        elif key in self.cache:
+            self.cache.pop(key)
+            return 1
+        return 0
+    
+    def get_stats(self):
+        """Get cache statistics."""
+        total = self.hits + self.misses
+        hit_rate = self.hits / total if total > 0 else 0
+        
+        return {
+            "size": len(self.cache),
+            "capacity": self.capacity,
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_rate": hit_rate
+        }
+
+class MemoryMonitor:
+    """Monitors memory usage and manages resources accordingly."""
+    
+    def __init__(self, threshold_percent: float = 85.0):
+        self.threshold_percent = threshold_percent
+        self.last_check_time = 0
+        self.process = psutil.Process(os.getpid())
+        self.memory_history = []
+    
+    def get_memory_usage(self):
+        """Get current memory usage statistics."""
+        mem_info = self.process.memory_info()
+        system_mem = psutil.virtual_memory()
+        
+        usage = {
+            "rss_mb": mem_info.rss / (1024 * 1024),  # Resident Set Size
+            "percent_used": self.process.memory_percent(),
+            "system_percent": system_mem.percent,
+            "timestamp": time.time()
+        }
+        
+        self.memory_history.append(usage)
+        if len(self.memory_history) > 100:
+            self.memory_history = self.memory_history[-100:]
+            
+        return usage
+    
+    def should_reduce_memory(self):
+        """Check if memory usage is above threshold."""
+        usage = self.get_memory_usage()
+        return usage["percent_used"] > self.threshold_percent
+    
+    def reduce_memory_pressure(self):
+        """Attempt to reduce memory pressure."""
+        results = {
+            "before": self.get_memory_usage(),
+            "actions_taken": []
+        }
+        
+        # Force garbage collection
+        gc.collect()
+        results["actions_taken"].append("gc_collect")
+        
+        results["after"] = self.get_memory_usage()
+        return results
 
 class NPCPerception(BaseModel):
     environment: Dict[str, Any] = Field(default_factory=dict)
@@ -112,11 +266,11 @@ class NPCContext:
         }
         
         # Cache
-        self.cache = {
-            'perception': {},
-            'memories': {},
-            'emotional_state': None,
-            'mask': None
+        self.caches = {
+            'perception': LRUCache(capacity=50, default_ttl=300),  # 5 minutes
+            'memories': LRUCache(capacity=100, default_ttl=600),   # 10 minutes
+            'emotional_state': LRUCache(capacity=5, default_ttl=120),  # 2 minutes
+            'mask': LRUCache(capacity=5, default_ttl=300)  # 5 minutes
         }
         self.cache_timestamps = {
             'perception': {},
@@ -140,67 +294,42 @@ class NPCContext:
             )
         return self.memory_system
 
-    def is_cache_valid(self, cache_key: str, sub_key: Optional[str] = None) -> bool:
-        """Check if a cache entry is valid."""
-        now = datetime.now()
-        ttl = self.cache_ttls.get(cache_key)
         
-        if ttl is None:
+    def is_cache_valid(self, cache_key, sub_key=None):
+        """Check if a cache entry is valid using LRU cache."""
+        if cache_key not in self.caches:
             return False
             
-        timestamp = None
-        if sub_key is not None:
-            if (not isinstance(self.cache_timestamps.get(cache_key), dict) or 
-                sub_key not in self.cache_timestamps[cache_key]):
-                return False
-            timestamp = self.cache_timestamps[cache_key].get(sub_key)
-        else:
-            timestamp = self.cache_timestamps.get(cache_key)
-            
-        if timestamp is None:
-            return False
-            
-        return timestamp + ttl > now
+        cache = self.caches[cache_key]
+        key = sub_key if sub_key is not None else "default"
         
-    async def update_cache(self, cache_key: str, sub_key: Optional[str] = None, value: Any = None):
+        return cache.get(key) is not None
+        
+    async def update_cache(self, cache_key, sub_key=None, value=None):
         """Update the cache with a new value."""
-        now = datetime.now()
+        if cache_key not in self.caches:
+            return
         
-        if sub_key is not None:
-            if cache_key not in self.cache:
-                self.cache[cache_key] = {}
-            if cache_key not in self.cache_timestamps:
-                self.cache_timestamps[cache_key] = {}
-                
-            self.cache[cache_key][sub_key] = value
-            self.cache_timestamps[cache_key][sub_key] = now
-        else:
-            self.cache[cache_key] = value
-            self.cache_timestamps[cache_key] = now
+        cache = self.caches[cache_key]
+        key = sub_key if sub_key is not None else "default"
+        
+        cache.put(key, value)
             
-    async def invalidate_cache(self, cache_key: Optional[str] = None):
+    async def invalidate_cache(self, cache_key=None):
         """Invalidate the cache."""
         if cache_key is None:
-            self.cache = {
-                'perception': {},
-                'memories': {},
-                'emotional_state': None,
-                'mask': None
-            }
-            self.cache_timestamps = {
-                'perception': {},
-                'memories': {},
-                'emotional_state': None,
-                'mask': None
-            }
-        elif cache_key in self.cache:
-            if isinstance(self.cache[cache_key], dict):
-                self.cache[cache_key] = {}
-                if isinstance(self.cache_timestamps[cache_key], dict):
-                    self.cache_timestamps[cache_key] = {}
-            else:
-                self.cache[cache_key] = None
-                self.cache_timestamps[cache_key] = None
+            # Invalidate all caches
+            for cache in self.caches.values():
+                cache.invalidate()
+        elif cache_key in self.caches:
+            self.caches[cache_key].invalidate()
+    
+    def get_cache_stats(self):
+        """Get cache statistics for monitoring."""
+        return {
+            cache_name: cache.get_stats()
+            for cache_name, cache in self.caches.items()
+        }
 
     def record_decision(self, action: Dict[str, Any]):
         """Record a decision to the history."""
@@ -288,15 +417,37 @@ async def get_npc_stats(ctx: RunContextWrapper[NPCContext]) -> NPCStats:
 @function_tool
 async def perceive_environment(
     ctx: RunContextWrapper[NPCContext], 
-    current_context: Dict[str, Any]
+    current_context: Dict[str, Any],
+    detail_level: str = "auto"  # "low", "standard", "high", "auto"
 ) -> NPCPerception:
-    """
-    Perceive the NPC's environment and retrieve relevant memories, relationships,
-    and emotional state.
+    """Perceive environment with adaptive detail levels based on system load."""
     
-    Args:
-        current_context: The current environment context.
-    """
+    # If auto, determine detail level based on system load
+    if detail_level == "auto":
+        system_load = psutil.cpu_percent()
+        mem_usage = psutil.virtual_memory().percent
+        
+        if system_load > 80 or mem_usage > 85:
+            detail_level = "low"
+        elif system_load > 60 or mem_usage > 70:
+            detail_level = "standard"
+        else:
+            detail_level = "high"
+    
+    # Process based on detail level
+    if detail_level == "low":
+        # Minimal perception - fewer memories, no flashbacks
+        # Limit memory retrieval to 3 items
+        memory_limit = 3
+        include_flashbacks = False
+    elif detail_level == "high":
+        # Detailed perception - more memories, flashbacks, detailed relationships
+        memory_limit = 8
+        include_flashbacks = True
+    else:
+        # Standard processing
+        memory_limit = 5
+        include_flashbacks = random.random() < 0.3
     with function_span("perceive_environment"):
         perf_start = time.perf_counter()
         npc_id = ctx.context.npc_id
@@ -1219,6 +1370,74 @@ class NPCAgentSDK:
         
         # Performance monitoring setup
         self._setup_performance_reporting()
+
+        self.memory_monitor = MemoryMonitor(threshold_percent=80.0)
+    
+        # Start memory monitoring
+        self._setup_memory_monitoring()
+
+    def _setup_memory_monitoring(self):
+        """Schedule periodic memory monitoring."""
+        async def monitor_memory():
+            while True:
+                try:
+                    await asyncio.sleep(300)  # Every 5 minutes
+                    
+                    if self.memory_monitor.should_reduce_memory():
+                        logger.warning("High memory usage detected, performing cleanup")
+                        results = self.memory_monitor.reduce_memory_pressure()
+                        
+                        # If GC didn't free enough, clear caches
+                        if results["after"]["percent_used"] > 75:
+                            await self._clear_nonessential_caches()
+                            
+                            # If still high, unload inactive agents
+                            if self.memory_monitor.should_reduce_memory():
+                                await self._unload_inactive_agents()
+                        
+                        logger.info(f"Memory reduction results: {results}")
+                except Exception as e:
+                    logger.error(f"Memory monitoring error: {e}")
+        
+        asyncio.create_task(monitor_memory())
+
+    async def _clear_nonessential_caches(self):
+        """Clear caches that aren't essential right now."""
+        cleared_count = 0
+        
+        # Clear coordinator caches
+        self.coordinator.invalidate_cache("memory")
+        self.coordinator.invalidate_cache("mask")
+        
+        # Clear agent caches
+        for npc_id, agent in self.npc_agents.items():
+            await agent.context.invalidate_cache()
+            cleared_count += 1
+        
+        return cleared_count
+    
+    async def _unload_inactive_agents(self):
+        """Unload agents that haven't been active recently."""
+        # Get inactive agents (no activity in 30 min)
+        inactive_threshold = datetime.now() - timedelta(minutes=30)
+        inactive_agents = []
+        
+        async with self.connection_pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT npc_id FROM NPCAgentState
+                WHERE user_id = $1 AND conversation_id = $2
+                  AND last_updated < $3
+            """, self.user_id, self.conversation_id, inactive_threshold)
+            
+            for row in rows:
+                inactive_agents.append(row["npc_id"])
+        
+        # Unload inactive agents
+        for npc_id in inactive_agents:
+            if npc_id in self.npc_agents:
+                del self.npc_agents[npc_id]
+        
+        return len(inactive_agents)
         
     def _setup_performance_reporting(self) -> None:
         """
@@ -1307,18 +1526,14 @@ class NPCAgentSDK:
     async def process_player_action(
         self,
         player_action: Dict[str, Any],
-        context: Optional[Dict[str, Any]] = None
+        context: Dict[str, Any],
+        npc_ids: Optional[List[int]] = None
     ) -> Dict[str, Any]:
         """
-        Process a player's action and respond appropriately.
-        
-        Args:
-            player_action: The player's action
-            context: Additional context information
-            
-        Returns:
-            The NPC's response to the player action
+        Handle a player action directed at multiple NPCs.
         """
+        # Acquire decision resource
+        decision_resource = await self.resource_pools["decisions"].acquire()
         with trace(workflow_name=f"NPC {self.npc_id} Process Player Action"):
             perf_start = time.perf_counter()
             context_obj = context or {}
@@ -1338,7 +1553,15 @@ class NPCAgentSDK:
                     f"Process player action: {player_action.get('description', '')}",
                     context=self.context
                 )
+                npc_responses = []
+                batch_size = 3
                 
+                # Adjust batch size based on resource availability
+                if not decision_resource:
+                    batch_size = 2
+                    logger.warning("Decision resources constrained, processing smaller batches")
+                    
+                for i in range(0, len(npc_ids), batch_size):                
                 # Process the response
                 response = result.final_output
                 if isinstance(response, dict):
@@ -1361,12 +1584,11 @@ class NPCAgentSDK:
                 elapsed = time.perf_counter() - perf_start
                 logger.error(f"Error processing player action for NPC {self.npc_id} after {elapsed:.2f}s: {e}")
                 
-                return {
-                    "npc_id": self.npc_id,
-                    "action": {"type": "error", "description": "had an internal error"},
-                    "result": {"outcome": "NPC seems confused", "emotional_impact": -1},
-                    "error": str(e)
-                }
+                return {"npc_responses": npc_responses}
+            finally:
+                # Always release the resource
+                if decision_resource:
+                    self.resource_pools["decisions"].release()
     
     async def run_memory_maintenance(self) -> Dict[str, Any]:
         """
