@@ -124,6 +124,22 @@ class NyxMemorySystem:
                 self._invalidate_cache()
                 
                 return memory_id
+
+    async def retrieve_npc_memories(self, query, npc_ids=None):
+        """Retrieve memories from specific NPCs"""
+        coordinator = NPCAgentCoordinator(self.user_id, self.conversation_id)
+        npc_ids = await coordinator.load_agents(npc_ids)
+        
+        all_memories = []
+        for npc_id in npc_ids:
+            if npc_id in coordinator.active_agents:
+                agent = coordinator.active_agents[npc_id]
+                memory_result = await agent.memory_manager.retrieve_memories(query)
+                for memory in memory_result.get("memories", []):
+                    memory["npc_id"] = npc_id
+                    all_memories.append(memory)
+        
+        return all_memories
     
     async def retrieve_memories(
         self,
