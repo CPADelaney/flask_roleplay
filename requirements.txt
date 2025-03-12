@@ -4,6 +4,7 @@ gunicorn==21.2.0
 python-dotenv==1.0.0    # For local .env file support (optional)
 flask-cors==4.0.0  # Add this line
 openai
+openai-agents
 celery
 requests
 asyncpg
