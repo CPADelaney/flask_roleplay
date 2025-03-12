@@ -1590,6 +1590,42 @@ async def perform_activity_endpoint():
         logging.exception("[perform_activity_endpoint] Error")
         return jsonify({"error": str(e)}), 500
 
+@story_bp.route("/currency_info", methods=["GET"])
+@timed_function
+async def get_currency_info():
+    """
+    Get the currency system information for the current game.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        conversation_id = request.args.get("conversation_id")
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id parameter"}), 400
+        
+        # Create cache key
+        cache_key = f"currency:{user_id}:{conversation_id}"
+        
+        # Check cache first
+        cached_result = NPC_CACHE.get(cache_key)
+        if cached_result:
+            return jsonify(cached_result)
+        
+        # Get currency system
+        currency_generator = CurrencyGenerator(user_id, int(conversation_id))
+        currency_system = await currency_generator.get_currency_system()
+        
+        # Cache the result
+        NPC_CACHE.set(cache_key, currency_system, 3600)  # TTL: 1 hour (currency doesn't change often)
+        
+        return jsonify(currency_system)
+        
+    except Exception as e:
+        logging.exception("[get_currency_info] Error")
+        return jsonify({"error": str(e)}), 500
+
 @story_bp.route("/next_storybeat", methods=["POST"])
 async def next_storybeat():
     """Enhanced storybeat endpoint with better resource management and parallel processing."""
