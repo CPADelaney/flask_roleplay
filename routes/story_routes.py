@@ -1600,6 +1600,60 @@ async def next_storybeat():
             )
             tracker.end_phase()
 
+            # Process resources based on activity
+            tracker.start_phase("resource_processing")
+            try:
+                activity_type = action_type if "action_type" in locals() else "conversation"
+                resource_manager = ResourceManager(user_id, conv_id)
+                
+                # Different activities have different effects on resources
+                resource_effects = {
+                    "conversation": {"energy": -2, "hunger": -1},
+                    "eating": {"energy": 5, "hunger": 30, "money": -5},
+                    "working": {"energy": -10, "hunger": -5, "money": 15},
+                    "shopping": {"energy": -5, "hunger": -2, "money": -10, "supplies": 5},
+                    "training": {"energy": -15, "hunger": -10, "influence": 2},
+                    "socializing": {"energy": -8, "hunger": -3, "influence": 3},
+                    "resting": {"energy": 15, "hunger": -3},
+                    "studying": {"energy": -10, "hunger": -3, "influence": 1}
+                }
+                
+                # Default to conversation if activity_type is not recognized
+                effects = resource_effects.get(activity_type, resource_effects["conversation"])
+                
+                # Apply effects
+                resource_results = {}
+                for resource, amount in effects.items():
+                    if resource == "energy":
+                        result = await resource_manager.modify_energy(amount, activity_type, "Activity effect")
+                        resource_results["energy"] = result
+                    elif resource == "hunger":
+                        result = await resource_manager.modify_hunger(amount, activity_type, "Activity effect")
+                        resource_results["hunger"] = result
+                    elif resource == "money":
+                        result = await resource_manager.modify_money(amount, activity_type, "Activity expense/income")
+                        resource_results["money"] = result
+                    elif resource == "supplies":
+                        result = await resource_manager.modify_supplies(amount, activity_type, "Activity supplies")
+                        resource_results["supplies"] = result
+                    elif resource == "influence":
+                        result = await resource_manager.modify_influence(amount, activity_type, "Activity influence")
+                        resource_results["influence"] = result
+                
+                # Add to response
+                response["resource_changes"] = resource_results
+                
+                # Get updated resources
+                current_resources = await resource_manager.get_resources()
+                current_vitals = await resource_manager.get_vitals()
+                response["current_resources"] = current_resources
+                response["current_vitals"] = current_vitals
+                
+            except Exception as e:
+                logging.error(f"Error processing resources: {e}")
+                response["resource_error"] = str(e)
+            tracker.end_phase()
+
             # Process conflicts
             tracker.start_phase("conflicts")
             try:
