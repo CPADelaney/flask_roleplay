@@ -21,6 +21,7 @@ from db.connection import get_db_connection
 from logic.npc_creation import spawn_multiple_npcs_enhanced, create_and_refine_npc, init_chase_schedule
 from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
+from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 
 DB_DSN = os.getenv("DB_DSN") 
 
@@ -568,8 +569,15 @@ async def async_process_new_game(user_id, conversation_data):
                 ON CONFLICT (user_id, conversation_id, key)
                 DO UPDATE SET value=EXCLUDED.value
             """, user_id, conversation_id, welcome_image_url)
-            
-            # Add the image to the response
+
+            try:
+                conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+                initial_conflict = await conflict_integration.generate_new_conflict("major")
+                logging.info(f"Generated initial major conflict: {initial_conflict.get('conflict_name', 'Unnamed')}")
+            except Exception as e:
+                logging.error(f"Error generating initial conflict: {e}")
+        
+            # Return the success message and other data as before
             success_msg = (
                 f"New game started. environment={setting_name}, conversation_id={conversation_id}"
             )
@@ -582,7 +590,7 @@ async def async_process_new_game(user_id, conversation_data):
                 "calendar_names": calendar_data,
                 "conversation_id": conversation_id,
                 "welcome_image_url": welcome_image_url  # Add the image URL to the response
-            }
+            }        
 
     except Exception as e:
         logging.exception("Error in async_process_new_game:")
