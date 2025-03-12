@@ -232,7 +232,164 @@ def create_all_tables():
     ''')
 
     #
-    # ---------- LEGACY “NPCMemories” TABLE (OPTIONAL) ----------
+    # ---------- CONFLICT SYSTEM TABLES ----------
+    #
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Conflicts (
+            conflict_id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            conflict_name VARCHAR(255) NOT NULL,
+            conflict_type VARCHAR(50) NOT NULL, 
+            parent_conflict_id INTEGER NULL,
+            description TEXT NOT NULL,
+            brewing_description TEXT NOT NULL,
+            active_description TEXT NOT NULL,
+            climax_description TEXT NOT NULL,
+            resolution_description TEXT NOT NULL,
+            progress FLOAT NOT NULL DEFAULT 0,
+            phase VARCHAR(50) NOT NULL DEFAULT 'brewing',
+            start_day INTEGER NOT NULL,
+            estimated_duration INTEGER NOT NULL DEFAULT 7,
+            faction_a_name VARCHAR(255) NOT NULL,
+            faction_b_name VARCHAR(255) NOT NULL,
+            resources_required JSONB NOT NULL DEFAULT '{"money": 0, "supplies": 0, "influence": 0}'::jsonb,
+            success_rate FLOAT NOT NULL DEFAULT 0,
+            outcome VARCHAR(50) NOT NULL DEFAULT 'pending',
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (user_id, conversation_id, conflict_id)
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ConflictConsequences (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER NOT NULL,
+            consequence_type VARCHAR(50) NOT NULL,
+            entity_type VARCHAR(50) NOT NULL,
+            entity_id INTEGER NULL,
+            description TEXT NOT NULL,
+            applied BOOLEAN NOT NULL DEFAULT FALSE,
+            applied_at TIMESTAMP NULL,
+            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ConflictNPCs (
+            conflict_id INTEGER NOT NULL,
+            npc_id INTEGER NOT NULL,
+            faction VARCHAR(10) NOT NULL,
+            role VARCHAR(50) NOT NULL,
+            influence_level INTEGER NOT NULL DEFAULT 50,
+            PRIMARY KEY (conflict_id, npc_id),
+            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerConflictInvolvement (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
+            involvement_level VARCHAR(50) NOT NULL DEFAULT 'none',
+            faction VARCHAR(10) NOT NULL DEFAULT 'neutral',
+            money_committed INTEGER NOT NULL DEFAULT 0,
+            supplies_committed INTEGER NOT NULL DEFAULT 0,
+            influence_committed INTEGER NOT NULL DEFAULT 0,
+            actions_taken JSONB NOT NULL DEFAULT '[]'::jsonb,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (conflict_id, user_id, conversation_id),
+            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ConflictMemoryEvents (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER NOT NULL,
+            memory_text TEXT NOT NULL,
+            significance INTEGER NOT NULL DEFAULT 5,
+            entity_type VARCHAR(50) NOT NULL,
+            entity_id INTEGER NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerVitals (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
+            energy INTEGER NOT NULL DEFAULT 100,
+            hunger INTEGER NOT NULL DEFAULT 100,
+            last_update TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (user_id, conversation_id, player_name)
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ConflictHistory (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            conflict_id INTEGER NOT NULL,
+            affected_npc_id INTEGER NOT NULL,
+            impact_type VARCHAR(50) NOT NULL,
+            grudge_level INTEGER NOT NULL DEFAULT 0,
+            narrative_impact TEXT NOT NULL,
+            has_triggered_consequence BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS FactionPowerShifts (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            faction_name VARCHAR(255) NOT NULL,
+            power_level INTEGER NOT NULL,
+            change_amount INTEGER NOT NULL,
+            cause TEXT NOT NULL,
+            conflict_id INTEGER REFERENCES Conflicts(conflict_id),
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
+    # Create conflict system indexes
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_conflicts_user_conv ON Conflicts(user_id, conversation_id);
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_conflict_npcs ON ConflictNPCs(conflict_id);
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_player_involvement ON PlayerConflictInvolvement(conflict_id, user_id, conversation_id);
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_active_conflicts ON Conflicts(is_active) WHERE is_active = TRUE;
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_conflict_history ON ConflictHistory(user_id, conversation_id);
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_grudge_level ON ConflictHistory(grudge_level) WHERE grudge_level > 50;
+    ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_faction_power_shifts ON FactionPowerShifts(user_id, conversation_id);
+    ''')
+
+    #
+    # ---------- LEGACY "NPCMemories" TABLE (OPTIONAL) ----------
     #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCMemories (
@@ -268,7 +425,7 @@ def create_all_tables():
     ''')
 
     #
-    # ---------- NEW “unified_memories” TABLE ----------
+    # ---------- NEW "unified_memories" TABLE ----------
     #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS unified_memories (
@@ -668,114 +825,8 @@ def create_all_tables():
             rating >= 4
         GROUP BY 
             user_id, npc_name
-        );
+        ;
     ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Conflicts (
-            conflict_id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            conflict_name VARCHAR(255) NOT NULL,
-            conflict_type VARCHAR(50) NOT NULL, -- 'major', 'minor', 'standard', 'catastrophic'
-            parent_conflict_id INTEGER NULL, -- For minor conflicts linked to major ones
-            description TEXT NOT NULL,
-            brewing_description TEXT NOT NULL,
-            active_description TEXT NOT NULL,
-            climax_description TEXT NOT NULL,
-            resolution_description TEXT NOT NULL,
-            progress FLOAT NOT NULL DEFAULT 0, -- 0-100 percentage
-            phase VARCHAR(50) NOT NULL DEFAULT 'brewing', -- 'brewing', 'active', 'climax', 'resolution'
-            start_day INTEGER NOT NULL,
-            estimated_duration INTEGER NOT NULL DEFAULT 7, -- Duration in days
-            faction_a_name VARCHAR(255) NOT NULL,
-            faction_b_name VARCHAR(255) NOT NULL,
-            resources_required JSONB NOT NULL DEFAULT '{"money": 0, "supplies": 0, "influence": 0}'::jsonb,
-            success_rate FLOAT NOT NULL DEFAULT 0, -- 0-100 percentage
-            outcome VARCHAR(50) NOT NULL DEFAULT 'pending', -- 'pending', 'success', 'partial_success', 'failure', 'ignored'
-            is_active BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (user_id, conversation_id, conflict_id)
-        );
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ConflictConsequences (
-            id SERIAL PRIMARY KEY,
-            conflict_id INTEGER NOT NULL,
-            consequence_type VARCHAR(50) NOT NULL, -- 'relationship', 'stat', 'unlock', 'permanent'
-            entity_type VARCHAR(50) NOT NULL, -- 'player', 'npc', 'location', 'faction'
-            entity_id INTEGER NULL, -- NULL for player
-            description TEXT NOT NULL,
-            applied BOOLEAN NOT NULL DEFAULT FALSE,
-            applied_at TIMESTAMP NULL,
-            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
-        );
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ConflictNPCs (
-            conflict_id INTEGER NOT NULL,
-            npc_id INTEGER NOT NULL,
-            faction VARCHAR(10) NOT NULL, -- 'a', 'b', 'neutral'
-            role VARCHAR(50) NOT NULL, -- 'leader', 'member', 'supporter', 'observer'
-            influence_level INTEGER NOT NULL DEFAULT 50, -- 0-100
-            PRIMARY KEY (conflict_id, npc_id),
-            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
-        );
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS PlayerConflictInvolvement (
-            id SERIAL PRIMARY KEY,
-            conflict_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
-            involvement_level VARCHAR(50) NOT NULL DEFAULT 'none', -- 'none', 'observing', 'participating', 'leading'
-            faction VARCHAR(10) NOT NULL DEFAULT 'neutral', -- 'a', 'b', 'neutral'
-            money_committed INTEGER NOT NULL DEFAULT 0,
-            supplies_committed INTEGER NOT NULL DEFAULT 0,
-            influence_committed INTEGER NOT NULL DEFAULT 0,
-            actions_taken JSONB NOT NULL DEFAULT '[]'::jsonb,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (conflict_id, user_id, conversation_id),
-            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
-        );
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ConflictMemoryEvents (
-            id SERIAL PRIMARY KEY,
-            conflict_id INTEGER NOT NULL,
-            memory_text TEXT NOT NULL,
-            significance INTEGER NOT NULL DEFAULT 5, -- 1-10
-            entity_type VARCHAR(50) NOT NULL, -- 'player', 'npc'
-            entity_id INTEGER NULL, -- NULL for player
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
-        );
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS PlayerVitals (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
-            energy INTEGER NOT NULL DEFAULT 100, -- 0-100
-            hunger INTEGER NOT NULL DEFAULT 100, -- 0-100
-            last_update TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (user_id, conversation_id, player_name)
-        );
-    ''')
-
-CREATE INDEX IF NOT EXISTS idx_conflicts_user_conv ON Conflicts(user_id, conversation_id);
-CREATE INDEX IF NOT EXISTS idx_conflict_npcs ON ConflictNPCs(conflict_id);
-CREATE INDEX IF NOT EXISTS idx_player_involvement ON PlayerConflictInvolvement(conflict_id, user_id, conversation_id);
-CREATE INDEX IF NOT EXISTS idx_active_conflicts ON Conflicts(is_active) WHERE is_active = TRUE;
 
     #
     # ---------- (OPTIONAL) Additional NPCMemory Associations ----------
@@ -808,7 +859,7 @@ CREATE INDEX IF NOT EXISTS idx_active_conflicts ON Conflicts(is_active) WHERE is
     ''')
 
     #
-    # ---------- “NyxMemories” LEGACY TABLE (OPTIONAL) ----------
+    # ---------- "NyxMemories" LEGACY TABLE (OPTIONAL) ----------
     #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxMemories (
@@ -832,7 +883,7 @@ CREATE INDEX IF NOT EXISTS idx_active_conflicts ON Conflicts(is_active) WHERE is
     ''')
 
     #
-    # ---------- “NyxAgentState” FOR DM LOGIC ----------
+    # ---------- "NyxAgentState" FOR DM LOGIC ----------
     #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxAgentState (
@@ -903,207 +954,11 @@ CREATE INDEX IF NOT EXISTS idx_active_conflicts ON Conflicts(is_active) WHERE is
         );
     ''')
 
-def create_conflict_tables():
-    """Create all tables needed for the Dynamic Conflict System."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    # Conflicts table - stores main conflict data
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Conflicts (
-            conflict_id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            conflict_name VARCHAR(255) NOT NULL,
-            conflict_type VARCHAR(50) NOT NULL, -- 'major', 'minor', 'standard', 'catastrophic'
-            parent_conflict_id INTEGER NULL, -- For minor conflicts linked to major ones
-            description TEXT NOT NULL,
-            brewing_description TEXT NOT NULL,
-            active_description TEXT NOT NULL,
-            climax_description TEXT NOT NULL,
-            resolution_description TEXT NOT NULL,
-            progress FLOAT NOT NULL DEFAULT 0, -- 0-100 percentage
-            phase VARCHAR(50) NOT NULL DEFAULT 'brewing', -- 'brewing', 'active', 'climax', 'resolution'
-            start_day INTEGER NOT NULL,
-            estimated_duration INTEGER NOT NULL DEFAULT 7, -- Duration in days
-            faction_a_name VARCHAR(255) NOT NULL,
-            faction_b_name VARCHAR(255) NOT NULL,
-            resources_required JSONB NOT NULL DEFAULT '{"money": 0, "supplies": 0, "influence": 0}'::jsonb,
-            success_rate FLOAT NOT NULL DEFAULT 0, -- 0-100 percentage
-            outcome VARCHAR(50) NOT NULL DEFAULT 'pending', -- 'pending', 'success', 'partial_success', 'failure', 'ignored'
-            is_active BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (user_id, conversation_id, conflict_id)
-        );
-    ''')
-    
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_conflicts_user_conv 
-        ON Conflicts(user_id, conversation_id);
-    ''')
-    
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_active_conflicts 
-        ON Conflicts(is_active) 
-        WHERE is_active = TRUE;
-    ''')
-
-    # ConflictConsequences table - stores consequences of conflicts
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ConflictConsequences (
-            id SERIAL PRIMARY KEY,
-            conflict_id INTEGER NOT NULL,
-            consequence_type VARCHAR(50) NOT NULL, -- 'relationship', 'stat', 'unlock', 'permanent'
-            entity_type VARCHAR(50) NOT NULL, -- 'player', 'npc', 'location', 'faction'
-            entity_id INTEGER NULL, -- NULL for player
-            description TEXT NOT NULL,
-            applied BOOLEAN NOT NULL DEFAULT FALSE,
-            applied_at TIMESTAMP NULL,
-            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
-        );
-    ''')
-    
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_conflict_consequences 
-        ON ConflictConsequences(conflict_id);
-    ''')
-
-    # ConflictNPCs table - tracks NPCs involved in conflicts
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ConflictNPCs (
-            conflict_id INTEGER NOT NULL,
-            npc_id INTEGER NOT NULL,
-            faction VARCHAR(10) NOT NULL, -- 'a', 'b', 'neutral'
-            role VARCHAR(50) NOT NULL, -- 'leader', 'member', 'supporter', 'observer'
-            influence_level INTEGER NOT NULL DEFAULT 50, -- 0-100
-            PRIMARY KEY (conflict_id, npc_id),
-            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
-        );
-    ''')
-    
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_conflict_npcs 
-        ON ConflictNPCs(conflict_id);
-    ''')
-
-    # PlayerConflictInvolvement table - tracks player involvement in conflicts
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS PlayerConflictInvolvement (
-            id SERIAL PRIMARY KEY,
-            conflict_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
-            involvement_level VARCHAR(50) NOT NULL DEFAULT 'none', -- 'none', 'observing', 'participating', 'leading'
-            faction VARCHAR(10) NOT NULL DEFAULT 'neutral', -- 'a', 'b', 'neutral'
-            money_committed INTEGER NOT NULL DEFAULT 0,
-            supplies_committed INTEGER NOT NULL DEFAULT 0,
-            influence_committed INTEGER NOT NULL DEFAULT 0,
-            actions_taken JSONB NOT NULL DEFAULT '[]'::jsonb,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (conflict_id, user_id, conversation_id),
-            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
-        );
-    ''')
-    
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_player_involvement 
-        ON PlayerConflictInvolvement(conflict_id, user_id, conversation_id);
-    ''')
-
-    # ConflictMemoryEvents table - stores memory events for conflicts
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ConflictMemoryEvents (
-            id SERIAL PRIMARY KEY,
-            conflict_id INTEGER NOT NULL,
-            memory_text TEXT NOT NULL,
-            significance INTEGER NOT NULL DEFAULT 5, -- 1-10
-            entity_type VARCHAR(50) NOT NULL, -- 'player', 'npc'
-            entity_id INTEGER NULL, -- NULL for player
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
-        );
-    ''')
-    
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_conflict_memory_events 
-        ON ConflictMemoryEvents(conflict_id);
-    ''')
-
-    # PlayerVitals table - tracks player energy and hunger
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS PlayerVitals (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
-            energy INTEGER NOT NULL DEFAULT 100, -- 0-100
-            hunger INTEGER NOT NULL DEFAULT 100, -- 0-100
-            last_update TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (user_id, conversation_id, player_name)
-        );
-    ''')
-    
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_player_vitals 
-        ON PlayerVitals(user_id, conversation_id);
-    ''')
-
-    # ConflictHistory table - for the Consequence Chain System
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ConflictHistory (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            conflict_id INTEGER NOT NULL,
-            affected_npc_id INTEGER NOT NULL,
-            impact_type VARCHAR(50) NOT NULL, -- 'positive', 'negative', 'neutral'
-            grudge_level INTEGER NOT NULL DEFAULT 0,
-            narrative_impact TEXT NOT NULL,
-            has_triggered_consequence BOOLEAN DEFAULT FALSE,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
-        );
-    ''')
-    
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_conflict_history 
-        ON ConflictHistory(user_id, conversation_id);
-    ''')
-    
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_grudge_level 
-        ON ConflictHistory(grudge_level) 
-        WHERE grudge_level > 50;
-    ''')
-
-    # FactionPowerShifts table - tracks changes in faction power
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS FactionPowerShifts (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            faction_name VARCHAR(255) NOT NULL,
-            power_level INTEGER NOT NULL,
-            change_amount INTEGER NOT NULL,
-            cause TEXT NOT NULL,
-            conflict_id INTEGER REFERENCES Conflicts(conflict_id),
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-    ''')
-    
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_faction_power_shifts 
-        ON FactionPowerShifts(user_id, conversation_id);
-    ''')
-
-    # Commit the changes
+    # Done creating everything:
     conn.commit()
     conn.close()
-    
-    logging.info("Conflict system tables created successfully.")
+    logging.info("All tables created (old + new).")
+
 
 def seed_initial_vitals():
     """Seed initial player vitals."""
@@ -1136,20 +991,10 @@ def seed_initial_vitals():
         conn.close()
 
 def initialize_conflict_system():
-    """Initialize the conflict system by creating tables and seeding initial data."""
-    create_conflict_tables()
+    """Initialize the conflict system by seeding initial data."""
+    # We don't need to create tables again as they're already created in create_all_tables()
     seed_initial_vitals()
     logging.info("Conflict system initialized.")
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    initialize_conflict_system()
-    
-    # Done creating everything:
-    conn.commit()
-    conn.close()
-    logging.info("All tables created (old + new).")
-
 
 def seed_initial_data():
     """
@@ -1176,4 +1021,10 @@ def initialize_all_data():
     """
     create_all_tables()
     seed_initial_data()
+    initialize_conflict_system()
     print("All tables created & default data seeded successfully!")
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    initialize_all_data()
