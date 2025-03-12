@@ -8,7 +8,7 @@ from typing import Dict, List, Any, Optional
 import asyncpg
 
 from db.connection import get_db_connection
-from nyx.memory_system import NyxMemorySystem
+from nyx.nyx_memory_system import NyxMemorySystem
 
 logger = logging.getLogger(__name__)
 
