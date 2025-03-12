@@ -6,7 +6,7 @@ import asyncio
 from typing import Dict, List, Any, Optional
 import asyncpg
 
-from nyx.nyx_agent import NyxAgent
+from nyx.nyx_agent_sdk import NyxAgent 
 from logic.npc_agents.agent_coordinator import NPCAgentCoordinator
 from logic.npc_agents.agent_system import NPCAgentSystem
 from db.connection import get_db_connection
@@ -19,7 +19,7 @@ class GameEventManager:
     def __init__(self, user_id, conversation_id):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.nyx_agent = NyxAgent(user_id, conversation_id)
+        self.nyx_agent_sdk = NyxAgent(user_id, conversation_id)
         self.npc_coordinator = NPCAgentCoordinator(user_id, conversation_id)
     
     async def broadcast_event(self, event_type, event_data):
@@ -27,7 +27,7 @@ class GameEventManager:
         logger.info(f"Broadcasting event {event_type} to Nyx and NPCs")
         
         # Tell Nyx about the event
-        await self.nyx_agent.process_game_event(event_type, event_data)
+        await self.nyx_agent_sdk.process_game_event(event_type, event_data)
         
         # Tell NPCs about the event
         affected_npcs = event_data.get("affected_npcs")
@@ -173,7 +173,7 @@ class NyxNPCIntegrationManager:
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.nyx_agent = NyxAgent(user_id, conversation_id)
+        self.nyx_agent_sdk = NyxAgent(user_id, conversation_id)
         self.npc_coordinator = NPCAgentCoordinator(user_id, conversation_id)
         self.npc_system = None  # Lazy-loaded
     
@@ -191,7 +191,7 @@ class NyxNPCIntegrationManager:
         logger.info(f"Processing user input through Nyx and NPC integration")
         
         # First get Nyx's response
-        nyx_response = await self.nyx_agent.process_input(user_input, context)
+        nyx_response = await self.nyx_agent_sdk.process_input(user_input, context)
         
         # Extract NPC guidance from Nyx's response
         npc_guidance = self._extract_npc_guidance(nyx_response)
@@ -359,7 +359,7 @@ class NyxNPCIntegrationManager:
                     # Store in Nyx's memory system
                     memory_text = f"{npc_name} reacted with {result.get('outcome', 'a strong response')}"
                     
-                    await self.nyx_agent.memory_system.add_memory(
+                    await self.nyx_agent_sdk.memory_system.add_memory(
                         memory_text=memory_text,
                         memory_type="observation",
                         memory_scope="game",
@@ -385,7 +385,7 @@ class NyxNPCIntegrationManager:
         enhanced_context = {**transition_context, "location_details": location_context}
         
         # First, handle Nyx's scene transition
-        scene_result = await self.nyx_agent.process_input(
+        scene_result = await self.nyx_agent_sdk.process_input(
             f"We're now moving to {new_location}",
             {"transition_to": new_location, **enhanced_context}
         )
@@ -565,7 +565,7 @@ class NyxNPCIntegrationManager:
         
         # First, handle Nyx's scene transition
         # Assuming Nyx has a transition_scene method to handle scene transitions
-        scene_result = await self.nyx_agent.process_input(
+        scene_result = await self.nyx_agent_sdk.process_input(
             f"We're now moving to {new_location}",
             {"transition_to": new_location, **transition_context}
         )
@@ -633,7 +633,7 @@ class NyxNPCIntegrationManager:
         
         # First, get Nyx's guidance for the scene
         nyx_input = f"I need guidance for a group interaction with the following NPCs: {npc_ids}"
-        nyx_response = await self.nyx_agent.process_input(nyx_input, shared_context)
+        nyx_response = await self.nyx_agent_sdk.process_input(nyx_input, shared_context)
         
         # Extract guidance
         nyx_guidance = nyx_response.get("text", "")
@@ -691,8 +691,8 @@ class NyxNPCIntegrationManager:
         logger.info(f"Running joint memory maintenance for user {user_id}, conversation {conversation_id}")
         
         # Run Nyx memory maintenance
-        nyx_agent = NyxAgent(user_id, conversation_id)
-        nyx_result = await nyx_agent.run_memory_maintenance()
+        nyx_agent_sdk = NyxAgent(user_id, conversation_id)
+        nyx_result = await nyx_agent_sdk.run_memory_maintenance()
         
         # Run NPC memory maintenance
         npc_coordinator = NPCAgentCoordinator(user_id, conversation_id)
@@ -766,7 +766,7 @@ class NyxNPCIntegrationManager:
                         # Only share very significant memories
                         if memory_significance >= 7:
                             # Share with Nyx's memory system
-                            await nyx_agent.memory_system.add_memory(
+                            await nyx_agent_sdk.memory_system.add_memory(
                                 memory_text=f"{npc_name}: {memory.get('text', '')}",
                                 memory_type="observation",
                                 memory_scope="game",
@@ -782,7 +782,7 @@ class NyxNPCIntegrationManager:
         if relationship_insights:
             # Create a reflection for Nyx about NPC relationships
             relationship_text = "NPC Relationships: " + relationship_insights
-            await nyx_agent.memory_system.add_memory(
+            await nyx_agent_sdk.memory_system.add_memory(
                 memory_text=relationship_text,
                 memory_type="reflection",
                 memory_scope="game",
@@ -966,7 +966,7 @@ class NyxNPCIntegrationManager:
         enhanced_context = {**context, "npc_states": npc_context}
         
         # Get Nyx's response with enhanced NPC awareness
-        nyx_response = await self.nyx_agent.process_input(user_input, enhanced_context)
+        nyx_response = await self.nyx_agent_sdk.process_input(user_input, enhanced_context)
         
         # Extract NPC guidance from Nyx's response
         npc_guidance = self._extract_npc_guidance(nyx_response)
