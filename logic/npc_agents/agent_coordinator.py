@@ -17,6 +17,7 @@ from agents import Agent, Runner, function_tool, handoff, trace, InputGuardrail,
 from db.connection import get_db_connection
 from memory.wrapper import MemorySystem
 from .npc_agent import NPCAgent, NPCAction
+from .behavior_evolution import BehaviorEvolution
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +296,57 @@ class NPCAgentCoordinator:
         except Exception as e:
             logger.error(f"Error getting NPC traits for {npc_id}: {e}")
             return {"error": str(e)}
+
+    async def evaluate_npc_scheming_for_all(self, npc_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """
+        Evaluate and update scheming behavior for each NPC in the provided list.
+        Returns a dictionary of npc_id -> adjustments result from BehaviorEvolution.
+        """
+        results = {}
+        for npc_id in npc_ids:
+            be = BehaviorEvolution(self.user_id, self.conversation_id)
+            adjustments = await be.evaluate_npc_scheming(npc_id)
+
+            # Optional: store or act on these adjustments
+            # E.g., update NPCStats or store in memory
+            await self._apply_scheming_adjustments(npc_id, adjustments)
+
+            results[npc_id] = adjustments
+
+        return results
+
+    async def _apply_scheming_adjustments(self, npc_id: int, adjustments: Dict[str, Any]):
+        """
+        Apply the adjustments from BehaviorEvolution to your NPC's data, 
+        for example by updating NPCStats or saving new beliefs.
+        """
+        try:
+            # Example: update an NPCStats column with the new scheme_level 
+            # or record betrayal_planning, etc.
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                # Store scheme_level into a new column if you have one, e.g. `scheming_level`
+                new_level = adjustments.get("scheme_level", 0)
+                cursor.execute("""
+                    UPDATE NPCStats
+                    SET scheming_level = %s
+                    WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                """, (new_level, npc_id, self.user_id, self.conversation_id))
+
+                # If you want to store betrayal_planning or targeting_player, do so similarly
+                # (You might add columns or handle them in JSON fields)
+                # e.g.:
+                betrayal_planning = adjustments.get("betrayal_planning", False)
+                cursor.execute("""
+                    UPDATE NPCStats
+                    SET betrayal_planning = %s
+                    WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                """, (betrayal_planning, npc_id, self.user_id, self.conversation_id))
+
+                conn.commit()
+
+            logger.info(f"Applied scheming adjustments for NPC {npc_id}: {adjustments}")
+        except Exception as e:
+            logger.error(f"Error applying scheming adjustments for NPC {npc_id}: {e}")
 
     @function_tool
     async def _get_relationships_between_npcs(self, npc_ids: List[int]) -> Dict[str, Any]:
