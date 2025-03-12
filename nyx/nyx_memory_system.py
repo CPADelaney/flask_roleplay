@@ -126,6 +126,20 @@ class NyxMemorySystem:
                 
                 return memory_id
 
+    async def share_memory_with_npcs(self, memory_text, npc_ids, importance="medium"):
+        """Share a memory from Nyx with specific NPCs."""
+        coordinator = NPCAgentCoordinator(self.user_id, self.conversation_id)
+        
+        return await coordinator.batch_update_npcs(
+            npc_ids,
+            "memory_update",
+            {
+                "memory_text": f"Nyx: {memory_text}", 
+                "importance": importance,
+                "tags": ["nyx_shared_memory"]
+            }
+        )
+
     async def retrieve_npc_memories(self, query, npc_ids=None):
         """Retrieve memories from specific NPCs"""
         coordinator = NPCAgentCoordinator(self.user_id, self.conversation_id)
