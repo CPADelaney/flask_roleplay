@@ -8,7 +8,7 @@ import time
 from datetime import datetime, date, timedelta
 from flask import Blueprint, request, jsonify, session
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-
+from logic.activity_analyzer import ActivityAnalyzer
 
 # Import utility modules
 from utils.db_helpers import db_transaction, with_transaction, handle_database_operation,fetch_row_async, fetch_all_async, execute_async
@@ -1604,48 +1604,33 @@ async def next_storybeat():
             tracker.start_phase("resource_processing")
             try:
                 activity_type = action_type if "action_type" in locals() else "conversation"
-                resource_manager = ResourceManager(user_id, conv_id)
+                activity_analyzer = ActivityAnalyzer(user_id, conv_id)
                 
-                # Different activities have different effects on resources
-                resource_effects = {
-                    "conversation": {"energy": -2, "hunger": -1},
-                    "eating": {"energy": 5, "hunger": 30, "money": -5},
-                    "working": {"energy": -10, "hunger": -5, "money": 15},
-                    "shopping": {"energy": -5, "hunger": -2, "money": -10, "supplies": 5},
-                    "training": {"energy": -15, "hunger": -10, "influence": 2},
-                    "socializing": {"energy": -8, "hunger": -3, "influence": 3},
-                    "resting": {"energy": 15, "hunger": -3},
-                    "studying": {"energy": -10, "hunger": -3, "influence": 1}
-                }
+                # If we have a specific activity description from the user, use that
+                # Otherwise, use the general activity type
+                activity_description = data.get("activity_description", user_input)
+                if not activity_description or len(activity_description) < 5:
+                    activity_description = f"{activity_type}"
                 
-                # Default to conversation if activity_type is not recognized
-                effects = resource_effects.get(activity_type, resource_effects["conversation"])
-                
-                # Apply effects
-                resource_results = {}
-                for resource, amount in effects.items():
-                    if resource == "energy":
-                        result = await resource_manager.modify_energy(amount, activity_type, "Activity effect")
-                        resource_results["energy"] = result
-                    elif resource == "hunger":
-                        result = await resource_manager.modify_hunger(amount, activity_type, "Activity effect")
-                        resource_results["hunger"] = result
-                    elif resource == "money":
-                        result = await resource_manager.modify_money(amount, activity_type, "Activity expense/income")
-                        resource_results["money"] = result
-                    elif resource == "supplies":
-                        result = await resource_manager.modify_supplies(amount, activity_type, "Activity supplies")
-                        resource_results["supplies"] = result
-                    elif resource == "influence":
-                        result = await resource_manager.modify_influence(amount, activity_type, "Activity influence")
-                        resource_results["influence"] = result
-                
-                # Add to response
-                response["resource_changes"] = resource_results
+                # Analyze the activity and apply effects
+                activity_analysis = await activity_analyzer.analyze_activity(
+                    activity_description,
+                    apply_effects=True
+                )
                 
                 # Get updated resources
+                resource_manager = ResourceManager(user_id, conv_id)
                 current_resources = await resource_manager.get_resources()
                 current_vitals = await resource_manager.get_vitals()
+                
+                # Add results to response
+                response["activity_effects"] = {
+                    "activity_type": activity_analysis["activity_type"],
+                    "activity_details": activity_analysis["activity_details"],
+                    "effects": activity_analysis["effects"],
+                    "description": activity_analysis["description"],
+                    "flags": activity_analysis.get("flags", {})
+                }
                 response["current_resources"] = current_resources
                 response["current_vitals"] = current_vitals
                 
@@ -1653,7 +1638,7 @@ async def next_storybeat():
                 logging.error(f"Error processing resources: {e}")
                 response["resource_error"] = str(e)
             tracker.end_phase()
-
+    
             # Process conflicts
             tracker.start_phase("conflicts")
             try:
