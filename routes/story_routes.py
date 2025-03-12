@@ -7,17 +7,13 @@ import asyncio
 import time
 from datetime import datetime, date, timedelta
 from flask import Blueprint, request, jsonify, session
+from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+
 
 # Import utility modules
-from utils.db_helpers import (
-    db_transaction, with_transaction, handle_database_operation,
-    fetch_row_async, fetch_all_async, execute_async
-)
+from utils.db_helpers import db_transaction, with_transaction, handle_database_operation,fetch_row_async, fetch_all_async, execute_async
 from utils.performance import PerformanceTracker, timed_function, STATS
-from utils.caching import (
-    NPC_CACHE, LOCATION_CACHE, AGGREGATOR_CACHE, TIME_CACHE,
-    COMPUTATION_CACHE
-)
+from utils.caching import NPC_CACHE, LOCATION_CACHE, AGGREGATOR_CACHE, TIME_CACHE,COMPUTATION_CACHE
 
 # Import core logic modules
 from db.connection import get_db_connection
@@ -36,28 +32,15 @@ from config import CONFIG
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
 
 # Import enhanced modules
-from logic.stats_logic import (
-    get_player_current_tier, check_for_combination_triggers, 
-    apply_stat_change, apply_activity_effects
-)
-from logic.npc_creation import (
-    process_daily_npc_activities, check_for_mask_slippage, 
-    detect_relationship_stage_changes
-)
-from logic.narrative_progression import (
-    get_current_narrative_stage, check_for_personal_revelations, 
-    check_for_narrative_moments, check_for_npc_revelations, 
-    add_dream_sequence, add_moment_of_clarity
-)
-from logic.social_links import (
-    get_relationship_dynamic_level, update_relationship_dynamic, 
-    check_for_relationship_crossroads, check_for_relationship_ritual, 
-    get_relationship_summary, apply_crossroads_choice
-)
-from logic.addiction_system import (
-    check_addiction_levels, update_addiction_level, process_addiction_effects, 
-    get_addiction_status, get_addiction_label
-)
+from logic.stats_logic import get_player_current_tier, check_for_combination_triggers, apply_stat_change, apply_activity_effects
+
+from logic.npc_creation import process_daily_npc_activities, check_for_mask_slippage, detect_relationship_stage_changes
+
+from logic.narrative_progression import get_current_narrative_stage, check_for_personal_revelations, check_for_narrative_moments, check_for_npc_revelations, add_dream_sequence, add_moment_of_clarity
+
+from logic.social_links import get_relationship_dynamic_level, update_relationship_dynamic, check_for_relationship_crossroads, check_for_relationship_ritual, get_relationship_summary, apply_crossroads_choice
+
+from logic.addiction_system import check_addiction_levels, update_addiction_level, process_addiction_effects, get_addiction_status, get_addiction_label
 
 from nyx.nyx_agent_sdk import process_user_input
 
@@ -1429,6 +1412,38 @@ async def next_storybeat():
                 data,
                 current_time
             )
+            tracker.end_phase()
+
+            # Process conflicts
+            tracker.start_phase("conflicts")
+            try:
+                conflict_integration = ConflictSystemIntegration(user_id, conv_id)
+                
+                # Check for active conflicts
+                active_conflicts = await conflict_integration.get_active_conflicts()
+                
+                # If time advanced, run daily update
+                conflict_update = None
+                if time_result.get("time_advanced", False):
+                    conflict_update = await conflict_integration.run_daily_update()
+                
+                # Process activity impact on conflicts
+                impact_result = None
+                activity_type = action_type if "action_type" in locals() else "conversation"
+                impact_result = await conflict_integration.process_activity_for_conflict_impact(
+                    activity_type, 
+                    user_input
+                )
+                
+                # Add conflict info to response
+                response["conflicts"] = {
+                    "active": active_conflicts,
+                    "updates": conflict_update,
+                    "impact": impact_result
+                }
+            except Exception as e:
+                logging.error(f"Error processing conflicts: {e}")
+                response["conflicts"] = {"error": str(e)}
             tracker.end_phase()
 
             # 8) Relationship events & crossroads
