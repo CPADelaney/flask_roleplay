@@ -522,6 +522,29 @@ def create_all_tables():
     ''')
 
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ActivityEffects (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            activity_name TEXT NOT NULL,                   -- General activity type (eating, working, etc.)
+            activity_details TEXT,                         -- Specific details (burger, hotdog, coffee, etc.)
+            setting_context TEXT,                          -- The setting where this effect applies
+            effects JSONB NOT NULL,                        -- Effects on resources (hunger, energy, money, etc.)
+            description TEXT,                              -- Description of the effects
+            flags JSONB,                                   -- Special flags (temporary_effect, stacking, etc.)
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (user_id, conversation_id, activity_name, activity_details)
+        );
+    ''')
+
+    # Index for quick lookups
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_activity_effects_lookup 
+        ON ActivityEffects(user_id, conversation_id, activity_name, activity_details);
+    ''')
+
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS Events (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
