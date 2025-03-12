@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field
 from db.connection import get_db_connection
 from nyx.nyx_memory_system import NyxMemorySystem
 from nyx.nyx_model_manager import UserModelManager
-from logic.nyx_enhancements_integration import enhance_context_with_memories
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +74,12 @@ async def retrieve_memories(ctx, query: str, limit: int = 5) -> str:
         formatted_memories.append(f"I {confidence_marker}: {memory['memory_text']}")
     
     return "\n".join(formatted_memories)
+
+def enhance_context_with_memories(context, memories):
+    """Add memories to context for better decision making."""
+    enhanced_context = context.copy()
+    enhanced_context['relevant_memories'] = memories
+    return enhanced_context
 
 @function_tool
 async def add_memory(ctx, memory_text: str, memory_type: str = "observation", significance: int = 5) -> str:
