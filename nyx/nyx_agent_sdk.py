@@ -107,6 +107,27 @@ async def add_memory(ctx, memory_text: str, memory_type: str = "observation", si
     
     return f"Memory added with ID: {memory_id}"
 
+async def get_scene_guidance(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate guidance for scene based on context."""
+    prompt = f"Generate guidance for a scene with the following context: {json.dumps(context)}"
+    
+    # Use existing agent to process prompt
+    response = await self.process_input(prompt, context)
+    
+    # Extract NPC guidance or create default
+    npc_guidance = response.get("npc_guidance", {})
+    if not npc_guidance:
+        npc_guidance = {
+            "responding_npcs": [],
+            "tone_guidance": {},
+            "content_guidance": {},
+            "emotion_guidance": {},
+            "conflict_guidance": {},
+            "nyx_expectations": {}
+        }
+    
+    return npc_guidance
+
 @function_tool
 async def get_user_model_guidance(ctx) -> str:
     """
