@@ -360,7 +360,7 @@ class NyxNPCIntegrationManager:
         enhanced_context = {**transition_context, "location_details": location_context}
         
         # First, handle Nyx's scene transition
-        scene_result = await self.nyx_agent_sdk.process_input(
+        scene_result = await self.nyx_agent_sdk.process_user_input(
             f"We're now moving to {new_location}",
             {"transition_to": new_location, **enhanced_context}
         )
@@ -547,7 +547,7 @@ class NyxNPCIntegrationManager:
         
         # First, get Nyx's guidance for the scene
         nyx_input = f"I need guidance for a group interaction with the following NPCs: {npc_ids}"
-        nyx_response = await self.nyx_agent_sdk.process_input(nyx_input, shared_context)
+        nyx_response = await self.nyx_agent_sdk.process_user_input(nyx_input, shared_context)
         
         # Extract guidance
         nyx_guidance = nyx_response.get("text", "")
@@ -903,7 +903,7 @@ class NyxNPCIntegrationManager:
         enhanced_context = {**context, "npc_states": npc_context}
         
         # Get Nyx's response with enhanced NPC awareness
-        nyx_response = await self.nyx_agent_sdk.process_input(user_input, enhanced_context)
+        nyx_response = await self.nyx_agent_sdk.process_user_input(user_input, enhanced_context)
         
         # Extract NPC guidance from Nyx's response
         npc_guidance = self._extract_npc_guidance(nyx_response)
