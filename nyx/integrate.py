@@ -224,21 +224,24 @@ class NyxNPCIntegrationManager:
     
     def _extract_npc_guidance(self, nyx_response):
         """
-        Extract guidance for NPCs from Nyx's response.
+        Extract comprehensive guidance for NPCs from Nyx's response.
         
         This includes:
         - Which NPCs should respond
-        - How they should respond (tone, content)
+        - How they should respond (tone, content, emotions)
         - Any specific instructions for behavior
+        - Conflicts or tensions to highlight
         """
         guidance = {
             "responding_npcs": [],
             "tone_guidance": {},
             "content_guidance": {},
+            "emotion_guidance": {},  # Added emotional guidance
+            "conflict_guidance": {},  # Added conflict guidance
             "nyx_expectations": {}
         }
         
-        # Extract NPC guidance if it exists
+        # Extract explicit NPC guidance if it exists
         npc_guidance = nyx_response.get("npc_guidance")
         if npc_guidance:
             # Direct inclusion if structure matches
@@ -249,6 +252,13 @@ class NyxNPCIntegrationManager:
         
         # Check for explicit NPC mentions
         npc_mentions = []
+        emotion_indicators = {
+            "angry": ["angrily", "fuming", "enraged", "angry"],
+            "surprised": ["surprised", "shocked", "startled", "astonished"],
+            "nervous": ["nervously", "anxiously", "hesitantly", "timidly"],
+            "pleased": ["pleased", "happily", "cheerfully", "gladly"],
+            "suspicious": ["suspiciously", "warily", "cautiously", "skeptically"]
+        }
         
         # Get all NPCs for this conversation
         try:
@@ -263,13 +273,25 @@ class NyxNPCIntegrationManager:
                     # Check if NPC is mentioned by name
                     if npc_name in response_text:
                         npc_mentions.append(npc_id)
-                        # Simple extraction of tone guidance
-                        if "angrily" in response_text or "angry" in response_text:
-                            guidance["tone_guidance"][npc_id] = "angry"
-                        elif "surprised" in response_text or "shock" in response_text:
-                            guidance["tone_guidance"][npc_id] = "surprised"
-                        elif "nervously" in response_text or "nervous" in response_text:
-                            guidance["tone_guidance"][npc_id] = "nervous"
+                        
+                        # Extract sentence containing NPC name for context
+                        sentences = response_text.split('.')
+                        for sentence in sentences:
+                            if npc_name in sentence:
+                                # Check for emotional indicators
+                                for emotion, indicators in emotion_indicators.items():
+                                    if any(indicator in sentence.lower() for indicator in indicators):
+                                        guidance["tone_guidance"][npc_id] = emotion
+                                        guidance["emotion_guidance"][npc_id] = emotion
+                                        break
+                                
+                                # Check for content guidance
+                                if "says" in sentence or "tells" in sentence or "asks" in sentence:
+                                    # Extract what they might say
+                                    content_start = sentence.find('"')
+                                    content_end = sentence.rfind('"')
+                                    if content_start != -1 and content_end != -1 and content_end > content_start:
+                                        guidance["content_guidance"][npc_id] = sentence[content_start+1:content_end]
         except Exception as e:
             logger.error(f"Error extracting NPC mentions: {e}")
         
@@ -292,11 +314,187 @@ class NyxNPCIntegrationManager:
             except Exception as e:
                 logger.error(f"Error getting location-based NPCs: {e}")
         
+        # Look for conflict cues
+        conflict_keywords = ["tension", "conflict", "disagree", "argue", "fight", "dispute"]
+        if any(keyword in response_text.lower() for keyword in conflict_keywords):
+            # Extract NPCs involved in conflict
+            for npc_id in guidance["responding_npcs"]:
+                if npc_id in guidance["tone_guidance"] and guidance["tone_guidance"][npc_id] in ["angry", "suspicious"]:
+                    guidance["conflict_guidance"][npc_id] = True
+        
         # Limit to max 3 responding NPCs to avoid overwhelming responses
         if len(guidance["responding_npcs"]) > 3:
             guidance["responding_npcs"] = guidance["responding_npcs"][:3]
         
         return guidance
+
+     async def _store_significant_npc_reactions(self, npc_responses):
+        """Store significant NPC reactions for future context"""
+        if not npc_responses:
+            return
+            
+        for response in npc_responses:
+            npc_id = response.get("npc_id")
+            if not npc_id:
+                continue
+                
+            result = response.get("result", {})
+            emotional_impact = result.get("emotional_impact", 0)
+            
+            # Only store significant reactions
+            if abs(emotional_impact) >= 2:
+                try:
+                    # Get NPC name
+                    npc_name = "Unknown NPC"
+                    with get_db_connection() as conn, conn.cursor() as cursor:
+                        cursor.execute("""
+                            SELECT npc_name FROM NPCStats
+                            WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                        """, (npc_id, self.user_id, self.conversation_id))
+                        
+                        row = cursor.fetchone()
+                        if row:
+                            npc_name = row[0]
+                    
+                    # Store in Nyx's memory system
+                    memory_text = f"{npc_name} reacted with {result.get('outcome', 'a strong response')}"
+                    
+                    await self.nyx_agent.memory_system.add_memory(
+                        memory_text=memory_text,
+                        memory_type="observation",
+                        memory_scope="game",
+                        significance=min(abs(emotional_impact) + 3, 10),  # Convert to significance scale
+                        tags=["npc_reaction", f"npc_{npc_id}"],
+                        metadata={"npc_id": npc_id, "npc_name": npc_name, "emotional_impact": emotional_impact}
+                    )
+                except Exception as e:
+                    logger.error(f"Error storing NPC reaction: {e}")   
+
+    async def transition_scene_with_npcs(
+        self,
+        user_id: int,
+        conversation_id: int,
+        new_location: str,
+        transition_context: Dict[str, Any]
+    ):
+        """Manage scene transition with enhanced NPC movement and reactions"""
+        logger.info(f"Transitioning scene to {new_location} with NPCs")
+        
+        # Create location context for Nyx
+        location_context = await self._get_location_context(new_location)
+        enhanced_context = {**transition_context, "location_details": location_context}
+        
+        # First, handle Nyx's scene transition
+        scene_result = await self.nyx_agent.process_input(
+            f"We're now moving to {new_location}",
+            {"transition_to": new_location, **enhanced_context}
+        )
+        
+        # Get NPCs that should move to the new location
+        npcs_to_move = transition_context.get("accompanying_npcs", [])
+        
+        if not npcs_to_move:
+            # If not specified, check if current location is known
+            old_location = transition_context.get("current_location")
+            if old_location:
+                # Get NPCs at current location (they should move with the player)
+                try:
+                    with get_db_connection() as conn, conn.cursor() as cursor:
+                        cursor.execute("""
+                            SELECT npc_id FROM NPCStats
+                            WHERE user_id = %s AND conversation_id = %s AND current_location = %s
+                        """, (user_id, conversation_id, old_location))
+                        
+                        for row in cursor.fetchall():
+                            npcs_to_move.append(row[0])
+                except Exception as e:
+                    logger.error(f"Error getting NPCs at location: {e}")
+        
+        # Additional context from Nyx's response
+        npc_transition_guidance = scene_result.get("npc_transition_guidance", {})
+        
+        # Move NPCs to the new location
+        if npcs_to_move:
+            # Get NPC reactions to this location if available from Nyx
+            npc_location_reactions = {}
+            for npc_id in npcs_to_move:
+                if str(npc_id) in npc_transition_guidance:
+                    npc_location_reactions[npc_id] = npc_transition_guidance[str(npc_id)]
+            
+            # Move the NPCs
+            await self.npc_coordinator.batch_update_npcs(
+                npcs_to_move,
+                "location_change",
+                {"new_location": new_location}
+            )
+            
+            # Handle emotional responses to location if provided
+            for npc_id, reaction in npc_location_reactions.items():
+                if "emotion" in reaction:
+                    await self.npc_coordinator.batch_update_npcs(
+                        [npc_id],
+                        "emotional_update",
+                        {"emotion": reaction["emotion"], "intensity": reaction.get("intensity", 0.5)}
+                    )
+            
+            # Generate memories for NPCs about the location change
+            await self.npc_coordinator.batch_update_npcs(
+                npcs_to_move,
+                "memory_update",
+                {"memory_text": f"I moved to {new_location} with the player", 
+                "tags": ["location_change"]}
+            )
+            
+            logger.info(f"Moved {len(npcs_to_move)} NPCs to {new_location}")
+        
+        # Enhance the scene result with NPC information
+        scene_result["npcs_moved"] = npcs_to_move
+        scene_result["new_location"] = new_location
+        scene_result["npc_reactions"] = npc_location_reactions if 'npc_location_reactions' in locals() else {}
+        
+        return scene_result
+    
+    async def _get_location_context(self, location: str) -> Dict[str, Any]:
+        """Get detailed location context for better scene descriptions"""
+        location_context = {"name": location}
+        
+        try:
+            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                async with pool.acquire() as conn:
+                    # Get location details
+                    row = await conn.fetchrow("""
+                        SELECT description, properties 
+                        FROM Locations
+                        WHERE name = $1
+                    """, location)
+                    
+                    if row:
+                        location_context["description"] = row["description"]
+                        if row["properties"]:
+                            location_context["properties"] = json.loads(row["properties"])
+                    
+                    # Get NPCs already at this location
+                    rows = await conn.fetch("""
+                        SELECT npc_id, npc_name, personality_traits
+                        FROM NPCStats
+                        WHERE current_location = $1
+                          AND user_id = $2
+                          AND conversation_id = $3
+                    """, location, self.user_id, self.conversation_id)
+                    
+                    if rows:
+                        location_context["resident_npcs"] = [
+                            {
+                                "npc_id": row["npc_id"],
+                                "npc_name": row["npc_name"],
+                                "traits": row["personality_traits"] if row["personality_traits"] else []
+                            }
+                            for row in rows
+                        ]
+        except Exception as e:
+            logger.error(f"Error getting location context: {e}")
+        
+        return location_context
     
     def _combine_responses(self, nyx_response, npc_responses):
         """
@@ -488,90 +686,317 @@ class NyxNPCIntegrationManager:
         return result
 
 
-async def run_joint_memory_maintenance(user_id: int, conversation_id: int):
-    """Maintain both Nyx and NPC memories with coordination"""
-    logger.info(f"Running joint memory maintenance for user {user_id}, conversation {conversation_id}")
-    
-    # Run Nyx memory maintenance
-    nyx_agent = NyxAgent(user_id, conversation_id)
-    nyx_result = await nyx_agent.run_memory_maintenance()
-    
-    # Run NPC memory maintenance
-    npc_coordinator = NPCAgentCoordinator(user_id, conversation_id)
-    npc_ids = await npc_coordinator.load_agents()
-    
-    # Create reflections based on Nyx's insights
-    if "reflections" in nyx_result:
-        for reflection in nyx_result["reflections"]:
-            await npc_coordinator.batch_update_npcs(
-                npc_ids,
-                "belief_update",
-                {"belief_text": f"Nyx believes: {reflection}",
-                "confidence": 0.8,
-                "topic": "nyx_perspective"}
-            )
-    
-    # Perform NPC memory maintenance
-    npc_maintenance_results = {}
-    batch_size = 5  # Process NPCs in smaller batches
-    
-    for i in range(0, len(npc_ids), batch_size):
-        batch = npc_ids[i:i+batch_size]
+    async def run_joint_memory_maintenance(user_id: int, conversation_id: int):
+        """Maintain both Nyx and NPC memories with enhanced coordination"""
+        logger.info(f"Running joint memory maintenance for user {user_id}, conversation {conversation_id}")
         
-        batch_results = {}
-        for npc_id in batch:
-            try:
-                # Get the NPC agent
-                if npc_id in npc_coordinator.active_agents:
-                    agent = npc_coordinator.active_agents[npc_id]
-                    
-                    # Run memory maintenance
-                    result = await agent.run_memory_maintenance()
-                    batch_results[npc_id] = result
-            except Exception as e:
-                logger.error(f"Error in memory maintenance for NPC {npc_id}: {e}")
-                batch_results[npc_id] = {"error": str(e)}
+        # Run Nyx memory maintenance
+        nyx_agent = NyxAgent(user_id, conversation_id)
+        nyx_result = await nyx_agent.run_memory_maintenance()
         
-        # Save batch results
-        npc_maintenance_results.update(batch_results)
+        # Run NPC memory maintenance
+        npc_coordinator = NPCAgentCoordinator(user_id, conversation_id)
+        npc_ids = await npc_coordinator.load_agents()
         
-        # Small delay between batches
-        if i + batch_size < len(npc_ids):
-            await asyncio.sleep(0.1)
-    
-    # Share important NPC memories with Nyx
-    for npc_id, result in npc_maintenance_results.items():
-        if "important_memories" in result:
-            for memory in result.get("important_memories", []):
-                try:
-                    # Get NPC name
-                    npc_name = f"NPC_{npc_id}"
-                    with get_db_connection() as conn, conn.cursor() as cursor:
-                        cursor.execute("""
-                            SELECT npc_name FROM NPCStats
-                            WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
-                        """, (npc_id, user_id, conversation_id))
-                        
-                        row = cursor.fetchone()
-                        if row:
-                            npc_name = row[0]
-                    
-                    # Share with Nyx's memory system
-                    await nyx_agent.memory_system.add_memory(
-                        memory_text=f"{npc_name}: {memory.get('text', '')}",
-                        memory_type="observation",
-                        memory_scope="game",
-                        significance=memory.get("significance", 5),
-                        tags=["npc_memory", f"npc_{npc_id}"],
-                        metadata={"source_npc": npc_id, "npc_name": npc_name}
+        # Create reflections based on Nyx's insights
+        if "reflections" in nyx_result:
+            for reflection in nyx_result["reflections"]:
+                # Determine which NPCs should be aware of this reflection
+                aware_npcs = await _determine_reflection_aware_npcs(
+                    user_id, conversation_id, npc_ids, reflection
+                )
+                
+                # Share with relevant NPCs
+                if aware_npcs:
+                    await npc_coordinator.batch_update_npcs(
+                        aware_npcs,
+                        "belief_update",
+                        {"belief_text": f"Nyx believes: {reflection}",
+                        "confidence": 0.8,
+                        "topic": "nyx_perspective"}
                     )
+        
+        # Perform NPC memory maintenance
+        npc_maintenance_results = {}
+        batch_size = 5  # Process NPCs in smaller batches
+        
+        for i in range(0, len(npc_ids), batch_size):
+            batch = npc_ids[i:i+batch_size]
+            
+            batch_results = {}
+            for npc_id in batch:
+                try:
+                    # Get the NPC agent
+                    if npc_id in npc_coordinator.active_agents:
+                        agent = npc_coordinator.active_agents[npc_id]
+                        
+                        # Run memory maintenance
+                        result = await agent.run_memory_maintenance()
+                        batch_results[npc_id] = result
                 except Exception as e:
-                    logger.error(f"Error sharing NPC memory with Nyx: {e}")
+                    logger.error(f"Error in memory maintenance for NPC {npc_id}: {e}")
+                    batch_results[npc_id] = {"error": str(e)}
+            
+            # Save batch results
+            npc_maintenance_results.update(batch_results)
+            
+            # Small delay between batches
+            if i + batch_size < len(npc_ids):
+                await asyncio.sleep(0.1)
+        
+        # Share important NPC memories with Nyx
+        for npc_id, result in npc_maintenance_results.items():
+            if "important_memories" in result:
+                for memory in result.get("important_memories", []):
+                    try:
+                        # Get NPC name
+                        npc_name = f"NPC_{npc_id}"
+                        with get_db_connection() as conn, conn.cursor() as cursor:
+                            cursor.execute("""
+                                SELECT npc_name FROM NPCStats
+                                WHERE npc_id = %s AND user_id = %s AND conversation_id = %s
+                            """, (npc_id, user_id, conversation_id))
+                            
+                            row = cursor.fetchone()
+                            if row:
+                                npc_name = row[0]
+                        
+                        # Determine significance based on memory significance
+                        memory_significance = memory.get("significance", 5)
+                        # Only share very significant memories
+                        if memory_significance >= 7:
+                            # Share with Nyx's memory system
+                            await nyx_agent.memory_system.add_memory(
+                                memory_text=f"{npc_name}: {memory.get('text', '')}",
+                                memory_type="observation",
+                                memory_scope="game",
+                                significance=memory.get("significance", 5),
+                                tags=["npc_memory", f"npc_{npc_id}"],
+                                metadata={"source_npc": npc_id, "npc_name": npc_name}
+                            )
+                    except Exception as e:
+                        logger.error(f"Error sharing NPC memory with Nyx: {e}")
+        
+        # Identify potential cross-NPC relationships or conflicts
+        relationship_insights = await _identify_npc_relationships(user_id, conversation_id, npc_ids)
+        if relationship_insights:
+            # Create a reflection for Nyx about NPC relationships
+            relationship_text = "NPC Relationships: " + relationship_insights
+            await nyx_agent.memory_system.add_memory(
+                memory_text=relationship_text,
+                memory_type="reflection",
+                memory_scope="game",
+                significance=6,
+                tags=["npc_relationships", "group_dynamics"],
+                metadata={"maintenance_generated": True}
+            )
+        
+        return {
+            "nyx_maintenance": nyx_result,
+            "npc_maintenance": npc_maintenance_results,
+            "npcs_processed": len(npc_ids),
+            "shared_memories": sum(1 for r in npc_maintenance_results.values() 
+                                for m in r.get("important_memories", []) if m.get("significance", 0) >= 7),
+            "relationship_insights": bool(relationship_insights)
+        }
+
+    async def _determine_reflection_aware_npcs(user_id, conversation_id, npc_ids, reflection):
+        """Determine which NPCs would be aware of Nyx's reflection"""
+        aware_npcs = []
+        
+        # Check for perceptive NPCs
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                # Query NPCs with perceptive traits
+                cursor.execute("""
+                    SELECT npc_id, personality_traits, scheming_level, dominance
+                    FROM NPCStats
+                    WHERE user_id = %s AND conversation_id = %s AND npc_id = ANY(%s)
+                """, (user_id, conversation_id, npc_ids))
+                
+                for row in cursor.fetchall():
+                    npc_id = row[0]
+                    traits = row[1] or []
+                    scheming_level = row[2] or 0
+                    dominance = row[3] or 50
+                    
+                    # Parse traits if needed
+                    if isinstance(traits, str):
+                        try:
+                            traits_list = json.loads(traits)
+                        except json.JSONDecodeError:
+                            traits_list = []
+                    else:
+                        traits_list = traits
+                    
+                    # Check for perceptive traits
+                    perceptive_traits = ["observant", "perceptive", "vigilant", "alert", "curious"]
+                    has_perceptive_trait = any(trait in traits_list for trait in perceptive_traits)
+                    
+                    # High schemers should be aware
+                    is_high_schemer = scheming_level >= 7
+                    
+                    # Highly dominant NPCs are more likely to be aware
+                    is_dominant = dominance >= 75
+                    
+                    # Check for specifics in the reflection that might trigger awareness
+                    reflection_topics = ["power", "control", "submission", "dominance"]
+                    has_relevant_topic = any(topic in reflection.lower() for topic in reflection_topics)
+                    
+                    # Determine if this NPC should be aware
+                    if is_high_schemer or (has_perceptive_trait and (is_dominant or has_relevant_topic)):
+                        aware_npcs.append(npc_id)
+        except Exception as e:
+            logger.error(f"Error determining reflection-aware NPCs: {e}")
+        
+        return aware_npcs
+
+    async def _identify_npc_relationships(user_id, conversation_id, npc_ids):
+        """Identify relationships and potential conflicts between NPCs"""
+        if len(npc_ids) < 2:
+            return ""
+        
+        insights = []
+        
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                # Get all social links between NPCs
+                placeholders = ','.join(['%s'] * len(npc_ids))
+                cursor.execute(f"""
+                    SELECT entity1_id, entity2_id, link_type, link_level
+                    FROM SocialLinks
+                    WHERE user_id = %s
+                      AND conversation_id = %s
+                      AND entity1_type = 'npc'
+                      AND entity2_type = 'npc'
+                      AND entity1_id IN ({placeholders})
+                      AND entity2_id IN ({placeholders})
+                """, (user_id, conversation_id, *npc_ids, *npc_ids))
+                
+                links = cursor.fetchall()
+                
+                # Get NPC names
+                cursor.execute(f"""
+                    SELECT npc_id, npc_name
+                    FROM NPCStats
+                    WHERE user_id = %s
+                      AND conversation_id = %s
+                      AND npc_id IN ({placeholders})
+                """, (user_id, conversation_id, *npc_ids))
+                
+                npc_names = {row[0]: row[1] for row in cursor.fetchall()}
+                
+                # Process links to find insights
+                for e1_id, e2_id, link_type, link_level in links:
+                    e1_name = npc_names.get(e1_id, f"NPC_{e1_id}")
+                    e2_name = npc_names.get(e2_id, f"NPC_{e2_id}")
+                    
+                    if link_type == "rival" and link_level < 30:
+                        insights.append(f"{e1_name} and {e2_name} have a strong rivalry.")
+                    elif link_type == "ally" and link_level > 70:
+                        insights.append(f"{e1_name} and {e2_name} are close allies.")
+                    elif link_type == "co_conspirator" and link_level > 80:
+                        insights.append(f"{e1_name} and {e2_name} appear to be co-conspirators.")
+        except Exception as e:
+            logger.error(f"Error identifying NPC relationships: {e}")
+        
+        return " ".join(insights)
+
+    async def _gather_npc_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Gather important NPC states to inform Nyx's understanding"""
+        npc_context = {}
+        
+        try:
+            # Get current location from context
+            location = context.get("location")
+            if not location:
+                # Try to get from game state
+                async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                    async with pool.acquire() as conn:
+                        row = await conn.fetchrow("""
+                            SELECT value FROM CurrentRoleplay 
+                            WHERE user_id = $1 AND conversation_id = $2 AND key = 'CurrentLocation'
+                        """, self.user_id, self.conversation_id)
+                        
+                        if row:
+                            location = row["value"]
+            
+            if location:
+                # Get NPCs at this location with their states
+                with get_db_connection() as conn, conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT n.npc_id, n.npc_name, n.dominance, n.cruelty, 
+                               n.personality_traits, n.schedule
+                        FROM NPCStats n
+                        WHERE n.user_id = %s 
+                          AND n.conversation_id = %s 
+                          AND n.current_location = %s
+                    """, (self.user_id, self.conversation_id, location))
+                    
+                    for row in cursor.fetchall():
+                        npc_id, npc_name = row[0], row[1]
+                        
+                        # Get emotional state for NPC
+                        memory_system = await self._get_memory_system(npc_id)
+                        emotional_state = await memory_system.get_npc_emotion(npc_id)
+                        
+                        npc_context[npc_id] = {
+                            "npc_name": npc_name,
+                            "dominance": row[2],
+                            "cruelty": row[3],
+                            "personality_traits": row[4],
+                            "emotional_state": emotional_state
+                        }
+        except Exception as e:
+            logger.error(f"Error gathering NPC context: {e}")
+        
+        return npc_context
     
-    return {
-        "nyx_maintenance": nyx_result,
-        "npc_maintenance": npc_maintenance_results,
-        "npcs_processed": len(npc_ids),
-        "shared_memories": sum(1 for r in npc_maintenance_results.values() 
-                            for m in r.get("important_memories", []))
-    }
+    async def _get_memory_system(self, npc_id):
+        """Get memory system for an NPC"""
+        # This would need to be implemented based on your memory system architecture
+        pass
+
+    async def process_user_input(self, user_input: str, context: Dict[str, Any]):
+        """Process user input through both systems with enhanced bidirectional feedback"""
+        logger.info(f"Processing user input through Nyx and NPC integration")
+        
+        # First, get key NPC states to enrich Nyx's context
+        npc_context = await self._gather_npc_context(context)
+        enhanced_context = {**context, "npc_states": npc_context}
+        
+        # Get Nyx's response with enhanced NPC awareness
+        nyx_response = await self.nyx_agent.process_input(user_input, enhanced_context)
+        
+        # Extract NPC guidance from Nyx's response
+        npc_guidance = self._extract_npc_guidance(nyx_response)
+        
+        # Add Nyx's guidance to context for NPCs
+        npc_context = context.copy()
+        npc_context["nyx_guidance"] = npc_guidance
+        
+        # Get NPC responses with Nyx's guidance
+        npc_responses = []
+        if "responding_npcs" in npc_guidance and npc_guidance["responding_npcs"]:
+            # Convert to player action for NPC system
+            player_action = {
+                "description": user_input,
+                "type": "talk"
+            }
+            
+            # Process through NPC system
+            npc_system = await self.get_npc_system()
+            npc_result = await npc_system.handle_player_action(
+                player_action,
+                npc_context
+            )
+            
+            npc_responses = npc_result.get("npc_responses", [])
+        
+        # Combine responses
+        combined_response = self._combine_responses(nyx_response, npc_responses)
+        
+        # Store important NPC reactions for future Nyx context
+        await self._store_significant_npc_reactions(npc_responses)
+        
+        return combined_response
