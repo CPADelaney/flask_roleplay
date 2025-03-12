@@ -23,6 +23,7 @@ from logic.aggregator import get_aggregated_roleplay_context
 from logic.time_cycle import get_current_time, should_advance_time, nightly_maintenance
 from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client, build_message_history
+from logic.resource_management import ResourceManager
 from routes.settings_routes import generate_mega_setting_logic
 from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
@@ -1311,6 +1312,191 @@ def build_aggregator_text(aggregator_data, rule_knowledge=None):
 # -------------------------------------------------------------------
 # ROUTE DEFINITION
 # -------------------------------------------------------------------
+
+@story_bp.route("/player/resources", methods=["GET"])
+@timed_function
+async def get_player_resources():
+    """
+    Get the current player resources.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        conversation_id = request.args.get("conversation_id")
+        player_name = request.args.get("player_name", "Chase")
+        
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id parameter"}), 400
+        
+        # Create cache key
+        cache_key = f"resources:{user_id}:{conversation_id}:{player_name}"
+        
+        # Check cache first
+        cached_result = NPC_CACHE.get(cache_key)
+        if cached_result:
+            return jsonify(cached_result)
+        
+        # Get resources from ResourceManager
+        resource_manager = ResourceManager(user_id, int(conversation_id), player_name)
+        resources = await resource_manager.get_resources()
+        vitals = await resource_manager.get_vitals()
+        
+        # Combine resources and vitals for a comprehensive resource state
+        result = {
+            "resources": resources,
+            "vitals": vitals
+        }
+        
+        # Cache the result
+        NPC_CACHE.set(cache_key, result, 30)  # TTL: 30 seconds
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logging.exception("[get_player_resources] Error")
+        return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/player/resources/modify", methods=["POST"])
+@timed_function
+async def modify_player_resources():
+    """
+    Modify player resources (money, supplies, influence, hunger, energy).
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        data = request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        player_name = data.get("player_name", "Chase")
+        
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id parameter"}), 400
+        
+        # Get resource and amount to modify
+        resource_type = data.get("resource_type")
+        amount = data.get("amount")
+        source = data.get("source", "manual")
+        description = data.get("description", "")
+        
+        if not resource_type or amount is None:
+            return jsonify({"error": "Missing resource_type or amount parameters"}), 400
+        
+        # Initialize ResourceManager
+        resource_manager = ResourceManager(user_id, int(conversation_id), player_name)
+        
+        # Modify the specified resource
+        result = None
+        if resource_type == "money":
+            result = await resource_manager.modify_money(amount, source, description)
+        elif resource_type == "supplies":
+            result = await resource_manager.modify_supplies(amount, source, description)
+        elif resource_type == "influence":
+            result = await resource_manager.modify_influence(amount, source, description)
+        elif resource_type == "hunger":
+            result = await resource_manager.modify_hunger(amount, source, description)
+        elif resource_type == "energy":
+            result = await resource_manager.modify_energy(amount, source, description)
+        else:
+            return jsonify({"error": f"Invalid resource_type: {resource_type}"}), 400
+        
+        # Clear cache
+        NPC_CACHE.remove(f"resources:{user_id}:{conversation_id}:{player_name}")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logging.exception("[modify_player_resources] Error")
+        return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/player/daily-income", methods=["POST"])
+@timed_function
+async def process_daily_income():
+    """
+    Process daily income for the player.
+    This gets called during nightly maintenance.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        data = request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id parameter"}), 400
+        
+        # Initialize ResourceManager
+        resource_manager = ResourceManager(user_id, int(conversation_id))
+        
+        # Base daily income
+        money_income = 10
+        supplies_income = 5
+        influence_income = 2
+        
+        # Get player stats to modify income based on skills/stats
+        # For example, higher confidence might increase influence gain
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT confidence, willpower FROM PlayerStats
+                WHERE user_id=%s AND conversation_id=%s AND player_name='Chase'
+            """, (user_id, conversation_id))
+            
+            row = cursor.fetchone()
+            
+            if row:
+                confidence, willpower = row
+                # Adjust income based on stats
+                influence_bonus = max(0, (confidence - 50) // 10)
+                money_bonus = max(0, (willpower - 50) // 10)
+                
+                money_income += money_bonus
+                influence_income += influence_bonus
+        finally:
+            cursor.close()
+            conn.close()
+        
+        # Apply income
+        money_result = await resource_manager.modify_money(
+            money_income, "daily_income", "Daily income"
+        )
+        
+        supplies_result = await resource_manager.modify_supplies(
+            supplies_income, "daily_income", "Daily supplies"
+        )
+        
+        influence_result = await resource_manager.modify_influence(
+            influence_income, "daily_income", "Daily influence gain"
+        )
+        
+        # Recover some energy overnight
+        energy_result = await resource_manager.modify_energy(
+            20, "rest", "Overnight rest"  # Recover 20 energy overnight
+        )
+        
+        # Decrease hunger (negative value = more hungry)
+        hunger_result = await resource_manager.modify_hunger(
+            -15, "metabolism", "Overnight metabolism"  # Lose 15 hunger overnight
+        )
+        
+        return jsonify({
+            "money": money_result,
+            "supplies": supplies_result,
+            "influence": influence_result,
+            "energy": energy_result,
+            "hunger": hunger_result
+        })
+        
+    except Exception as e:
+        logging.exception("[process_daily_income] Error")
+        return jsonify({"error": str(e)}), 500
 
 @story_bp.route("/next_storybeat", methods=["POST"])
 async def next_storybeat():
