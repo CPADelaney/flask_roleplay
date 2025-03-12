@@ -1498,6 +1498,98 @@ async def process_daily_income():
         logging.exception("[process_daily_income] Error")
         return jsonify({"error": str(e)}), 500
 
+# Add this to story_routes.py
+
+@story_bp.route("/analyze_activity", methods=["POST"])
+@timed_function
+async def analyze_activity_endpoint():
+    """
+    Analyze an activity to determine its resource effects without applying them.
+    This can be used for showing the player what will happen before they confirm.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        data = request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        activity_text = data.get("activity_text")
+        
+        if not conversation_id or not activity_text:
+            return jsonify({"error": "Missing required parameters"}), 400
+        
+        # Initialize activity analyzer
+        activity_analyzer = ActivityAnalyzer(user_id, int(conversation_id))
+        
+        # Analyze the activity (but don't apply effects yet)
+        activity_analysis = await activity_analyzer.analyze_activity(
+            activity_text,
+            apply_effects=False
+        )
+        
+        return jsonify({
+            "analysis": activity_analysis,
+            "message": "Activity analyzed successfully"
+        })
+        
+    except Exception as e:
+        logging.exception("[analyze_activity_endpoint] Error")
+        return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/perform_activity", methods=["POST"])
+@timed_function
+async def perform_activity_endpoint():
+    """
+    Perform a specific activity and apply its resource effects.
+    This endpoint allows activities outside the main conversation flow.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+            
+        data = request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        activity_text = data.get("activity_text")
+        
+        if not conversation_id or not activity_text:
+            return jsonify({"error": "Missing required parameters"}), 400
+        
+        # Initialize activity analyzer
+        activity_analyzer = ActivityAnalyzer(user_id, int(conversation_id))
+        
+        # Analyze and apply the activity effects
+        activity_result = await activity_analyzer.analyze_activity(
+            activity_text,
+            apply_effects=True
+        )
+        
+        # Get updated resources
+        resource_manager = ResourceManager(user_id, int(conversation_id))
+        current_resources = await resource_manager.get_resources()
+        current_vitals = await resource_manager.get_vitals()
+        
+        # Build the response
+        response = {
+            "activity_result": activity_result,
+            "current_resources": current_resources,
+            "current_vitals": current_vitals,
+            "message": "Activity performed successfully"
+        }
+        
+        # Check for special conditions based on resource states
+        if current_vitals.get("hunger", 100) < 20:
+            response["warnings"] = ["You're getting very hungry."]
+        if current_vitals.get("energy", 100) < 20:
+            response["warnings"] = response.get("warnings", []) + ["You're getting very tired."]
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        logging.exception("[perform_activity_endpoint] Error")
+        return jsonify({"error": str(e)}), 500
+
 @story_bp.route("/next_storybeat", methods=["POST"])
 async def next_storybeat():
     """Enhanced storybeat endpoint with better resource management and parallel processing."""
