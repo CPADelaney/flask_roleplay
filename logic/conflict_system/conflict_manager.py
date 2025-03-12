@@ -1,3 +1,5 @@
+# logic/conflict_system/conflict_manager.py
+
 import logging
 import json
 import random
