@@ -852,6 +852,25 @@ def create_all_tables():
     ''')
 
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS CurrencySystem (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            currency_name TEXT NOT NULL,                    -- Primary currency name (e.g., "credits", "gold")
+            currency_plural TEXT NOT NULL,                  -- Plural form (e.g., "credits", "gold pieces")
+            minor_currency_name TEXT,                       -- Secondary denomination if any (e.g., "cents", "silver")
+            minor_currency_plural TEXT,                     -- Plural form of minor currency
+            exchange_rate INTEGER DEFAULT 100,              -- How many minor units = 1 major unit (e.g., 100 cents = 1 dollar)
+            currency_symbol TEXT,                           -- Symbol if any (e.g., "$", "₢", "£")
+            format_template TEXT DEFAULT '{{amount}} {{currency}}', -- How to format currency strings
+            description TEXT,                               -- Brief description of the currency system
+            setting_context TEXT,                           -- The setting this currency belongs to
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (user_id, conversation_id)
+        );
+    ''')
+
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCVisualEvolution (
             id SERIAL PRIMARY KEY,
             npc_id INTEGER NOT NULL,
