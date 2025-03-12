@@ -44,11 +44,19 @@ class NPCAgentCoordinator:
     """Coordinates the behavior of multiple NPC agents using the Agents SDK."""
 
     def __init__(self, user_id: int, conversation_id: int):
+        # Existing initialization
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.active_agents: Dict[int, NPCAgent] = {}  # Map of npc_id -> NPCAgent
+        self.active_agents: Dict[int, NPCAgent] = {}
         self._memory_system = None
         self._coordinator_agent = None
+        
+        # Add resource pools for different operation types
+        self.resource_pools = {
+            "decisions": ResourcePool(max_concurrent=10, timeout=45.0),
+            "perceptions": ResourcePool(max_concurrent=15, timeout=30.0),
+            "memory_operations": ResourcePool(max_concurrent=20, timeout=20.0)
+        }
         
         # Cache systems to reduce repeated queries
         self._emotional_states = {}  # Cache of emotional states to avoid repeated queries
@@ -117,6 +125,24 @@ class NPCAgentCoordinator:
                         output_type=GroupDecisionOutput
                     )
         return self._coordinator_agent
+
+    async def get_resource_stats(self) -> Dict[str, Any]:
+        """Get statistics about resource pool usage."""
+        stats = {}
+        for name, pool in self.resource_pools.items():
+            stats[name] = pool.stats.copy()
+        return stats
+    
+    # You can then periodically log this information
+    async def _log_resource_stats(self):
+        """Log resource usage statistics periodically."""
+        while True:
+            try:
+                await asyncio.sleep(300)  # Every 5 minutes
+                stats = await self.get_resource_stats()
+                logger.info(f"Resource pool stats: {stats}")
+            except Exception as e:
+                logger.error(f"Error logging resource stats: {e}")
 
     async def load_agents(self, npc_ids: Optional[List[int]] = None) -> List[int]:
         """
@@ -416,83 +442,93 @@ class NPCAgentCoordinator:
     ) -> Dict[str, Any]:
         """
         Coordinate decision-making for a group of NPCs using the Agents SDK.
-        
-        Args:
-            npc_ids: List of NPC IDs
-            shared_context: Common context for all NPCs
-            available_actions: Optional pre-defined actions for each NPC
-            
-        Returns:
-            Dictionary with group action plan
         """
-        # Ensure all NPCs are loaded
-        await self.load_agents(npc_ids)
+        # Acquire decision resources with timeout
+        decision_resource = await self.resource_pools["decisions"].acquire()
         
-        # Get the coordinator agent
-        coordinator_agent = await self._get_coordinator_agent()
-        
-        # 1. Prepare enhanced group context with memory integration
-        enhanced_context = await self._prepare_group_context(npc_ids, shared_context)
-        
-        # 2. If actions are not provided, generate them
-        if available_actions is None:
-            available_actions = await self.generate_group_actions(npc_ids, enhanced_context)
-        
-        # 3. Prepare input for the coordinator agent
-        input_data = {
-            "context": enhanced_context,
-            "npc_ids": npc_ids,
-            "available_actions": available_actions
-        }
-        
-        # 4. Create trace for debugging
-        with trace(
-            f"group_decision_{self.user_id}_{self.conversation_id}", 
-            group_id=f"user_{self.user_id}_conv_{self.conversation_id}"
-        ):
-            # 5. Run the coordinator agent to make group decisions
-            result = await Runner.run(coordinator_agent, input_data)
+        try:
+            # Ensure all NPCs are loaded
+            await self.load_agents(npc_ids)
             
-            # 6. Process the result
-            output = result.final_output_as(GroupDecisionOutput)
+            # Get the coordinator agent
+            coordinator_agent = await self._get_coordinator_agent()
             
-            # 7. Create memories for all NPCs based on the decision
-            location = enhanced_context.get("location", "Unknown")
-            memory_text = f"I participated in a group interaction at {location} with {len(npc_ids)} others"
+            # 1. Prepare enhanced group context with memory integration
+            enhanced_context = await self._prepare_group_context(npc_ids, shared_context)
             
-            await self._create_group_memory(
-                npc_ids=npc_ids,
-                memory_text=memory_text,
-                importance="medium",
-                tags=["group_interaction", "group_decision"]
-            )
+            # 2. If actions are not provided, generate them
+            if available_actions is None:
+                # Use a smaller batch size if resources are constrained
+                if not decision_resource:
+                    logger.warning("Decision resources constrained, using smaller batches")
+                    available_actions = await self.generate_group_actions(
+                        npc_ids[:min(5, len(npc_ids))], enhanced_context
+                    )
+                else:
+                    available_actions = await self.generate_group_actions(npc_ids, enhanced_context)
             
-            # 8. Return the action plan
-            return {
-                "group_actions": output.group_actions,
-                "individual_actions": output.individual_actions,
-                "reasoning": output.reasoning,
-                "context": enhanced_context
+            # 3. Prepare input for the coordinator agent
+            input_data = {
+                "context": enhanced_context,
+                "npc_ids": npc_ids,
+                "available_actions": available_actions
             }
+            
+            # 4. Create trace for debugging
+            with trace(
+                f"group_decision_{self.user_id}_{self.conversation_id}", 
+                group_id=f"user_{self.user_id}_conv_{self.conversation_id}"
+            ):
+                # 5. Run the coordinator agent to make group decisions
+                result = await Runner.run(coordinator_agent, input_data)
+                
+                # 6. Process the result
+                output = result.final_output_as(GroupDecisionOutput)
+                
+                # 7. Create memories for all NPCs based on the decision
+                location = enhanced_context.get("location", "Unknown")
+                memory_text = f"I participated in a group interaction at {location} with {len(npc_ids)} others"
+                
+                # Use memory resource pool for these operations
+                memory_resource = await self.resource_pools["memory_operations"].acquire()
+                try:
+                    await self._create_group_memory(
+                        npc_ids=npc_ids,
+                        memory_text=memory_text,
+                        importance="medium",
+                        tags=["group_interaction", "group_decision"]
+                    )
+                finally:
+                    if memory_resource:
+                        self.resource_pools["memory_operations"].release()
+                
+                # 8. Return the action plan
+                return {
+                    "group_actions": output.group_actions,
+                    "individual_actions": output.individual_actions,
+                    "reasoning": output.reasoning,
+                    "context": enhanced_context
+                }
+        finally:
+            # Always release the resource when done
+            if decision_resource:
+                self.resource_pools["decisions"].release()
     
     async def _prepare_group_context(self, npc_ids: List[int], shared_context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Prepare enhanced context for group interactions with memory.
         Thread-safe implementation with batched processing.
-        
-        Args:
-            npc_ids: List of NPC IDs
-            shared_context: Base context to enhance
-            
-        Returns:
-            Enhanced context with memory integration
         """
-        memory_system = await self._get_memory_system()
+        # Acquire perception resource
+        perception_resource = await self.resource_pools["perceptions"].acquire()
         
-        # Create enhanced context
-        enhanced_context = shared_context.copy()
-        enhanced_context["participants"] = npc_ids
-        enhanced_context["type"] = "group_interaction"
+        try:
+            memory_system = await self._get_memory_system()
+            
+            # Create enhanced context
+            enhanced_context = shared_context.copy()
+            enhanced_context["participants"] = npc_ids
+            enhanced_context["type"] = "group_interaction"
         
         # Add location if not present
         if "location" not in enhanced_context:
@@ -552,6 +588,34 @@ class NPCAgentCoordinator:
             if i + batch_size < len(npc_ids):
                 await asyncio.sleep(0.05)
         
+        batch_size = 5
+        if not perception_resource:
+            # If resources are constrained, use smaller batches
+            batch_size = 3
+            logger.warning("Perception resources constrained, using smaller batch size")
+            
+        npc_contexts = {}
+        
+        for i in range(0, len(npc_ids), batch_size):
+            batch_npc_ids = npc_ids[i:i+batch_size]
+            batch_tasks = []
+            
+            # Create tasks for this batch
+            for npc_id in batch_npc_ids:
+                batch_tasks.append(self._prepare_single_npc_context(npc_id, npc_ids, enhanced_context))
+            
+            # Process the batch
+            batch_results = await asyncio.gather(*batch_tasks)
+            
+            # Add results to the context
+            for result in batch_results:
+                npc_id = result.pop("npc_id")
+                npc_contexts[npc_id] = result
+            
+            # Small delay between batches to prevent resource contention
+            if i + batch_size < len(npc_ids):
+                await asyncio.sleep(0.05)
+        
         # Store in enhanced context
         enhanced_context["npc_context"] = npc_contexts
         
@@ -567,6 +631,10 @@ class NPCAgentCoordinator:
         enhanced_context["shared_history"] = shared_memories.get("memories", [])
         
         return enhanced_context
+    finally:
+        # Always release the resource when done
+        if perception_resource:
+            self.resource_pools["perceptions"].release()
     
     async def _prepare_single_npc_context(
         self, 
