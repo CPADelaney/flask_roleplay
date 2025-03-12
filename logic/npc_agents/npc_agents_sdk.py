@@ -15,6 +15,47 @@ class NPCAgentSystem:
         self.conversation_id = conversation_id
         self.npc_agents = {}  # Map of npc_id -> Agent
         self._memory_system = None
+
+    async def create_npc_agent(self, npc_id: int, npc_data: dict):
+        """Create an Agent for an NPC with personality-based instructions"""
+        
+        # Create personalized instructions based on NPC traits
+        dominance = npc_data.get('dominance', 50)
+        cruelty = npc_data.get('cruelty', 50)
+        personality_traits = npc_data.get('personality_traits', [])
+        
+        # Build dynamic instructions based on NPC traits
+        instructions = f"""You are {npc_data['npc_name']}, an NPC with the following traits:
+- Dominance: {dominance}/100 {' (You tend to take control)' if dominance > 70 else ' (You tend to let others lead)' if dominance < 30 else ''}
+- Cruelty: {cruelty}/100 {' (You can be harsh)' if cruelty > 70 else ' (You are kind to others)' if cruelty < 30 else ''}
+"""
+        
+        if personality_traits:
+            instructions += "Your personality is characterized as: " + ", ".join(personality_traits) + ".\n"
+            
+        instructions += f"""
+You are in {npc_data.get('current_location', 'an unknown location')}.
+Respond to player actions in character, making decisions based on your personality, memories, and relationships.
+"""
+        
+        # Create the agent with tools
+        agent = Agent(
+            name=npc_data['npc_name'],
+            instructions=instructions,
+            model="gpt-4o",
+            model_settings=ModelSettings(temperature=0.7),
+            tools=[
+                function_tool(self.retrieve_memories),
+                function_tool(self.get_relationships),
+                function_tool(self.perceive_environment),
+                function_tool(self.update_emotion),
+                function_tool(self.create_memory),
+                function_tool(self.check_mask_integrity)
+            ]
+        )
+        
+        self.npc_agents[npc_id] = agent
+        return agent
     
     async def initialize_agents(self) -> None:
         """Initialize agents for all NPCs in this conversation."""
