@@ -553,67 +553,6 @@ class NyxNPCIntegrationManager:
         
         return combined
     
-    async def transition_scene_with_npcs(
-        self,
-        user_id: int,
-        conversation_id: int,
-        new_location: str,
-        transition_context: Dict[str, Any]
-    ):
-        """Manage scene transition with NPC movement"""
-        logger.info(f"Transitioning scene to {new_location} with NPCs")
-        
-        # First, handle Nyx's scene transition
-        # Assuming Nyx has a transition_scene method to handle scene transitions
-        scene_result = await self.nyx_agent_sdk.process_input(
-            f"We're now moving to {new_location}",
-            {"transition_to": new_location, **transition_context}
-        )
-        
-        # Get NPCs that should move to the new location
-        npcs_to_move = transition_context.get("accompanying_npcs", [])
-        
-        if not npcs_to_move:
-            # If not specified, check if current location is known
-            old_location = transition_context.get("current_location")
-            if old_location:
-                # Get NPCs at current location (they should move with the player)
-                try:
-                    with get_db_connection() as conn, conn.cursor() as cursor:
-                        cursor.execute("""
-                            SELECT npc_id FROM NPCStats
-                            WHERE user_id = %s AND conversation_id = %s AND current_location = %s
-                        """, (user_id, conversation_id, old_location))
-                        
-                        for row in cursor.fetchall():
-                            npcs_to_move.append(row[0])
-                except Exception as e:
-                    logger.error(f"Error getting NPCs at location: {e}")
-        
-        # Move NPCs to the new location
-        if npcs_to_move:
-            await self.npc_coordinator.batch_update_npcs(
-                npcs_to_move,
-                "location_change",
-                {"new_location": new_location}
-            )
-            
-            # Generate emotions and memory for NPCs about the location change
-            await self.npc_coordinator.batch_update_npcs(
-                npcs_to_move,
-                "memory_update",
-                {"memory_text": f"I moved to {new_location} with the player", 
-                "tags": ["location_change"]}
-            )
-            
-            logger.info(f"Moved {len(npcs_to_move)} NPCs to {new_location}")
-        
-        # Enhance the scene result with NPC information
-        scene_result["npcs_moved"] = npcs_to_move
-        scene_result["new_location"] = new_location
-        
-        return scene_result
-    
     async def process_group_decision_with_nyx(
         self,
         npc_ids: List[int],
@@ -720,8 +659,31 @@ class NyxNPCIntegrationManager:
         npc_maintenance_results = {}
         batch_size = 5  # Process NPCs in smaller batches
         
-        for i in range(0, len(npc_ids), batch_size):
-            batch = npc_ids[i:i+batch_size]
+        # With proper batch processing:
+        npc_responses = []
+        if "responding_npcs" in npc_guidance and npc_guidance["responding_npcs"]:
+            # Convert to player action for NPC system
+            player_action = {
+                "description": user_input,
+                "type": "talk"
+            }
+            
+            # Process through NPC system
+            npc_system = await self.get_npc_system()
+            
+            # Process NPCs in batches
+            for i in range(0, len(npc_guidance["responding_npcs"]), batch_size):
+                batch = npc_guidance["responding_npcs"][i:i+batch_size]
+                batch_context = npc_context.copy()
+                batch_context["batch_npcs"] = batch
+                
+                batch_result = await npc_system.handle_player_action(
+                    player_action,
+                    batch_context
+                )
+                
+                if "npc_responses" in batch_result:
+                    npc_responses.extend(batch_result["npc_responses"])
             
             batch_results = {}
             for npc_id in batch:
