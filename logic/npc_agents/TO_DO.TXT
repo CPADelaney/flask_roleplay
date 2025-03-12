@@ -126,3 +126,104 @@ Overall, these expansions make your NPCs feel more nuanced,
 reactive, and “alive.” Even small changes—like referencing 
 an NPC’s “cruelty” trait to magnify negative relationship 
 responses—can yield a big difference in gameplay dynamics.
+
+1. NPCS THAT TRULY REMEMBER, EVOLVE & REFLECT ON PAST EVENTS
+What FemU 0.5 Does:
+Tracks past events but doesn’t deeply reflect on them.
+Memories are summarized, but NPCs don’t “rethink” their past often.
+NPCs react logically to history but don’t engage in long-term reflection.
+Your Advantage:
+✅ NPCs Should Reflect & Regret Actions Over Time
+
+If an NPC did something cruel, they should second-guess themselves later.
+Guilt, regret, pride, or self-justification should emerge from past memories.
+✅ NPCs Should Have Private Thoughts the Player Can Uncover
+
+NPCs should journal their thoughts or talk to other NPCs about past events.
+Player should be able to eavesdrop or learn from rumors.
+Some NPCs should lie about their past actions when confronted.
+✅ NPCs Should “Grow” from Their Memories, Not Just Recall Them
+
+NPCs should reevaluate past beliefs based on new experiences.
+Example: If an NPC hated the player, but the player repeatedly helped them, they should struggle with their bias instead of instantly flipping.
+NPCs should internalize lessons over time rather than instantly responding to moment-to-moment events.
+💡 Implementation Idea:
+
+Create a "Memory Bias Evolution System"
+NPCs should occasionally rethink past memories when encountering similar situations.
+Instead of just recalling what happened, they should reinterpret events differently based on time, emotions, and external influence.
+🔹 Result? NPCs will truly change over time, making them feel more alive and dynamic than FemU’s static memory tracking.
+
+2. NPCS WHO PLOT, PLAN & SET TRAPS
+What FemU 0.5 Does:
+NPCs react to the player but don’t scheme in advance.
+The player initiates most major events—NPCs don’t actively set up situations for the player.
+Your Advantage:
+✅ NPCs Should Have Their Own Goals That Advance Over Time
+
+If an NPC wants revenge, power, or to manipulate the player, they should act independently instead of just responding to player actions.
+NPCs should develop schemes & conspiracies against the player and other NPCs.
+✅ NPCs Should Use Deception & Strategy
+
+NPCs should pretend to be loyal while secretly betraying the player later.
+Some NPCs should set up false scenarios (e.g., framing someone for a crime) to see how the player reacts.
+✅ NPCs Should Exploit the Player’s Weaknesses
+
+If the player is gullible, NPCs should fake distress to manipulate them.
+If the player is violent, NPCs should trick them into fighting the wrong enemy.
+💡 Implementation Idea:
+
+Create NPC Background Goals that run in the background, independent of the player.
+Some NPCs should try to manipulate the player into helping or hurting others.
+Add NPCs who deceive the player, then act differently when confronted.
+🔹 Result? Your NPCs will feel more cunning & unpredictable, unlike FemU’s purely reactive AI.
+
+3. NPCS WHO INTERACT WITH THE PLAYER WHEN THEY’RE “OFFLINE”
+What FemU 0.5 Does:
+NPCs interact in Discord & Private Chat, but they don’t reach out on their own unless spoken to.
+The player initiates 90% of conversations.
+Your Advantage:
+✅ NPCs Should Message the Player FIRST, Based on Their Personality
+
+A clingy NPC should spam the player with texts.
+A dominant NPC should command the player to check in with them.
+A shy NPC should only message when necessary, and apologize for being “needy.”
+✅ NPCs Should Comment on What the Player is Doing in the World
+
+If the player gets into trouble, NPCs should warn them or criticize them.
+If the player gains power, NPCs should treat them differently—even if they’re not talking directly.
+✅ NPCs Should Send Misinformation to Trick the Player
+
+If an NPC wants the player to act on false information, they should lie via text.
+NPCs should "warn" the player about other NPCs, but their motivations should vary.
+💡 Implementation Idea:
+
+NPCs should send random texts & notifications based on recent player actions.
+Add "NPC Gossip Chat" where NPCs talk about the player even if they’re not in the conversation.
+NPCs should react to what they “see” in the world, not just direct interactions.
+🔹 Result? NPCs will feel like real people who have their own lives & thoughts, instead of waiting for the player to interact.
+
+4. NPCS WHO LIE, MANIPULATE & GASLIGHT THE PLAYER
+What FemU 0.5 Does:
+NPCs detect lies, but they never tell major lies themselves.
+NPCs don’t try to rewrite history or gaslight the player.
+Your Advantage:
+✅ NPCs Should Convince the Player That Reality is Different from What Happened
+
+If an NPC cheats on the player, they should deny it unless caught with proof.
+If the player confronts them, they should try to make the player doubt their own memory.
+✅ NPCs Should "Rewrite" Events in Their Favor
+
+If an NPC loses an argument, they should later claim they won.
+NPCs should pretend they were always loyal, even if they betrayed the player earlier.
+✅ NPCs Should Exaggerate Their Relationship with the Player
+
+A possessive NPC should tell others they “own” the player, even if it’s not true.
+NPCs should talk about the player in ways that distort what actually happened.
+💡 Implementation Idea:
+
+Add "NPC Reality Distortion" where NPCs subtly change their retelling of past events.
+Add "Memory Corruption", where some NPCs make the player doubt their own choices.
+🔹 Result? NPCs will feel more manipulative & human, creating real emotional tension.
+
+
