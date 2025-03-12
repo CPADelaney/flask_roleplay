@@ -26,6 +26,26 @@ class BehaviorEvolution:
             self.memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
         return self.memory_system
 
+    # In BehaviorEvolution
+    async def evaluate_npc_scheming_with_user_model(self, npc_id: int) -> dict:
+        """Evolve NPC behavior considering user preferences"""
+        # Get base evolution
+        base_adjustments = await self.evaluate_npc_scheming(npc_id)
+        
+        # Get user model from Nyx
+        user_model = UserModelManager(self.user_id, self.conversation_id)
+        user_guidance = await user_model.get_response_guidance()
+        
+        # Adjust scheming based on user preferences
+        if user_guidance.get("suggested_dominance", 0.5) > 0.7:
+            # User prefers dominant characters, enhance scheming
+            base_adjustments["scheme_level"] += 2
+        elif user_guidance.get("suggested_dominance", 0.5) < 0.3:
+            # User prefers less dominant characters, reduce scheming
+            base_adjustments["scheme_level"] = max(0, base_adjustments["scheme_level"] - 1)
+        
+        return base_adjustments
+
     async def evaluate_npc_scheming(self, npc_id: int) -> dict:
         """
         Periodically evaluate if an NPC should adjust their behavior, escalate plans, or set new secret goals.
