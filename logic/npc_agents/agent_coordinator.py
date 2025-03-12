@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional, Set, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pydantic import BaseModel
+import asyncio
 
 from agents import Agent, Runner, function_tool, handoff, trace, InputGuardrail, RunContextWrapper, GuardrailFunctionOutput
 from db.connection import get_db_connection
@@ -60,53 +61,67 @@ class NPCAgentCoordinator:
             "emotional_state": 120,  # 2 minutes in seconds
             "mask": 300,             # 5 minutes in seconds
         }
+        
+        # Locks for synchronization
+        self._memory_system_lock = asyncio.Lock()
+        self._emotional_state_lock = asyncio.Lock()
+        self._mask_state_lock = asyncio.Lock()
+        self._agent_init_lock = asyncio.Lock()
+        self._batch_update_lock = asyncio.Lock()
 
     async def _get_memory_system(self):
-        """Lazy-load the memory system."""
+        """Lazy-load the memory system with synchronization."""
         if self._memory_system is None:
-            self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+            async with self._memory_system_lock:
+                # Check again within the lock to prevent double initialization
+                if self._memory_system is None:
+                    self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
         return self._memory_system
     
     async def _get_coordinator_agent(self):
-        """Lazy-load the coordinator agent."""
+        """Lazy-load the coordinator agent with synchronization."""
         if self._coordinator_agent is None:
-            self._coordinator_agent = Agent(
-                name="NPC_Group_Coordinator",
-                instructions="""
-                You coordinate interactions between multiple NPCs in a group setting.
-                Your job is to decide what actions each NPC should take based on their traits,
-                relationships, and the context of the interaction.
-                
-                Consider the following factors:
-                1. Each NPC's dominance and cruelty levels
-                2. Relationships between NPCs
-                3. Emotional states of NPCs
-                4. The specific context of the interaction
-                5. Previous group interactions
-                
-                Your output should include:
-                - Group actions: Actions that affect the entire group
-                - Individual actions: Actions specific to each NPC
-                - Reasoning: Explanation for your decisions
-                
-                Ensure that actions align with each NPC's personality and maintain consistent
-                character behavior.
-                """,
-                model="gpt-4o",
-                tools=[
-                    function_tool(self._get_npc_emotional_state),
-                    function_tool(self._get_npc_mask),
-                    function_tool(self._get_npc_traits),
-                    function_tool(self._get_relationships_between_npcs),
-                    function_tool(self._create_group_memory)
-                ],
-                output_type=GroupDecisionOutput
-            )
+            async with self._memory_system_lock:  # Reusing the memory system lock is fine here
+                # Check again within the lock to prevent double initialization
+                if self._coordinator_agent is None:
+                    self._coordinator_agent = Agent(
+                        name="NPC_Group_Coordinator",
+                        instructions="""
+                        You coordinate interactions between multiple NPCs in a group setting.
+                        Your job is to decide what actions each NPC should take based on their traits,
+                        relationships, and the context of the interaction.
+                        
+                        Consider the following factors:
+                        1. Each NPC's dominance and cruelty levels
+                        2. Relationships between NPCs
+                        3. Emotional states of NPCs
+                        4. The specific context of the interaction
+                        5. Previous group interactions
+                        
+                        Your output should include:
+                        - Group actions: Actions that affect the entire group
+                        - Individual actions: Actions specific to each NPC
+                        - Reasoning: Explanation for your decisions
+                        
+                        Ensure that actions align with each NPC's personality and maintain consistent
+                        character behavior.
+                        """,
+                        model="gpt-4o",
+                        tools=[
+                            function_tool(self._get_npc_emotional_state),
+                            function_tool(self._get_npc_mask),
+                            function_tool(self._get_npc_traits),
+                            function_tool(self._get_relationships_between_npcs),
+                            function_tool(self._create_group_memory)
+                        ],
+                        output_type=GroupDecisionOutput
+                    )
         return self._coordinator_agent
 
     async def load_agents(self, npc_ids: Optional[List[int]] = None) -> List[int]:
         """
         Load specified NPC agents into memory, or load all if none specified.
+        Thread-safe implementation that prevents duplicate initialization.
 
         Returns:
             List of NPC IDs that were successfully loaded.
@@ -135,13 +150,22 @@ class NPCAgentCoordinator:
                 cursor.execute(query, params)
                 rows = cursor.fetchall()
 
+                # First collect all IDs to load
+                to_load = []
                 for row in rows:
                     npc_id = row[0]
                     if npc_id not in self.active_agents:
-                        self.active_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
-                        # Initialize the agent
-                        await self.active_agents[npc_id].initialize()
+                        to_load.append(npc_id)
                     loaded_ids.append(npc_id)
+                
+                # Then initialize them with proper locking
+                for npc_id in to_load:
+                    async with self._agent_init_lock:
+                        # Check again inside the lock to avoid double initialization
+                        if npc_id not in self.active_agents:
+                            self.active_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+                            # Initialize the agent
+                            await self.active_agents[npc_id].initialize()
 
             logger.info("Loaded agents: %s", loaded_ids)
             return loaded_ids
@@ -153,6 +177,7 @@ class NPCAgentCoordinator:
     async def _get_npc_emotional_state(self, npc_id: int) -> Dict[str, Any]:
         """
         Get an NPC's current emotional state, with caching for performance.
+        Thread-safe implementation.
         
         Args:
             npc_id: ID of the NPC
@@ -162,29 +187,38 @@ class NPCAgentCoordinator:
         """
         now = datetime.now()
         
-        # Check cache first
+        # First quick check without lock
         if npc_id in self._emotional_states:
             timestamp = self._emotional_states_timestamps.get(npc_id)
             if timestamp and (now - timestamp).total_seconds() < self._cache_ttl["emotional_state"]:
                 return self._emotional_states[npc_id]
+        
+        # If we need to fetch or update, acquire lock
+        async with self._emotional_state_lock:
+            # Check again within the lock
+            if npc_id in self._emotional_states:
+                timestamp = self._emotional_states_timestamps.get(npc_id)
+                if timestamp and (now - timestamp).total_seconds() < self._cache_ttl["emotional_state"]:
+                    return self._emotional_states[npc_id]
             
-        try:
-            memory_system = await self._get_memory_system()
-            emotional_state = await memory_system.get_npc_emotion(npc_id)
-            
-            # Cache the result
-            self._emotional_states[npc_id] = emotional_state
-            self._emotional_states_timestamps[npc_id] = now
-            
-            return emotional_state
-        except Exception as e:
-            logger.error(f"Error getting emotional state for NPC {npc_id}: {e}")
-            return {}
+            try:
+                memory_system = await self._get_memory_system()
+                emotional_state = await memory_system.get_npc_emotion(npc_id)
+                
+                # Cache the result
+                self._emotional_states[npc_id] = emotional_state
+                self._emotional_states_timestamps[npc_id] = now
+                
+                return emotional_state
+            except Exception as e:
+                logger.error(f"Error getting emotional state for NPC {npc_id}: {e}")
+                return {}
     
     @function_tool
     async def _get_npc_mask(self, npc_id: int) -> Dict[str, Any]:
         """
         Get an NPC's mask information, with caching for performance.
+        Thread-safe implementation.
         
         Args:
             npc_id: ID of the NPC
@@ -194,24 +228,32 @@ class NPCAgentCoordinator:
         """
         now = datetime.now()
         
-        # Check cache first
+        # First quick check without lock
         if npc_id in self._mask_states:
             timestamp = self._mask_states_timestamps.get(npc_id)
             if timestamp and (now - timestamp).total_seconds() < self._cache_ttl["mask"]:
                 return self._mask_states[npc_id]
+        
+        # If we need to fetch or update, acquire lock
+        async with self._mask_state_lock:
+            # Check again within the lock
+            if npc_id in self._mask_states:
+                timestamp = self._mask_states_timestamps.get(npc_id)
+                if timestamp and (now - timestamp).total_seconds() < self._cache_ttl["mask"]:
+                    return self._mask_states[npc_id]
             
-        try:
-            memory_system = await self._get_memory_system()
-            mask_info = await memory_system.get_npc_mask(npc_id)
-            
-            # Cache the result
-            self._mask_states[npc_id] = mask_info
-            self._mask_states_timestamps[npc_id] = now
-            
-            return mask_info
-        except Exception as e:
-            logger.error(f"Error getting mask info for NPC {npc_id}: {e}")
-            return {}
+            try:
+                memory_system = await self._get_memory_system()
+                mask_info = await memory_system.get_npc_mask(npc_id)
+                
+                # Cache the result
+                self._mask_states[npc_id] = mask_info
+                self._mask_states_timestamps[npc_id] = now
+                
+                return mask_info
+            except Exception as e:
+                logger.error(f"Error getting mask info for NPC {npc_id}: {e}")
+                return {}
     
     @function_tool
     async def _get_npc_traits(self, npc_id: int) -> Dict[str, Any]:
@@ -332,19 +374,37 @@ class NPCAgentCoordinator:
         memory_system = await self._get_memory_system()
         results = {}
         
-        for npc_id in npc_ids:
-            try:
-                memory = await memory_system.remember(
+        # Create tasks for all NPCs but execute in smaller batches
+        # to prevent overwhelming the memory system
+        batch_size = 5
+        for i in range(0, len(npc_ids), batch_size):
+            batch = npc_ids[i:i+batch_size]
+            tasks = []
+            
+            for npc_id in batch:
+                task = memory_system.remember(
                     entity_type="npc",
                     entity_id=npc_id,
                     memory_text=memory_text,
                     importance=importance,
                     tags=tags
                 )
-                results[npc_id] = {"status": "success", "memory_id": memory.get("id")}
-            except Exception as e:
-                logger.error(f"Error creating memory for NPC {npc_id}: {e}")
-                results[npc_id] = {"status": "error", "message": str(e)}
+                tasks.append(task)
+            
+            # Process this batch
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Record results
+            for npc_id, result in zip(batch, batch_results):
+                if isinstance(result, Exception):
+                    logger.error(f"Error creating memory for NPC {npc_id}: {result}")
+                    results[npc_id] = {"status": "error", "message": str(result)}
+                else:
+                    results[npc_id] = {"status": "success", "memory_id": result.get("id")}
+            
+            # Small delay between batches to prevent resource contention
+            if i + batch_size < len(npc_ids):
+                await asyncio.sleep(0.05)
         
         return results
     
@@ -418,6 +478,7 @@ class NPCAgentCoordinator:
     async def _prepare_group_context(self, npc_ids: List[int], shared_context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Prepare enhanced context for group interactions with memory.
+        Thread-safe implementation with batched processing.
         
         Args:
             npc_ids: List of NPC IDs
@@ -467,17 +528,32 @@ class NPCAgentCoordinator:
         if "npc_context" not in enhanced_context:
             enhanced_context["npc_context"] = {}
         
-        # Process each NPC in parallel for better performance
-        tasks = []
-        for npc_id in npc_ids:
-            tasks.append(self._prepare_single_npc_context(npc_id, npc_ids, enhanced_context))
+        # Process NPCs in batches for better performance and resource management
+        batch_size = 5  # Process 5 NPCs at a time
+        npc_contexts = {}
         
-        npc_contexts = await asyncio.gather(*tasks)
+        for i in range(0, len(npc_ids), batch_size):
+            batch_npc_ids = npc_ids[i:i+batch_size]
+            batch_tasks = []
+            
+            # Create tasks for this batch
+            for npc_id in batch_npc_ids:
+                batch_tasks.append(self._prepare_single_npc_context(npc_id, npc_ids, enhanced_context))
+            
+            # Process the batch
+            batch_results = await asyncio.gather(*batch_tasks)
+            
+            # Add results to the context
+            for result in batch_results:
+                npc_id = result.pop("npc_id")
+                npc_contexts[npc_id] = result
+            
+            # Small delay between batches to prevent resource contention
+            if i + batch_size < len(npc_ids):
+                await asyncio.sleep(0.05)
         
         # Store in enhanced context
-        for npc_context in npc_contexts:
-            npc_id = npc_context.pop("npc_id")
-            enhanced_context["npc_context"][npc_id] = npc_context
+        enhanced_context["npc_context"] = npc_contexts
         
         # Add shared group memories
         shared_memories = await memory_system.recall(
@@ -500,6 +576,7 @@ class NPCAgentCoordinator:
     ) -> Dict[str, Any]:
         """
         Prepare context for a single NPC within a group.
+        Thread-safe implementation using cached data when available.
         
         Args:
             npc_id: The NPC ID
@@ -526,26 +603,42 @@ class NPCAgentCoordinator:
             context_text = f"group interaction at {context.get('location', 'Unknown')}"
             flashback = await memory_system.npc_flashback(npc_id, context_text)
         
-        # Get NPC's emotional state
+        # Get NPC's emotional state - use thread-safe method
         emotional_state = await self._get_npc_emotional_state(npc_id)
         
-        # Get NPC's mask status
+        # Get NPC's mask status - use thread-safe method
         mask_info = await self._get_npc_mask(npc_id)
         
         # Get NPC's traits
         traits = await self._get_npc_traits(npc_id)
         
-        # Get NPC's beliefs about other NPCs in the group
+        # Get NPC's beliefs about other NPCs in the group - process in smaller batches
         beliefs = {}
-        for other_id in group_npc_ids:
-            if other_id != npc_id:
-                npc_beliefs = await memory_system.get_beliefs(
+        other_npc_ids = [other_id for other_id in group_npc_ids if other_id != npc_id]
+        
+        # Process in batches of 3
+        batch_size = 3
+        for i in range(0, len(other_npc_ids), batch_size):
+            batch = other_npc_ids[i:i+batch_size]
+            batch_tasks = []
+            
+            for other_id in batch:
+                task = memory_system.get_beliefs(
                     entity_type="npc",
                     entity_id=npc_id,
                     topic=f"npc_{other_id}"
                 )
-                if npc_beliefs:
-                    beliefs[other_id] = npc_beliefs
+                batch_tasks.append(task)
+            
+            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+            
+            for other_id, result in zip(batch, batch_results):
+                if not isinstance(result, Exception) and result:
+                    beliefs[other_id] = result
+            
+            # Small delay between batches
+            if i + batch_size < len(other_npc_ids):
+                await asyncio.sleep(0.02)
         
         return {
             "npc_id": npc_id,
@@ -565,6 +658,7 @@ class NPCAgentCoordinator:
         """
         Generate possible actions for each NPC in a group context.
         Enhanced with memory-based influences.
+        Thread-safe implementation with batched processing.
 
         Args:
             npc_ids: IDs of the NPCs
@@ -578,253 +672,302 @@ class NPCAgentCoordinator:
         # Get memory system
         memory_system = await self._get_memory_system()
         
-        # Process each NPC
-        for npc_id in npc_ids:
-            # Get NPC traits
-            npc_traits = await self._get_npc_traits(npc_id)
+        # Process NPCs in batches
+        batch_size = 5
+        for i in range(0, len(npc_ids), batch_size):
+            batch = npc_ids[i:i+batch_size]
+            batch_tasks = []
             
-            if "error" in npc_traits:
-                continue
-                
-            dom = npc_traits.get("dominance", 50)
-            cru = npc_traits.get("cruelty", 50)
-            name = npc_traits.get("npc_name", f"NPC_{npc_id}")
+            # Create tasks for this batch
+            for npc_id in batch:
+                batch_tasks.append(self._generate_actions_for_npc(npc_id, npc_ids, context, memory_system))
             
-            # Basic actions available to all NPCs
-            actions = [
-                {
-                    "type": "talk",
-                    "description": "Talk to the group",
-                    "target": "group"
-                },
-                {
-                    "type": "observe",
-                    "description": "Observe the group",
-                    "target": "group"
-                },
-                {
-                    "type": "leave",
-                    "description": "Leave the group",
-                    "target": "group"
-                }
-            ]
+            # Process this batch
+            batch_results = await asyncio.gather(*batch_tasks)
             
-            # Get emotional state to influence available actions
-            emotional_state = await self._get_npc_emotional_state(npc_id)
+            # Add results to output
+            for npc_id, actions in batch_results:
+                group_actions[npc_id] = actions
             
-            # Get NPC's mask information
-            mask_info = await self._get_npc_mask(npc_id)
+            # Small delay between batches
+            if i + batch_size < len(npc_ids):
+                await asyncio.sleep(0.05)
+        
+        return group_actions
+    
+    async def _generate_actions_for_npc(
+        self,
+        npc_id: int,
+        all_npc_ids: List[int],
+        context: Dict[str, Any],
+        memory_system: MemorySystem
+    ) -> Tuple[int, List[Dict[str, Any]]]:
+        """
+        Generate actions for a single NPC.
+        
+        Args:
+            npc_id: ID of the NPC
+            all_npc_ids: All NPCs in the group
+            context: Context data
+            memory_system: The memory system instance
             
-            # Get beliefs that might influence actions
-            beliefs = await memory_system.get_beliefs(
-                entity_type="npc",
-                entity_id=npc_id,
-                topic="group_interaction"
-            )
+        Returns:
+            Tuple of (npc_id, list of actions)
+        """
+        # Get NPC traits - use thread-safe method that includes caching
+        npc_traits = await self._get_npc_traits(npc_id)
+        
+        if "error" in npc_traits:
+            return npc_id, []
             
-            # Add dominance-based actions
-            if dom > 60:
+        dom = npc_traits.get("dominance", 50)
+        cru = npc_traits.get("cruelty", 50)
+        name = npc_traits.get("npc_name", f"NPC_{npc_id}")
+        
+        # Basic actions available to all NPCs
+        actions = [
+            {
+                "type": "talk",
+                "description": "Talk to the group",
+                "target": "group"
+            },
+            {
+                "type": "observe",
+                "description": "Observe the group",
+                "target": "group"
+            },
+            {
+                "type": "leave",
+                "description": "Leave the group",
+                "target": "group"
+            }
+        ]
+        
+        # Get emotional state to influence available actions - use thread-safe method
+        emotional_state = await self._get_npc_emotional_state(npc_id)
+        
+        # Get NPC's mask information - use thread-safe method
+        mask_info = await self._get_npc_mask(npc_id)
+        
+        # Get beliefs that might influence actions
+        beliefs = await memory_system.get_beliefs(
+            entity_type="npc",
+            entity_id=npc_id,
+            topic="group_interaction"
+        )
+        
+        # Add dominance-based actions
+        if dom > 60:
+            actions.append({
+                "type": "command",
+                "description": "Give an authoritative command",
+                "target": "group",
+                "stats_influenced": {"dominance": 1, "trust": -1}
+            })
+            actions.append({
+                "type": "test",
+                "description": "Test group's obedience",
+                "target": "group",
+                "stats_influenced": {"dominance": 2, "respect": -1}
+            })
+            
+            if dom > 75:
                 actions.append({
-                    "type": "command",
-                    "description": "Give an authoritative command",
+                    "type": "dominate",
+                    "description": "Assert dominance forcefully",
                     "target": "group",
-                    "stats_influenced": {"dominance": 1, "trust": -1}
+                    "stats_influenced": {"dominance": 3, "fear": 2}
                 })
+        
+        # Add cruelty-based actions
+        if cru > 60:
+            actions.append({
+                "type": "mock",
+                "description": "Mock or belittle the group",
+                "target": "group",
+                "stats_influenced": {"cruelty": 1, "closeness": -2}
+            })
+            
+            if cru > 70:
                 actions.append({
-                    "type": "test",
-                    "description": "Test group's obedience",
+                    "type": "humiliate",
+                    "description": "Deliberately humiliate the group",
                     "target": "group",
-                    "stats_influenced": {"dominance": 2, "respect": -1}
+                    "stats_influenced": {"cruelty": 2, "fear": 2}
                 })
-                
-                if dom > 75:
+        
+        # Add emotionally-influenced actions for strong emotions
+        if emotional_state and "current_emotion" in emotional_state:
+            current_emotion = emotional_state["current_emotion"]
+            primary = current_emotion.get("primary", {})
+            
+            # Handle different data structures
+            if isinstance(primary, dict) and "name" in primary:
+                emotion_name = primary.get("name", "neutral")
+                intensity = primary.get("intensity", 0.0)
+            else:
+                emotion_name = primary if primary else "neutral"
+                intensity = current_emotion.get("intensity", 0.0)
+            
+            if intensity > 0.7:
+                if emotion_name == "anger":
                     actions.append({
-                        "type": "dominate",
-                        "description": "Assert dominance forcefully",
+                        "type": "express_anger",
+                        "description": "Express anger forcefully",
                         "target": "group",
-                        "stats_influenced": {"dominance": 3, "fear": 2}
+                        "stats_influenced": {"dominance": 2, "closeness": -3}
                     })
-            
-            # Add cruelty-based actions
-            if cru > 60:
-                actions.append({
-                    "type": "mock",
-                    "description": "Mock or belittle the group",
-                    "target": "group",
-                    "stats_influenced": {"cruelty": 1, "closeness": -2}
-                })
-                
-                if cru > 70:
+                elif emotion_name == "fear":
                     actions.append({
-                        "type": "humiliate",
-                        "description": "Deliberately humiliate the group",
-                        "target": "group",
-                        "stats_influenced": {"cruelty": 2, "fear": 2}
+                        "type": "act_defensive",
+                        "description": "Act defensively and guarded",
+                        "target": "environment",
+                        "stats_influenced": {"trust": -2}
                     })
-            
-            # Add emotionally-influenced actions for strong emotions
-            if emotional_state and "current_emotion" in emotional_state:
-                current_emotion = emotional_state["current_emotion"]
-                primary = current_emotion.get("primary", {})
-                
-                # Handle different data structures
-                if isinstance(primary, dict) and "name" in primary:
-                    emotion_name = primary.get("name", "neutral")
-                    intensity = primary.get("intensity", 0.0)
-                else:
-                    emotion_name = primary if primary else "neutral"
-                    intensity = current_emotion.get("intensity", 0.0)
-                
-                if intensity > 0.7:
-                    if emotion_name == "anger":
-                        actions.append({
-                            "type": "express_anger",
-                            "description": "Express anger forcefully",
-                            "target": "group",
-                            "stats_influenced": {"dominance": 2, "closeness": -3}
-                        })
-                    elif emotion_name == "fear":
-                        actions.append({
-                            "type": "act_defensive",
-                            "description": "Act defensively and guarded",
-                            "target": "environment",
-                            "stats_influenced": {"trust": -2}
-                        })
-                    elif emotion_name == "joy":
-                        actions.append({
-                            "type": "celebrate",
-                            "description": "Share happiness enthusiastically",
-                            "target": "group",
-                            "stats_influenced": {"closeness": 3}
-                        })
-            
-            # Add actions based on mask information
-            mask_integrity = 100
-            hidden_traits = {}
-            
-            if mask_info:
-                mask_integrity = mask_info.get("integrity", 100)
-                hidden_traits = mask_info.get("hidden_traits", {})
-            
-            if mask_integrity < 70:
-                # As mask breaks down, hidden traits show through
-                if isinstance(hidden_traits, dict):
-                    for trait, value in hidden_traits.items():
-                        if trait == "dominant" and value:
-                            actions.append({
-                                "type": "mask_slip",
-                                "description": "Show unexpected dominance",
-                                "target": "group",
-                                "stats_influenced": {"dominance": 3, "fear": 2}
-                            })
-                        elif trait == "cruel" and value:
-                            actions.append({
-                                "type": "mask_slip",
-                                "description": "Reveal unexpected cruelty",
-                                "target": "group",
-                                "stats_influenced": {"cruelty": 2, "fear": 1}
-                            })
-                        elif trait == "submissive" and value:
-                            actions.append({
-                                "type": "mask_slip",
-                                "description": "Show unexpected submission",
-                                "target": "group",
-                                "stats_influenced": {"dominance": -2}
-                            })
-                elif isinstance(hidden_traits, list):
-                    if "dominant" in hidden_traits:
+                elif emotion_name == "joy":
+                    actions.append({
+                        "type": "celebrate",
+                        "description": "Share happiness enthusiastically",
+                        "target": "group",
+                        "stats_influenced": {"closeness": 3}
+                    })
+        
+        # Add actions based on mask information
+        mask_integrity = 100
+        hidden_traits = {}
+        
+        if mask_info:
+            mask_integrity = mask_info.get("integrity", 100)
+            hidden_traits = mask_info.get("hidden_traits", {})
+        
+        if mask_integrity < 70:
+            # As mask breaks down, hidden traits show through
+            if isinstance(hidden_traits, dict):
+                for trait, value in hidden_traits.items():
+                    if trait == "dominant" and value:
                         actions.append({
                             "type": "mask_slip",
                             "description": "Show unexpected dominance",
                             "target": "group",
                             "stats_influenced": {"dominance": 3, "fear": 2}
                         })
-                    elif "cruel" in hidden_traits:
+                    elif trait == "cruel" and value:
                         actions.append({
                             "type": "mask_slip",
                             "description": "Reveal unexpected cruelty",
                             "target": "group",
                             "stats_influenced": {"cruelty": 2, "fear": 1}
                         })
-                    elif "submissive" in hidden_traits:
+                    elif trait == "submissive" and value:
                         actions.append({
                             "type": "mask_slip",
                             "description": "Show unexpected submission",
                             "target": "group",
                             "stats_influenced": {"dominance": -2}
                         })
+            elif isinstance(hidden_traits, list):
+                if "dominant" in hidden_traits:
+                    actions.append({
+                        "type": "mask_slip",
+                        "description": "Show unexpected dominance",
+                        "target": "group",
+                        "stats_influenced": {"dominance": 3, "fear": 2}
+                    })
+                elif "cruel" in hidden_traits:
+                    actions.append({
+                        "type": "mask_slip",
+                        "description": "Reveal unexpected cruelty",
+                        "target": "group",
+                        "stats_influenced": {"cruelty": 2, "fear": 1}
+                    })
+                elif "submissive" in hidden_traits:
+                    actions.append({
+                        "type": "mask_slip",
+                        "description": "Show unexpected submission",
+                        "target": "group",
+                        "stats_influenced": {"dominance": -2}
+                    })
+        
+        # Add actions based on beliefs
+        if beliefs:
+            for belief in beliefs:
+                belief_text = belief.get("belief", "").lower()
+                if "dangerous" in belief_text or "threat" in belief_text:
+                    actions.append({
+                        "type": "defensive",
+                        "description": "Take a defensive stance",
+                        "target": "group",
+                        "stats_influenced": {"trust": -2}
+                    })
+                elif "opportunity" in belief_text or "beneficial" in belief_text:
+                    actions.append({
+                        "type": "engage",
+                        "description": "Actively engage with the group",
+                        "target": "group",
+                        "stats_influenced": {"closeness": 2}
+                    })
+        
+        # Context-based actions
+        location = context.get("location", "").lower()
+        
+        if location and any(loc in location for loc in ["cafe", "restaurant", "bar", "party"]):
+            actions.append({
+                "type": "socialize",
+                "description": "Engage in group conversation",
+                "target": "group",
+                "stats_influenced": {"closeness": 1}
+            })
+        
+        # Add target-specific actions for other NPCs
+        # Process in smaller batches
+        batch_size = 3
+        other_npcs = [other_id for other_id in all_npc_ids if other_id != npc_id]
+        
+        for i in range(0, len(other_npcs), batch_size):
+            batch_other_ids = other_npcs[i:i+batch_size]
             
-            # Add actions based on beliefs
-            if beliefs:
-                for belief in beliefs:
-                    belief_text = belief.get("belief", "").lower()
-                    if "dangerous" in belief_text or "threat" in belief_text:
-                        actions.append({
-                            "type": "defensive",
-                            "description": "Take a defensive stance",
-                            "target": "group",
-                            "stats_influenced": {"trust": -2}
-                        })
-                    elif "opportunity" in belief_text or "beneficial" in belief_text:
-                        actions.append({
-                            "type": "engage",
-                            "description": "Actively engage with the group",
-                            "target": "group",
-                            "stats_influenced": {"closeness": 2}
-                        })
-            
-            # Context-based actions
-            location = context.get("location", "").lower()
-            
-            if location and any(loc in location for loc in ["cafe", "restaurant", "bar", "party"]):
+            # Process this batch
+            for other_id in batch_other_ids:
+                other_traits = await self._get_npc_traits(other_id)
+                if "error" in other_traits:
+                    continue
+                    
+                other_name = other_traits.get("npc_name", f"NPC_{other_id}")
+                
+                # Basic interaction
                 actions.append({
-                    "type": "socialize",
-                    "description": "Engage in group conversation",
-                    "target": "group",
+                    "type": "talk_to",
+                    "description": f"Talk to {other_name}",
+                    "target": str(other_id),
+                    "target_name": other_name,
                     "stats_influenced": {"closeness": 1}
                 })
-            
-            # Add target-specific actions for other NPCs
-            for other_id in npc_ids:
-                if other_id != npc_id:
-                    other_traits = await self._get_npc_traits(other_id)
-                    if "error" in other_traits:
-                        continue
-                        
-                    other_name = other_traits.get("npc_name", f"NPC_{other_id}")
-                    
-                    # Basic interaction
+                
+                # High dominance actions
+                if dom > 60:
                     actions.append({
-                        "type": "talk_to",
-                        "description": f"Talk to {other_name}",
+                        "type": "command",
+                        "description": f"Command {other_name}",
                         "target": str(other_id),
                         "target_name": other_name,
-                        "stats_influenced": {"closeness": 1}
+                        "stats_influenced": {"dominance": 1, "trust": -1}
                     })
-                    
-                    # High dominance actions
-                    if dom > 60:
-                        actions.append({
-                            "type": "command",
-                            "description": f"Command {other_name}",
-                            "target": str(other_id),
-                            "target_name": other_name,
-                            "stats_influenced": {"dominance": 1, "trust": -1}
-                        })
-                    
-                    # High cruelty actions
-                    if cru > 60:
-                        actions.append({
-                            "type": "mock",
-                            "description": f"Mock {other_name}",
-                            "target": str(other_id),
-                            "target_name": other_name,
-                            "stats_influenced": {"cruelty": 1, "closeness": -2}
-                        })
+                
+                # High cruelty actions
+                if cru > 60:
+                    actions.append({
+                        "type": "mock",
+                        "description": f"Mock {other_name}",
+                        "target": str(other_id),
+                        "target_name": other_name,
+                        "stats_influenced": {"cruelty": 1, "closeness": -2}
+                    })
             
-            group_actions[npc_id] = actions
-
-        return group_actions
+            # Small delay between batches
+            if i + batch_size < len(other_npcs):
+                await asyncio.sleep(0.01)
+        
+        return npc_id, actions
     
     async def handle_player_action(
         self,
@@ -834,6 +977,7 @@ class NPCAgentCoordinator:
     ) -> Dict[str, Any]:
         """
         Handle a player action directed at multiple NPCs, using the Agents SDK.
+        Thread-safe implementation.
         
         Args:
             player_action: The player's action
@@ -908,6 +1052,7 @@ class NPCAgentCoordinator:
     ) -> Dict[str, Any]:
         """
         Process a player action for multiple NPCs.
+        Thread-safe implementation with batched processing.
         
         Args:
             player_action: The player's action
@@ -928,49 +1073,84 @@ class NPCAgentCoordinator:
         # Add memory-based context enhancements
         memory_system = await self._get_memory_system()
         
-        # Get emotional states for all NPCs
+        # Get emotional states for all NPCs - in batches for performance
         emotional_states = {}
-        for npc_id in npc_ids:
-            try:
-                emotional_state = await self._get_npc_emotional_state(npc_id)
-                if emotional_state:
-                    emotional_states[npc_id] = emotional_state
-            except Exception as e:
-                logger.error(f"Error getting emotional state for NPC {npc_id}: {e}")
-        
+        for i in range(0, len(npc_ids), 5):  # Process 5 at a time
+            batch = npc_ids[i:i+5]
+            batch_tasks = []
+            
+            for npc_id in batch:
+                batch_tasks.append(self._get_npc_emotional_state(npc_id))
+            
+            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+            
+            for npc_id, result in zip(batch, batch_results):
+                if not isinstance(result, Exception) and result:
+                    emotional_states[npc_id] = result
+            
+            # Small delay between batches
+            if i + 5 < len(npc_ids):
+                await asyncio.sleep(0.05)
+                
         enhanced_context["emotional_states"] = emotional_states
         
-        # Get mask information for all NPCs
+        # Get mask information for all NPCs - in batches for performance
         mask_states = {}
-        for npc_id in npc_ids:
-            try:
-                mask_info = await self._get_npc_mask(npc_id)
-                if mask_info:
-                    mask_states[npc_id] = mask_info
-            except Exception as e:
-                logger.error(f"Error getting mask info for NPC {npc_id}: {e}")
-        
+        for i in range(0, len(npc_ids), 5):  # Process 5 at a time
+            batch = npc_ids[i:i+5]
+            batch_tasks = []
+            
+            for npc_id in batch:
+                batch_tasks.append(self._get_npc_mask(npc_id))
+            
+            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+            
+            for npc_id, result in zip(batch, batch_results):
+                if not isinstance(result, Exception) and result:
+                    mask_states[npc_id] = result
+            
+            # Small delay between batches
+            if i + 5 < len(npc_ids):
+                await asyncio.sleep(0.05)
+                
         enhanced_context["mask_states"] = mask_states
         
-        # Process player action for each NPC concurrently
-        response_tasks = []
-        for npc_id in npc_ids:
-            agent = self.active_agents.get(npc_id)
-            if agent:
-                # Pass the enhanced context to each agent
-                npc_context = enhanced_context.copy()
-                # Add NPC-specific context elements
-                npc_context["emotional_state"] = emotional_states.get(npc_id)
-                npc_context["mask_info"] = mask_states.get(npc_id)
-                
-                response_tasks.append(agent.process_player_action(player_action, npc_context))
-            else:
-                response_tasks.append(asyncio.sleep(0))
-
-        responses = await asyncio.gather(*response_tasks)
-        filtered_responses = [r for r in responses if r is not None]
+        # Process player action for each NPC - in batches for better performance
+        npc_responses = []
+        batch_size = 3  # Process 3 NPCs at a time
         
-        # Create memories of this group interaction
+        for i in range(0, len(npc_ids), batch_size):
+            batch = npc_ids[i:i+batch_size]
+            batch_tasks = []
+            
+            for npc_id in batch:
+                agent = self.active_agents.get(npc_id)
+                if agent:
+                    # Create a copy of the context for each NPC for thread safety
+                    npc_context = enhanced_context.copy()
+                    # Add NPC-specific context elements
+                    npc_context["emotional_state"] = emotional_states.get(npc_id)
+                    npc_context["mask_info"] = mask_states.get(npc_id)
+                    
+                    batch_tasks.append(agent.process_player_action(player_action, npc_context))
+                else:
+                    batch_tasks.append(asyncio.sleep(0))
+                    
+            # Process this batch
+            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+            
+            # Add non-error results to the output
+            for result in batch_results:
+                if not isinstance(result, Exception) and result is not None:
+                    npc_responses.append(result)
+                elif isinstance(result, Exception):
+                    logger.error(f"Error processing NPC response: {result}")
+            
+            # Small delay between batches to prevent resource contention
+            if i + batch_size < len(npc_ids):
+                await asyncio.sleep(0.1)
+        
+        # Create memories of this group interaction - after processing responses
         if len(npc_ids) > 1:
             await self._create_player_group_interaction_memories(
                 npc_ids,
@@ -978,7 +1158,7 @@ class NPCAgentCoordinator:
                 context
             )
         
-        return {"npc_responses": filtered_responses}
+        return {"npc_responses": npc_responses}
     
     async def _determine_affected_npcs(
         self,
@@ -1025,6 +1205,7 @@ class NPCAgentCoordinator:
     ) -> None:
         """
         Create memories of a group interaction with the player.
+        Thread-safe implementation with batched processing.
         
         Args:
             npc_ids: List of NPC IDs
@@ -1033,35 +1214,63 @@ class NPCAgentCoordinator:
         """
         memory_system = await self._get_memory_system()
         
-        # Get NPC names for better memory context
+        # Get NPC names for better memory context - in batches
         npc_names_dict = {}
-        for npc_id in npc_ids:
-            traits = await self._get_npc_traits(npc_id)
-            if "error" not in traits:
-                npc_names_dict[npc_id] = traits.get("npc_name", f"NPC_{npc_id}")
-            else:
-                npc_names_dict[npc_id] = f"NPC_{npc_id}"
+        batch_size = 5
         
-        # Create a memory of this group interaction for each NPC
-        for npc_id in npc_ids:
-            # Filter out this NPC from the participant list
-            other_npcs = [npc_names_dict.get(other_id, f"NPC_{other_id}") for other_id in npc_ids if other_id != npc_id]
-            others_text = ", ".join(other_npcs) if other_npcs else "no one else"
+        for i in range(0, len(npc_ids), batch_size):
+            batch = npc_ids[i:i+batch_size]
+            batch_tasks = []
             
-            memory_text = f"The player {player_action.get('description', 'interacted with us')} while I was with {others_text}"
+            for npc_id in batch:
+                batch_tasks.append(self._get_npc_traits(npc_id))
             
-            # Determine emotional impact
-            action_type = player_action.get("type", "").lower()
-            is_emotional = "emotion" in action_type or action_type in ["challenge", "threaten", "mock", "praise"]
+            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
             
-            await memory_system.remember(
-                entity_type="npc",
-                entity_id=npc_id,
-                memory_text=memory_text,
-                importance="medium",
-                emotional=is_emotional,
-                tags=["group_interaction", "player_action"]
-            )
+            for npc_id, result in zip(batch, batch_results):
+                if not isinstance(result, Exception) and "error" not in result:
+                    npc_names_dict[npc_id] = result.get("npc_name", f"NPC_{npc_id}")
+                else:
+                    npc_names_dict[npc_id] = f"NPC_{npc_id}"
+            
+            # Small delay between batches
+            if i + batch_size < len(npc_ids):
+                await asyncio.sleep(0.05)
+        
+        # Create memories in batches
+        batch_size = 5
+        for i in range(0, len(npc_ids), batch_size):
+            batch = npc_ids[i:i+batch_size]
+            batch_tasks = []
+            
+            for npc_id in batch:
+                # Filter out this NPC from the participant list
+                other_npcs = [npc_names_dict.get(other_id, f"NPC_{other_id}") for other_id in npc_ids if other_id != npc_id]
+                others_text = ", ".join(other_npcs) if other_npcs else "no one else"
+                
+                memory_text = f"The player {player_action.get('description', 'interacted with us')} while I was with {others_text}"
+                
+                # Determine emotional impact
+                action_type = player_action.get("type", "").lower()
+                is_emotional = "emotion" in action_type or action_type in ["challenge", "threaten", "mock", "praise"]
+                
+                batch_tasks.append(
+                    memory_system.remember(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        memory_text=memory_text,
+                        importance="medium",
+                        emotional=is_emotional,
+                        tags=["group_interaction", "player_action"]
+                    )
+                )
+            
+            # Process this batch
+            await asyncio.gather(*batch_tasks, return_exceptions=True)
+            
+            # Small delay between batches
+            if i + batch_size < len(npc_ids):
+                await asyncio.sleep(0.1)
     
     async def batch_update_npcs(
         self,
@@ -1069,561 +1278,716 @@ class NPCAgentCoordinator:
         update_type: str,
         update_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Update multiple NPCs in a single batch operation for better performance."""
-        results = {
-            "success_count": 0,
-            "error_count": 0,
-            "details": {}
-        }
+        """
+        Update multiple NPCs in a single batch operation for better performance.
+        Thread-safe implementation.
         
-        # Ensure all NPCs are loaded
-        await self.load_agents(npc_ids)
-        
-        # Process different update types
-        if update_type == "location_change":
-            # Batch location update
-            new_location = update_data.get("new_location")
-            if not new_location:
-                return {"error": "No location specified"}
-                
-            try:
-                with get_db_connection() as conn, conn.cursor() as cursor:
-                    # Begin transaction
-                    cursor.execute("BEGIN")
-                    
-                    # Update all NPCs in a single query
-                    cursor.execute(
-                        """
-                        UPDATE NPCStats
-                        SET current_location = %s
-                        WHERE npc_id = ANY(%s)
-                        AND user_id = %s
-                        AND conversation_id = %s
-                        RETURNING npc_id
-                        """,
-                        (new_location, npc_ids, self.user_id, self.conversation_id)
-                    )
-                    
-                    rows = cursor.fetchall()
-                    results["success_count"] = len(rows)
-                    results["updated_npcs"] = [r[0] for r in rows]
-                    
-                    # Commit transaction
-                    cursor.execute("COMMIT")
-                    
-            except Exception as e:
-                logger.error(f"Error updating NPC locations: {e}")
-                results["error"] = str(e)
-                results["error_count"] = len(npc_ids)
-                
-                # Attempt to rollback transaction
-                try:
-                    with get_db_connection() as conn, conn.cursor() as cursor:
-                        cursor.execute("ROLLBACK")
-                except Exception as rollback_error:
-                    logger.error(f"Error rolling back transaction: {rollback_error}")
-                    
-        elif update_type == "emotional_update":
-            # Batch emotional state update
-            emotion = update_data.get("emotion")
-            intensity = update_data.get("intensity", 0.5)
+        Args:
+            npc_ids: List of NPC IDs to update
+            update_type: Type of update (location_change, emotional_update, etc.)
+            update_data: Data for the update
             
-            if not emotion:
-                return {"error": "No emotion specified"}
-                
-            # Get memory system
-            memory_system = await self._get_memory_system()
-            
-            # Process in smaller batches for better control
-            batch_size = 5
-            for i in range(0, len(npc_ids), batch_size):
-                batch = npc_ids[i:i+batch_size]
-                
-                # Process each NPC in batch
-                batch_tasks = []
-                for npc_id in batch:
-                    task = memory_system.update_npc_emotion(
-                        npc_id=npc_id,
-                        emotion=emotion,
-                        intensity=intensity
-                    )
-                    batch_tasks.append(task)
-                    
-                # Execute batch concurrently
-                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                
-                # Process results
-                for npc_id, result in zip(batch, batch_results):
-                    if isinstance(result, Exception):
-                        results["error_count"] += 1
-                        results["details"][npc_id] = {"error": str(result)}
-                    else:
-                        results["success_count"] += 1
-                        results["details"][npc_id] = {"success": True}
-                        
-                        # Invalidate cached emotional state
-                        if npc_id in self._emotional_states:
-                            del self._emotional_states[npc_id]
-                            del self._emotional_states_timestamps[npc_id]
-        
-        # Mask update - update mask integrity or reveal/hide traits
-        elif update_type == "mask_update":
-            mask_action = update_data.get("action")
-            
-            if not mask_action:
-                return {"error": "No mask action specified"}
-                
-            # Get memory system
-            memory_system = await self._get_memory_system()
-            
-            if mask_action == "reveal_trait":
-                # Reveal a hidden trait
-                trait = update_data.get("trait")
-                trigger = update_data.get("trigger", "forced revelation")
-                severity = update_data.get("severity", 1)
-                
-                if not trait:
-                    return {"error": "No trait specified for reveal"}
-                
-                batch_tasks = []
-                for npc_id in npc_ids:
-                    task = memory_system.reveal_npc_trait(
-                        npc_id=npc_id, 
-                        trigger=trigger, 
-                        trait=trait,
-                        severity=severity
-                    )
-                    batch_tasks.append(task)
-                    
-                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                
-                # Process results
-                for npc_id, result in zip(npc_ids, batch_results):
-                    if isinstance(result, Exception):
-                        results["error_count"] += 1
-                        results["details"][npc_id] = {"error": str(result)}
-                    else:
-                        results["success_count"] += 1
-                        results["details"][npc_id] = {"success": True}
-                        
-                        # Invalidate cached mask
-                        if npc_id in self._mask_states:
-                            del self._mask_states[npc_id]
-                            del self._mask_states_timestamps[npc_id]
-                            
-            elif mask_action == "adjust_integrity":
-                # Adjust mask integrity
-                value = update_data.get("value")
-                absolute = update_data.get("absolute", False)
-                
-                if value is None:
-                    return {"error": "No value specified for mask integrity adjustment"}
-                
-                try:
-                    with get_db_connection() as conn, conn.cursor() as cursor:
-                        if absolute:
-                            cursor.execute("""
-                                UPDATE NPCStats
-                                SET mask_integrity = %s
-                                WHERE npc_id = ANY(%s)
-                                AND user_id = %s
-                                AND conversation_id = %s
-                                RETURNING npc_id
-                            """, (value, npc_ids, self.user_id, self.conversation_id))
-                        else:
-                            # Relative adjustment
-                            cursor.execute("""
-                                UPDATE NPCStats
-                                SET mask_integrity = GREATEST(0, LEAST(100, mask_integrity + %s))
-                                WHERE npc_id = ANY(%s)
-                                AND user_id = %s
-                                AND conversation_id = %s
-                                RETURNING npc_id
-                            """, (value, npc_ids, self.user_id, self.conversation_id))
-                            
-                        updated_ids = [row[0] for row in cursor.fetchall()]
-                        results["success_count"] = len(updated_ids)
-                        results["updated_npcs"] = updated_ids
-                        
-                        # Invalidate cached masks
-                        for npc_id in updated_ids:
-                            if npc_id in self._mask_states:
-                                del self._mask_states[npc_id]
-                                del self._mask_states_timestamps[npc_id]
-                except Exception as e:
-                    logger.error(f"Error updating mask integrity: {e}")
-                    results["error"] = str(e)
-                    results["error_count"] = len(npc_ids)
-            
-            else:
-                return {"error": f"Unknown mask action: {mask_action}"}
-                
-        # Relationship update - update relationships between NPCs
-        elif update_type == "relationship_update":
-            target_npc_ids = update_data.get("target_npc_ids", [])
-            link_type = update_data.get("link_type")
-            link_level = update_data.get("link_level")
-            adjustment = update_data.get("adjustment")
-            
-            if not target_npc_ids:
-                return {"error": "No target NPCs specified"}
-                
-            if (link_level is None and adjustment is None) or link_type is None:
-                return {"error": "Must specify link_type and either link_level or adjustment"}
-                
-            try:
-                with get_db_connection() as conn, conn.cursor() as cursor:
-                    cursor.execute("BEGIN")
-                    
-                    updated_pairs = []
-                    for npc_id in npc_ids:
-                        for target_id in target_npc_ids:
-                            if npc_id == target_id:
-                                continue  # Skip self-relationship
-                                
-                            # Check if relationship exists
-                            cursor.execute("""
-                                SELECT link_level
-                                FROM SocialLinks
-                                WHERE user_id = %s
-                                AND conversation_id = %s
-                                AND ((entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
-                                    OR (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s))
-                            """, (self.user_id, self.conversation_id, npc_id, target_id, target_id, npc_id))
-                            
-                            row = cursor.fetchone()
-                            
-                            if row:
-                                # Update existing relationship
-                                current_level = row[0]
-                                new_level = link_level if link_level is not None else max(0, min(100, current_level + adjustment))
-                                
-                                cursor.execute("""
-                                    UPDATE SocialLinks
-                                    SET link_type = %s, link_level = %s
-                                    WHERE user_id = %s
-                                    AND conversation_id = %s
-                                    AND ((entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
-                                        OR (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s))
-                                """, (link_type, new_level, self.user_id, self.conversation_id, 
-                                      npc_id, target_id, target_id, npc_id))
-                            else:
-                                # Create new relationship
-                                new_level = link_level if link_level is not None else 50  # Default level
-                                
-                                cursor.execute("""
-                                    INSERT INTO SocialLinks
-                                    (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level)
-                                    VALUES (%s, %s, 'npc', %s, 'npc', %s, %s, %s)
-                                """, (self.user_id, self.conversation_id, npc_id, target_id, link_type, new_level))
-                                
-                            updated_pairs.append((npc_id, target_id))
-                            
-                    cursor.execute("COMMIT")
-                    
-                    results["success_count"] = len(updated_pairs)
-                    results["updated_relationships"] = updated_pairs
-                    
-            except Exception as e:
-                logger.error(f"Error updating relationships: {e}")
-                results["error"] = str(e)
-                results["error_count"] = len(npc_ids) * len(target_npc_ids)
-                
-                # Rollback on error
-                try:
-                    with get_db_connection() as conn, conn.cursor() as cursor:
-                        cursor.execute("ROLLBACK")
-                except Exception as rollback_error:
-                    logger.error(f"Error rolling back transaction: {rollback_error}")
-        
-        # Belief update - create or update beliefs
-        elif update_type == "belief_update":
-            belief_text = update_data.get("belief_text")
-            topic = update_data.get("topic", "player")
-            confidence = update_data.get("confidence", 0.7)
-            
-            if not belief_text:
-                return {"error": "No belief text specified"}
-                
-            # Get memory system
-            memory_system = await self._get_memory_system()
-            
-            batch_tasks = []
-            for npc_id in npc_ids:
-                task = memory_system.create_belief(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    belief_text=belief_text,
-                    confidence=confidence,
-                    topic=topic
-                )
-                batch_tasks.append(task)
-                
-            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-            
-            # Process results
-            for npc_id, result in zip(npc_ids, batch_results):
-                if isinstance(result, Exception):
-                    results["error_count"] += 1
-                    results["details"][npc_id] = {"error": str(result)}
-                else:
-                    results["success_count"] += 1
-                    results["details"][npc_id] = {"success": True, "belief_id": result.get("id")}
-                    
-        # Trait update - update NPC traits
-        elif update_type == "trait_update":
-            traits = update_data.get("traits", {})
-            
-            if not traits:
-                return {"error": "No traits specified for update"}
-                
-            try:
-                with get_db_connection() as conn, conn.cursor() as cursor:
-                    cursor.execute("BEGIN")
-                    
-                    # Build dynamic update SQL
-                    update_fields = []
-                    update_values = []
-                    
-                    for trait, value in traits.items():
-                        if trait in ["dominance", "cruelty", "mental_resilience"]:
-                            # Numeric trait
-                            update_fields.append(f"{trait} = %s")
-                            update_values.append(value)
-                        elif trait == "personality_traits":
-                            # JSON trait - handle as array or object
-                            update_fields.append(f"{trait} = %s")
-                            
-                            if isinstance(value, list) or isinstance(value, dict):
-                                import json
-                                update_values.append(json.dumps(value))
-                            else:
-                                update_values.append(value)
-                    
-                    if update_fields:
-                        query = f"""
-                            UPDATE NPCStats
-                            SET {', '.join(update_fields)}
-                            WHERE npc_id = ANY(%s)
-                            AND user_id = %s
-                            AND conversation_id = %s
-                            RETURNING npc_id
-                        """
-                        
-                        cursor.execute(
-                            query, 
-                            [*update_values, npc_ids, self.user_id, self.conversation_id]
-                        )
-                        
-                        updated_ids = [row[0] for row in cursor.fetchall()]
-                        results["success_count"] = len(updated_ids)
-                        results["updated_npcs"] = updated_ids
-                        
-                    cursor.execute("COMMIT")
-                    
-            except Exception as e:
-                logger.error(f"Error updating NPC traits: {e}")
-                results["error"] = str(e)
-                results["error_count"] = len(npc_ids)
-                
-                # Rollback on error
-                try:
-                    with get_db_connection() as conn, conn.cursor() as cursor:
-                        cursor.execute("ROLLBACK")
-                except Exception as rollback_error:
-                    logger.error(f"Error rolling back transaction: {rollback_error}")
-                    
-        # Memory update - add memory to NPCs
-        elif update_type == "memory_update":
-            memory_text = update_data.get("memory_text")
-            importance = update_data.get("importance", "medium")
-            emotional = update_data.get("emotional", False)
-            tags = update_data.get("tags", [])
-            
-            if not memory_text:
-                return {"error": "No memory text specified"}
-                
-            # Get memory system
-            memory_system = await self._get_memory_system()
-            
-            batch_tasks = []
-            for npc_id in npc_ids:
-                task = memory_system.remember(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    memory_text=memory_text,
-                    importance=importance,
-                    emotional=emotional,
-                    tags=tags
-                )
-                batch_tasks.append(task)
-                
-            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-            
-            # Process results
-            for npc_id, result in zip(npc_ids, batch_results):
-                if isinstance(result, Exception):
-                    results["error_count"] += 1
-                    results["details"][npc_id] = {"error": str(result)}
-                else:
-                    results["success_count"] += 1
-                    results["details"][npc_id] = {"success": True, "memory_id": result.get("id")}
-                    
-        # Schedule update - update NPC schedules
-        elif update_type == "schedule_update":
-            schedule_data = update_data.get("schedule_data")
-            time_period = update_data.get("time_period")  # e.g., "morning", "evening", or "default"
-            
-            if not schedule_data:
-                return {"error": "No schedule data specified"}
-                
-            try:
-                with get_db_connection() as conn, conn.cursor() as cursor:
-                    cursor.execute("BEGIN")
-                    
-                    updated_ids = []
-                    for npc_id in npc_ids:
-                        # First get current schedule
-                        cursor.execute("""
-                            SELECT schedule
-                            FROM NPCStats
-                            WHERE npc_id = %s
-                            AND user_id = %s
-                            AND conversation_id = %s
-                        """, (npc_id, self.user_id, self.conversation_id))
-                        
-                        row = cursor.fetchone()
-                        if not row:
-                            continue
-                            
-                        current_schedule = row[0]
-                        
-                        # Parse and update schedule
-                        if current_schedule is None:
-                            current_schedule = {}
-                        elif isinstance(current_schedule, str):
-                            import json
-                            try:
-                                current_schedule = json.loads(current_schedule)
-                            except json.JSONDecodeError:
-                                current_schedule = {}
-                        
-                        if not isinstance(current_schedule, dict):
-                            current_schedule = {}
-                            
-                        # Update schedule for specific time period or create a new one
-                        if time_period:
-                            current_schedule[time_period] = schedule_data
-                        else:
-                            # Replace entire schedule
-                            current_schedule = schedule_data
-                            
-                        # Save updated schedule
-                        import json
-                        cursor.execute("""
-                            UPDATE NPCStats
-                            SET schedule = %s
-                            WHERE npc_id = %s
-                            AND user_id = %s
-                            AND conversation_id = %s
-                        """, (json.dumps(current_schedule), npc_id, self.user_id, self.conversation_id))
-                        
-                        updated_ids.append(npc_id)
-                        
-                    cursor.execute("COMMIT")
-                    
-                    results["success_count"] = len(updated_ids)
-                    results["updated_npcs"] = updated_ids
-                    
-            except Exception as e:
-                logger.error(f"Error updating NPC schedules: {e}")
-                results["error"] = str(e)
-                results["error_count"] = len(npc_ids)
-                
-                # Rollback on error
-                try:
-                    with get_db_connection() as conn, conn.cursor() as cursor:
-                        cursor.execute("ROLLBACK")
-                except Exception as rollback_error:
-                    logger.error(f"Error rolling back transaction: {rollback_error}")
-                    
-        # Status update - update NPC status (active, introduced, etc.)
-        elif update_type == "status_update":
-            status_field = update_data.get("field")
-            status_value = update_data.get("value")
-            
-            if status_field is None or status_value is None:
-                return {"error": "Must specify status field and value"}
-                
-            # Validate status field for security
-            allowed_fields = ["introduced", "active", "visible"]
-            if status_field not in allowed_fields:
-                return {"error": f"Invalid status field. Allowed: {allowed_fields}"}
-                
-            try:
-                with get_db_connection() as conn, conn.cursor() as cursor:
-                    cursor.execute(f"""
-                        UPDATE NPCStats
-                        SET {status_field} = %s
-                        WHERE npc_id = ANY(%s)
-                        AND user_id = %s
-                        AND conversation_id = %s
-                        RETURNING npc_id
-                    """, (status_value, npc_ids, self.user_id, self.conversation_id))
-                    
-                    updated_ids = [row[0] for row in cursor.fetchall()]
-                    results["success_count"] = len(updated_ids)
-                    results["updated_npcs"] = updated_ids
-                    
-            except Exception as e:
-                logger.error(f"Error updating NPC status: {e}")
-                results["error"] = str(e)
-                results["error_count"] = len(npc_ids)
-                
-        # Appearance update - update NPC appearance
-        elif update_type == "appearance_update":
-            appearance_data = update_data.get("appearance_data")
-            
-            if not appearance_data:
-                return {"error": "No appearance data specified"}
-                
-            try:
-                with get_db_connection() as conn, conn.cursor() as cursor:
-                    import json
-                    
-                    # Ensure appearance data is JSON
-                    if isinstance(appearance_data, dict):
-                        appearance_json = json.dumps(appearance_data)
-                    else:
-                        appearance_json = appearance_data
-                        
-                    cursor.execute("""
-                        UPDATE NPCStats
-                        SET appearance = %s
-                        WHERE npc_id = ANY(%s)
-                        AND user_id = %s
-                        AND conversation_id = %s
-                        RETURNING npc_id
-                    """, (appearance_json, npc_ids, self.user_id, self.conversation_id))
-                    
-                    updated_ids = [row[0] for row in cursor.fetchall()]
-                    results["success_count"] = len(updated_ids)
-                    results["updated_npcs"] = updated_ids
-                    
-            except Exception as e:
-                logger.error(f"Error updating NPC appearance: {e}")
-                results["error"] = str(e)
-                results["error_count"] = len(npc_ids)
-                
-        else:
-            return {
-                "error": f"Unknown update type: {update_type}",
-                "valid_types": [
-                    "location_change", "emotional_update", "mask_update", 
-                    "relationship_update", "belief_update", "trait_update",
-                    "memory_update", "schedule_update", "status_update",
-                    "appearance_update"
-                ]
+        Returns:
+            Results of the batch update
+        """
+        # Use lock to ensure only one batch update runs at a time
+        async with self._batch_update_lock:
+            results = {
+                "success_count": 0,
+                "error_count": 0,
+                "details": {}
             }
             
-        return results
+            try:
+                if update_type == "location_change":
+                    # Batch location update
+                    new_location = update_data.get("new_location")
+                    if not new_location:
+                        return {"error": "No location specified"}
+                        
+                    try:
+                        with get_db_connection() as conn, conn.cursor() as cursor:
+                            # Begin transaction
+                            cursor.execute("BEGIN")
+                            
+                            # Update all NPCs in a single query
+                            cursor.execute(
+                                """
+                                UPDATE NPCStats
+                                SET current_location = %s
+                                WHERE npc_id = ANY(%s)
+                                AND user_id = %s
+                                AND conversation_id = %s
+                                RETURNING npc_id
+                                """,
+                                (new_location, npc_ids, self.user_id, self.conversation_id)
+                            )
+                            
+                            rows = cursor.fetchall()
+                            results["success_count"] = len(rows)
+                            results["updated_npcs"] = [r[0] for r in rows]
+                            
+                            # Commit transaction
+                            cursor.execute("COMMIT")
+                            
+                    except Exception as e:
+                        logger.error(f"Error updating NPC locations: {e}")
+                        results["error"] = str(e)
+                        results["error_count"] = len(npc_ids)
+                        
+                        # Attempt to rollback transaction
+                        try:
+                            with get_db_connection() as conn, conn.cursor() as cursor:
+                                cursor.execute("ROLLBACK")
+                        except Exception as rollback_error:
+                            logger.error(f"Error rolling back transaction: {rollback_error}")
+                        
+                elif update_type == "emotional_update":
+                    # Batch emotional state update
+                    emotion = update_data.get("emotion")
+                    intensity = update_data.get("intensity", 0.5)
+                    
+                    if not emotion:
+                        return {"error": "No emotion specified"}
+                        
+                    # Get memory system
+                    memory_system = await self._get_memory_system()
+                    
+                    # Process in smaller batches for better control
+                    batch_size = 5
+                    for i in range(0, len(npc_ids), batch_size):
+                        batch = npc_ids[i:i+batch_size]
+                        
+                        # Process each NPC in batch
+                        batch_tasks = []
+                        for npc_id in batch:
+                            task = memory_system.update_npc_emotion(
+                                npc_id=npc_id,
+                                emotion=emotion,
+                                intensity=intensity
+                            )
+                            batch_tasks.append(task)
+                            
+                        # Execute batch concurrently
+                        batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                        
+                        # Process results
+                        for npc_id, result in zip(batch, batch_results):
+                            if isinstance(result, Exception):
+                                results["error_count"] += 1
+                                results["details"][npc_id] = {"error": str(result)}
+                            else:
+                                results["success_count"] += 1
+                                results["details"][npc_id] = {"success": True}
+                                
+                                # Invalidate cached emotional state - with lock
+                                async with self._emotional_state_lock:
+                                    if npc_id in self._emotional_states:
+                                        del self._emotional_states[npc_id]
+                                        if npc_id in self._emotional_states_timestamps:
+                                            del self._emotional_states_timestamps[npc_id]
+                        
+                        # Small delay between batches
+                        if i + batch_size < len(npc_ids):
+                            await asyncio.sleep(0.1)
+                
+                # Mask update - update mask integrity or reveal/hide traits
+                elif update_type == "mask_update":
+                    mask_action = update_data.get("action")
+                    
+                    if not mask_action:
+                        return {"error": "No mask action specified"}
+                        
+                    # Get memory system
+                    memory_system = await self._get_memory_system()
+                    
+                    if mask_action == "reveal_trait":
+                        # Reveal a hidden trait
+                        trait = update_data.get("trait")
+                        trigger = update_data.get("trigger", "forced revelation")
+                        severity = update_data.get("severity", 1)
+                        
+                        if not trait:
+                            return {"error": "No trait specified for reveal"}
+                        
+                        # Process in batches for better control
+                        batch_size = 5
+                        for i in range(0, len(npc_ids), batch_size):
+                            batch = npc_ids[i:i+batch_size]
+                            batch_tasks = []
+                            
+                            for npc_id in batch:
+                                task = memory_system.reveal_npc_trait(
+                                    npc_id=npc_id, 
+                                    trigger=trigger, 
+                                    trait=trait,
+                                    severity=severity
+                                )
+                                batch_tasks.append(task)
+                                
+                            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                            
+                            # Process results
+                            for npc_id, result in zip(batch, batch_results):
+                                if isinstance(result, Exception):
+                                    results["error_count"] += 1
+                                    results["details"][npc_id] = {"error": str(result)}
+                                else:
+                                    results["success_count"] += 1
+                                    results["details"][npc_id] = {"success": True}
+                                    
+                                    # Invalidate cached mask - with lock
+                                    async with self._mask_state_lock:
+                                        if npc_id in self._mask_states:
+                                            del self._mask_states[npc_id]
+                                            if npc_id in self._mask_states_timestamps:
+                                                del self._mask_states_timestamps[npc_id]
+                            
+                            # Small delay between batches
+                            if i + batch_size < len(npc_ids):
+                                await asyncio.sleep(0.1)
+                                
+                    elif mask_action == "adjust_integrity":
+                        # Adjust mask integrity
+                        value = update_data.get("value")
+                        absolute = update_data.get("absolute", False)
+                        
+                        if value is None:
+                            return {"error": "No value specified for mask integrity adjustment"}
+                        
+                        try:
+                            with get_db_connection() as conn, conn.cursor() as cursor:
+                                # Begin transaction
+                                cursor.execute("BEGIN")
+                                
+                                if absolute:
+                                    cursor.execute("""
+                                        UPDATE NPCStats
+                                        SET mask_integrity = %s
+                                        WHERE npc_id = ANY(%s)
+                                        AND user_id = %s
+                                        AND conversation_id = %s
+                                        RETURNING npc_id
+                                    """, (value, npc_ids, self.user_id, self.conversation_id))
+                                else:
+                                    # Relative adjustment
+                                    cursor.execute("""
+                                        UPDATE NPCStats
+                                        SET mask_integrity = GREATEST(0, LEAST(100, mask_integrity + %s))
+                                        WHERE npc_id = ANY(%s)
+                                        AND user_id = %s
+                                        AND conversation_id = %s
+                                        RETURNING npc_id
+                                    """, (value, npc_ids, self.user_id, self.conversation_id))
+                                    
+                                updated_ids = [row[0] for row in cursor.fetchall()]
+                                results["success_count"] = len(updated_ids)
+                                results["updated_npcs"] = updated_ids
+                                
+                                # Commit transaction
+                                cursor.execute("COMMIT")
+                                
+                                # Invalidate cached masks - with lock
+                                async with self._mask_state_lock:
+                                    for npc_id in updated_ids:
+                                        if npc_id in self._mask_states:
+                                            del self._mask_states[npc_id]
+                                            if npc_id in self._mask_states_timestamps:
+                                                del self._mask_states_timestamps[npc_id]
+                        except Exception as e:
+                            logger.error(f"Error updating mask integrity: {e}")
+                            results["error"] = str(e)
+                            results["error_count"] = len(npc_ids)
+                            
+                            # Attempt to rollback transaction
+                            try:
+                                with get_db_connection() as conn, conn.cursor() as cursor:
+                                    cursor.execute("ROLLBACK")
+                            except Exception as rollback_error:
+                                logger.error(f"Error rolling back transaction: {rollback_error}")
+                    
+                    else:
+                        return {"error": f"Unknown mask action: {mask_action}"}
+                        
+                # Relationship update - update relationships between NPCs
+                elif update_type == "relationship_update":
+                    target_npc_ids = update_data.get("target_npc_ids", [])
+                    link_type = update_data.get("link_type")
+                    link_level = update_data.get("link_level")
+                    adjustment = update_data.get("adjustment")
+                    
+                    if not target_npc_ids:
+                        return {"error": "No target NPCs specified"}
+                        
+                    if (link_level is None and adjustment is None) or link_type is None:
+                        return {"error": "Must specify link_type and either link_level or adjustment"}
+                        
+                    try:
+                        with get_db_connection() as conn, conn.cursor() as cursor:
+                            # Begin transaction
+                            cursor.execute("BEGIN")
+                            
+                            updated_pairs = []
+                            for npc_id in npc_ids:
+                                # Process target NPCs in smaller batches
+                                batch_size = 5
+                                for i in range(0, len(target_npc_ids), batch_size):
+                                    batch_targets = target_npc_ids[i:i+batch_size]
+                                    
+                                    for target_id in batch_targets:
+                                        if npc_id == target_id:
+                                            continue  # Skip self-relationship
+                                            
+                                        # Check if relationship exists
+                                        cursor.execute("""
+                                            SELECT link_level
+                                            FROM SocialLinks
+                                            WHERE user_id = %s
+                                            AND conversation_id = %s
+                                            AND ((entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
+                                                OR (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s))
+                                        """, (self.user_id, self.conversation_id, npc_id, target_id, target_id, npc_id))
+                                        
+                                        row = cursor.fetchone()
+                                        
+                                        if row:
+                                            # Update existing relationship
+                                            current_level = row[0]
+                                            new_level = link_level if link_level is not None else max(0, min(100, current_level + adjustment))
+                                            
+                                            cursor.execute("""
+                                                UPDATE SocialLinks
+                                                SET link_type = %s, link_level = %s
+                                                WHERE user_id = %s
+                                                AND conversation_id = %s
+                                                AND ((entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s)
+                                                    OR (entity1_type = 'npc' AND entity1_id = %s AND entity2_type = 'npc' AND entity2_id = %s))
+                                            """, (link_type, new_level, self.user_id, self.conversation_id, 
+                                                  npc_id, target_id, target_id, npc_id))
+                                        else:
+                                            # Create new relationship
+                                            new_level = link_level if link_level is not None else 50  # Default level
+                                            
+                                            cursor.execute("""
+                                                INSERT INTO SocialLinks
+                                                (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level)
+                                                VALUES (%s, %s, 'npc', %s, 'npc', %s, %s, %s)
+                                            """, (self.user_id, self.conversation_id, npc_id, target_id, link_type, new_level))
+                                            
+                                        updated_pairs.append((npc_id, target_id))
+                                    
+                                    # Small delay between batches
+                                    if i + batch_size < len(target_npc_ids):
+                                        await asyncio.sleep(0.05)
+                            
+                            cursor.execute("COMMIT")
+                            
+                            results["success_count"] = len(updated_pairs)
+                            results["updated_relationships"] = updated_pairs
+                            
+                    except Exception as e:
+                        logger.error(f"Error updating relationships: {e}")
+                        results["error"] = str(e)
+                        results["error_count"] = len(npc_ids) * len(target_npc_ids)
+                        
+                        # Rollback on error
+                        try:
+                            with get_db_connection() as conn, conn.cursor() as cursor:
+                                cursor.execute("ROLLBACK")
+                        except Exception as rollback_error:
+                            logger.error(f"Error rolling back transaction: {rollback_error}")
+                
+                # Belief update - create or update beliefs
+                elif update_type == "belief_update":
+                    belief_text = update_data.get("belief_text")
+                    topic = update_data.get("topic", "player")
+                    confidence = update_data.get("confidence", 0.7)
+                    
+                    if not belief_text:
+                        return {"error": "No belief text specified"}
+                        
+                    # Get memory system
+                    memory_system = await self._get_memory_system()
+                    
+                    # Process in smaller batches
+                    batch_size = 5
+                    for i in range(0, len(npc_ids), batch_size):
+                        batch = npc_ids[i:i+batch_size]
+                        batch_tasks = []
+                        
+                        for npc_id in batch:
+                            task = memory_system.create_belief(
+                                entity_type="npc",
+                                entity_id=npc_id,
+                                belief_text=belief_text,
+                                confidence=confidence,
+                                topic=topic
+                            )
+                            batch_tasks.append(task)
+                            
+                        # Process this batch
+                        batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                        
+                        # Process results
+                        for npc_id, result in zip(batch, batch_results):
+                            if isinstance(result, Exception):
+                                results["error_count"] += 1
+                                results["details"][npc_id] = {"error": str(result)}
+                            else:
+                                results["success_count"] += 1
+                                results["details"][npc_id] = {"success": True, "belief_id": result.get("id")}
+                        
+                        # Small delay between batches
+                        if i + batch_size < len(npc_ids):
+                            await asyncio.sleep(0.1)
+                
+                # Trait update - update NPC traits
+                elif update_type == "trait_update":
+                    traits = update_data.get("traits", {})
+                    
+                    if not traits:
+                        return {"error": "No traits specified for update"}
+                        
+                    try:
+                        with get_db_connection() as conn, conn.cursor() as cursor:
+                            # Begin transaction
+                            cursor.execute("BEGIN")
+                            
+                            # Build dynamic update SQL
+                            update_fields = []
+                            update_values = []
+                            
+                            for trait, value in traits.items():
+                                if trait in ["dominance", "cruelty", "mental_resilience"]:
+                                    # Numeric trait
+                                    update_fields.append(f"{trait} = %s")
+                                    update_values.append(value)
+                                elif trait == "personality_traits":
+                                    # JSON trait - handle as array or object
+                                    update_fields.append(f"{trait} = %s")
+                                    
+                                    if isinstance(value, list) or isinstance(value, dict):
+                                        import json
+                                        update_values.append(json.dumps(value))
+                                    else:
+                                        update_values.append(value)
+                            
+                            if update_fields:
+                                # Process NPCs in smaller batches
+                                batch_size = 10
+                                updated_ids = []
+                                
+                                for i in range(0, len(npc_ids), batch_size):
+                                    batch_npcs = npc_ids[i:i+batch_size]
+                                    
+                                    query = f"""
+                                        UPDATE NPCStats
+                                        SET {', '.join(update_fields)}
+                                        WHERE npc_id = ANY(%s)
+                                        AND user_id = %s
+                                        AND conversation_id = %s
+                                        RETURNING npc_id
+                                    """
+                                    
+                                    cursor.execute(
+                                        query, 
+                                        [*update_values, batch_npcs, self.user_id, self.conversation_id]
+                                    )
+                                    
+                                    batch_updated = [row[0] for row in cursor.fetchall()]
+                                    updated_ids.extend(batch_updated)
+                                    
+                                    # Small delay between batches
+                                    if i + batch_size < len(npc_ids):
+                                        await asyncio.sleep(0.05)
+                                        
+                                results["success_count"] = len(updated_ids)
+                                results["updated_npcs"] = updated_ids
+                                
+                            cursor.execute("COMMIT")
+                            
+                    except Exception as e:
+                        logger.error(f"Error updating NPC traits: {e}")
+                        results["error"] = str(e)
+                        results["error_count"] = len(npc_ids)
+                        
+                        # Rollback on error
+                        try:
+                            with get_db_connection() as conn, conn.cursor() as cursor:
+                                cursor.execute("ROLLBACK")
+                        except Exception as rollback_error:
+                            logger.error(f"Error rolling back transaction: {rollback_error}")
+                
+                # Memory update - add memory to NPCs
+                elif update_type == "memory_update":
+                    memory_text = update_data.get("memory_text")
+                    importance = update_data.get("importance", "medium")
+                    emotional = update_data.get("emotional", False)
+                    tags = update_data.get("tags", [])
+                    
+                    if not memory_text:
+                        return {"error": "No memory text specified"}
+                        
+                    # Get memory system
+                    memory_system = await self._get_memory_system()
+                    
+                    # Process in smaller batches
+                    batch_size = 5
+                    for i in range(0, len(npc_ids), batch_size):
+                        batch = npc_ids[i:i+batch_size]
+                        batch_tasks = []
+                        
+                        for npc_id in batch:
+                            task = memory_system.remember(
+                                entity_type="npc",
+                                entity_id=npc_id,
+                                memory_text=memory_text,
+                                importance=importance,
+                                emotional=emotional,
+                                tags=tags
+                            )
+                            batch_tasks.append(task)
+                            
+                        # Process this batch
+                        batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                        
+                        # Process results
+                        for npc_id, result in zip(batch, batch_results):
+                            if isinstance(result, Exception):
+                                results["error_count"] += 1
+                                results["details"][npc_id] = {"error": str(result)}
+                            else:
+                                results["success_count"] += 1
+                                results["details"][npc_id] = {"success": True, "memory_id": result.get("id")}
+                        
+                        # Small delay between batches
+                        if i + batch_size < len(npc_ids):
+                            await asyncio.sleep(0.1)
+                
+                # Schedule update - update NPC schedules
+                elif update_type == "schedule_update":
+                    schedule_data = update_data.get("schedule_data")
+                    time_period = update_data.get("time_period")  # e.g., "morning", "evening", or "default"
+                    
+                    if not schedule_data:
+                        return {"error": "No schedule data specified"}
+                        
+                    try:
+                        with get_db_connection() as conn, conn.cursor() as cursor:
+                            # Begin transaction
+                            cursor.execute("BEGIN")
+                            
+                            # Process NPCs in smaller batches
+                            batch_size = 10
+                            updated_ids = []
+                            
+                            for i in range(0, len(npc_ids), batch_size):
+                                batch_npcs = npc_ids[i:i+batch_size]
+                                
+                                for npc_id in batch_npcs:
+                                    # First get current schedule
+                                    cursor.execute("""
+                                        SELECT schedule
+                                        FROM NPCStats
+                                        WHERE npc_id = %s
+                                        AND user_id = %s
+                                        AND conversation_id = %s
+                                    """, (npc_id, self.user_id, self.conversation_id))
+                                    
+                                    row = cursor.fetchone()
+                                    if not row:
+                                        continue
+                                        
+                                    current_schedule = row[0]
+                                    
+                                    # Parse and update schedule
+                                    if current_schedule is None:
+                                        current_schedule = {}
+                                    elif isinstance(current_schedule, str):
+                                        import json
+                                        try:
+                                            current_schedule = json.loads(current_schedule)
+                                        except json.JSONDecodeError:
+                                            current_schedule = {}
+                                    
+                                    if not isinstance(current_schedule, dict):
+                                        current_schedule = {}
+                                        
+                                    # Update schedule for specific time period or create a new one
+                                    if time_period:
+                                        current_schedule[time_period] = schedule_data
+                                    else:
+                                        # Replace entire schedule
+                                        current_schedule = schedule_data
+                                        
+                                    # Save updated schedule
+                                    import json
+                                    cursor.execute("""
+                                        UPDATE NPCStats
+                                        SET schedule = %s
+                                        WHERE npc_id = %s
+                                        AND user_id = %s
+                                        AND conversation_id = %s
+                                    """, (json.dumps(current_schedule), npc_id, self.user_id, self.conversation_id))
+                                    
+                                    updated_ids.append(npc_id)
+                                
+                                # Small delay between batches
+                                if i + batch_size < len(npc_ids):
+                                    await asyncio.sleep(0.05)
+                                    
+                            cursor.execute("COMMIT")
+                            
+                            results["success_count"] = len(updated_ids)
+                            results["updated_npcs"] = updated_ids
+                            
+                    except Exception as e:
+                        logger.error(f"Error updating NPC schedules: {e}")
+                        results["error"] = str(e)
+                        results["error_count"] = len(npc_ids)
+                        
+                        # Rollback on error
+                        try:
+                            with get_db_connection() as conn, conn.cursor() as cursor:
+                                cursor.execute("ROLLBACK")
+                        except Exception as rollback_error:
+                            logger.error(f"Error rolling back transaction: {rollback_error}")
+                
+                # Status update - update NPC status (active, introduced, etc.)
+                elif update_type == "status_update":
+                    status_field = update_data.get("field")
+                    status_value = update_data.get("value")
+                    
+                    if status_field is None or status_value is None:
+                        return {"error": "Must specify status field and value"}
+                        
+                    # Validate status field for security
+                    allowed_fields = ["introduced", "active", "visible"]
+                    if status_field not in allowed_fields:
+                        return {"error": f"Invalid status field. Allowed: {allowed_fields}"}
+                        
+                    try:
+                        with get_db_connection() as conn, conn.cursor() as cursor:
+                            # Begin transaction
+                            cursor.execute("BEGIN")
+                            
+                            # Process NPCs in smaller batches
+                            batch_size = 20
+                            updated_ids = []
+                            
+                            for i in range(0, len(npc_ids), batch_size):
+                                batch_npcs = npc_ids[i:i+batch_size]
+                                
+                                cursor.execute(f"""
+                                    UPDATE NPCStats
+                                    SET {status_field} = %s
+                                    WHERE npc_id = ANY(%s)
+                                    AND user_id = %s
+                                    AND conversation_id = %s
+                                    RETURNING npc_id
+                                """, (status_value, batch_npcs, self.user_id, self.conversation_id))
+                                
+                                batch_updated = [row[0] for row in cursor.fetchall()]
+                                updated_ids.extend(batch_updated)
+                                
+                                # Small delay between batches
+                                if i + batch_size < len(npc_ids):
+                                    await asyncio.sleep(0.05)
+                                
+                            cursor.execute("COMMIT")
+                            
+                            results["success_count"] = len(updated_ids)
+                            results["updated_npcs"] = updated_ids
+                            
+                    except Exception as e:
+                        logger.error(f"Error updating NPC status: {e}")
+                        results["error"] = str(e)
+                        results["error_count"] = len(npc_ids)
+                        
+                        # Rollback on error
+                        try:
+                            with get_db_connection() as conn, conn.cursor() as cursor:
+                                cursor.execute("ROLLBACK")
+                        except Exception as rollback_error:
+                            logger.error(f"Error rolling back transaction: {rollback_error}")
+                
+                # Appearance update - update NPC appearance
+                elif update_type == "appearance_update":
+                    appearance_data = update_data.get("appearance_data")
+                    
+                    if not appearance_data:
+                        return {"error": "No appearance data specified"}
+                        
+                    try:
+                        with get_db_connection() as conn, conn.cursor() as cursor:
+                            # Begin transaction
+                            cursor.execute("BEGIN")
+                            
+                            import json
+                            
+                            # Ensure appearance data is JSON
+                            if isinstance(appearance_data, dict):
+                                appearance_json = json.dumps(appearance_data)
+                            else:
+                                appearance_json = appearance_data
+                                
+                            # Process NPCs in smaller batches
+                            batch_size = 20
+                            updated_ids = []
+                            
+                            for i in range(0, len(npc_ids), batch_size):
+                                batch_npcs = npc_ids[i:i+batch_size]
+                                
+                                cursor.execute("""
+                                    UPDATE NPCStats
+                                    SET appearance = %s
+                                    WHERE npc_id = ANY(%s)
+                                    AND user_id = %s
+                                    AND conversation_id = %s
+                                    RETURNING npc_id
+                                """, (appearance_json, batch_npcs, self.user_id, self.conversation_id))
+                                
+                                batch_updated = [row[0] for row in cursor.fetchall()]
+                                updated_ids.extend(batch_updated)
+                                
+                                # Small delay between batches
+                                if i + batch_size < len(npc_ids):
+                                    await asyncio.sleep(0.05)
+                                
+                            cursor.execute("COMMIT")
+                            
+                            results["success_count"] = len(updated_ids)
+                            results["updated_npcs"] = updated_ids
+                            
+                    except Exception as e:
+                        logger.error(f"Error updating NPC appearance: {e}")
+                        results["error"] = str(e)
+                        results["error_count"] = len(npc_ids)
+                        
+                        # Rollback on error
+                        try:
+                            with get_db_connection() as conn, conn.cursor() as cursor:
+                                cursor.execute("ROLLBACK")
+                        except Exception as rollback_error:
+                            logger.error(f"Error rolling back transaction: {rollback_error}")
+            
+                else:
+                    return {
+                        "error": f"Unknown update type: {update_type}",
+                        "valid_types": [
+                            "location_change", "emotional_update", "mask_update", 
+                            "relationship_update", "belief_update", "trait_update",
+                            "memory_update", "schedule_update", "status_update",
+                            "appearance_update"
+                        ]
+                    }
+                
+                return results
+                
+            except Exception as e:
+                logger.error(f"Error in batch update: {e}")
+                return {
+                    "error": str(e),
+                    "success_count": 0,
+                    "error_count": len(npc_ids)
+                }
