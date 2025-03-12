@@ -221,6 +221,11 @@ class NyxNPCIntegrationManager:
         # Combine responses
         combined_response = self._combine_responses(nyx_response, npc_responses)
         return combined_response
+
+    def get_npc_coordinator(user_id, conversation_id):
+        """Lazy-load NPCAgentCoordinator to avoid circular imports."""
+        from logic.npc_agents.agent_coordinator import NPCAgentCoordinator
+        return NPCAgentCoordinator(user_id, conversation_id)
     
     def _extract_npc_guidance(self, nyx_response):
         """
