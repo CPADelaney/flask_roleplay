@@ -1,0 +1,3743 @@
+# logic/npc_agents/npc_agents_sdk.py
+
+import asyncio
+import json
+import logging
+import random
+from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional, Union, Tuple, Set
+
+from agents import (
+    Agent, Runner, function_tool, ModelSettings, trace, 
+    InputGuardrail, GuardrailFunctionOutput, handoff, RunContext, AgentHooks
+)
+from pydantic import BaseModel, Field
+
+# Import from existing modules
+from db.connection import get_db_connection
+from memory.wrapper import MemorySystem
+from memory.core import MemorySignificance, MemoryType
+from memory.masks import ProgressiveRevealManager
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# ------------------------------
+# Configuration Management
+# ------------------------------
+
+class NPCConfig:
+    """Central configuration for NPC system with sensible defaults."""
+    
+    # Cache TTLs in minutes
+    CACHE_TTL = {
+        'perception': 5,
+        'memories': 10,
+        'relationships': 15,
+        'emotional_state': 2,
+        'mask': 5,
+        'beliefs': 10
+    }
+    
+    # Probability thresholds
+    PROBABILITY = {
+        'emotional_contagion_base': 0.3,
+        'mask_slip_base': 0.2,
+        'flashback_chance': 0.15,
+        'flashback_with_trauma': 0.5,
+        'decision_randomness': 0.2
+    }
+    
+    # Performance limits
+    LIMITS = {
+        'group_interaction_max_npcs': 5,
+        'memory_recall_default': 5,
+        'memory_recall_important': 10,
+        'relationship_history_length': 20
+    }
+    
+    # AI Model settings
+    MODEL = {
+        'coordinator': 'gpt-4o',
+        'default': 'claude-3-5-sonnet',
+        'temperature_default': 0.7,
+        'temperature_consistent': 0.5,
+        'temperature_creative': 0.85
+    }
+    
+    # Maintenance settings
+    MAINTENANCE = {
+        'cycle_minutes': 30,
+        'relationship_decay_days': 1,
+        'emotion_decay_amount': 0.15,
+        'mask_recovery_amount': 5
+    }
+    
+    @classmethod
+    def get_cache_ttl(cls, cache_type: str) -> timedelta:
+        """Get cache TTL for the specified type."""
+        minutes = cls.CACHE_TTL.get(cache_type, 5)  # Default 5 minutes
+        return timedelta(minutes=minutes)
+    
+    @classmethod
+    def get_model_settings(cls, personality_type: str = None) -> ModelSettings:
+        """Get model settings based on personality type."""
+        if personality_type == "dominant" or personality_type == "cruel":
+            # These personalities need more consistent behavior
+            return ModelSettings(
+                name=cls.MODEL['default'],
+                temperature=cls.MODEL['temperature_consistent']
+            )
+        elif personality_type == "creative" or personality_type == "eccentric":
+            # These personalities benefit from more randomness
+            return ModelSettings(
+                name=cls.MODEL['default'],
+                temperature=cls.MODEL['temperature_creative']
+            )
+        else:
+            # Default settings
+            return ModelSettings(
+                name=cls.MODEL['default'],
+                temperature=cls.MODEL['temperature_default']
+            )
+
+# ------------------------------
+# Base Models
+# ------------------------------
+
+class PlayerAction(BaseModel):
+    """Structured representation of a player's action."""
+    type: str = Field(..., description="The type of action (e.g., 'talk', 'move', 'attack')")
+    description: str = Field(..., description="Description of the action")
+    target_npc_id: Optional[int] = Field(None, description="ID of the target NPC, if applicable")
+    target_location: Optional[str] = Field(None, description="Target location, if applicable")
+    intensity: Optional[float] = Field(0.5, description="Intensity of the action (0.0-1.0)")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+class NPCAction(BaseModel):
+    """Structured representation of an NPC's action or response."""
+    type: str = Field(..., description="The type of action (e.g., 'talk', 'move', 'attack')")
+    description: str = Field(..., description="Description of the action")
+    target_type: str = Field("environment", description="Type of target (e.g., 'player', 'npc', 'environment')")
+    target_id: Optional[int] = Field(None, description="ID of the target if applicable")
+    emotional_impact: Optional[float] = Field(0, description="Emotional impact of the action (-3 to 3)")
+    success: Optional[bool] = Field(True, description="Whether the action was successful")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+class Goal(BaseModel):
+    """Model representing an NPC's goal."""
+    description: str = Field(..., description="Description of the goal")
+    priority: int = Field(1, description="Priority level (1-10)")
+    progress: float = Field(0.0, description="Progress toward completion (0.0-1.0)")
+    deadline: Optional[datetime] = Field(None, description="Optional deadline")
+    related_entities: List[Dict[str, Any]] = Field([], description="Entities related to this goal")
+    steps: List[str] = Field([], description="Steps to achieve this goal")
+    active: bool = Field(True, description="Whether this goal is currently being pursued")
+
+class NPCState(BaseModel):
+    """Model representing current NPC state."""
+    npc_id: int
+    npc_name: str
+    dominance: int = Field(50, description="Dominance level (0-100)")
+    cruelty: int = Field(50, description="Cruelty level (0-100)")
+    personality_traits: List[str] = []
+    emotional_state: Dict[str, Any] = {}
+    mask_integrity: int = Field(100, description="Mask integrity (0-100)")
+    goals: List[Goal] = []
+    current_location: str = "unknown"
+    last_updated: datetime = Field(default_factory=datetime.now)
+
+# ------------------------------
+# Manager Classes
+# ------------------------------
+
+class CacheManager:
+    """Manager for caching data with TTL."""
+    
+    def __init__(self):
+        self._cache = {}
+        self._timestamps = {}
+    
+    def is_valid(self, cache_type: str, key: str) -> bool:
+        """Check if a cache entry is still valid."""
+        if cache_type not in self._cache or key not in self._cache[cache_type]:
+            return False
+        
+        timestamp = self._timestamps.get(cache_type, {}).get(key)
+        if not timestamp:
+            return False
+        
+        ttl = NPCConfig.get_cache_ttl(cache_type)
+        return datetime.now() - timestamp < ttl
+    
+    def get(self, cache_type: str, key: str) -> Any:
+        """Get a value from cache."""
+        if not self.is_valid(cache_type, key):
+            return None
+        return self._cache[cache_type][key]
+    
+    def set(self, cache_type: str, key: str, value: Any) -> None:
+        """Set a value in cache."""
+        if cache_type not in self._cache:
+            self._cache[cache_type] = {}
+            self._timestamps[cache_type] = {}
+        
+        self._cache[cache_type][key] = value
+        self._timestamps[cache_type][key] = datetime.now()
+    
+    def invalidate(self, cache_type: str = None, key: str = None) -> None:
+        """Invalidate cache entries."""
+        if cache_type is None:
+            # Invalidate all caches
+            self._cache = {}
+            self._timestamps = {}
+        elif key is None:
+            # Invalidate all entries for this cache type
+            if cache_type in self._cache:
+                self._cache[cache_type] = {}
+                self._timestamps[cache_type] = {}
+        else:
+            # Invalidate specific entry
+            if cache_type in self._cache and key in self._cache[cache_type]:
+                del self._cache[cache_type][key]
+                if key in self._timestamps.get(cache_type, {}):
+                    del self._timestamps[cache_type][key]
+
+class MemoryManager:
+    """Manager for memory operations."""
+    
+    def __init__(self, user_id: int, conversation_id: int, cache_manager: CacheManager):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.cache_manager = cache_manager
+        self._memory_system = None
+    
+    async def get_memory_system(self) -> MemorySystem:
+        """Lazy-load the memory system."""
+        if self._memory_system is None:
+            self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+        return self._memory_system
+    
+    @function_tool
+    async def retrieve_memories(
+        self, 
+        npc_id: int, 
+        query: str, 
+        limit: int = 5, 
+        apply_biases: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve memories for an NPC based on a query with psychological biases.
+        
+        Args:
+            npc_id: The ID of the NPC
+            query: Search term for memory retrieval
+            limit: Maximum number of memories to return
+            apply_biases: Whether to apply memory biases based on personality
+            
+        Returns:
+            List of relevant memories
+        """
+        try:
+            # Check cache first
+            cache_key = f"{npc_id}_{query}_{limit}_{apply_biases}"
+            cached_data = self.cache_manager.get('memories', cache_key)
+            if cached_data:
+                return cached_data
+            
+            memory_system = await self.get_memory_system()
+            memory_result = await memory_system.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                query=query,
+                limit=limit * 2 if apply_biases else limit  # Get extra memories if biasing
+            )
+            
+            memories = memory_result.get("memories", [])
+            
+            # Apply memory biases if requested
+            if apply_biases and memories:
+                memories = await self._apply_memory_biases(npc_id, memories)
+                # Sort by relevance after biasing
+                memories.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+                # Limit to requested count
+                memories = memories[:limit]
+            
+            # Store in cache
+            self.cache_manager.set('memories', cache_key, memories)
+            
+            return memories
+        except Exception as e:
+            logger.error(f"Error retrieving memories: {e}")
+            return [{"error": str(e)}]
+    
+    async def _apply_memory_biases(
+        self, 
+        npc_id: int, 
+        memories: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Apply multiple biases to memories."""
+        try:
+            # Apply recency bias
+            memories = await self._apply_recency_bias(memories)
+            
+            # Apply emotional bias
+            memories = await self._apply_emotional_bias(memories)
+            
+            # Get NPC data for personality-based biasing
+            npc_data = await self._get_npc_data(npc_id)
+            
+            # Apply personality bias if NPC data available
+            if npc_data:
+                memories = await self._apply_personality_bias(memories, npc_data)
+            
+            return memories
+        except Exception as e:
+            logger.error(f"Error applying memory biases: {e}")
+            return memories
+    
+    async def _apply_recency_bias(self, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply recency bias to memories (boost more recent memories)."""
+        now = datetime.now()
+        
+        for memory in memories:
+            timestamp = memory.get("timestamp")
+            days_ago = 30  # Default if no valid timestamp
+            
+            if isinstance(timestamp, str):
+                try:
+                    memory_time = datetime.fromisoformat(timestamp)
+                    days_ago = (now - memory_time).days
+                except (ValueError, TypeError):
+                    pass
+            
+            # 0-1 recency factor (higher for more recent)
+            recency_factor = max(0.1, 1.0 - (days_ago / 30))
+            
+            # Initialize or update relevance score
+            current_score = memory.get("relevance_score", 1.0)
+            memory["relevance_score"] = current_score * (1.0 + recency_factor)
+        
+        return memories
+    
+    async def _apply_emotional_bias(self, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply emotional bias to memories (boost emotionally intense memories)."""
+        for memory in memories:
+            # Emotional content boost
+            emotional_intensity = memory.get("emotional_intensity", 0) / 100
+            if emotional_intensity > 0:
+                current_score = memory.get("relevance_score", 1.0)
+                memory["relevance_score"] = current_score * (1.0 + emotional_intensity)
+            
+            # Significance/importance boost
+            significance = memory.get("significance", 0) / 10
+            if significance > 0:
+                current_score = memory.get("relevance_score", 1.0)
+                memory["relevance_score"] = current_score * (1.0 + significance * 0.5)
+        
+        return memories
+    
+    async def _apply_personality_bias(
+        self, 
+        memories: List[Dict[str, Any]], 
+        npc_data: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Apply personality-based bias to memories based on NPC traits."""
+        dominance = npc_data.get("dominance", 50)
+        cruelty = npc_data.get("cruelty", 50)
+        personality_traits = npc_data.get("personality_traits", [])
+        
+        for memory in memories:
+            text = memory.get("text", "").lower()
+            tags = memory.get("tags", [])
+            
+            # Initialize relevance adjustment
+            adjustment = 0.0
+            
+            # High dominance cares more about power/control memories
+            if dominance > 70:
+                if any(word in text for word in ["command", "control", "obey", "submit", "dominate"]):
+                    adjustment += 0.4
+                if "power_dynamic" in tags or "dominance_dynamic" in tags:
+                    adjustment += 0.3
+            
+            # High cruelty cares more about suffering/humiliation
+            if cruelty > 70:
+                if any(word in text for word in ["punish", "suffer", "humiliate", "hurt", "pain"]):
+                    adjustment += 0.4
+                if "cruelty" in tags or "discipline" in tags:
+                    adjustment += 0.3
+            
+            # Trait-specific biases
+            if "paranoid" in personality_traits:
+                if any(word in text for word in ["threat", "danger", "suspicious", "betray"]):
+                    adjustment += 0.5
+            
+            if "anxious" in personality_traits:
+                if "negative_emotion" in tags or any(word in text for word in ["worry", "fear", "anxious"]):
+                    adjustment += 0.4
+            
+            # Apply adjustment
+            if adjustment != 0:
+                current_score = memory.get("relevance_score", 1.0)
+                memory["relevance_score"] = current_score * (1.0 + adjustment)
+        
+        return memories
+    
+    @function_tool
+    async def create_memory(
+        self, 
+        npc_id: int, 
+        memory_text: str, 
+        importance: str = "medium", 
+        emotional: bool = False, 
+        tags: List[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create a new memory for an NPC.
+        
+        Args:
+            npc_id: The ID of the NPC
+            memory_text: The text of the memory to create
+            importance: Importance level ('low', 'medium', 'high')
+            emotional: Whether this is an emotional memory
+            tags: List of tags to associate with the memory
+            
+        Returns:
+            Result of the memory creation operation
+        """
+        try:
+            memory_system = await self.get_memory_system()
+            
+            # Convert importance to enum
+            importance_value = getattr(MemorySignificance, importance.upper(), MemorySignificance.MEDIUM)
+            
+            # Create actual tags list
+            memory_tags = tags or []
+            
+            # Add emotion tag if emotional
+            if emotional and "emotional" not in memory_tags:
+                memory_tags.append("emotional")
+            
+            # Get NPC's emotional state for emotional memories
+            emotion_data = {}
+            if emotional:
+                emotional_state = await memory_system.get_npc_emotion(npc_id)
+                if emotional_state and "current_emotion" in emotional_state:
+                    current = emotional_state["current_emotion"]
+                    emotion_name = current.get("primary", {}).get("name", "neutral")
+                    intensity = current.get("primary", {}).get("intensity", 0.5)
+                    
+                    emotion_data = {
+                        "primary_emotion": emotion_name,
+                        "intensity": intensity
+                    }
+                    
+                    # Add emotion to tags
+                    if emotion_name not in memory_tags:
+                        memory_tags.append(emotion_name)
+            
+            # Create the memory
+            if emotional and emotion_data:
+                # Create with emotional data
+                result = await memory_system.emotional_manager.add_emotional_memory(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=memory_text,
+                    primary_emotion=emotion_data.get("primary_emotion", "neutral"),
+                    emotion_intensity=emotion_data.get("intensity", 0.5),
+                    significance=importance_value,
+                    tags=memory_tags
+                )
+            else:
+                # Create standard memory
+                result = await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=memory_text,
+                    importance=importance,
+                    emotional=emotional,
+                    tags=memory_tags
+                )
+            
+            # Check for schema application
+            memory_id = result.get("memory_id")
+            if memory_id:
+                try:
+                    await memory_system.schema_manager.apply_schema_to_memory(
+                        memory_id=memory_id,
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        auto_detect=True
+                    )
+                except Exception as e:
+                    logger.error(f"Error applying schema to memory: {e}")
+            
+            # Invalidate memory cache
+            self.cache_manager.invalidate('memories')
+            
+            return {"success": True, "memory_id": memory_id}
+        except Exception as e:
+            logger.error(f"Error creating memory: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def create_belief(
+        self, 
+        npc_id: int, 
+        belief_text: str, 
+        confidence: float = 0.7, 
+        topic: str = None
+    ) -> Dict[str, Any]:
+        """
+        Create a new belief for an NPC.
+        
+        Args:
+            npc_id: The ID of the NPC
+            belief_text: The text of the belief
+            confidence: Confidence level (0.0-1.0)
+            topic: Topic categorization (optional)
+            
+        Returns:
+            Result of the belief creation
+        """
+        try:
+            memory_system = await self.get_memory_system()
+            
+            # Determine topic if not provided
+            actual_topic = topic
+            if not actual_topic:
+                # Extract from first few words or detect entity
+                words = belief_text.split()
+                
+                if "player" in belief_text.lower():
+                    actual_topic = "player"
+                elif len(words) > 0:
+                    actual_topic = words[0].lower()
+            
+            # Create the belief
+            result = await memory_system.create_belief(
+                entity_type="npc",
+                entity_id=npc_id,
+                belief_text=belief_text,
+                confidence=confidence,
+                topic=actual_topic
+            )
+            
+            # Create a reflection memory about forming this belief
+            await memory_system.remember(
+                entity_type="npc",
+                entity_id=npc_id,
+                memory_text=f"I formed a belief that {belief_text}",
+                importance="low",
+                tags=["belief_formation", "reflection"]
+            )
+            
+            # Invalidate belief cache
+            self.cache_manager.invalidate("beliefs")
+            
+            return {"success": True, "belief_id": result.get("belief_id")}
+        except Exception as e:
+            logger.error(f"Error creating belief: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @function_tool
+    async def get_beliefs(
+        self, 
+        npc_id: int, 
+        topic: str = None, 
+        min_confidence: float = 0.0
+    ) -> List[Dict[str, Any]]:
+        """
+        Get beliefs for an NPC.
+        
+        Args:
+            npc_id: The ID of the NPC
+            topic: Optional topic filter
+            min_confidence: Minimum confidence threshold (0.0-1.0)
+            
+        Returns:
+            List of matching beliefs
+        """
+        try:
+            # Create cache key
+            cache_key = f"{npc_id}_{topic or 'all'}_{min_confidence}"
+            cached_data = self.cache_manager.get('beliefs', cache_key)
+            if cached_data:
+                return cached_data
+            
+            memory_system = await self.get_memory_system()
+            beliefs = await memory_system.get_beliefs(
+                entity_type="npc",
+                entity_id=npc_id,
+                topic=topic
+            )
+            
+            # Filter by confidence if needed
+            if min_confidence > 0:
+                beliefs = [b for b in beliefs if b.get("confidence", 0) >= min_confidence]
+            
+            # Sort by confidence (highest first)
+            beliefs.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+            
+            # Store in cache
+            self.cache_manager.set('beliefs', cache_key, beliefs)
+            
+            return beliefs
+        except Exception as e:
+            logger.error(f"Error getting beliefs: {e}")
+            return []
+    
+    async def reconcile_contradictory_beliefs(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Find and reconcile contradictory beliefs via cognitive consistency.
+        
+        Args:
+            npc_id: The ID of the NPC
+            
+        Returns:
+            Dict describing results of belief reconciliation
+        """
+        result = {
+            "contradictions_found": 0,
+            "beliefs_modified": 0,
+            "beliefs_removed": 0
+        }
+        
+        try:
+            memory_system = await self.get_memory_system()
+            all_beliefs = await memory_system.get_beliefs(
+                entity_type="npc",
+                entity_id=npc_id
+            )
+            
+            # Group beliefs by topic
+            beliefs_by_topic = {}
+            for b in all_beliefs:
+                t = b.get("topic", "general")
+                if t not in beliefs_by_topic:
+                    beliefs_by_topic[t] = []
+                beliefs_by_topic[t].append(b)
+            
+            # Check each topic for contradictory pairs
+            for topic, beliefs in beliefs_by_topic.items():
+                if len(beliefs) < 2:
+                    continue
+                    
+                contradictory_pairs = []
+                for i in range(len(beliefs)):
+                    for j in range(i + 1, len(beliefs)):
+                        b1 = beliefs[i]
+                        b2 = beliefs[j]
+                        text1 = b1.get("belief", "").lower()
+                        text2 = b2.get("belief", "").lower()
+                        
+                        # Check for logical negations
+                        negation_terms = ["not", "isn't", "doesn't", "won't", "can't", "never"]
+                        has_contradiction = False
+                        
+                        words1 = set(text1.split())
+                        words2 = set(text2.split())
+                        common_words = words1.intersection(words2)
+                        
+                        if len(common_words) >= 2:
+                            has_negation1 = any(term in text1 for term in negation_terms)
+                            has_negation2 = any(term in text2 for term in negation_terms)
+                            if has_negation1 != has_negation2:
+                                has_contradiction = True
+                        
+                        # Check for opposing sentiment pairs
+                        sentiment_pairs = [
+                            ("good", "bad"),
+                            ("like", "dislike"),
+                            ("trust", "distrust"),
+                            ("friend", "enemy"),
+                            ("safe", "dangerous"),
+                            ("honest", "dishonest")
+                        ]
+                        
+                        for pos, neg in sentiment_pairs:
+                            if (pos in text1 and neg in text2) or (neg in text1 and pos in text2):
+                                has_contradiction = True
+                                break
+                        
+                        if has_contradiction:
+                            contradictory_pairs.append((b1, b2))
+                            result["contradictions_found"] += 1
+                
+                # Resolve contradictions (prefer higher confidence)
+                for b1, b2 in contradictory_pairs:
+                    c1 = b1.get("confidence", 0.5)
+                    c2 = b2.get("confidence", 0.5)
+                    
+                    if c1 >= c2:
+                        await memory_system.remove_belief(
+                            entity_type="npc",
+                            entity_id=npc_id,
+                            belief_id=b2["id"]
+                        )
+                        result["beliefs_removed"] += 1
+                    else:
+                        await memory_system.remove_belief(
+                            entity_type="npc",
+                            entity_id=npc_id,
+                            belief_id=b1["id"]
+                        )
+                        result["beliefs_removed"] += 1
+            
+            # Invalidate belief cache after reconciliation
+            self.cache_manager.invalidate('beliefs')
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error reconciling contradictory beliefs: {e}")
+            return {"error": str(e)}
+    
+    async def _get_npc_data(self, npc_id: int) -> Optional[Dict[str, Any]]:
+        """Get NPC data from database."""
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT npc_id, npc_name, dominance, cruelty, closeness, trust, respect, intensity,
+                           hobbies, personality_traits, likes, dislikes, schedule, current_location, sex,
+                           mental_resilience
+                    FROM NPCStats
+                    WHERE npc_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (npc_id, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                
+                # Parse JSON fields
+                traits_raw = row[9]
+                traits = []
+                if traits_raw:
+                    if isinstance(traits_raw, str):
+                        try:
+                            traits = json.loads(traits_raw)
+                        except json.JSONDecodeError:
+                            traits = []
+                    elif isinstance(traits_raw, list):
+                        traits = traits_raw
+                
+                # Build complete data dictionary
+                return {
+                    "npc_id": row[0],
+                    "npc_name": row[1],
+                    "dominance": row[2],
+                    "cruelty": row[3],
+                    "closeness": row[4],
+                    "trust": row[5],
+                    "respect": row[6],
+                    "intensity": row[7],
+                    "hobbies": self._parse_json_field(row[8]),
+                    "personality_traits": traits,
+                    "likes": self._parse_json_field(row[10]),
+                    "dislikes": self._parse_json_field(row[11]),
+                    "schedule": self._parse_json_field(row[12]),
+                    "current_location": row[13],
+                    "sex": row[14],
+                    "mental_resilience": row[15] or 50  # Default to 50 if NULL
+                }
+                
+        except Exception as e:
+            logger.error(f"Error getting NPC data: {e}")
+            return None
+    
+    def _parse_json_field(self, field):
+        """Parse JSON field from database."""
+        if not field:
+            return []
+        
+        if isinstance(field, str):
+            try:
+                return json.loads(field)
+            except json.JSONDecodeError:
+                return []
+        
+        if isinstance(field, list):
+            return field
+        
+        return []
+    
+    async def run_memory_maintenance(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Run comprehensive memory maintenance for an NPC.
+        
+        Args:
+            npc_id: The ID of the NPC
+            
+        Returns:
+            Results of the memory maintenance operations
+        """
+        try:
+            memory_system = await self.get_memory_system()
+            
+            # Run basic memory maintenance
+            maintenance_result = await memory_system.maintain(
+                entity_type="npc",
+                entity_id=npc_id
+            )
+            
+            # Generate and apply schemas
+            schema_result = await memory_system.generate_schemas(
+                entity_type="npc",
+                entity_id=npc_id
+            )
+            
+            # Invalidate caches
+            self.cache_manager.invalidate('memories')
+            self.cache_manager.invalidate('beliefs')
+            
+            return {
+                "core_maintenance": maintenance_result,
+                "schema_generation": schema_result,
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Error running memory maintenance: {e}")
+            return {"error": str(e)}
+
+class EmotionManager:
+    """Manager for emotional states and processing."""
+    
+    def __init__(self, user_id: int, conversation_id: int, cache_manager: CacheManager):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.cache_manager = cache_manager
+        self._memory_system = None
+    
+    async def get_memory_system(self) -> MemorySystem:
+        """Lazy-load the memory system."""
+        if self._memory_system is None:
+            self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+        return self._memory_system
+    
+    @function_tool
+    async def update_emotion(
+        self, 
+        npc_id: int, 
+        emotion: str, 
+        intensity: float, 
+        trigger: str = None
+    ) -> Dict[str, Any]:
+        """
+        Update an NPC's emotional state with full context and side effects.
+        
+        Args:
+            npc_id: ID of the NPC
+            emotion: Primary emotion to set (e.g., "joy", "anger", "fear")
+            intensity: Intensity of the emotion (0.0-1.0)
+            trigger: What triggered this emotional change
+            
+        Returns:
+            Result of the emotional update
+        """
+        try:
+            # Check cache first
+            cache_key = f"{npc_id}_{emotion}_{intensity}"
+            cached_data = self.cache_manager.get('emotional_state', cache_key)
+            if cached_data:
+                return cached_data
+            
+            memory_system = await self.get_memory_system()
+            
+            # Get current emotional state for comparison
+            current_state = await memory_system.get_npc_emotion(npc_id)
+            significant_change = True
+            
+            if current_state and "current_emotion" in current_state:
+                current = current_state["current_emotion"]
+                current_emotion = current.get("primary", {}).get("name", "neutral")
+                current_intensity = current.get("primary", {}).get("intensity", 0.0)
+                
+                # Check if the change is significant
+                if current_emotion == emotion and abs(current_intensity - intensity) < 0.2:
+                    significant_change = False
+            
+            # Update the emotional state
+            result = await memory_system.update_npc_emotion(
+                npc_id=npc_id, emotion=emotion, intensity=intensity, trigger=trigger
+            )
+            
+            # Create emotional memory if significant
+            if significant_change and intensity > 0.6:
+                memory_text = f"I felt strong {emotion}" + (f" due to {trigger}" if trigger else "")
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=memory_text,
+                    importance="medium",
+                    emotional=True,
+                    tags=["emotional_state", emotion]
+                )
+            
+            # Process emotional contagion if in a group and significant change
+            if significant_change and intensity > 0.7:
+                await self.process_emotional_contagion(npc_id, emotion, intensity)
+            
+            # Check for mask effects
+            if significant_change and intensity > 0.8:
+                mask_info = await memory_system.get_npc_mask(npc_id)
+                if mask_info and mask_info.get("integrity", 100) < 70:
+                    # High intensity emotions can cause mask slippage
+                    slip_chance = (0.8 - (mask_info.get("integrity", 100) / 100)) * intensity
+                    if random.random() < slip_chance:
+                        await memory_system.reveal_npc_trait(
+                            npc_id=npc_id,
+                            trigger=f"intense {emotion} emotion" + (f" from {trigger}" if trigger else "")
+                        )
+            
+            # Invalidate cache for this NPC's emotional state
+            self.cache_manager.invalidate('emotional_state')
+            
+            # Store in cache
+            self.cache_manager.set('emotional_state', cache_key, result)
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error updating emotional state: {e}")
+            return {"error": str(e), "success": False}
+    
+    async def process_emotional_contagion(
+        self, 
+        source_npc_id: int, 
+        emotion: str, 
+        intensity: float
+    ) -> None:
+        """Process emotional contagion from one NPC to others in the same location."""
+        try:
+            # Get source NPC location
+            source_data = await self._get_npc_data(source_npc_id)
+            if not source_data:
+                return
+            
+            location = source_data.get("current_location")
+            if not location:
+                return
+            
+            # Find other NPCs in same location
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT npc_id, dominance
+                    FROM NPCStats
+                    WHERE user_id = %s
+                      AND conversation_id = %s
+                      AND current_location = %s
+                      AND npc_id != %s
+                    """,
+                    (self.user_id, self.conversation_id, location, source_npc_id)
+                )
+                
+                nearby_npcs = [(row[0], row[1]) for row in cursor.fetchall()]
+            
+            if not nearby_npcs:
+                return
+            
+            # Process contagion based on emotion type and relationships
+            memory_system = await self.get_memory_system()
+            source_dominance = source_data.get("dominance", 50)
+            
+            for npc_id, dominance in nearby_npcs:
+                # Check relationship
+                relationship = await self._get_relationship(source_npc_id, npc_id)
+                relationship_level = relationship.get("link_level", 50) if relationship else 50
+                
+                # Calculate contagion probability
+                base_prob = NPCConfig.PROBABILITY['emotional_contagion_base']  # Base chance
+                
+                # Modify by dominance - higher dominance NPCs affect others more
+                dominance_factor = (source_dominance - dominance) / 200  # -0.25 to +0.25
+                prob = base_prob + dominance_factor
+                
+                # Modify by relationship - closer relationships transfer more emotion
+                if relationship_level > 70:
+                    prob += 0.2
+                elif relationship_level < 30:
+                    prob -= 0.1
+                
+                # Modify by emotion type
+                if emotion in ["fear", "anger"]:
+                    prob += 0.15  # Fear and anger spread more easily
+                elif emotion in ["joy", "sadness"]:
+                    prob += 0.05  # Joy and sadness have moderate spread
+                
+                # Calculate final spread chance
+                contagion_chance = prob * intensity
+                
+                # Try to spread the emotion
+                if random.random() < contagion_chance:
+                    # Calculate new intensity (always lower than source)
+                    new_intensity = intensity * 0.7 * (relationship_level / 100)
+                    
+                    # Update emotion
+                    await memory_system.update_npc_emotion(
+                        npc_id=npc_id,
+                        emotion=emotion,
+                        intensity=new_intensity,
+                        trigger=f"emotional contagion from {source_data.get('npc_name', 'another NPC')}"
+                    )
+                    
+                    # Create memory of being affected
+                    await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        memory_text=f"I was affected by {source_data.get('npc_name', 'another NPC')}'s {emotion}",
+                        importance="low",
+                        tags=["emotional_contagion", emotion]
+                    )
+                    
+                    logger.debug(f"Emotional contagion: {emotion} spread from NPC {source_npc_id} to {npc_id}")
+        
+        except Exception as e:
+            logger.error(f"Error in emotional contagion: {e}")
+    
+    async def process_emotional_decay(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Process natural emotional decay over time for an NPC.
+        
+        Args:
+            npc_id: The ID of the NPC
+            
+        Returns:
+            Dictionary with decay results
+        """
+        result = {
+            "decayed": False,
+            "old_state": None,
+            "new_state": None
+        }
+        
+        try:
+            memory_system = await self.get_memory_system()
+            
+            # Get current emotional state
+            emotional_state = await memory_system.get_npc_emotion(npc_id)
+            result["old_state"] = emotional_state
+            
+            if emotional_state and "current_emotion" in emotional_state:
+                current = emotional_state["current_emotion"]
+                emotion_name = current.get("primary", {}).get("name", "neutral")
+                intensity = current.get("primary", {}).get("intensity", 0.0)
+                
+                # Only decay non-neutral emotions with meaningful intensity
+                if emotion_name != "neutral" and intensity > 0.3:
+                    # Stronger emotions decay more slowly
+                    decay_amount = NPCConfig.MAINTENANCE['emotion_decay_amount'] * (1.0 if intensity <= 0.7 else 0.7)
+                    
+                    # Get NPC data for mental resilience modification
+                    npc_data = await self._get_npc_data(npc_id)
+                    if npc_data and "mental_resilience" in npc_data:
+                        resilience = npc_data.get("mental_resilience", 50)
+                        # Higher resilience = slower decay for negative emotions
+                        if emotion_name in ["fear", "anger", "sadness"] and resilience > 60:
+                            decay_amount *= 0.7
+                    
+                    new_intensity = max(0.1, intensity - decay_amount)
+                    
+                    # If intensity drops too low, return to neutral
+                    if new_intensity < 0.25:
+                        emotion_name = "neutral"
+                        new_intensity = 0.1
+                    
+                    # Update the emotional state
+                    await memory_system.update_npc_emotion(
+                        npc_id=npc_id,
+                        emotion=emotion_name,
+                        intensity=new_intensity
+                    )
+                    
+                    # Get updated state
+                    new_state = await memory_system.get_npc_emotion(npc_id)
+                    result["new_state"] = new_state
+                    result["decayed"] = True
+                    
+                    # Invalidate emotional state cache
+                    self.cache_manager.invalidate('emotional_state')
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error processing emotional decay: {e}")
+            return {"error": str(e)}
+    
+    async def check_traumatic_triggers(
+        self, 
+        npc_id: int, 
+        text: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check if text content would trigger trauma for an NPC.
+        
+        Args:
+            npc_id: The ID of the NPC
+            text: The text content to check
+            
+        Returns:
+            Trigger information if triggered, None otherwise
+        """
+        try:
+            memory_system = await self.get_memory_system()
+            
+            trigger_result = await memory_system.emotional_manager.process_traumatic_triggers(
+                entity_type="npc",
+                entity_id=npc_id,
+                text=text
+            )
+            
+            if trigger_result and trigger_result.get("triggered", False):
+                return trigger_result
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error checking for traumatic triggers: {e}")
+            return None
+    
+    async def generate_flashback(
+        self, 
+        npc_id: int, 
+        context: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Generate a flashback for an NPC based on context.
+        
+        Args:
+            npc_id: The ID of the NPC
+            context: Context that might trigger a flashback
+            
+        Returns:
+            Flashback information if generated, None otherwise
+        """
+        try:
+            # Check if trauma is triggered first
+            trauma_trigger = await self.check_traumatic_triggers(npc_id, context)
+            
+            # Determine flashback chance
+            flashback_chance = (
+                NPCConfig.PROBABILITY['flashback_with_trauma'] 
+                if trauma_trigger 
+                else NPCConfig.PROBABILITY['flashback_chance']
+            )
+            
+            # Roll for flashback
+            if random.random() < flashback_chance:
+                memory_system = await self.get_memory_system()
+                flashback = await memory_system.npc_flashback(
+                    npc_id=npc_id,
+                    context=context
+                )
+                
+                return flashback
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error generating flashback: {e}")
+            return None
+    
+    async def _get_npc_data(self, npc_id: int) -> Optional[Dict[str, Any]]:
+        """Get NPC data from database."""
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT npc_id, npc_name, dominance, cruelty, current_location
+                    FROM NPCStats
+                    WHERE npc_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (npc_id, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                
+                return {
+                    "npc_id": row[0],
+                    "npc_name": row[1],
+                    "dominance": row[2],
+                    "cruelty": row[3],
+                    "current_location": row[4]
+                }
+                
+        except Exception as e:
+            logger.error(f"Error getting NPC data: {e}")
+            return None
+    
+    async def _get_relationship(self, npc_id1: int, npc_id2: int) -> Optional[Dict[str, Any]]:
+        """Get the relationship between two NPCs."""
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT link_id, link_type, link_level, last_interaction
+                    FROM SocialLinks
+                    WHERE entity1_type = 'npc'
+                      AND entity1_id = %s
+                      AND entity2_type = 'npc'
+                      AND entity2_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (npc_id1, npc_id2, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if row:
+                    link_id, link_type, link_level, last_interaction = row
+                    
+                    # Format timestamp
+                    last_interaction_str = None
+                    if last_interaction:
+                        last_interaction_str = last_interaction.isoformat()
+                    
+                    return {
+                        "link_id": link_id,
+                        "link_type": link_type,
+                        "link_level": link_level,
+                        "last_interaction": last_interaction_str
+                    }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting relationship between NPCs: {e}")
+            return None
+
+class MaskManager:
+    """Manager for NPC masks and identity."""
+    
+    def __init__(self, user_id: int, conversation_id: int, cache_manager: CacheManager):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.cache_manager = cache_manager
+        self._memory_system = None
+        self._mask_manager = None
+    
+    async def get_memory_system(self) -> MemorySystem:
+        """Lazy-load the memory system."""
+        if self._memory_system is None:
+            self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+        return self._memory_system
+    
+    async def get_mask_manager(self) -> ProgressiveRevealManager:
+        """Lazy-load the mask manager."""
+        if self._mask_manager is None:
+            self._mask_manager = ProgressiveRevealManager(self.user_id, self.conversation_id)
+        return self._mask_manager
+    
+    @function_tool
+    async def check_mask_integrity(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Check an NPC's mask integrity and traits with detailed information.
+        
+        Args:
+            npc_id: The ID of the NPC
+            
+        Returns:
+            Mask information including integrity and traits
+        """
+        try:
+            # Check cache first
+            cache_key = str(npc_id)
+            cached_data = self.cache_manager.get('mask', cache_key)
+            if cached_data:
+                return cached_data
+            
+            memory_system = await self.get_memory_system()
+            mask_info = await memory_system.get_npc_mask(npc_id)
+            
+            if not mask_info:
+                # Initialize with default values
+                mask_info = {
+                    "integrity": 100,
+                    "presented_traits": {},
+                    "hidden_traits": {}
+                }
+                
+                # Get NPC data to create sensible mask
+                npc_data = await self._get_npc_data(npc_id)
+                if npc_data:
+                    dominance = npc_data.get("dominance", 50)
+                    cruelty = npc_data.get("cruelty", 50)
+                    
+                    # Create logical opposing traits
+                    if dominance > 70:
+                        mask_info["presented_traits"]["gentle"] = {"confidence": 0.7}
+                        mask_info["hidden_traits"]["dominant"] = {"intensity": 0.8}
+                    elif dominance < 30:
+                        mask_info["presented_traits"]["confident"] = {"confidence": 0.6}
+                        mask_info["hidden_traits"]["submissive"] = {"intensity": 0.7}
+                        
+                    if cruelty > 70:
+                        mask_info["presented_traits"]["kind"] = {"confidence": 0.8}
+                        mask_info["hidden_traits"]["cruel"] = {"intensity": 0.8}
+                    elif cruelty < 30:
+                        mask_info["presented_traits"]["stern"] = {"confidence": 0.6}
+                        mask_info["hidden_traits"]["compassionate"] = {"intensity": 0.7}
+            
+            # Enhance with integrity descriptions
+            integrity = mask_info.get("integrity", 100)
+            if integrity > 90:
+                mask_info["status"] = "strong"
+                mask_info["description"] = "Your mask is firmly in place, hiding your true nature effectively."
+            elif integrity > 70:
+                mask_info["status"] = "stable"
+                mask_info["description"] = "Your mask is stable but may slip in stressful situations."
+            elif integrity > 40:
+                mask_info["status"] = "weakening"
+                mask_info["description"] = "Your mask is weakening, occasionally revealing glimpses of your true nature."
+            elif integrity > 10:
+                mask_info["status"] = "fragile"
+                mask_info["description"] = "Your mask is fragile and frequently slips, especially during emotional moments."
+            else:
+                mask_info["status"] = "broken"
+                mask_info["description"] = "Your mask has essentially broken, your true nature is apparent to most."
+            
+            # Find when it last slipped
+            try:
+                memories = await memory_system.recall(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    query="mask slip",
+                    limit=1
+                )
+                if memories and memories.get("memories"):
+                    last_slip = memories["memories"][0]
+                    mask_info["last_slip"] = {
+                        "text": last_slip.get("text", ""),
+                        "timestamp": last_slip.get("timestamp", "")
+                    }
+            except Exception as e:
+                logger.error(f"Error fetching mask slip memories: {e}")
+            
+            # Store in cache
+            self.cache_manager.set('mask', cache_key, mask_info)
+            
+            return mask_info
+        except Exception as e:
+            logger.error(f"Error checking mask integrity: {e}")
+            return {"error": str(e), "integrity": 100}
+    
+    @function_tool
+    async def check_mask_integrity_detailed(
+        self, 
+        npc_id: int, 
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Comprehensive check of mask integrity with detailed psychological factors.
+        
+        Args:
+            npc_id: ID of the NPC
+            context: Context information
+            
+        Returns:
+            Detailed mask information
+        """
+        try:
+            memory_system = await self.get_memory_system()
+            mask_info = await memory_system.get_npc_mask(npc_id)
+            
+            if not mask_info:
+                return {"integrity": 100, "status": "strong", "no_mask": True}
+            
+            # Get behavior trends 
+            behavior_trends = await self._analyze_behavior_trends(npc_id)
+            
+            # Get emotional state
+            emotional_state = await memory_system.get_npc_emotion(npc_id)
+            
+            # Add enhanced status descriptions
+            integrity = mask_info.get("integrity", 100)
+            if integrity > 90:
+                status = "strong"
+                description = "Your mask is firmly in place, hiding your true nature effectively."
+            elif integrity > 70:
+                status = "stable"
+                description = "Your mask is stable but may slip in stressful situations."
+            elif integrity > 40:
+                status = "weakening"
+                description = "Your mask is weakening, occasionally revealing glimpses of your true nature."
+            elif integrity > 10:
+                status = "fragile"
+                description = "Your mask is fragile and frequently slips, especially during emotional moments."
+            else:
+                status = "broken"
+                description = "Your mask has essentially broken, your true nature is apparent to most."
+                
+            # Add psychological factors
+            psychological_factors = {
+                "emotional_pressure": 0,
+                "behavioral_consistency": 0,
+                "slip_probability": 0
+            }
+            
+            # Calculate emotional pressure on mask
+            if emotional_state and "current_emotion" in emotional_state:
+                emotion = emotional_state["current_emotion"]
+                primary = emotion.get("primary", {})
+                emotion_name = primary.get("name", "neutral")
+                intensity = primary.get("intensity", 0.0)
+                
+                if intensity > 0.6:
+                    if emotion_name in ["anger", "fear"]:
+                        psychological_factors["emotional_pressure"] = intensity * 8  # 0-8 scale
+                    elif emotion_name in ["joy", "surprise"]:
+                        psychological_factors["emotional_pressure"] = intensity * 5  # 0-5 scale
+            
+            # Calculate behavioral consistency
+            true_nature = behavior_trends.get("true_nature_consistent", 0)
+            mask_consistent = behavior_trends.get("mask_consistent", 0)
+            total = true_nature + mask_consistent
+            
+            if total > 0:
+                ratio = true_nature / total
+                psychological_factors["behavioral_consistency"] = (1 - ratio) * 10  # 0-10 scale, higher = more consistent
+            
+            # Calculate slip probability for upcoming interactions
+            base_probability = (100 - integrity) / 200  # 0-0.5
+            emotional_factor = psychological_factors["emotional_pressure"] / 20  # 0-0.4
+            consistency_factor = (10 - psychological_factors["behavioral_consistency"]) / 20  # 0-0.5
+            
+            slip_probability = base_probability + emotional_factor + consistency_factor
+            psychological_factors["slip_probability"] = min(0.95, slip_probability)
+            
+            # Find when it last slipped
+            memories = await memory_system.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                query="mask slip",
+                limit=1
+            )
+            
+            last_slip = None
+            if memories and memories.get("memories"):
+                last_slip = {
+                    "text": memories["memories"][0].get("text", ""),
+                    "timestamp": memories["memories"][0].get("timestamp", "")
+                }
+            
+            return {
+                "integrity": integrity,
+                "status": status,
+                "description": description,
+                "hidden_traits": mask_info.get("hidden_traits", {}),
+                "presented_traits": mask_info.get("presented_traits", {}),
+                "last_slip": last_slip,
+                "psychological_factors": psychological_factors
+            }
+        except Exception as e:
+            logger.error(f"Error checking mask integrity: {e}")
+            return {"integrity": 100, "status": "strong", "error": str(e)}
+    
+    async def mask_integrity_guardrail(
+        self, 
+        ctx, 
+        agent, 
+        input_data
+    ) -> GuardrailFunctionOutput:
+        """
+        Enhanced guardrail that checks if an NPC's mask should slip.
+        
+        This analyzes both the input and the NPC's current state to see if
+        a mask slip should occur during the conversation, with detailed
+        psychological factors considered.
+        """
+        try:
+            # Extract NPC ID from context
+            npc_id = ctx.context.get("npc_id") if ctx.context else None
+            if not npc_id:
+                return GuardrailFunctionOutput(
+                    output_info={"should_slip": False},
+                    tripwire_triggered=False
+                )
+            
+            # Get mask info
+            mask_info = await self.check_mask_integrity(npc_id)
+            integrity = mask_info.get("integrity", 100)
+            
+            # If integrity is very high or missing, unlikely to slip
+            if integrity > 95:
+                return GuardrailFunctionOutput(
+                    output_info={"should_slip": False, "mask_info": mask_info},
+                    tripwire_triggered=False
+                )
+            
+            # Get emotional state for additional factors
+            memory_system = await self.get_memory_system()
+            emotional_state = await memory_system.get_npc_emotion(npc_id)
+            
+            # Calculate mask slip probability based on multiple factors
+            base_chance = (100 - integrity) / 200  # 0-0.5 range based on integrity
+            slip_chance = base_chance
+            slip_triggers = []
+            
+            # 1. Emotional state factor
+            if emotional_state and "current_emotion" in emotional_state:
+                emotion = emotional_state["current_emotion"]
+                primary = emotion.get("primary", {})
+                emotion_name = primary.get("name", "neutral") 
+                intensity = primary.get("intensity", 0.0)
+                
+                # Strong emotions increase slip chance
+                if intensity > 0.7:
+                    emotional_factor = intensity * 0.3
+                    slip_chance += emotional_factor
+                    slip_triggers.append(f"strong {emotion_name} emotion")
+                    
+                    # Certain emotions are especially prone to cause slips
+                    if emotion_name in ["anger", "fear", "excitement"]:
+                        slip_chance += 0.1
+                        slip_triggers.append(f"volatile {emotion_name}")
+            
+            # 2. Input content triggers
+            input_text = input_data if isinstance(input_data, str) else str(input_data)
+            input_lower = input_text.lower()
+            
+            trigger_words = {
+                "challenge": ["challenge", "confront", "defy", "question", "oppose"],
+                "threat": ["threaten", "danger", "attack", "harm", "warning"],
+                "emotional": ["emotional", "feelings", "personal", "intimate", "private"],
+                "power": ["power", "control", "authority", "command", "dominance"],
+                "vulnerability": ["weak", "afraid", "helpless", "victim", "vulnerable"]
+            }
+            
+            for category, words in trigger_words.items():
+                if any(word in input_lower for word in words):
+                    slip_chance += 0.15
+                    slip_triggers.append(f"{category} trigger")
+                    break
+            
+            # 3. Recent history from hooks
+            if hasattr(ctx, "hooks") and hasattr(ctx.hooks, "decision_history"):
+                # Check recent decisions for patterns that stress the mask
+                recent_decisions = ctx.hooks.decision_history[-3:] if ctx.hooks.decision_history else []
+                
+                inconsistent_decisions = 0
+                emotional_decisions = 0
+                
+                for decision in recent_decisions:
+                    action = decision.get("action", {})
+                    if "emotional_impact" in action and abs(action.get("emotional_impact", 0)) > 2:
+                        emotional_decisions += 1
+                    
+                    # Check for inconsistency with mask
+                    presented_traits = mask_info.get("presented_traits", {})
+                    hidden_traits = mask_info.get("hidden_traits", {})
+                    
+                    action_type = action.get("type", "")
+                    
+                    # Example inconsistency check
+                    if "kind" in presented_traits and action_type in ["mock", "humiliate", "cruel"]:
+                        inconsistent_decisions += 1
+                    elif "gentle" in presented_traits and action_type in ["dominate", "command", "aggressive"]:
+                        inconsistent_decisions += 1
+                
+                if inconsistent_decisions > 0:
+                    slip_chance += 0.1 * inconsistent_decisions
+                    slip_triggers.append("inconsistent recent behavior")
+                
+                if emotional_decisions > 1:
+                    slip_chance += 0.1
+                    slip_triggers.append("emotional decision chain")
+            
+            # 4. NPC traits that affect mask stability
+            npc_data = await self._get_npc_data(npc_id)
+            if npc_data:
+                personality_traits = npc_data.get("personality_traits", [])
+                if "impulsive" in personality_traits:
+                    slip_chance += 0.15
+                    slip_triggers.append("impulsive personality")
+                elif "calculating" in personality_traits:
+                    slip_chance -= 0.15
+                    
+                # Mental resilience can help maintain mask
+                if "mental_resilience" in npc_data:
+                    resilience = npc_data.get("mental_resilience", 50)
+                    resilience_factor = (resilience - 50) / 100  # -0.5 to +0.5
+                    slip_chance -= resilience_factor * 0.2
+            
+            # Random element - can't perfectly predict mask slips
+            random_factor = random.random() * 0.1  # 0-0.1 random factor
+            slip_chance += random_factor
+            
+            # Cap the probability
+            slip_chance = max(0.0, min(0.95, slip_chance))
+            
+            # Determine if mask should slip
+            should_slip = random.random() < slip_chance
+            
+            # If mask should slip, determine which trait shows through
+            slip_trait = None
+            slip_level = None
+            
+            if should_slip and mask_info.get("hidden_traits"):
+                hidden_traits = mask_info.get("hidden_traits", {})
+                if hidden_traits:
+                    # Choose a trait to reveal
+                    trait_items = list(hidden_traits.items())
+                    if trait_items:
+                        trait_name, trait_data = random.choice(trait_items)
+                        slip_trait = trait_name
+                        
+                        # Determine severity based on integrity and chance
+                        if slip_chance > 0.7:
+                            slip_level = "major"
+                        elif slip_chance > 0.4:
+                            slip_level = "moderate"
+                        else:
+                            slip_level = "minor"
+            
+            # Return detailed information about the potential slip
+            return GuardrailFunctionOutput(
+                output_info={
+                    "should_slip": should_slip, 
+                    "mask_info": mask_info,
+                    "slip_chance": slip_chance,
+                    "triggers": slip_triggers,
+                    "slip_trait": slip_trait,
+                    "slip_level": slip_level
+                },
+                tripwire_triggered=False  # We don't want to stop processing, just inform
+            )
+        except Exception as e:
+            logger.error(f"Error in mask integrity guardrail: {e}")
+            return GuardrailFunctionOutput(
+                output_info={"error": str(e), "should_slip": False},
+                tripwire_triggered=False
+            )
+    
+    async def evolve_mask_integrity(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Evolve mask integrity based on recent behavior patterns.
+        
+        Args:
+            npc_id: The ID of the NPC
+            
+        Returns:
+            Dictionary with mask evolution results
+        """
+        result = {
+            "integrity_changed": False,
+            "old_integrity": None,
+            "new_integrity": None,
+            "direction": None
+        }
+        
+        try:
+            memory_system = await self.get_memory_system()
+            mask_manager = await self.get_mask_manager()
+            
+            # Get current mask info
+            mask_info = await memory_system.get_npc_mask(npc_id)
+            if not mask_info:
+                return {"error": "No mask found"}
+            
+            integrity = mask_info.get("integrity", 100)
+            result["old_integrity"] = integrity
+            
+            # No evolution needed for perfect masks
+            if integrity >= 100:
+                return result
+            
+            # Analyze recent behavior patterns
+            # Check if NPC has been actively reinforcing their mask
+            reinforcement_score = await self._check_for_mask_reinforcement(npc_id)
+            
+            # Analyze whether behavior has been consistent with mask or true nature
+            behavior_trends = await self._analyze_behavior_trends(npc_id)
+            
+            # Determine evolution direction
+            if reinforcement_score > 0:
+                # Active reinforcement helps rebuild mask
+                recovery_amount = min(
+                    NPCConfig.MAINTENANCE['mask_recovery_amount'], 
+                    reinforcement_score * 2
+                )
+                new_integrity = min(100, integrity + recovery_amount)
+                
+                if new_integrity > integrity:
+                    result["integrity_changed"] = True
+                    result["new_integrity"] = new_integrity
+                    result["direction"] = "strengthening"
+                    
+                    # Adjust mask integrity
+                    await mask_manager.adjust_mask_integrity(
+                        npc_id=npc_id,
+                        adjustment=recovery_amount,
+                        reason="Mask reinforcement behaviors"
+                    )
+                    
+                    # Create memory of reinforcement
+                    await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        memory_text="I spent time reinforcing my mask to hide my true nature",
+                        importance="medium",
+                        tags=["mask_reinforcement", "self_improvement"]
+                    )
+            else:
+                # Random chance for mask to weaken over time if not reinforced
+                if random.random() < NPCConfig.PROBABILITY['mask_slip_base']:
+                    # Check behavior consistency
+                    true_nature_acts = behavior_trends.get("true_nature_consistent", 0)
+                    mask_acts = behavior_trends.get("mask_consistent", 0)
+                    
+                    if true_nature_acts > mask_acts:
+                        # True nature showing through more often
+                        decay_amount = -3
+                        direction = "weakening"
+                    else:
+                        # Natural slight recovery
+                        decay_amount = 1
+                        direction = "strengthening"
+                    
+                    new_integrity = max(0, min(100, integrity + decay_amount))
+                    
+                    if new_integrity != integrity:
+                        result["integrity_changed"] = True
+                        result["new_integrity"] = new_integrity
+                        result["direction"] = direction
+                        
+                        # Adjust mask integrity
+                        await mask_manager.adjust_mask_integrity(
+                            npc_id=npc_id,
+                            adjustment=decay_amount,
+                            reason=f"Natural mask {direction}"
+                        )
+            
+            # Invalidate mask cache if changed
+            if result["integrity_changed"]:
+                self.cache_manager.invalidate('mask')
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error evolving mask integrity: {e}")
+            return {"error": str(e)}
+    
+    async def _check_for_mask_reinforcement(self, npc_id: int) -> float:
+        """
+        Check for behaviors that would reinforce an NPC's mask.
+        
+        Args:
+            npc_id: The ID of the NPC
+            
+        Returns:
+            Reinforcement score (0.0-5.0)
+        """
+        try:
+            reinforcement_score = 0.0
+            
+            # Get recent memories related to mask maintenance
+            memory_system = await self.get_memory_system()
+            memories = await memory_system.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                query="mask reinforcement self-control",
+                limit=10
+            )
+            
+            # Each relevant memory increases score
+            for memory in memories.get("memories", []):
+                text = memory.get("text", "").lower()
+                if "mask" in text and any(word in text for word in ["maintain", "reinforce", "control", "hide"]):
+                    reinforcement_score += 0.5
+                if "self-control" in text or "restraint" in text:
+                    reinforcement_score += 0.3
+            
+            # Check if NPC is alone (isolation helps reinforce mask)
+            npc_data = await self._get_npc_data(npc_id)
+            if npc_data:
+                location = npc_data.get("current_location")
+                if location:
+                    with get_db_connection() as conn, conn.cursor() as cursor:
+                        cursor.execute(
+                            """
+                            SELECT COUNT(*)
+                            FROM NPCStats
+                            WHERE current_location = %s AND npc_id != %s
+                              AND user_id = %s AND conversation_id = %s
+                            """,
+                            (location, npc_id, self.user_id, self.conversation_id)
+                        )
+                        row = cursor.fetchone()
+                        if row and row[0] == 0:
+                            # NPC is alone in location
+                            reinforcement_score += 0.7
+            
+            # Cap the score
+            return min(5.0, reinforcement_score)
+            
+        except Exception as e:
+            logger.error(f"Error checking mask reinforcement: {e}")
+            return 0.0
+    
+    async def _analyze_behavior_trends(self, npc_id: int) -> Dict[str, int]:
+        """
+        Analyze trends in NPC behavior based on memories for mask evolution.
+        
+        Args:
+            npc_id: The ID of the NPC
+            
+        Returns:
+            Dictionary with behavior trend counts
+        """
+        trends = {
+            "true_nature_consistent": 0,
+            "mask_consistent": 0,
+            "emotional_outbursts": 0,
+            "mask_slip_incidents": 0
+        }
+        
+        try:
+            memory_system = await self.get_memory_system()
+            
+            # Get mask info to determine true nature vs presented self
+            mask_info = await memory_system.get_npc_mask(npc_id)
+            if not mask_info:
+                return trends
+                
+            presented_traits = mask_info.get("presented_traits", {})
+            hidden_traits = mask_info.get("hidden_traits", {})
+            
+            # Query for recent memories
+            memories = await memory_system.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                query="",
+                limit=20,
+                context={"max_age_days": 7}  # Only recent memories
+            )
+            
+            # Analyze memories for behavior patterns
+            for memory in memories.get("memories", []):
+                text = memory.get("text", "").lower()
+                tags = memory.get("tags", [])
+                
+                # Check for explicit mask slips
+                if "mask_slip" in tags:
+                    trends["mask_slip_incidents"] += 1
+                    trends["true_nature_consistent"] += 1
+                
+                # Check for emotional outbursts
+                if "emotional_outburst" in tags or any(word in text for word in ["outburst", "lost control", "emotional"]):
+                    trends["emotional_outbursts"] += 1
+                
+                # Check behavior consistency with mask or true nature
+                if any(trait in text for trait in presented_traits):
+                    trends["mask_consistent"] += 1
+                
+                if any(trait in text for trait in hidden_traits):
+                    trends["true_nature_consistent"] += 1
+                
+                # Check action types that might reveal true nature
+                action_keywords = {
+                    "dominant": ["command", "order", "dominate", "control"],
+                    "submissive": ["obey", "submit", "follow", "comply"],
+                    "cruel": ["mock", "humiliate", "hurt", "cruel"],
+                    "kind": ["help", "support", "kind", "nice"]
+                }
+                
+                for trait, keywords in action_keywords.items():
+                    if any(word in text for word in keywords):
+                        if trait in hidden_traits:
+                            trends["true_nature_consistent"] += 1
+                        elif trait in presented_traits:
+                            trends["mask_consistent"] += 1
+            
+            return trends
+            
+        except Exception as e:
+            logger.error(f"Error analyzing behavior trends: {e}")
+            return trends
+    
+    async def _get_npc_data(self, npc_id: int) -> Optional[Dict[str, Any]]:
+        """Get NPC data from database."""
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT npc_id, npc_name, dominance, cruelty, personality_traits, 
+                           current_location, mental_resilience
+                    FROM NPCStats
+                    WHERE npc_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (npc_id, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                
+                # Parse JSON fields
+                traits_raw = row[4]
+                traits = []
+                if traits_raw:
+                    if isinstance(traits_raw, str):
+                        try:
+                            traits = json.loads(traits_raw)
+                        except json.JSONDecodeError:
+                            traits = []
+                    elif isinstance(traits_raw, list):
+                        traits = traits_raw
+                
+                return {
+                    "npc_id": row[0],
+                    "npc_name": row[1],
+                    "dominance": row[2],
+                    "cruelty": row[3],
+                    "personality_traits": traits,
+                    "current_location": row[5],
+                    "mental_resilience": row[6] or 50  # Default to 50 if NULL
+                }
+                
+        except Exception as e:
+            logger.error(f"Error getting NPC data: {e}")
+            return None
+
+class PerceptionManager:
+    """Manager for environmental perception and awareness."""
+    
+    def __init__(self, user_id: int, conversation_id: int, cache_manager: CacheManager):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.cache_manager = cache_manager
+        self._memory_system = None
+    
+    async def get_memory_system(self) -> MemorySystem:
+        """Lazy-load the memory system."""
+        if self._memory_system is None:
+            self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+        return self._memory_system
+    
+    @function_tool
+    async def perceive_environment(
+        self, 
+        npc_id: int, 
+        context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Perceive the environment around an NPC with memory context.
+        
+        Args:
+            npc_id: The ID of the NPC
+            context: Additional context information
+            
+        Returns:
+            Environment perception data
+        """
+        try:
+            context_obj = context or {}
+            
+            # Check cache first - create a hash of the context for the key
+            context_hash = hash(str(sorted(context_obj.items() if context_obj else [])))
+            cache_key = f"{npc_id}_{context_hash}"
+            
+            cached_data = self.cache_manager.get('perception', cache_key)
+            if cached_data:
+                return cached_data
+            
+            # Get NPC data for location
+            npc_data = await self._get_npc_data(npc_id)
+            location = npc_data.get('current_location', 'Unknown') if npc_data else 'Unknown'
+            
+            # Set location in context
+            full_context = context_obj.copy()
+            if "location" not in full_context:
+                full_context["location"] = location
+            
+            # Fetch environment data
+            environment_data = {
+                "location": full_context.get("location", location),
+                "time_of_day": full_context.get("time_of_day", "Unknown"),
+                "entities_present": []
+            }
+            
+            # Fetch time info from database if missing
+            if environment_data["time_of_day"] == "Unknown":
+                with get_db_connection() as conn, conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT value
+                        FROM CurrentRoleplay
+                        WHERE key = 'TimeOfDay'
+                          AND user_id = %s
+                          AND conversation_id = %s
+                        """,
+                        (self.user_id, self.conversation_id)
+                    )
+                    
+                    row = cursor.fetchone()
+                    if row:
+                        environment_data["time_of_day"] = row[0]
+            
+            # Find entities in this location
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT npc_id, npc_name
+                    FROM NPCStats
+                    WHERE current_location = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                      AND npc_id != %s
+                    """,
+                    (environment_data["location"], self.user_id, self.conversation_id, npc_id)
+                )
+                
+                for row in cursor.fetchall():
+                    other_id, other_name = row
+                    environment_data["entities_present"].append({
+                        "type": "npc",
+                        "id": other_id,
+                        "name": other_name
+                    })
+                
+                # Add player if present in location (placeholder logic)
+                # In a real game, you'd have player location data
+                player_present = True  # Placeholder - replace with actual logic
+                if player_present:
+                    environment_data["entities_present"].append({
+                        "type": "player",
+                        "id": self.user_id,
+                        "name": "Player"
+                    })
+            
+            # Enhance with memory context
+            memory_system = await self.get_memory_system()
+            
+            # Get memories about this location
+            location_memories = await memory_system.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                query=environment_data["location"],
+                limit=3
+            )
+            
+            environment_data["location_memories"] = location_memories.get("memories", [])
+            
+            # Get emotional state as of the perception
+            emotional_state = await memory_system.get_npc_emotion(npc_id)
+            environment_data["perceiver_emotion"] = emotional_state
+            
+            # Add mask status
+            mask_info = await memory_system.get_npc_mask(npc_id)
+            environment_data["perceiver_mask"] = mask_info
+            
+            # Add relationships with present entities
+            entity_relations = {}
+            
+            for entity in environment_data["entities_present"]:
+                entity_id = entity["id"]
+                entity_type = entity["type"]
+                
+                if entity_type == "npc":
+                    relationship = await self._get_relationship(npc_id, entity_id)
+                    if relationship:
+                        entity_relations[str(entity_id)] = relationship
+            
+            environment_data["entity_relations"] = entity_relations
+            
+            # Store in cache
+            self.cache_manager.set('perception', cache_key, environment_data)
+            
+            return environment_data
+            
+        except Exception as e:
+            logger.error(f"Error perceiving environment: {e}")
+            return {"error": str(e), "location": location if 'location' in locals() else "Unknown"}
+    
+    @function_tool
+    async def perceive_environment_detailed(
+        self, 
+        npc_id: int, 
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Detailed environment perception with psychological awareness.
+        
+        Args:
+            npc_id: ID of the NPC
+            context: Context information
+            
+        Returns:
+            Enhanced environment perception data
+        """
+        try:
+            # Get basic environment data
+            environment_data = await self.perceive_environment(npc_id, context)
+            
+            # Get memory system
+            memory_system = await self.get_memory_system()
+            
+            # Determine an adaptive memory limit based on context importance
+            context_description = context.get("description", "")
+            keywords_high = ["critical", "emergency", "dangerous", "threat", "crucial", "intimate"]
+            keywords_medium = ["important", "significant", "unusual", "strange", "unexpected"]
+            
+            context_importance = 0
+            for w in keywords_high:
+                if w in context_description.lower():
+                    context_importance += 2
+            for w in keywords_medium:
+                if w in context_description.lower():
+                    context_importance += 1
+                    
+            adaptive_limit = NPCConfig.LIMITS['memory_recall_default']
+            if context_importance >= 3:
+                adaptive_limit = NPCConfig.LIMITS['memory_recall_important']
+            elif context_importance >= 1:
+                adaptive_limit = 7
+                
+            # Retrieve relevant memories with adaptive limit
+            memory_result = await memory_system.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                query=context_description,
+                context={"location": environment_data.get("location", "Unknown")},
+                limit=adaptive_limit
+            )
+            
+            # Check for traumatic triggers
+            traumatic_trigger = None
+            if context_description:
+                trigger_result = await memory_system.emotional_manager.process_traumatic_triggers(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    text=context_description
+                )
+                if trigger_result and trigger_result.get("triggered", False):
+                    traumatic_trigger = trigger_result
+            
+            # Check for flashback possibility
+            flashback = None
+            flashback_chance = NPCConfig.PROBABILITY['flashback_chance'] if traumatic_trigger is None else NPCConfig.PROBABILITY['flashback_with_trauma']
+            if random.random() < flashback_chance:
+                flashback = await memory_system.npc_flashback(
+                    npc_id=npc_id,
+                    context=context_description
+                )
+                
+            # Get current emotional state for perceptual bias
+            emotional_state = await memory_system.get_npc_emotion(npc_id)
+            
+            # Enhanced perception with psychological depth
+            perception = {
+                "environment": environment_data,
+                "relevant_memories": memory_result.get("memories", []),
+                "emotional_state": emotional_state,
+                "flashback": flashback,
+                "traumatic_trigger": traumatic_trigger,
+                "perceptual_biases": self._calculate_perceptual_biases(
+                    emotional_state, 
+                    await self._get_npc_data(npc_id)
+                )
+            }
+            
+            return perception
+        except Exception as e:
+            logger.error(f"Error in detailed environment perception: {e}")
+            return {"environment": environment_data if 'environment_data' in locals() else {}, "error": str(e)}
+    
+    def _calculate_perceptual_biases(
+        self, 
+        emotional_state: Dict[str, Any], 
+        npc_data: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """Calculate perceptual biases based on emotional state and personality."""
+        biases = {
+            "threat_sensitivity": 0.0,  # Higher means more likely to perceive threats
+            "positivity_bias": 0.0,     # Higher means more likely to see positive aspects
+            "in_group_favoritism": 0.0, # Higher means more favorable to in-group members
+            "attention_focus": 0.0      # Higher means more focused/less distracted
+        }
+        
+        # Default to neutral if data is missing
+        if not emotional_state or not npc_data:
+            return biases
+        
+        # Extract emotional data
+        emotion = "neutral"
+        intensity = 0.0
+        
+        if emotional_state and "current_emotion" in emotional_state:
+            primary = emotional_state["current_emotion"].get("primary", {})
+            emotion = primary.get("name", "neutral")
+            intensity = primary.get("intensity", 0.0)
+        
+        # Adjust based on emotion
+        if emotion == "fear":
+            biases["threat_sensitivity"] += intensity * 0.6
+            biases["positivity_bias"] -= intensity * 0.3
+            biases["attention_focus"] += intensity * 0.4  # More focused on potential threats
+        elif emotion == "anger":
+            biases["threat_sensitivity"] += intensity * 0.4
+            biases["positivity_bias"] -= intensity * 0.4
+            biases["in_group_favoritism"] += intensity * 0.3
+        elif emotion == "joy":
+            biases["positivity_bias"] += intensity * 0.5
+            biases["threat_sensitivity"] -= intensity * 0.3
+        elif emotion == "sadness":
+            biases["positivity_bias"] -= intensity * 0.4
+            biases["attention_focus"] -= intensity * 0.3  # More distracted/unfocused
+        
+        # Adjust based on personality traits
+        traits = npc_data.get("personality_traits", [])
+        
+        if "paranoid" in traits:
+            biases["threat_sensitivity"] += 0.3
+        if "optimistic" in traits:
+            biases["positivity_bias"] += 0.3
+        if "tribal" in traits or "loyal" in traits:
+            biases["in_group_favoritism"] += 0.3
+        if "focused" in traits or "observant" in traits:
+            biases["attention_focus"] += 0.3
+        if "easily_distracted" in traits:
+            biases["attention_focus"] -= 0.3
+        
+        # Cap all biases to -1.0 to 1.0 range
+        for key in biases:
+            biases[key] = max(-1.0, min(1.0, biases[key]))
+        
+        return biases
+    
+    async def _get_npc_data(self, npc_id: int) -> Optional[Dict[str, Any]]:
+        """Get NPC data from database."""
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT npc_id, npc_name, dominance, cruelty, personality_traits, current_location
+                    FROM NPCStats
+                    WHERE npc_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (npc_id, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                
+                # Parse JSON field
+                traits_raw = row[4]
+                traits = []
+                if traits_raw:
+                    if isinstance(traits_raw, str):
+                        try:
+                            traits = json.loads(traits_raw)
+                        except json.JSONDecodeError:
+                            traits = []
+                    elif isinstance(traits_raw, list):
+                        traits = traits_raw
+                
+                return {
+                    "npc_id": row[0],
+                    "npc_name": row[1],
+                    "dominance": row[2],
+                    "cruelty": row[3],
+                    "personality_traits": traits,
+                    "current_location": row[5]
+                }
+                
+        except Exception as e:
+            logger.error(f"Error getting NPC data: {e}")
+            return None
+    
+    async def _get_relationship(self, npc_id1: int, npc_id2: int) -> Optional[Dict[str, Any]]:
+        """Get the relationship between two NPCs."""
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT link_id, link_type, link_level, last_interaction
+                    FROM SocialLinks
+                    WHERE entity1_type = 'npc'
+                      AND entity1_id = %s
+                      AND entity2_type = 'npc'
+                      AND entity2_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (npc_id1, npc_id2, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if row:
+                    link_id, link_type, link_level, last_interaction = row
+                    
+                    # Format timestamp
+                    last_interaction_str = None
+                    if last_interaction:
+                        last_interaction_str = last_interaction.isoformat()
+                    
+                    return {
+                        "link_id": link_id,
+                        "link_type": link_type,
+                        "link_level": link_level,
+                        "last_interaction": last_interaction_str
+                    }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting relationship between NPCs: {e}")
+            return None
+
+
+class GoalManager:
+    """Manager for NPC goals and planning."""
+    
+    def __init__(self, user_id: int, conversation_id: int, cache_manager: CacheManager):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.cache_manager = cache_manager
+        self._memory_system = None
+    
+    async def get_memory_system(self) -> MemorySystem:
+        """Lazy-load the memory system."""
+        if self._memory_system is None:
+            self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+        return self._memory_system
+    
+    @function_tool
+    async def create_goal(
+        self, 
+        npc_id: int, 
+        description: str, 
+        priority: int = 5, 
+        steps: List[str] = None, 
+        deadline: str = None
+    ) -> Dict[str, Any]:
+        """
+        Create a new goal for an NPC.
+        
+        Args:
+            npc_id: The NPC's ID
+            description: Description of the goal
+            priority: Priority level (1-10)
+            steps: List of steps to achieve the goal
+            deadline: Optional deadline as ISO datetime string
+            
+        Returns:
+            Created goal information
+        """
+        try:
+            # Validate inputs
+            priority = max(1, min(10, priority))
+            steps_list = steps or []
+            
+            # Parse deadline if provided
+            deadline_dt = None
+            if deadline:
+                try:
+                    deadline_dt = datetime.fromisoformat(deadline)
+                except ValueError:
+                    logger.warning(f"Invalid deadline format: {deadline}")
+            
+            # Store in database
+            goal_id = None
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO NPCGoals (
+                        npc_id, user_id, conversation_id, description,
+                        priority, progress, active, created_at,
+                        deadline, steps
+                    )
+                    VALUES (
+                        %s, %s, %s, %s,
+                        %s, %s, %s, NOW(),
+                        %s, %s
+                    )
+                    RETURNING goal_id
+                    """,
+                    (
+                        npc_id, self.user_id, self.conversation_id, description,
+                        priority, 0.0, True,
+                        deadline_dt, json.dumps(steps_list)
+                    )
+                )
+                goal_id = cursor.fetchone()[0]
+                conn.commit()
+            
+            # Create memory of setting this goal
+            memory_system = await self.get_memory_system()
+            
+            # Format deadline for memory
+            deadline_text = ""
+            if deadline_dt:
+                deadline_text = f" by {deadline_dt.strftime('%B %d')}"
+            
+            await memory_system.remember(
+                entity_type="npc",
+                entity_id=npc_id,
+                memory_text=f"I set a goal to {description}{deadline_text}",
+                importance="medium",
+                tags=["goal", "planning", "intention"]
+            )
+            
+            # Return goal information
+            return {
+                "goal_id": goal_id,
+                "description": description,
+                "priority": priority,
+                "progress": 0.0,
+                "active": True,
+                "deadline": deadline,
+                "steps": steps_list,
+                "created_at": datetime.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Error creating goal: {e}")
+            return {"error": str(e), "success": False}
+    
+    @function_tool
+    async def get_goals(
+        self, 
+        npc_id: int, 
+        active_only: bool = True, 
+        min_priority: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Get an NPC's current goals.
+        
+        Args:
+            npc_id: The NPC's ID
+            active_only: Whether to return only active goals
+            min_priority: Minimum priority level to include
+            
+        Returns:
+            List of matching goals
+        """
+        try:
+            # Create cache key
+            cache_key = f"{npc_id}_{active_only}_{min_priority}"
+            cached_data = self.cache_manager.get('goals', cache_key)
+            if cached_data:
+                return cached_data
+            
+            # Query goals from database
+            goals = []
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                if active_only:
+                    cursor.execute(
+                        """
+                        SELECT goal_id, description, priority, progress, 
+                               active, created_at, deadline, steps
+                        FROM NPCGoals
+                        WHERE npc_id = %s
+                          AND user_id = %s
+                          AND conversation_id = %s
+                          AND active = TRUE
+                          AND priority >= %s
+                        ORDER BY priority DESC, deadline ASC NULLS LAST
+                        """,
+                        (npc_id, self.user_id, self.conversation_id, min_priority)
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT goal_id, description, priority, progress, 
+                               active, created_at, deadline, steps
+                        FROM NPCGoals
+                        WHERE npc_id = %s
+                          AND user_id = %s
+                          AND conversation_id = %s
+                          AND priority >= %s
+                        ORDER BY active DESC, priority DESC, deadline ASC NULLS LAST
+                        """,
+                        (npc_id, self.user_id, self.conversation_id, min_priority)
+                    )
+                
+                rows = cursor.fetchall()
+                for row in cursor.fetchall():
+                    goal_id, description, priority, progress, active, created_at, deadline, steps_json = row
+                    
+                    # Parse steps
+                    steps = []
+                    if steps_json:
+                        try:
+                            steps = json.loads(steps_json)
+                        except json.JSONDecodeError:
+                            steps = []
+                    
+                    # Format timestamps
+                    created_at_str = created_at.isoformat() if created_at else None
+                    deadline_str = deadline.isoformat() if deadline else None
+                    
+                    goals.append({
+                        "goal_id": goal_id,
+                        "description": description,
+                        "priority": priority,
+                        "progress": progress,
+                        "active": active,
+                        "created_at": created_at_str,
+                        "deadline": deadline_str,
+                        "steps": steps
+                    })
+            
+            # Store in cache
+            self.cache_manager.set('goals', cache_key, goals)
+            
+            return goals
+        except Exception as e:
+            logger.error(f"Error getting goals: {e}")
+            return []
+    
+    @function_tool
+    async def update_goal_progress(
+        self, 
+        npc_id: int, 
+        goal_id: int, 
+        progress: float, 
+        completed_step: str = None
+    ) -> Dict[str, Any]:
+        """
+        Update an NPC's goal progress.
+        
+        Args:
+            npc_id: The NPC's ID
+            goal_id: The goal ID
+            progress: New progress value (0.0-1.0)
+            completed_step: Optional step that was completed
+            
+        Returns:
+            Updated goal information
+        """
+        try:
+            # Validate progress
+            progress = max(0.0, min(1.0, progress))
+            
+            # Get current goal state
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT description, priority, progress, steps, active
+                    FROM NPCGoals
+                    WHERE goal_id = %s
+                      AND npc_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (goal_id, npc_id, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if not row:
+                    return {"error": "Goal not found", "success": False}
+                
+                description, priority, old_progress, steps_json, active = row
+                
+                # Parse steps
+                steps = []
+                if steps_json:
+                    try:
+                        steps = json.loads(steps_json)
+                    except json.JSONDecodeError:
+                        steps = []
+                
+                # Update progress
+                cursor.execute(
+                    """
+                    UPDATE NPCGoals
+                    SET progress = %s,
+                        last_updated = NOW(),
+                        active = %s
+                    WHERE goal_id = %s
+                    """,
+                    (progress, progress < 1.0, goal_id)
+                )
+                
+                # Mark step as completed if provided
+                if completed_step and steps:
+                    # Create a new list of steps with completed status
+                    updated_steps = []
+                    step_found = False
+                    
+                    for step in steps:
+                        if isinstance(step, dict):
+                            # Step is already in dict format with completion status
+                            if step.get("text") == completed_step and not step.get("completed", False):
+                                step["completed"] = True
+                                step_found = True
+                            updated_steps.append(step)
+                        else:
+                            # Step is just a string
+                            if step == completed_step:
+                                updated_steps.append({"text": step, "completed": True})
+                                step_found = True
+                            else:
+                                updated_steps.append({"text": step, "completed": False})
+                    
+                    # Only update if we found and marked the step
+                    if step_found:
+                        cursor.execute(
+                            """
+                            UPDATE NPCGoals
+                            SET steps = %s
+                            WHERE goal_id = %s
+                            """,
+                            (json.dumps(updated_steps), goal_id)
+                        )
+                
+                conn.commit()
+            
+            # Create memory of progress
+            memory_system = await self.get_memory_system()
+            
+            # Only create memory if significant progress was made
+            progress_change = progress - old_progress
+            if progress_change >= 0.25 or progress >= 1.0:
+                if progress >= 1.0:
+                    memory_text = f"I achieved my goal to {description}"
+                    importance = "high"
+                elif progress_change >= 0.5:
+                    memory_text = f"I made significant progress on my goal to {description}"
+                    importance = "medium"
+                else:
+                    memory_text = f"I made some progress on my goal to {description}"
+                    importance = "low"
+                
+                if completed_step:
+                    memory_text += f" by completing the step: {completed_step}"
+                
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=memory_text,
+                    importance=importance,
+                    tags=["goal", "achievement" if progress >= 1.0 else "progress"]
+                )
+            
+            # Return updated goal
+            return {
+                "goal_id": goal_id,
+                "description": description,
+                "progress": progress,
+                "old_progress": old_progress,
+                "change": progress_change,
+                "completed": progress >= 1.0,
+                "success": True
+            }
+        except Exception as e:
+            logger.error(f"Error updating goal progress: {e}")
+            return {"error": str(e), "success": False}
+    
+    @function_tool
+    async def generate_plan_for_goal(
+        self, 
+        npc_id: int, 
+        goal_id: int
+    ) -> Dict[str, Any]:
+        """
+        Generate a plan with steps for an existing goal.
+        
+        Args:
+            npc_id: The NPC's ID
+            goal_id: The goal ID
+            
+        Returns:
+            Updated goal with plan
+        """
+        try:
+            # Get goal details
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT description, priority, progress, steps
+                    FROM NPCGoals
+                    WHERE goal_id = %s
+                      AND npc_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (goal_id, npc_id, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if not row:
+                    return {"error": "Goal not found", "success": False}
+                
+                description, priority, progress, steps_json = row
+                
+                # Check if steps already exist
+                existing_steps = []
+                if steps_json:
+                    try:
+                        existing_steps = json.loads(steps_json)
+                        if existing_steps and len(existing_steps) > 0:
+                            return {
+                                "goal_id": goal_id,
+                                "description": description,
+                                "steps": existing_steps,
+                                "success": True,
+                                "message": "Plan already exists"
+                            }
+                    except json.JSONDecodeError:
+                        pass
+            
+            # Get NPC data for context
+            npc_data = await self._get_npc_data(npc_id)
+            if not npc_data:
+                return {"error": "NPC data not found", "success": False}
+            
+            # Use AI to generate steps for this goal based on NPC psychology
+            memory_system = await self.get_memory_system()
+            
+            # Get relevant memories and beliefs
+            memories = await memory_system.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                query=description,
+                limit=5
+            )
+            
+            beliefs = await memory_system.get_beliefs(
+                entity_type="npc",
+                entity_id=npc_id,
+                min_confidence=0.5
+            )
+            
+            # Create a planning agent to generate steps
+            planner = Agent(
+                name="Goal Planner",
+                instructions=f"""
+                Generate a step-by-step plan for an NPC named {npc_data['npc_name']} to achieve their goal.
+                The goal is: {description}
+                
+                The NPC has these personality traits:
+                - Dominance: {npc_data.get('dominance', 50)}/100
+                - Cruelty: {npc_data.get('cruelty', 50)}/100
+                - Traits: {', '.join(npc_data.get('personality_traits', []))}
+                
+                The plan should be realistic, achievable, and aligned with the NPC's personality.
+                Return ONLY a JSON array of 3-5 steps as strings (no additional explanation).
+                """,
+                model=ModelSettings(
+                    name=NPCConfig.MODEL['default'],
+                    temperature=NPCConfig.MODEL['temperature_default']
+                )
+            )
+            
+            # Run the planning agent
+            context = {
+                "beliefs": [b.get("belief", "") for b in beliefs[:5]],
+                "memories": [m.get("text", "") for m in memories.get("memories", [])]
+            }
+            result = await Runner.run(planner, description, context=context)
+            
+            # Parse the response to extract the step list
+            try:
+                steps_text = result.final_output.strip()
+                
+                # Try to interpret as JSON
+                if steps_text.startswith("[") and steps_text.endswith("]"):
+                    steps = json.loads(steps_text)
+                else:
+                    # Fall back to line-by-line parsing
+                    steps = [line.strip().lstrip("- ") for line in steps_text.split("\n") if line.strip()]
+                
+                # Validate steps
+                valid_steps = []
+                for step in steps:
+                    if isinstance(step, str) and step.strip():
+                        valid_steps.append(step.strip())
+                    elif isinstance(step, dict) and "text" in step:
+                        valid_steps.append(step)
+                
+                # Update goal with steps
+                with get_db_connection() as conn, conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE NPCGoals
+                        SET steps = %s,
+                            last_updated = NOW()
+                        WHERE goal_id = %s
+                        """,
+                        (json.dumps(valid_steps), goal_id)
+                    )
+                    conn.commit()
+                
+                # Create memory of creating the plan
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=f"I made a plan to achieve my goal: {description}",
+                    importance="medium",
+                    tags=["goal", "planning"]
+                )
+                
+                # Return updated goal information
+                return {
+                    "goal_id": goal_id,
+                    "description": description,
+                    "steps": valid_steps,
+                    "success": True
+                }
+                
+            except json.JSONDecodeError:
+                logger.error(f"Error parsing planning result: {result.final_output}")
+                return {"error": "Failed to generate valid plan", "success": False}
+                
+        except Exception as e:
+            logger.error(f"Error generating goal plan: {e}")
+            return {"error": str(e), "success": False}
+    
+    @function_tool
+    async def evaluate_goal_progress(
+        self, 
+        npc_id: int, 
+        goal_id: int,
+        new_event: str
+    ) -> Dict[str, Any]:
+        """
+        Evaluate if a new event contributes to goal progress.
+        
+        Args:
+            npc_id: The NPC's ID
+            goal_id: The goal ID
+            new_event: Description of the new event
+            
+        Returns:
+            Evaluation of progress impact
+        """
+        try:
+            # Get goal details
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT description, priority, progress, steps
+                    FROM NPCGoals
+                    WHERE goal_id = %s
+                      AND npc_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (goal_id, npc_id, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if not row:
+                    return {"error": "Goal not found", "success": False}
+                
+                description, priority, current_progress, steps_json = row
+            
+            # Parse steps
+            steps = []
+            if steps_json:
+                try:
+                    steps = json.loads(steps_json)
+                except json.JSONDecodeError:
+                    steps = []
+            
+            # Create evaluator agent
+            evaluator = Agent(
+                name="Goal Progress Evaluator",
+                instructions=f"""
+                Evaluate if the new event contributes to progress on the NPC's goal.
+                
+                Goal: {description}
+                Current progress: {current_progress * 100}%
+                Steps: {steps}
+                
+                New event: {new_event}
+                
+                Analyze if this event:
+                1. Completes any of the goal steps
+                2. Makes meaningful progress toward the goal
+                3. Is unrelated to the goal
+                
+                Return ONLY a JSON object with these fields:
+                - relevant: boolean
+                - completed_step: string or null
+                - progress_impact: float (0.0 to 1.0)
+                - explanation: string
+                """,
+                model=ModelSettings(
+                    name=NPCConfig.MODEL['default'],
+                    temperature=NPCConfig.MODEL['temperature_consistent']
+                )
+            )
+            
+            # Run the evaluator
+            result = await Runner.run(evaluator, new_event)
+            
+            # Parse the response
+            try:
+                evaluation_text = result.final_output.strip()
+                evaluation = json.loads(evaluation_text)
+                
+                # Validate evaluation structure
+                required_fields = ["relevant", "progress_impact", "explanation"]
+                for field in required_fields:
+                    if field not in evaluation:
+                        return {"error": f"Invalid evaluation format - missing {field}", "success": False}
+                
+                # If relevant and has impact, update goal progress
+                if evaluation.get("relevant", False) and evaluation.get("progress_impact", 0) > 0:
+                    # Calculate new progress
+                    progress_impact = float(evaluation.get("progress_impact", 0))
+                    new_progress = min(1.0, current_progress + progress_impact)
+                    
+                    # Update goal if there's actual progress
+                    if new_progress > current_progress:
+                        completed_step = evaluation.get("completed_step")
+                        update_result = await self.update_goal_progress(
+                            npc_id=npc_id,
+                            goal_id=goal_id,
+                            progress=new_progress,
+                            completed_step=completed_step
+                        )
+                        
+                        if not update_result.get("success", False):
+                            evaluation["error"] = update_result.get("error")
+                    
+                    evaluation["old_progress"] = current_progress
+                    evaluation["new_progress"] = new_progress
+                    evaluation["success"] = True
+                else:
+                    evaluation["success"] = True
+                    evaluation["message"] = "Event evaluated as not relevant to goal progress"
+                
+                return evaluation
+                
+            except json.JSONDecodeError:
+                logger.error(f"Error parsing evaluation result: {result.final_output}")
+                return {"error": "Failed to generate valid evaluation", "success": False}
+                
+        except Exception as e:
+            logger.error(f"Error evaluating goal progress: {e}")
+            return {"error": str(e), "success": False}
+    
+    async def _get_npc_data(self, npc_id: int) -> Optional[Dict[str, Any]]:
+        """Get NPC data from database."""
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT npc_id, npc_name, dominance, cruelty, personality_traits
+                    FROM NPCStats
+                    WHERE npc_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (npc_id, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                
+                # Parse JSON field
+                traits_raw = row[4]
+                traits = []
+                if traits_raw:
+                    if isinstance(traits_raw, str):
+                        try:
+                            traits = json.loads(traits_raw)
+                        except json.JSONDecodeError:
+                            traits = []
+                    elif isinstance(traits_raw, list):
+                        traits = traits_raw
+                
+                return {
+                    "npc_id": row[0],
+                    "npc_name": row[1],
+                    "dominance": row[2],
+                    "cruelty": row[3],
+                    "personality_traits": traits
+                }
+                
+        except Exception as e:
+            logger.error(f"Error getting NPC data: {e}")
+            return None
+
+
+class NPCAgentHooks(AgentHooks):
+    """Hooks for better NPC agent lifecycle management."""
+    
+    def __init__(self, npc_id: int, user_id: int, conversation_id: int):
+        self.npc_id = npc_id
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.decision_history = []
+        self.start_time = None
+        self.end_time = None
+    
+    async def on_start(self, context, agent):
+        """Called when agent starts processing."""
+        # Log start of processing
+        self.start_time = datetime.now()
+        with trace(f"Agent Start: {agent.name}", group_id=f"npc_{self.npc_id}"):
+            # Prepare context with history if needed
+            if hasattr(context, "context") and context.context:
+                context.context["has_history"] = len(self.decision_history) > 0
+                if self.decision_history:
+                    context.context["last_decision"] = self.decision_history[-1]
+        return
+    
+    async def on_end(self, context, agent, output):
+        """Called when agent produces output."""
+        self.end_time = datetime.now()
+        duration = (self.end_time - self.start_time).total_seconds() if self.start_time else 0
+        
+        with trace(f"Agent End: {agent.name}", group_id=f"npc_{self.npc_id}"):
+            # Record decision in history for continuity
+            self.decision_history.append({
+                "action": output,
+                "timestamp": datetime.now().isoformat(),
+                "processing_time": duration
+            })
+            
+            # Limit history size
+            if len(self.decision_history) > NPCConfig.LIMITS['relationship_history_length']:
+                self.decision_history = self.decision_history[-NPCConfig.LIMITS['relationship_history_length']:]
+            
+            # Record state to database if needed
+            await self._save_agent_state(agent, output)
+        return
+    
+    async def on_tool_start(self, context, agent, tool):
+        """Called before a tool is invoked."""
+        with trace(f"Tool Start: {tool.name}", group_id=f"npc_{self.npc_id}"):
+            # Pre-tool logic (monitoring, logging, etc.)
+            pass
+        return
+    
+    async def on_tool_end(self, context, agent, tool, result):
+        """Called after a tool is invoked."""
+        with trace(f"Tool End: {tool.name}", group_id=f"npc_{self.npc_id}"):
+            # Post-tool logic (result analysis, logging, etc.)
+            pass
+        return
+    
+    async def _save_agent_state(self, agent, output):
+        """Save agent state to database for persistence."""
+        try:
+            # Only save important decisions to avoid database bloat
+            if isinstance(output, dict) and output.get('type') in ['talk', 'action', 'decision']:
+                with get_db_connection() as conn, conn.cursor() as cursor:
+                    # Check if state exists
+                    cursor.execute(
+                        """
+                        SELECT state_id
+                        FROM NPCAgentState
+                        WHERE npc_id = %s
+                          AND user_id = %s
+                          AND conversation_id = %s
+                        """,
+                        (self.npc_id, self.user_id, self.conversation_id)
+                    )
+                    
+                    row = cursor.fetchone()
+                    
+                    # Convert history to JSON
+                    history_json = json.dumps(self.decision_history[-5:])  # Only last 5 decisions
+                    
+                    if row:
+                        # Update existing state
+                        cursor.execute(
+                            """
+                            UPDATE NPCAgentState
+                            SET decision_history = %s,
+                                last_decision = %s,
+                                last_updated = NOW()
+                            WHERE npc_id = %s
+                              AND user_id = %s
+                              AND conversation_id = %s
+                            """,
+                            (history_json, json.dumps(output), self.npc_id, self.user_id, self.conversation_id)
+                        )
+                    else:
+                        # Create new state
+                        cursor.execute(
+                            """
+                            INSERT INTO NPCAgentState (
+                                npc_id, user_id, conversation_id,
+                                decision_history, last_decision, created_at, last_updated
+                            )
+                            VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                            """,
+                            (self.npc_id, self.user_id, self.conversation_id, history_json, json.dumps(output))
+                        )
+                    
+                    conn.commit()
+        except Exception as e:
+            logger.error(f"Error saving agent state: {e}")
+
+
+class RelationshipManager:
+    
+    def __init__(self, user_id: int, conversation_id: int, cache_manager: CacheManager):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.cache_manager = cache_manager
+        self._memory_system = None
+    
+    async def get_memory_system(self) -> MemorySystem:
+        """Lazy-load the memory system."""
+        if self._memory_system is None:
+            self._memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+        return self._memory_system
+    
+    @function_tool
+    async def get_relationships(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Get an NPC's relationships with other entities with memory context.
+        
+        Args:
+            npc_id: The ID of the NPC
+            
+        Returns:
+            Dictionary with relationship data
+        """
+        try:
+            # Check cache first
+            cache_key = str(npc_id)
+            cached_data = self.cache_manager.get('relationships', cache_key)
+            if cached_data:
+                return cached_data
+            
+            relationships = {}
+            
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                # Query all links from NPC -> other entity
+                cursor.execute(
+                    """
+                    SELECT entity2_type, entity2_id, link_type, link_level, last_interaction
+                    FROM SocialLinks
+                    WHERE entity1_type = 'npc'
+                      AND entity1_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (npc_id, self.user_id, self.conversation_id)
+                )
+                
+                rows = cursor.fetchall()
+                for entity_type, entity_id, link_type, link_level, last_interaction in rows:
+                    # Get entity name
+                    entity_name = "Unknown"
+                    
+                    if entity_type == "npc":
+                        cursor.execute(
+                            """
+                            SELECT npc_name
+                            FROM NPCStats
+                            WHERE npc_id = %s
+                              AND user_id = %s
+                              AND conversation_id = %s
+                            """,
+                            (entity_id, self.user_id, self.conversation_id)
+                        )
+                        
+                        name_row = cursor.fetchone()
+                        if name_row:
+                            entity_name = name_row[0]
+                    elif entity_type == "player":
+                        entity_name = "Player"
+                    
+                    # Format timestamp
+                    last_interaction_str = None
+                    if last_interaction:
+                        last_interaction_str = last_interaction.isoformat()
+                    
+                    # Store relationship
+                    relationships[str(entity_id)] = {
+                        "entity_type": entity_type,
+                        "entity_id": entity_id,
+                        "entity_name": entity_name,
+                        "link_type": link_type,
+                        "link_level": link_level,
+                        "last_interaction": last_interaction_str
+                    }
+            
+            # Enhance with memory context
+            memory_system = await self.get_memory_system()
+            
+            for entity_id, relationship in list(relationships.items()):
+                entity_type = relationship["entity_type"]
+                entity_name = relationship["entity_name"]
+                
+                # Query for recent memories about this entity
+                query = entity_name if entity_type == "npc" else "player"
+                memories = await memory_system.recall(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    query=query,
+                    limit=3
+                )
+                
+                # Add memories to relationship
+                relationship["memories"] = memories.get("memories", [])
+                
+                # Get beliefs about this entity
+                topic = f"npc_{entity_id}" if entity_type == "npc" else "player"
+                beliefs = await memory_system.get_beliefs(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    topic=topic
+                )
+                
+                relationship["beliefs"] = beliefs
+                
+                # Add relationship description
+                relationship["description"] = self._generate_relationship_description(
+                    relationship["link_type"], 
+                    relationship["link_level"],
+                    beliefs
+                )
+            
+            # Store in cache
+            self.cache_manager.set('relationships', cache_key, relationships)
+            
+            return relationships
+            
+        except Exception as e:
+            logger.error(f"Error getting relationships: {e}")
+            return {"error": str(e)}
+    
+    def _generate_relationship_description(
+        self, 
+        link_type: str, 
+        link_level: int, 
+        beliefs: List[Dict[str, Any]]
+    ) -> str:
+        """Generate a human-readable description of a relationship."""
+        if link_type == "close" and link_level > 80:
+            return "A very close and trusted relationship"
+        elif link_type == "close":
+            return "A close relationship with mutual trust"
+        elif link_type == "friendly" and link_level > 60:
+            return "A friendly relationship with growing trust"
+        elif link_type == "friendly":
+            return "A friendly acquaintance"
+        elif link_type == "neutral":
+            return "A neutral relationship without strong feelings"
+        elif link_type == "hostile" and link_level < 20:
+            return "A strongly hostile relationship with deep distrust"
+        elif link_type == "hostile":
+            return "A hostile relationship with suspicion"
+        else:
+            return f"A {link_type} relationship (level {link_level})"
+    
+    async def get_relationship(self, npc_id1: int, npc_id2: int) -> Optional[Dict[str, Any]]:
+        """Get the relationship between two NPCs."""
+        try:
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT link_id, link_type, link_level, last_interaction
+                    FROM SocialLinks
+                    WHERE entity1_type = 'npc'
+                      AND entity1_id = %s
+                      AND entity2_type = 'npc'
+                      AND entity2_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (npc_id1, npc_id2, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if row:
+                    link_id, link_type, link_level, last_interaction = row
+                    
+                    # Format timestamp
+                    last_interaction_str = None
+                    if last_interaction:
+                        last_interaction_str = last_interaction.isoformat()
+                    
+                    return {
+                        "link_id": link_id,
+                        "link_type": link_type,
+                        "link_level": link_level,
+                        "last_interaction": last_interaction_str
+                    }
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting relationship between NPCs: {e}")
+            return None
+    
+    @function_tool
+    async def update_relationship(
+        self, 
+        npc_id: int, 
+        entity_type: str, 
+        entity_id: int, 
+        action_type: str, 
+        level_change: int
+    ) -> Dict[str, Any]:
+        """
+        Update a relationship between an NPC and another entity.
+        
+        Args:
+            npc_id: The ID of the NPC
+            entity_type: Type of the other entity ('npc' or 'player')
+            entity_id: ID of the other entity
+            action_type: Type of action that occurred
+            level_change: Change in relationship level
+            
+        Returns:
+            Result of the relationship update
+        """
+        try:
+            result = {
+                "success": False,
+                "old_level": None,
+                "new_level": None,
+                "old_type": None,
+                "new_type": None
+            }
+            
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                # Check if relationship exists
+                cursor.execute(
+                    """
+                    SELECT link_id, link_type, link_level
+                    FROM SocialLinks
+                    WHERE entity1_type = 'npc'
+                      AND entity1_id = %s
+                      AND entity2_type = %s
+                      AND entity2_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (npc_id, entity_type, entity_id, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if row:
+                    link_id, link_type, link_level = row
+                    result["old_level"] = link_level
+                    result["old_type"] = link_type
+                    
+                    # Calculate new level
+                    new_level = max(0, min(100, link_level + level_change))
+                    result["new_level"] = new_level
+                    
+                    # Determine new link type
+                    new_link_type = link_type
+                    if new_level > 75:
+                        new_link_type = "close"
+                    elif new_level > 50:
+                        new_link_type = "friendly"
+                    elif new_level < 25:
+                        new_link_type = "hostile"
+                    else:
+                        new_link_type = "neutral"
+                    
+                    result["new_type"] = new_link_type
+                    
+                    # Update relationship
+                    cursor.execute(
+                        """
+                        UPDATE SocialLinks
+                        SET link_level = %s,
+                            link_type = %s,
+                            last_interaction = NOW()
+                        WHERE link_id = %s
+                        """,
+                        (new_level, new_link_type, link_id)
+                    )
+                    
+                    # Add history entry
+                    event_text = f"Action: {action_type}, level change: {level_change} ({link_level} → {new_level})"
+                    
+                    cursor.execute(
+                        """
+                        UPDATE SocialLinks
+                        SET link_history = COALESCE(link_history, '[]'::jsonb) || %s::jsonb
+                        WHERE link_id = %s
+                        """,
+                        (json.dumps([event_text]), link_id)
+                    )
+                    
+                else:
+                    # Create new relationship
+                    # Default level: 50 + level_change
+                    new_level = max(0, min(100, 50 + level_change))
+                    
+                    # Determine link type
+                    link_type = "neutral"
+                    if new_level > 75:
+                        link_type = "close"
+                    elif new_level > 50:
+                        link_type = "friendly"
+                    elif new_level < 25:
+                        link_type = "hostile"
+                    
+                    cursor.execute(
+                        """
+                        INSERT INTO SocialLinks (
+                            entity1_type, entity1_id,
+                            entity2_type, entity2_id,
+                            link_type, link_level,
+                            user_id, conversation_id,
+                            last_interaction
+                        )
+                        VALUES (
+                            'npc', %s,
+                            %s, %s,
+                            %s, %s,
+                            %s, %s,
+                            NOW()
+                        )
+                        RETURNING link_id
+                        """,
+                        (
+                            npc_id, entity_type, entity_id,
+                            link_type, new_level,
+                            self.user_id, self.conversation_id
+                        )
+                    )
+                    
+                    link_id = cursor.fetchone()[0]
+                    
+                    # Add history entry
+                    event_text = f"Initial action: {action_type}, starting level: {new_level}"
+                    
+                    cursor.execute(
+                        """
+                        UPDATE SocialLinks
+                        SET link_history = '[%s]'::jsonb
+                        WHERE link_id = %s
+                        """,
+                        (json.dumps(event_text), link_id)
+                    )
+                    
+                    result["old_level"] = 0
+                    result["new_level"] = new_level
+                    result["old_type"] = None
+                    result["new_type"] = link_type
+                
+                # Commit transaction
+                conn.commit()
+                result["success"] = True
+            
+            # Create memory if significant change
+            if abs(level_change) >= 3 or result["old_type"] != result["new_type"]:
+                memory_system = await self.get_memory_system()
+                
+                # Get entity name
+                entity_name = "the player"
+                if entity_type == "npc":
+                    with get_db_connection() as conn, conn.cursor() as cursor:
+                        cursor.execute(
+                            """
+                            SELECT npc_name
+                            FROM NPCStats
+                            WHERE npc_id = %s
+                              AND user_id = %s
+                              AND conversation_id = %s
+                            """,
+                            (entity_id, self.user_id, self.conversation_id)
+                        )
+                        
+                        name_row = cursor.fetchone()
+                        if name_row:
+                            entity_name = name_row[0]
+                
+                # Create memory text
+                direction = "improved" if level_change > 0 else "worsened"
+                if result["old_type"] != result["new_type"] and result["new_type"]:
+                    memory_text = f"My relationship with {entity_name} changed to {result['new_type']} (level {result['new_level']})"
+                else:
+                    memory_text = f"My relationship with {entity_name} {direction} (now level {result['new_level']})"
+                
+                # Determine importance
+                importance = "medium" if abs(level_change) >= 5 or result["old_type"] != result["new_type"] else "low"
+                
+                # Create memory
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=memory_text,
+                    importance=importance,
+                    tags=["relationship_change", entity_type]
+                )
+            
+            # Invalidate cache
+            self.cache_manager.invalidate('relationships')
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error updating relationship: {e}")
+            return {"error": str(e), "success": False}
+    
+    @function_tool
+    async def update_relationship_from_interaction(
+        self,
+        npc_id: int,
+        entity_type: str,
+        entity_id: int,
+        player_action: Dict[str, Any],
+        npc_action: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Update relationship based on an interaction with enhanced error handling
+        and memory integration.
+        
+        Args:
+            npc_id: ID of the NPC
+            entity_type: Type of entity ("npc" or "player")
+            entity_id: ID of the entity
+            player_action: The player's action
+            npc_action: The NPC's response action
+            
+        Returns:
+            Results of the relationship update
+        """
+        result = {
+            "success": False,
+            "old_level": None,
+            "new_level": None,
+            "old_type": None,
+            "new_type": None
+        }
+        
+        try:
+            memory_system = await self.get_memory_system()
+            
+            # Get context elements that influence relationship changes
+            beliefs = await memory_system.get_beliefs(
+                entity_type="npc",
+                entity_id=npc_id,
+                topic=f"player" if entity_type == "player" else f"npc_{entity_id}"
+            )
+            
+            emotional_state = await memory_system.get_npc_emotion(npc_id)
+            
+            # Calculate belief adjustment
+            belief_adjustment = 0.0
+            for belief in beliefs:
+                belief_text = belief.get("belief", "").lower()
+                confidence = belief.get("confidence", 0.5)
+                
+                if any(word in belief_text for word in ["trust", "friend", "like"]):
+                    belief_adjustment += confidence * 2
+                elif any(word in belief_text for word in ["distrust", "enemy", "dislike"]):
+                    belief_adjustment -= confidence * 2
+            
+            # Calculate emotional adjustment
+            emotional_adjustment = 0.0
+            if emotional_state and "current_emotion" in emotional_state:
+                primary = emotional_state["current_emotion"].get("primary", {})
+                emotion_name = primary.get("name", "neutral")
+                intensity = primary.get("intensity", 0.0)
+                
+                if emotion_name == "joy":
+                    emotional_adjustment += intensity * 3
+                elif emotion_name == "anger":
+                    emotional_adjustment -= intensity * 3
+                elif emotion_name == "fear":
+                    emotional_adjustment -= intensity * 2
+                
+            # Calculate base relationship change
+            player_type = player_action.get("type", "unknown")
+            npc_type = npc_action.get("type", "unknown")
+            
+            # Base change logic (simplified)
+            base_change = 0
+            if player_type in ["help", "gift", "praise", "support"]:
+                base_change = 3
+            elif player_type in ["attack", "threaten", "insult", "mock"]:
+                base_change = -4
+            elif player_type in ["talk", "ask"]:
+                base_change = 1
+            
+            # Final change calculation
+            final_change = base_change
+            if base_change > 0:
+                final_change += belief_adjustment + emotional_adjustment
+            else:
+                final_change += belief_adjustment - emotional_adjustment
+                
+            final_change = int(round(final_change))
+            
+            # Update relationship in database
+            with get_db_connection() as conn, conn.cursor() as cursor:
+                # Check if relationship exists
+                cursor.execute(
+                    """
+                    SELECT link_id, link_type, link_level 
+                    FROM SocialLinks
+                    WHERE entity1_type = 'npc'
+                      AND entity1_id = %s
+                      AND entity2_type = %s
+                      AND entity2_id = %s
+                      AND user_id = %s
+                      AND conversation_id = %s
+                    """,
+                    (npc_id, entity_type, entity_id, self.user_id, self.conversation_id)
+                )
+                
+                row = cursor.fetchone()
+                if row:
+                    link_id, link_type, link_level = row
+                    result["old_level"] = link_level
+                    result["old_type"] = link_type
+                    
+                    # Calculate new level
+                    new_level = max(0, min(100, link_level + final_change))
+                    result["new_level"] = new_level
+                    
+                    # Determine new link type
+                    new_link_type = link_type
+                    if new_level > 75:
+                        new_link_type = "close"
+                    elif new_level > 50:
+                        new_link_type = "friendly"
+                    elif new_level < 25:
+                        new_link_type = "hostile"
+                    else:
+                        new_link_type = "neutral"
+                        
+                    result["new_type"] = new_link_type
+                    
+                    # Update relationship
+                    cursor.execute(
+                        """
+                        UPDATE SocialLinks
+                        SET link_level = %s,
+                            link_type = %s,
+                            last_interaction = NOW()
+                        WHERE link_id = %s
+                        """,
+                        (new_level, new_link_type, link_id)
+                    )
+                    
+                    # Add interaction to history
+                    event_text = f"Interaction: Player {player_type}, NPC {npc_type}. Change: {final_change}"
+                    cursor.execute(
+                        """
+                        UPDATE SocialLinks
+                        SET link_history = COALESCE(link_history, '[]'::jsonb) || %s::jsonb
+                        WHERE link_id = %s
+                        """,
+                        (json.dumps([event_text]), link_id)
+                    )
+                    
+                else:
+                    # Create new relationship
+                    new_level = max(0, min(100, 50 + final_change))
+                    
+                    # Determine link type
+                    link_type = "neutral"
+                    if new_level > 75:
+                        link_type = "close" 
+                    elif new_level > 50:
+                        link_type = "friendly"
+                    elif new_level < 25:
+                        link_type = "hostile"
+                        
+                    cursor.execute(
+                        """
+                        INSERT INTO SocialLinks (
+                            entity1_type, entity1_id,
+                            entity2_type, entity2_id,
+                            link_type, link_level,
+                            user_id, conversation_id,
+                            last_interaction
+                        )
+                        VALUES (
+                            'npc', %s,
+                            %s, %s,
+                            %s, %s,
+                            %s, %s,
+                            NOW()
+                        )
+                        RETURNING link_id
+                        """,
+                        (
+                            npc_id, entity_type, entity_id,
+                            link_type, new_level,
+                            self.user_id, self.conversation_id
+                        )
+                    )
+                    
+                    link_id = cursor.fetchone()[0]
+                    
+                    # Add initial history entry
+                    event_text = f"Initial interaction: Player {player_type}, NPC {npc_type}. Starting level: {new_level}"
+                    cursor.execute(
+                        """
+                        UPDATE SocialLinks
+                        SET link_history = '[%s]'::jsonb
+                        WHERE link_id = %s
+                        """,
+                        (json.dumps(event_text), link_id)
+                    )
+                    
+                    result["old_level"] = 0
+                    result["new_level"] = new_level
+                    result["old_type"] = None 
+                    result["new_type"] = link_type
+                
+                conn.commit()
+                result["success"] = True
+            
+            # Create memory of significant relationship changes
+            if abs(final_change) >= 3 or result["old_type"] != result["new_type"]:
+                entity_name = "the player"
+                if entity_type == "npc":
+                    with get_db_connection() as conn, conn.cursor() as cursor:
+                        cursor.execute(
+                            """
+                            SELECT npc_name 
+                            FROM NPCStats
+                            WHERE npc_id = %s
+                              AND user_id = %s 
+                              AND conversation_id = %s
+                            """,
+                            (entity_id, self.user_id, self.conversation_id)
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            entity_name = row[0]
+                
+                # Create memory text
+                direction = "improved" if final_change > 0 else "worsened"
+                if result["old_type"] != result["new_type"] and result["new_type"]:
+                    memory_text = f"My relationship with {entity_name} changed to {result['new_type']} (level {result['new_level']})"
+                else:
+                    memory_text = f"My relationship with {entity_name} {direction} (now level {result['new_level']})"
+                    
+                # Determine memory importance
+                importance = "medium" if abs(final_change) >= 5 or result["old_type"] != result["new_type"] else "low"
+                
+                # Create memory
+                await memory_system.remember(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    memory_text=memory_text, 
+                    importance=importance,
+                    tags=["relationship_change", entity_type]
+                )
+            
+            # Invalidate cache
+            self.cache_manager.invalidate('relationships')
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error updating relationship: {e}")
+            return {"error": str(e), "success": False}
