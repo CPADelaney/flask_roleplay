@@ -38,7 +38,15 @@ You are in {npc_data.get('current_location', 'an unknown location')}.
 Respond to player actions in character, making decisions based on your personality, memories, and relationships.
 """
         
-        # Create the agent with tools
+    
+        # Add memory-based context to instructions
+        if await self._has_memories(npc_id):
+            instructions += "\nYou have existing memories and relationships that influence your behavior. Use the retrieve_memories tool to access them.\n"
+            
+        # Add mask system concepts if applicable
+        if npc_data.get('has_mask', False):
+            instructions += "\nYou maintain a social mask that may hide your true nature. Your mask integrity affects how well you maintain this facade.\n"
+        
         agent = Agent(
             name=npc_data['npc_name'],
             instructions=instructions,
@@ -51,11 +59,13 @@ Respond to player actions in character, making decisions based on your personali
                 function_tool(self.update_emotion),
                 function_tool(self.create_memory),
                 function_tool(self.check_mask_integrity)
-            ]
+            ],
+            # Add hooks for better lifecycle management
+            hooks=NPCAgentHooks(npc_id=npc_id, user_id=self.user_id, conversation_id=self.conversation_id)
         )
-        
-        self.npc_agents[npc_id] = agent
-        return agent
+            
+            self.npc_agents[npc_id] = agent
+            return agent
     
     async def initialize_agents(self) -> None:
         """Initialize agents for all NPCs in this conversation."""
@@ -64,6 +74,32 @@ Respond to player actions in character, making decisions based on your personali
             npc_data = await self._get_npc_data(npc_id)
             agent = await self.create_npc_agent(npc_id, npc_data)
             self.npc_agents[npc_id] = agent
+
+    dominant_agent_template = Agent(
+        name="Dominant NPC Template",
+        handoff_description="Handles interactions for dominant NPCs",
+        instructions="You are a dominant personality NPC...",
+        tools=[function_tool(self.command_tools)]
+    )
+    
+    submissive_agent_template = Agent(
+        name="Submissive NPC Template",
+        handoff_description="Handles interactions for submissive NPCs",
+        instructions="You are a submissive personality NPC...",
+        tools=[function_tool(self.obedience_tools)]
+    )
+    
+    # Then use these templates as a base and customize per NPC:
+    def create_specialized_agent(self, npc_id, npc_data):
+        base_template = dominant_agent_template if npc_data.get('dominance', 50) > 60 else submissive_agent_template
+        
+        # Clone and customize the template
+        npc_agent = base_template.clone(
+            name=npc_data['npc_name'],
+            # Override other parameters as needed
+        )
+        
+        return npc_agent
     
     async def process_player_activity(self, input_text: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -369,3 +405,22 @@ Extract the action type and description from the player's text.""",
         description: str
         target_npc_id: Optional[int] = None
         target_location: Optional[str] = None
+
+    class PlayerInputValidation(BaseModel):
+        is_appropriate: bool
+        reasoning: str
+    
+    def player_input_guardrail(ctx, agent, input_data):
+        # Analyze if player input is appropriate for the game context
+        # This replaces some of your safety checks from the old system
+        analysis = {"is_appropriate": True, "reasoning": "Input appears appropriate"}
+        
+        # Check for inappropriate content based on your game's guidelines
+        if "inappropriate_terms" in input_data.lower():
+            analysis["is_appropriate"] = False
+            analysis["reasoning"] = "Input contains inappropriate terms"
+        
+        return GuardrailFunctionOutput(
+            output_info=analysis,
+            tripwire_triggered=not analysis["is_appropriate"]
+        )
