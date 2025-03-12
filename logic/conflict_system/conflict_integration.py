@@ -13,6 +13,7 @@ from typing import Dict, List, Any, Optional, Union
 from logic.conflict_system.conflict_manager import ConflictManager
 from logic.stats_logic import apply_stat_change
 from logic.time_cycle import get_current_time
+from logic.resource_management import ResourceManager
 from logic.calendar import load_calendar_names
 from utils.caching import CONFLICT_CACHE
 
@@ -151,6 +152,64 @@ class ConflictSystemIntegration:
                             "phase_changed": updated_conflict["phase"] != conflict["phase"]
                         })
                         result["progress_made"] = True
+        
+        return result
+
+    async def set_involvement(
+        self, 
+        conflict_id: int, 
+        involvement_level: str,
+        faction: str = "neutral",
+        money_committed: int = 0,
+        supplies_committed: int = 0,
+        influence_committed: int = 0,
+        action: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Set the player's involvement in a conflict, handling resource commitment.
+        
+        This method now integrates with the ResourceManager to properly deduct
+        resources when they are committed to a conflict.
+        """
+        if involvement_level not in self.conflict_manager.INVOLVEMENT_LEVELS:
+            return {"error": f"Invalid involvement level. Must be one of: {', '.join(self.conflict_manager.INVOLVEMENT_LEVELS)}"}
+        
+        if faction not in ["a", "b", "neutral"]:
+            return {"error": "Invalid faction. Must be 'a', 'b', or 'neutral'"}
+        
+        # Initialize resource manager to handle resource commitment
+        resource_manager = ResourceManager(self.user_id, self.conversation_id)
+        
+        # Check if player has sufficient resources
+        if money_committed > 0 or supplies_committed > 0 or influence_committed > 0:
+            resource_check = await resource_manager.check_resources(
+                money_committed, supplies_committed, influence_committed
+            )
+            
+            if not resource_check["has_resources"]:
+                return {
+                    "error": "Insufficient resources to commit",
+                    "missing": resource_check["missing"],
+                    "current": resource_check["current"]
+                }
+            
+            # Commit resources if available
+            resource_result = await resource_manager.commit_resources_to_conflict(
+                conflict_id, money_committed, supplies_committed, influence_committed
+            )
+            
+            if not resource_result["success"]:
+                return resource_result  # Return the error
+        
+        # Call the original manager method to update involvement
+        result = await self.conflict_manager.set_player_involvement(
+            conflict_id, involvement_level, faction,
+            money_committed, supplies_committed, influence_committed, action
+        )
+        
+        # Add resource information to the result
+        if "resources" not in result:
+            result["resources"] = await resource_manager.get_resources()
         
         return result
     
