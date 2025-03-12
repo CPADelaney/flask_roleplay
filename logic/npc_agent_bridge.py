@@ -12,13 +12,14 @@ from typing import Dict, List, Any, Optional
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
 from logic.npc_agents import NPCAgentSystem  # Your existing NPC system
 
+from agents import Agent, function_tool, Runner, ModelSettings, trace
+from logic.fully_integrated_npc_system import IntegratedNPCSystem
+from logic.npc_agents import NPCAgentSystem
+
 class NPCSystemBridge:
     """
     Bridge class that provides a unified interface between the legacy NPCAgentSystem
-    and the new IntegratedNPCSystem.
-    
-    This allows for gradual migration to the new system while maintaining compatibility
-    with existing code.
+    and the new OpenAI Agents SDK-based system.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
@@ -36,13 +37,14 @@ class NPCSystemBridge:
         self.integrated_system = IntegratedNPCSystem(user_id, conversation_id)
         self.agent_system = NPCAgentSystem(user_id, conversation_id)
         
+        # Flag to determine whether to use legacy or new system
+        self.use_new_system = False
+        
         logging.info(f"Initialized NPCSystemBridge for user={user_id}, conversation={conversation_id}")
     
     async def handle_player_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Handle a player action using both systems for a smooth transition.
-        Uses the agent system for responses but records memories and updates
-        relationships with the integrated system.
+        Handle a player action using the appropriate system.
         
         Args:
             action: Player action data
@@ -51,62 +53,38 @@ class NPCSystemBridge:
         Returns:
             Response data including NPC responses
         """
-        # Step 1: Use agent system for responses (compatibility)
-        agent_responses = await self.agent_system.handle_player_action(action, context)
-        
-        # Step 2: Enhance with integrated system features
-        enhanced_responses = []
-        
-        for response in agent_responses.get("npc_responses", []):
-            npc_id = response.get("npc_id")
-            if not npc_id:
-                enhanced_responses.append(response)
-                continue
+        if self.use_new_system:
+            # Use the new OpenAI Agents SDK-based system
+            return await self.integrated_system.process_player_activity(
+                f"The player {action.get('description', 'did something')}", 
+                context
+            )
+        else:
+            # Use the legacy system with enhancement from integrated system
+            agent_responses = await self.agent_system.handle_player_action(action, context)
+            
+            # Enhance with integrated system features
+            enhanced_responses = []
+            
+            for response in agent_responses.get("npc_responses", []):
+                npc_id = response.get("npc_id")
+                if not npc_id:
+                    enhanced_responses.append(response)
+                    continue
+                    
+                # Record memory of this interaction
+                memory_text = f"Player action: {action.get('description', 'did something')}. I responded with: {response.get('action', {}).get('description', 'a response')}"
+                await self.integrated_system.record_memory_event(npc_id, memory_text)
                 
-            # Record memory of this interaction
-            memory_text = f"Player action: {action.get('description', 'did something')}. I responded with: {response.get('action', {}).get('description', 'a response')}"
-            await self.integrated_system.record_memory_event(npc_id, memory_text)
+                # Add enhanced response
+                enhanced_responses.append(response)
             
-            # Determine interaction type
-            interaction_type = "extended_conversation"
-            if "no" in action.get("description", "").lower() or "won't" in action.get("description", "").lower():
-                interaction_type = "defiant_response"
-            elif "yes" in action.get("description", "").lower() or "okay" in action.get("description", "").lower():
-                interaction_type = "submissive_response"
-            
-            # Update relationship based on interaction (simplified)
-            try:
-                # Get NPC and player relationship
-                links = await self.get_relationship_links(npc_id)
-                if links:
-                    link_id = links[0].get("link_id")
-                    
-                    # Different dimension changes based on interaction type
-                    dimension_changes = {}
-                    if interaction_type == "defiant_response":
-                        dimension_changes = {"tension": +5, "respect": -2}
-                    elif interaction_type == "submissive_response":
-                        dimension_changes = {"control": +5, "dependency": +3}
-                    elif interaction_type == "extended_conversation":
-                        dimension_changes = {"trust": +2}
-                    
-                    if dimension_changes:
-                        await self.integrated_system.update_relationship_dimensions(
-                            link_id, dimension_changes, 
-                            f"Response to player action: {action.get('description', '')[:30]}"
-                        )
-            except Exception as e:
-                logging.warning(f"Error updating relationship: {e}")
-            
-            # Add the enhanced response
-            enhanced_responses.append(response)
-        
-        # Step 3: Return enhanced response data
-        return {
-            **agent_responses,
-            "npc_responses": enhanced_responses,
-            "enhanced": True
-        }
+            # Return enhanced response data
+            return {
+                **agent_responses,
+                "npc_responses": enhanced_responses,
+                "enhanced": True
+            }
     
     async def get_relationship_links(self, npc_id: int) -> List[Dict[str, Any]]:
         """
