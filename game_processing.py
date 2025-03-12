@@ -576,6 +576,14 @@ async def async_process_new_game(user_id, conversation_data):
                 logging.info(f"Generated initial major conflict: {initial_conflict.get('conflict_name', 'Unnamed')}")
             except Exception as e:
                 logging.error(f"Error generating initial conflict: {e}")
+
+            try:
+                from logic.currency_generator import CurrencyGenerator
+                currency_gen = CurrencyGenerator(user_id, conversation_id)
+                currency_system = await currency_gen.get_currency_system()
+                logging.info(f"Generated currency system: {currency_system['currency_name']} / {currency_system['currency_plural']}")
+            except Exception as e:
+                logging.error(f"Error generating currency system: {e}")        
         
             # Return the success message and other data as before
             success_msg = (
