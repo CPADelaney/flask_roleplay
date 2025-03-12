@@ -21,6 +21,10 @@ RELATIONSHIP_CLOSE = 75
 RELATIONSHIP_FRIENDLY = 50
 RELATIONSHIP_HOSTILE = 25
 
+ALLY_THRESHOLD = 80
+CO_CONSPIRATOR_THRESHOLD = 85
+RIVAL_THRESHOLD = 20
+
 # Constants for easy tuning of decay
 DECAY_BASE = 1.0
 DECAY_CLOSE = 0.5
@@ -802,3 +806,85 @@ class NPCRelationshipManager:
             logger.error(f"Error getting relationship memories: {e}")
             return []
 
+    async def evaluate_coalitions_and_rivalries(self, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Periodically run this to detect alliances (co-conspirators) or rivalry blocks
+        among NPCs who share strong negative relationships with a common target 
+        (often the player) or with each other.
+
+        - Any pair of NPCs with link_level >= ALLY_THRESHOLD => "ally"
+        - If link_level >= CO_CONSPIRATOR_THRESHOLD => "co_conspirator"
+        - If link_level <= RIVAL_THRESHOLD => "rival"
+
+        This extends the link_type to more explicit alliance/rival states.
+
+        Args:
+            context: Optional context about the environment or scene.
+
+        Returns:
+            A dictionary summarizing changes:
+            {
+              "alliances": [ (npc_id1, npc_id2, old_type, new_type), ... ],
+              "rivalries":  [ (npc_id1, npc_id2, old_type, new_type), ... ]
+            }
+        """
+        results = {
+            "alliances": [],
+            "rivalries": [],
+            "co_conspirators": []
+        }
+        
+        with get_db_connection() as conn, conn.cursor() as cursor:
+            try:
+                cursor.execute(
+                    """
+                    SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id, link_type, link_level
+                    FROM SocialLinks
+                    WHERE user_id = %s
+                      AND conversation_id = %s
+                      AND entity1_type = 'npc'
+                      AND entity2_type = 'npc'
+                    """,
+                    (self.user_id, self.conversation_id)
+                )
+                rows = cursor.fetchall()
+
+                for link_id, e1_type, e1_id, e2_type, e2_id, link_type, link_level in rows:
+                    old_type = link_type
+                    new_type = old_type
+
+                    # Evaluate alliance / co-conspirator
+                    if link_level >= CO_CONSPIRATOR_THRESHOLD:
+                        new_type = "co_conspirator"
+                    elif link_level >= ALLY_THRESHOLD:
+                        new_type = "ally"
+                    elif link_level <= RIVAL_THRESHOLD:
+                        new_type = "rival"
+                    else:
+                        # If it doesn't meet thresholds, keep whatever it was
+                        # or revert to neutral if you prefer
+                        pass
+
+                    if new_type != old_type:
+                        cursor.execute(
+                            """
+                            UPDATE SocialLinks
+                            SET link_type = %s
+                            WHERE link_id = %s
+                            """,
+                            (new_type, link_id)
+                        )
+                        if new_type == "ally":
+                            results["alliances"].append((e1_id, e2_id, old_type, new_type))
+                        elif new_type == "co_conspirator":
+                            results["co_conspirators"].append((e1_id, e2_id, old_type, new_type))
+                        elif new_type == "rival":
+                            results["rivalries"].append((e1_id, e2_id, old_type, new_type))
+
+                conn.commit()
+
+            except Exception as e:
+                logger.error(f"Error in evaluate_coalitions_and_rivalries: {e}")
+                conn.rollback()
+
+        return results
