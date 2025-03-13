@@ -1160,3 +1160,16 @@ class NPCAgentSystem:
             except Exception as e:
                 logger.error(f"Error getting player beliefs about NPC {npc_id}: {e}")
         return results
+
+    async def report_npc_action_to_nyx(self, npc_id: int, action: Dict[str, Any]) -> None:
+        """Report significant NPC actions back to Nyx for narrative coordination."""
+        nyx_agent = self.nyx_agent_sdk
+        
+        # Create a memory for Nyx about this action
+        await nyx_agent.memory_system.add_memory(
+            memory_text=f"NPC {npc_id} performed action: {action.get('description', 'unknown action')}",
+            memory_type="observation",
+            memory_scope="game",
+            significance=action.get("significance", 5),
+            tags=["npc_action", f"npc_{npc_id}"]
+        )
