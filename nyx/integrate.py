@@ -29,14 +29,36 @@ class GameEventManager:
         """Broadcast event to both Nyx and NPCs"""
         logger.info(f"Broadcasting event {event_type} to Nyx and NPCs")
         
-        # Tell Nyx about the event
-        await self.nyx_agent_sdk.process_game_event(event_type, event_data)
+        # CHANGE: Tell Nyx about the event FIRST and get filtering instructions
+        nyx_response = await self.nyx_agent_sdk.process_game_event(event_type, event_data)
         
-        # Tell NPCs about the event
+        # Check if Nyx wants to filter or modify this event
+        if not nyx_response.get("should_broadcast_to_npcs", True):
+            logger.info(f"Nyx has blocked broadcasting event {event_type} to NPCs: {nyx_response.get('reason', 'No reason provided')}")
+            return {
+                "event_type": event_type,
+                "nyx_notified": True,
+                "npcs_notified": 0,
+                "blocked_by_nyx": True,
+                "reason": nyx_response.get("reason", "Blocked by Nyx")
+            }
+        
+        # Use Nyx's modifications if provided
+        if "modified_event_data" in nyx_response:
+            event_data = nyx_response["modified_event_data"]
+        
+        # Let Nyx override which NPCs should be affected
         affected_npcs = event_data.get("affected_npcs")
+        if "override_affected_npcs" in nyx_response:
+            affected_npcs = nyx_response["override_affected_npcs"]
+        
         if not affected_npcs:
             # If no specific NPCs mentioned, determine who would know
             affected_npcs = await self._determine_aware_npcs(event_type, event_data)
+        
+        # Respect Nyx's filtering of aware NPCs
+        if "filtered_aware_npcs" in nyx_response:
+            affected_npcs = [npc_id for npc_id in affected_npcs if npc_id in nyx_response["filtered_aware_npcs"]]
         
         if affected_npcs:
             await self.npc_coordinator.batch_update_npcs(
@@ -53,7 +75,8 @@ class GameEventManager:
             "event_type": event_type,
             "nyx_notified": True,
             "npcs_notified": len(affected_npcs) if affected_npcs else 0,
-            "aware_npcs": affected_npcs
+            "aware_npcs": affected_npcs,
+            "nyx_modifications": "modified_event_data" in nyx_response
         }
 
     def get_nyx_agent(user_id, conversation_id):
