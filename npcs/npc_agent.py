@@ -529,11 +529,19 @@ async def execute_npc_action(
             elapsed = time.perf_counter() - perf_start
             ctx.context.perf_metrics['action_time'].append(elapsed)
             
-            return ActionResult(
+            result = ActionResult(
                 outcome=outcome,
                 emotional_impact=emotional_impact,
                 target_reactions=target_reactions
             )
+            
+            # Report to Nyx
+            try:
+                await ctx.context.report_action_to_nyx(action, result)
+            except Exception as reporting_error:
+                logger.error(f"Error reporting to Nyx: {reporting_error}")
+            
+            return result
             
         except Exception as e:
             elapsed = time.perf_counter() - perf_start
@@ -543,7 +551,6 @@ async def execute_npc_action(
                 outcome=f"NPC attempted to {action.description} but encountered an error: {str(e)}",
                 emotional_impact=-1
             )
-
 # -------------------------------------------------------
 # Decision-related agents
 # -------------------------------------------------------
