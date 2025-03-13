@@ -327,7 +327,7 @@ class NPCAgentSystem:
                 return await self.handle_single_npc_interaction(npc_id, player_action, context)
     
             # Multiple NPCs => group logic
-            return await self.handle_group_npc_interaction(affected_npcs, player_action, context)
+            return await self.(affected_npcs, player_action, context)
 
     @function_tool
     async def determine_affected_npcs(
@@ -623,19 +623,30 @@ class NPCAgentSystem:
         player_action: Dict[str, Any],
         context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """
-        Handle a player action directed at multiple NPCs.
-
-        Args:
-            npc_ids: List of NPC IDs that are all affected
-            player_action: The player's action
-            context: Additional context
-
-        Returns:
-            A dictionary possibly containing "npc_responses"
-        """
+        """Handle a player action directed at multiple NPCs."""
         logger.info("Handling group NPC interaction: %s", npc_ids)
-
+        
+        # Ask Nyx to approve or modify this group interaction
+        try:
+            from nyx.integrate import NyxNPCIntegrationManager
+            nyx_manager = NyxNPCIntegrationManager(self.user_id, self.conversation_id)
+            
+            approval = await nyx_manager.approve_group_interaction({
+                "npc_ids": npc_ids,
+                "context": context,
+                "player_action": player_action
+            })
+            
+            # Apply Nyx's modifications if any
+            if approval.get("modified_context"):
+                context = approval.get("modified_context")
+            
+            if approval.get("modified_npc_ids"):
+                npc_ids = approval.get("modified_npc_ids")
+                
+        except Exception as e:
+            logger.error(f"Error consulting Nyx for group interaction: {e}")
+        
         # Initialize all affected agents
         await self.initialize_agents(npc_ids)
         
