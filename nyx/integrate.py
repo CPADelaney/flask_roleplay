@@ -986,6 +986,49 @@ async def broadcast_event_with_governance(
     governance = await get_central_governance(user_id, conversation_id)
     return await governance.event_manager.broadcast_event(event_type, event_data)
 
+async def process_universal_update_with_governance(
+    user_id: int,
+    conversation_id: int,
+    narrative: str,
+    context: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """
+    Process a universal update based on narrative text with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        narrative: Narrative text to process
+        context: Additional context (optional)
+        
+    Returns:
+        Dictionary with update results
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    
+    # Import here to avoid circular imports
+    from logic.universal_updater_sdk import process_universal_update
+    
+    # Process the universal update
+    result = await process_universal_update(user_id, conversation_id, narrative, context)
+    
+    return result
+
+# Add during initialization sequence in register_with_governance or similar initialization function
+async def register_universal_updater(user_id: int, conversation_id: int):
+    """
+    Register universal updater with governance system.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+    """
+    # Import here to avoid circular imports
+    from logic.universal_updater_sdk import register_with_governance as register_updater
+    
+    # Register with governance
+    await register_updater(user_id, conversation_id)
+
 async def add_joint_memory_with_governance(
     user_id: int,
     conversation_id: int,
