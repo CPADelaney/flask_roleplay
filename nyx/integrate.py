@@ -1424,6 +1424,137 @@ class NyxNPCIntegrationManager:
         except Exception as e:
             logger.error(f"Error getting NPC names: {e}")
             return ", ".join([f"NPC_{npc_id}" for npc_id in npc_ids])
+
+    async def create_nyx_directed_scene(
+        self,
+        location: str,
+        scene_goal: str,
+        required_npcs: List[int] = None,
+        context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Create a scene that is completely directed by Nyx, with NPCs following her direction.
+        
+        Args:
+            location: Scene location
+            scene_goal: The narrative goal of this scene
+            required_npcs: NPCs that must be included
+            context: Additional context
+            
+        Returns:
+            Complete scene details
+        """
+        logger.info(f"Creating Nyx-directed scene at {location}")
+        
+        # Get NPCs at this location if not provided
+        if not required_npcs:
+            required_npcs = await self._get_npcs_at_location(location)
+        
+        if not required_npcs:
+            return {
+                "error": "No NPCs available at this location",
+                "location": location
+            }
+        
+        # Prepare scene context
+        scene_context = context or {}
+        scene_context.update({
+            "location": location,
+            "scene_goal": scene_goal,
+            "npc_ids": required_npcs,
+            "is_nyx_directed": True
+        })
+        
+        # Get Nyx's complete plan for the scene
+        scene_plan = await self.nyx_agent_sdk.create_scene_plan(scene_context)
+        
+        # Create directives for each NPC
+        for npc_directive in scene_plan.get("npc_directives", []):
+            npc_id = npc_directive.get("npc_id")
+            if not npc_id:
+                continue
+                
+            # Create a directive in the database
+            await self._create_npc_directive(
+                npc_id, 
+                npc_directive.get("directive"), 
+                scene_plan.get("scene_id", "unknown")
+            )
+        
+        # Execute scene with the NPC system now that directives are in place
+        npc_system = await self.get_npc_system()
+        
+        # Create a special player action that's actually a scene directive
+        scene_action = {
+            "type": "scene_directive",
+            "description": scene_plan.get("scene_description", "A new scene begins"),
+            "from_nyx": True
+        }
+        
+        # Process through NPC system with Nyx's directives already in place
+        npc_responses = await npc_system.handle_player_action(
+            scene_action,
+            scene_context
+        )
+        
+        # Create a coherent scene narrative
+        scene_narrative = await self.nyx_agent_sdk.create_scene_narrative(
+            scene_plan, 
+            npc_responses.get("npc_responses", []), 
+            scene_context
+        )
+        
+        return {
+            "narrative": scene_narrative,
+            "npc_responses": npc_responses.get("npc_responses", []),
+            "location": location,
+            "directed_by_nyx": True,
+            "scene_plan": scene_plan
+        }
+        
+    async def _create_npc_directive(
+        self, 
+        npc_id: int,
+        directive: Dict[str, Any],
+        scene_id: str
+    ) -> None:
+        """Create an NPC directive in the database."""
+        try:
+            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO NyxNPCDirectives (
+                            user_id, conversation_id, npc_id, directive,
+                            expires_at, priority, scene_id
+                        )
+                        VALUES ($1, $2, $3, $4, NOW() + INTERVAL '30 minutes', 8, $5)
+                        """,
+                        self.user_id, self.conversation_id, npc_id, json.dumps(directive), scene_id
+                    )
+        except Exception as e:
+            logger.error(f"Error creating NPC directive: {e}")
+            
+    async def _get_npcs_at_location(self, location: str) -> List[int]:
+        """Get NPCs at a specific location."""
+        npcs = []
+        try:
+            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT npc_id FROM NPCStats
+                        WHERE user_id = $1 AND conversation_id = $2 AND current_location = $3
+                        """,
+                        self.user_id, self.conversation_id, location
+                    )
+                    
+                    for row in rows:
+                        npcs.append(row["npc_id"])
+        except Exception as e:
+            logger.error(f"Error getting NPCs at location: {e}")
+        
+        return npcs
         
     async def process_user_input(self, user_input: str, context: Dict[str, Any]):
         # Get Nyx's response with enhanced NPC awareness
