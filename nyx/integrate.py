@@ -1,4 +1,4 @@
-# nyx/enhanced_integration.py
+# nyx/integrate.py
 
 """
 Enhanced integration module for Nyx's central governance system.
