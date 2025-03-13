@@ -978,6 +978,128 @@ class NyxNPCIntegrationManager:
                 self.user_id, 
                 self.conversation_id
             )
+
+    async def approve_group_interaction(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Approve or modify a requested group interaction.
+        
+        Args:
+            request: Dictionary with npc_ids, context, and other details
+            
+        Returns:
+            Dictionary with approval status and any modifications
+        """
+        # Default to approved
+        result = {
+            "approved": True,
+            "reason": "Approved by Nyx"
+        }
+        
+        try:
+            # Get narrative context
+            narrative_data = await self._get_current_narrative_context()
+            
+            # Check if interaction aligns with narrative goals
+            if narrative_data.get("active_arcs"):
+                current_arc = narrative_data["active_arcs"][0]
+                
+                # Extract needed NPCs for current arc
+                arc_npcs = current_arc.get("required_npcs", [])
+                requested_npcs = request.get("npc_ids", [])
+                
+                # If this interaction doesn't include NPCs needed for the current arc
+                # and those NPCs are supposed to be in the current location
+                # Consider rejecting or modifying
+                if arc_npcs and not any(npc_id in requested_npcs for npc_id in arc_npcs):
+                    current_location = request.get("context", {}).get("location")
+                    
+                    # Get where the required NPCs should be
+                    required_npc_locations = await self._get_npc_locations(arc_npcs)
+                    
+                    # If required NPCs should be here but aren't included
+                    if any(required_npc_locations.get(npc_id) == current_location for npc_id in arc_npcs):
+                        # Modify instead of reject - add the required NPCs
+                        modified_npcs = requested_npcs.copy()
+                        for npc_id in arc_npcs:
+                            if required_npc_locations.get(npc_id) == current_location and npc_id not in modified_npcs:
+                                modified_npcs.append(npc_id)
+                        
+                        # Return modified context
+                        modified_context = request.get("context", {}).copy()
+                        modified_context["modified_by_nyx"] = True
+                        modified_context["nyx_guidance"] = f"Ensure {self._get_npc_names(arc_npcs)} are involved to advance the current narrative arc."
+                        
+                        result["approved"] = True
+                        result["modified_context"] = modified_context
+                        result["modified_npc_ids"] = modified_npcs
+                        result["reason"] = "Modified by Nyx to include required NPCs for narrative progression"
+            
+            # Add Nyx's current guidance
+            result["nyx_guidance"] = await self._generate_interaction_guidance(
+                request.get("npc_ids", []), 
+                request.get("context", {})
+            )
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error in Nyx approval: {e}")
+            return result  # Default to approved
+
+    async def _get_current_narrative_context(self) -> Dict[str, Any]:
+        """Get current narrative context from database."""
+        try:
+            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                async with pool.acquire() as conn:
+                    row = await conn.fetchrow("""
+                        SELECT value FROM CurrentRoleplay 
+                        WHERE user_id = $1 AND conversation_id = $2 AND key = 'NyxNarrativeArcs'
+                    """, self.user_id, self.conversation_id)
+                    
+                    if row and row["value"]:
+                        return json.loads(row["value"])
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting narrative context: {e}")
+            return {}
+            
+    async def _get_npc_locations(self, npc_ids: List[int]) -> Dict[int, str]:
+        """Get current locations for a list of NPCs."""
+        locations = {}
+        try:
+            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                async with pool.acquire() as conn:
+                    for npc_id in npc_ids:
+                        row = await conn.fetchrow("""
+                            SELECT current_location FROM NPCStats
+                            WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+                        """, self.user_id, self.conversation_id, npc_id)
+                        
+                        if row:
+                            locations[npc_id] = row["current_location"]
+            return locations
+        except Exception as e:
+            logger.error(f"Error getting NPC locations: {e}")
+            return locations
+            
+    async def _get_npc_names(self, npc_ids: List[int]) -> str:
+        """Get names of NPCs as a formatted string."""
+        names = []
+        try:
+            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                async with pool.acquire() as conn:
+                    for npc_id in npc_ids:
+                        row = await conn.fetchrow("""
+                            SELECT npc_name FROM NPCStats
+                            WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+                        """, self.user_id, self.conversation_id, npc_id)
+                        
+                        if row:
+                            names.append(row["npc_name"])
+            return ", ".join(names)
+        except Exception as e:
+            logger.error(f"Error getting NPC names: {e}")
+            return ", ".join([f"NPC_{npc_id}" for npc_id in npc_ids])
+        
     async def process_user_input(self, user_input: str, context: Dict[str, Any]):
         # Get Nyx's response with enhanced NPC awareness
         nyx_response = await self.nyx_agent_sdk.process_user_input(
