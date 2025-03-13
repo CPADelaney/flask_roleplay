@@ -2009,8 +2009,8 @@ class NPCCreationHandler:
             
             conn.close()
             
-            # Return the created NPC details
-            return {
+            # Create NPC details dictionary
+            npc_details = {
                 "npc_id": npc_id,
                 "npc_name": npc_name,
                 "physical_description": physical_description,
@@ -2037,6 +2037,63 @@ class NPCCreationHandler:
                 "memories": memories,
                 "current_location": current_location
             }
+    
+            # NEW: Inform Nyx about the new NPC
+            try:
+                # Import here to avoid circular imports
+                from nyx.integrate import NyxNPCIntegrationManager
+                
+                nyx_manager = NyxNPCIntegrationManager(
+                    user_id=ctx.context.get("user_id"),
+                    conversation_id=ctx.context.get("conversation_id")
+                )
+                
+                # Notify Nyx about the new NPC
+                await nyx_manager.nyx_agent_sdk.memory_system.add_memory(
+                    memory_text=f"A new NPC named {npc_name} has been created. {npc_name} is {physical_description[:100]}...",
+                    memory_type="observation",
+                    memory_scope="game",
+                    significance=7,
+                    tags=["npc_creation", f"npc_{npc_id}"],
+                    metadata={
+                        "npc_id": npc_id,
+                        "npc_name": npc_name,
+                        "archetype_summary": archetype_summary,
+                        "dominance": dominance,
+                        "cruelty": cruelty
+                    }
+                )
+                
+                # Create a memory in the joint memory graph
+                from nyx.memory_integration import JointMemoryGraph
+                
+                joint_memory = JointMemoryGraph(
+                    user_id=ctx.context.get("user_id"),
+                    conversation_id=ctx.context.get("conversation_id")
+                )
+                
+                await joint_memory.add_joint_memory(
+                    memory_text=f"NPC {npc_name} has been created with {archetype_summary}",
+                    source_type="system",
+                    source_id=0,
+                    shared_with=[
+                        {"type": "nyx", "id": 0},
+                        {"type": "npc", "id": npc_id}
+                    ],
+                    significance=7,
+                    tags=["npc_creation", "system_event"],
+                    metadata={
+                        "npc_id": npc_id,
+                        "npc_name": npc_name,
+                        "archetype_summary": archetype_summary
+                    }
+                )
+            except Exception as e:
+                logging.error(f"Error informing Nyx about new NPC: {e}")
+            
+            # Return the NPC details
+            return npc_details
+            
         except Exception as e:
             logging.error(f"Error creating NPC in database: {e}")
             return {"error": f"Failed to create NPC: {str(e)}"}
