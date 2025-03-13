@@ -9,6 +9,7 @@ from logic.chatgpt_integration import get_chatgpt_response
 from lore.lore_manager import LoreManager
 from db.connection import get_db_connection
 from utils.caching import LORE_CACHE
+from lore.setting_analyzer import SettingAnalyzer
 
 class DynamicLoreGenerator:
     """
@@ -70,7 +71,116 @@ class DynamicLoreGenerator:
             )
         
         return lore_data
+
     
+    async def generate_factions_from_setting_analysis(self, environment_desc: str, world_lore: Dict[str, str]) -> List[Dict[str, Any]]:
+        """
+        Generate factions based on a comprehensive analysis of the setting and NPCs.
+        
+        Args:
+            environment_desc: Description of the game environment
+            world_lore: Previously established world lore
+            
+        Returns:
+            List of generated factions
+        """
+        # Use setting analyzer to get organization data
+        analyzer = SettingAnalyzer(self.user_id, self.conversation_id)
+        organization_data = await analyzer.analyze_setting_for_organizations()
+        
+        # Collect all organizations from different categories
+        all_organizations = []
+        
+        for category in ["academic", "athletic", "social", "professional", "cultural", "political", "other"]:
+            if category in organization_data:
+                for org in organization_data[category]:
+                    org["category"] = category  # Add category to the organization data
+                    all_organizations.append(org)
+        
+        # Store each organization as a faction
+        faction_ids = []
+        
+        for org in all_organizations:
+            # Skip if it doesn't have the required fields
+            if not all(field in org for field in ["name", "description"]):
+                continue
+            
+            # Create the faction
+            faction_id = await self.lore_manager.add_faction(
+                name=org["name"],
+                faction_type=org.get("type", org["category"]),  # Use type or fall back to category
+                description=org["description"],
+                values=org.get("values", []),  # May not be present in the analysis
+                goals=org.get("goals", []),    # May not be present in the analysis
+                headquarters=org.get("gathering_location", ""),
+                hierarchy_type=org.get("hierarchy", "")
+            )
+            
+            # Store additional metadata
+            metadata = {
+                "membership_basis": org.get("membership_basis", ""),
+                "source": "setting_analysis",
+                "category": org["category"]
+            }
+            
+            await self._store_faction_metadata(faction_id, metadata)
+            
+            # Store the organization with its ID for later connection creation
+            faction_ids.append((faction_id, org))
+        
+        # Create connections between factions based on categories and logic
+        for i, (faction_id, org) in enumerate(faction_ids):
+            # Set up some default connections based on categories
+            if org["category"] == "academic":
+                # Academic departments are connected to their parent institution
+                for j, (other_id, other_org) in enumerate(faction_ids):
+                    if i != j and other_org["category"] == "academic":
+                        # If this is a department and the other is an institution
+                        if "department" in org.get("type", "").lower() and "institution" in other_org.get("type", "").lower():
+                            await self.lore_manager.add_lore_connection(
+                                source_type="Factions",
+                                source_id=faction_id,
+                                target_type="Factions",
+                                target_id=other_id,
+                                connection_type="part_of",
+                                description=f"{org['name']} is part of {other_org['name']}",
+                                strength=9
+                            )
+            
+            elif org["category"] == "athletic":
+                # Athletic teams might be rivals
+                for j, (other_id, other_org) in enumerate(faction_ids):
+                    if i != j and other_org["category"] == "athletic" and "team" in other_org.get("type", "").lower():
+                        # 33% chance of being rivals
+                        if random.random() < 0.33:
+                            await self.lore_manager.add_lore_connection(
+                                source_type="Factions",
+                                source_id=faction_id,
+                                target_type="Factions",
+                                target_id=other_id,
+                                connection_type="rivals_with",
+                                description=f"{org['name']} has a rivalry with {other_org['name']}",
+                                strength=7
+                            )
+        
+        # Convert to the format expected by the rest of the system
+        factions_data = []
+        for faction_id, org in faction_ids:
+            faction_data = {
+                "name": org["name"],
+                "type": org.get("type", org["category"]),
+                "description": org["description"],
+                "values": org.get("values", []),
+                "goals": org.get("goals", []),
+                "headquarters": org.get("gathering_location", ""),
+                "hierarchy_type": org.get("hierarchy", ""),
+                "membership_basis": org.get("membership_basis", ""),
+                "category": org["category"]
+            }
+            factions_data.append(faction_data)
+        
+        return factions_data
+
     async def generate_factions(self, environment_desc: str, world_lore: Dict[str, str]) -> List[Dict[str, Any]]:
         """
         Generate factions based on environment and established world lore.
@@ -547,8 +657,8 @@ class DynamicLoreGenerator:
         # Generate foundation lore
         world_lore = await self.initialize_world_lore(environment_desc)
         
-        # Generate factions
-        factions = await self.generate_factions(environment_desc, world_lore)
+        # Generate factions based on setting analysis
+        factions = await self.generate_factions_from_setting_analysis(environment_desc, world_lore)
         
         # Generate cultural elements
         cultural_elements = await self.generate_cultural_elements(environment_desc, factions)
@@ -557,7 +667,7 @@ class DynamicLoreGenerator:
         historical_events = await self.generate_historical_events(environment_desc, world_lore, factions)
         
         # Generate locations
-        locations = await self.generate_locations(environment_desc, factions)
+        locations = await self.generate_locations_from_setting_analysis(environment_desc, factions)
         
         # Generate quest hooks
         quests = await self.generate_quest_hooks(factions, locations)
@@ -572,6 +682,128 @@ class DynamicLoreGenerator:
             "quests": quests
         }
     
+    # Add this method to be consistent with the setting analysis approach
+    async def generate_locations_from_setting_analysis(self, environment_desc: str, factions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Generate significant locations within the game world, focusing on faction gathering places.
+        
+        Args:
+            environment_desc: Description of the game environment
+            factions: Previously generated factions
+            
+        Returns:
+            List of generated locations
+        """
+        # Get existing locations from NPCs
+        analyzer = SettingAnalyzer(self.user_id, self.conversation_id)
+        data = await analyzer.aggregate_npc_data()
+        existing_locations = data.get("aggregated", {}).get("locations", [])
+        
+        # Get faction gathering places
+        faction_locations = [faction.get("headquarters", "") for faction in factions if "headquarters" in faction]
+        
+        # Combine all location names for the prompt
+        all_mentioned_locations = list(set(existing_locations + faction_locations))
+        mentioned_locations_text = ", ".join(all_mentioned_locations) if all_mentioned_locations else "None explicitly mentioned"
+        
+        # Create list of faction names for reference
+        faction_names = [faction["name"] for faction in factions]
+        faction_names_text = ", ".join(faction_names)
+        
+        prompt = f"""
+        Generate 5-8 significant locations within this world:
+        
+        Environment: {environment_desc}
+        
+        Factions: {faction_names_text}
+        
+        Existing Locations Mentioned: {mentioned_locations_text}
+        
+        For each location, provide this information as a JSON array of objects:
+        1. "name": Name of the location (USE EXACTLY the names already mentioned when applicable)
+        2. "description": Detailed description (3-4 sentences)
+        3. "type": Type of location (settlement, landmark, institution, etc.)
+        4. "controlling_faction": Which faction controls it (reference established factions when applicable)
+        5. "notable_features": Array of 2-3 distinctive features
+        6. "hidden_secrets": Array of 1-2 secrets or mysteries about this place
+        7. "strategic_importance": Brief explanation of why this location matters
+        
+        Include a diverse mix of locations:
+        - At least one major gathering place for each main faction type (academic, athletic, social, etc.)
+        - At least one mysterious or hidden location
+        - At least one public space where different groups interact
+        - At least one exclusive location with restricted access
+        
+        Make locations feel authentic to the world and provide opportunities for intrigue.
+        """
+        
+        # Get GPT response
+        response = await get_chatgpt_response(
+            self.conversation_id,
+            system_prompt="You are a worldbuilding expert specializing in creating memorable and distinctive locations.",
+            user_prompt=prompt
+        )
+        
+        # Extract location data from response
+        locations_data = self._extract_json_from_response(response)
+        
+        # Ensure we have a list of locations
+        if not isinstance(locations_data, list):
+            locations_data = [locations_data]
+        
+        # Store locations in database
+        for location in locations_data:
+            # Skip if it doesn't have the required fields
+            if not all(field in location for field in ["name", "description"]):
+                continue
+                
+            # First add to Locations table (this is from game code, not lore system)
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    INSERT INTO Locations (user_id, conversation_id, location_name, description)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                """, (self.user_id, self.conversation_id, location["name"], location["description"]))
+                
+                location_id = cursor.fetchone()[0]
+                conn.commit()
+                
+                # Then add to LocationLore table
+                await self.lore_manager.add_location_lore(
+                    location_id=location_id,
+                    founding_story=location.get("founding_story", f"Founded as a {location['type']}"),
+                    hidden_secrets=location.get("hidden_secrets", []),
+                    local_legends=location.get("local_legends", []),
+                    historical_significance=location.get("historical_significance", location.get("strategic_importance", ""))
+                )
+                
+                # Create connections to controlling faction
+                controlling_faction = location.get("controlling_faction")
+                if controlling_faction:
+                    # Find matching faction
+                    for faction in factions:
+                        if faction["name"] == controlling_faction:
+                            # Find faction ID (would be better to have IDs directly)
+                            faction_rows = await self._find_faction_by_name(controlling_faction)
+                            if faction_rows:
+                                faction_id = faction_rows[0]["id"]
+                                await self.lore_manager.add_lore_connection(
+                                    source_type="Factions",
+                                    source_id=faction_id,
+                                    target_type="LocationLore",
+                                    target_id=location_id,
+                                    connection_type="controls",
+                                    description=f"{controlling_faction} controls {location['name']}",
+                                    strength=9
+                                )
+            finally:
+                cursor.close()
+                conn.close()
+        
+        return locations_data
     async def evolve_lore_with_event(self, event_description: str) -> Dict[str, Any]:
         """
         Evolve existing lore based on a new major event.
