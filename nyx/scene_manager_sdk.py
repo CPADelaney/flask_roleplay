@@ -454,3 +454,226 @@ async def get_location_description(ctx) -> str:
     """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
+
+# Add to the appropriate SDK module for narrative management
+
+@function_tool
+async def update_narrative_arcs_for_interaction(
+    ctx,
+    user_input: str,
+    ai_response: str
+) -> str:
+    """
+    Update narrative arcs based on the player interaction.
+    This helps Nyx maintain coherent storylines.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+        async with pool.acquire() as conn:
+            # Get current narrative arcs
+            row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay 
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'NyxNarrativeArcs'
+            """, user_id, conversation_id)
+            
+            if not row or not row["value"]:
+                return "No narrative arcs defined"
+            
+            narrative_arcs = json.loads(row["value"])
+            
+            # Check for progression in active arcs
+            for arc in narrative_arcs.get("active_arcs", []):
+                # Simple keyword matching to detect progression
+                arc_keywords = arc.get("keywords", [])
+                progression_detected = False
+                
+                # Check user input and AI response for keywords
+                combined_text = f"{user_input} {ai_response}".lower()
+                for keyword in arc_keywords:
+                    if keyword.lower() in combined_text:
+                        progression_detected = True
+                        break
+                
+                if progression_detected:
+                    # Update arc progress
+                    if "progress" not in arc:
+                        arc["progress"] = 0
+                    
+                    # Increment progress (small increment for keyword matches)
+                    arc["progress"] = min(100, arc["progress"] + 5)
+                    
+                    # Record the interaction
+                    if "interactions" not in arc:
+                        arc["interactions"] = []
+                    
+                    arc["interactions"].append({
+                        "timestamp": datetime.now().isoformat(),
+                        "progression_amount": 5,
+                        "notes": f"Keyword match in interaction"
+                    })
+                    
+                    # Check for completion
+                    if arc["progress"] >= 100 and arc.get("status") != "completed":
+                        arc["status"] = "completed"
+                        arc["completion_date"] = datetime.now().isoformat()
+                        
+                        # Move from active to completed
+                        if arc in narrative_arcs["active_arcs"]:
+                            narrative_arcs["active_arcs"].remove(arc)
+                            narrative_arcs["completed_arcs"].append(arc)
+                        
+                        # Add record of completion
+                        if "narrative_adaption_history" not in narrative_arcs:
+                            narrative_arcs["narrative_adaption_history"] = []
+                        
+                        narrative_arcs["narrative_adaption_history"].append({
+                            "event": f"Arc completed: {arc.get('name', 'Unnamed Arc')}",
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        
+                        # Activate a new arc if available
+                        if narrative_arcs.get("planned_arcs", []):
+                            new_arc = narrative_arcs["planned_arcs"].pop(0)
+                            new_arc["status"] = "active"
+                            new_arc["start_date"] = datetime.now().isoformat()
+                            narrative_arcs["active_arcs"].append(new_arc)
+                            
+                            narrative_arcs["narrative_adaption_history"].append({
+                                "event": f"New arc activated: {new_arc.get('name', 'Unnamed Arc')}",
+                                "timestamp": datetime.now().isoformat()
+                            })
+            
+            # Save updated narrative arcs
+            await conn.execute("""
+                UPDATE CurrentRoleplay
+                SET value = $1
+                WHERE user_id = $2 AND conversation_id = $3 AND key = 'NyxNarrativeArcs'
+            """, json.dumps(narrative_arcs), user_id, conversation_id)
+            
+            # Return a summary of changes
+            active_arcs = len(narrative_arcs.get("active_arcs", []))
+            completed_arcs = len(narrative_arcs.get("completed_arcs", []))
+            planned_arcs = len(narrative_arcs.get("planned_arcs", []))
+            
+            return json.dumps({
+                "active_arcs": active_arcs,
+                "completed_arcs": completed_arcs,
+                "planned_arcs": planned_arcs,
+                "updated": True
+            })
+
+@function_tool
+async def evaluate_narrative_impact(
+    ctx,
+    memory_text: str,
+    significance: int,
+    tags: List[str]
+) -> str:
+    """
+    Evaluate how a new memory impacts ongoing narrative arcs.
+    Updates Nyx's narrative plans based on player actions.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    # Only process significant memories
+    if significance < 5:
+        return json.dumps({"impact": "none", "reason": "Memory not significant enough"})
+    
+    async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+        async with pool.acquire() as conn:
+            # Get current narrative arcs
+            row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay 
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'NyxNarrativeArcs'
+            """, user_id, conversation_id)
+            
+            if not row or not row["value"]:
+                return json.dumps({"impact": "none", "reason": "No narrative arcs defined"})
+            
+            narrative_arcs = json.loads(row["value"])
+            impact_detected = False
+            impacted_arcs = []
+            
+            # Check each active arc for impact
+            for arc in narrative_arcs.get("active_arcs", []):
+                arc_keywords = arc.get("keywords", [])
+                arc_npcs = arc.get("involved_npcs", [])
+                
+                # Simple impact detection - keyword overlap
+                impact_score = 0
+                for keyword in arc_keywords:
+                    if keyword.lower() in memory_text.lower():
+                        impact_score += 1
+                
+                # Tag overlap
+                for tag in tags:
+                    if tag in arc_keywords:
+                        impact_score += 1
+                
+                # If significant impact detected
+                if impact_score >= 2:
+                    impact_detected = True
+                    # Update arc progress
+                    if "progress" not in arc:
+                        arc["progress"] = 0
+                    arc["progress"] += min(25, significance * 5)  # Cap at 25% progress per event
+                    
+                    # Record impact
+                    if "key_events" not in arc:
+                        arc["key_events"] = []
+                    arc["key_events"].append({
+                        "memory_text": memory_text,
+                        "impact_score": impact_score,
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    
+                    # Check for arc completion
+                    if arc["progress"] >= 100:
+                        arc["status"] = "completed"
+                        arc["completion_date"] = datetime.now().isoformat()
+                        narrative_arcs["completed_arcs"].append(arc)
+                        narrative_arcs["active_arcs"].remove(arc)
+                        
+                        # Add record of adaptation
+                        if "narrative_adaption_history" not in narrative_arcs:
+                            narrative_arcs["narrative_adaption_history"] = []
+                        
+                        narrative_arcs["narrative_adaption_history"].append({
+                            "event": f"Arc completed: {arc['name']}",
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        
+                        # Activate a planned arc if available
+                        if narrative_arcs["planned_arcs"]:
+                            new_arc = narrative_arcs["planned_arcs"].pop(0)
+                            new_arc["status"] = "active"
+                            new_arc["start_date"] = datetime.now().isoformat()
+                            narrative_arcs["active_arcs"].append(new_arc)
+                            
+                            narrative_arcs["narrative_adaption_history"].append({
+                                "event": f"New arc activated: {new_arc['name']}",
+                                "timestamp": datetime.now().isoformat()
+                            })
+                    
+                    impacted_arcs.append(arc["name"])
+            
+            # Save updated narrative arcs if changes were made
+            if impact_detected:
+                await conn.execute("""
+                    UPDATE CurrentRoleplay
+                    SET value = $1
+                    WHERE user_id = $2 AND conversation_id = $3 AND key = 'NyxNarrativeArcs'
+                """, json.dumps(narrative_arcs), user_id, conversation_id)
+                
+                return json.dumps({
+                    "impact": "significant",
+                    "impacted_arcs": impacted_arcs
+                })
+            else:
+                return json.dumps({
+                    "impact": "minimal",
+                    "reason": "No significant impact on current narrative arcs"
+                })
