@@ -40,34 +40,128 @@ from db.connection import get_db_connection
 
 asyncio.run(initialize_nyx_memory_system())
 
-
 async def background_chat_task(conversation_id, user_input, universal_update=None):
     """
-    Background task for processing chat messages using the enhanced Nyx agent.
+    Background task for processing chat messages using SDK Nyx agent.
     """
     try:
-        # Get user_id for this conversation
-        async with asyncio.Pool.create_pool(dsn=get_db_connection()) as pool:
+        # Get user_id
+        async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow(
                     "SELECT user_id FROM conversations WHERE id = $1", 
                     conversation_id
                 )
+                
                 if not row:
                     logging.error(f"No conversation found with id {conversation_id}")
                     return
+                    
                 user_id = row['user_id']
         
-        # Use the enhanced background chat task which leverages Nyx agent
-        await enhanced_background_chat_task(
-            conversation_id, 
-            user_input, 
-            universal_update,
-            user_id=user_id  # Pass user_id explicitly
+        # Get context data
+        from logic.aggregator import get_aggregated_roleplay_context
+        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")  # Default name
+        
+        # Build context
+        context = {
+            "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
+            "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
+            "player_name": aggregator_data.get("playerName", "Chase"),
+            "npc_present": aggregator_data.get("npcsPresent", []),
+            "aggregator_data": aggregator_data
+        }
+        
+        # Add universal update data
+        if universal_update:
+            context["universal_update"] = universal_update
+            
+            # Process updates with async context
+            async def apply_updates():
+                universal_update["user_id"] = user_id
+                universal_update["conversation_id"] = conversation_id
+                dsn = os.getenv("DB_DSN")
+                
+                async with asyncpg.create_pool(dsn=dsn) as pool:
+                    async with pool.acquire() as conn:
+                        return await apply_universal_updates_async(
+                            user_id, 
+                            conversation_id, 
+                            universal_update,
+                            conn
+                        )
+            
+            # Apply updates
+            await apply_updates()
+            
+            # Refresh context after updates
+            aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
+            context["aggregator_data"] = aggregator_data
+        
+        # Process via SDK
+        from nyx.nyx_agent_sdk import process_user_input
+        response = await process_user_input(user_id, conversation_id, user_input, context)
+        
+        # Store Nyx's response
+        from db.connection import get_db_connection
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+            (conversation_id, "Nyx", response["message"])
         )
+        conn.commit()
+        conn.close()
+        
+        # Check if we should generate an image
+        should_generate = response.get("generate_image", False)
+        
+        if should_generate:
+            try:
+                # Generate image based on the response
+                from routes.ai_image_generator import generate_roleplay_image_from_gpt
+                
+                image_result = await generate_roleplay_image_from_gpt(
+                    {
+                        "narrative": response["message"],
+                        "image_generation": {
+                            "generate": True,
+                            "priority": "medium",
+                            "focus": "balanced",
+                            "framing": "medium_shot",
+                            "reason": "Narrative moment"
+                        }
+                    },
+                    user_id,
+                    conversation_id
+                )
+                
+                # Emit image to the client via SocketIO
+                from flask_socketio import emit
+                if image_result and "image_urls" in image_result and image_result["image_urls"]:
+                    emit('image', {
+                        'image_url': image_result["image_urls"][0],
+                        'prompt_used': image_result.get('prompt_used', '')
+                    }, room=conversation_id)
+            except Exception as e:
+                logging.error(f"Error generating image: {e}")
+        
+        # Emit response to client
+        from flask_socketio import emit
+        
+        # Stream the response token by token
+        for i in range(0, len(response["message"]), 3):
+            token = response["message"][i:i+3]
+            emit('new_token', {'token': token}, room=conversation_id)
+            socketio.sleep(0.05)
+            
+        # Signal completion
+        emit('done', {'full_text': response["message"]}, room=conversation_id)
         
     except Exception as e:
         logging.error(f"Error in background_chat_task: {str(e)}", exc_info=True)
+        from flask_socketio import emit
+        emit('error', {'error': str(e)}, room=conversation_id)
 
 def create_flask_app():
     """
