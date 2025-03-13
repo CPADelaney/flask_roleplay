@@ -417,9 +417,23 @@ class NPCAgentCoordinator:
         shared_context: Dict[str, Any],
         available_actions: Optional[Dict[int, List[Dict[str, Any]]]] = None,
     ) -> Dict[str, Any]:
-        """
-        Coordinate decision-making for a group of NPCs using the Agents SDK.
-        """
+        """Coordinate decision-making for a group of NPCs."""
+        # NEW: Always get Nyx's approval first
+        nyx_approval = await self._get_nyx_scene_approval(npc_ids, shared_context)
+        
+        if not nyx_approval.get("approved", False):
+            logger.info(f"Nyx rejected group action: {nyx_approval.get('reason', 'No reason provided')}")
+            return {
+                "group_actions": [],
+                "individual_actions": {},
+                "reasoning": f"Nyx has not approved this group interaction: {nyx_approval.get('reason', 'Unknown reason')}",
+                "nyx_override": True
+            }
+        
+        # Use Nyx's modifications if provided
+        if "modified_context" in nyx_approval:
+            shared_context = nyx_approval["modified_context"]
+            
         decision_resource = await self.resource_pools["decisions"].acquire()
 
         try:
@@ -479,6 +493,30 @@ class NPCAgentCoordinator:
         finally:
             if decision_resource:
                 self.resource_pools["decisions"].release()
+
+    async def _get_nyx_scene_approval(
+        self, 
+        npc_ids: List[int], 
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Get Nyx's approval for a group interaction."""
+        try:
+            # Import here to avoid circular imports
+            from nyx.integrate import NyxNPCIntegrationManager
+            
+            nyx_manager = NyxNPCIntegrationManager(self.user_id, self.conversation_id)
+            
+            approval_result = await nyx_manager.approve_group_interaction({
+                "npc_ids": npc_ids,
+                "context": context,
+                "requested_at": datetime.now().isoformat()
+            })
+            
+            return approval_result
+        except Exception as e:
+            logger.error(f"Error getting Nyx approval: {e}")
+            # Default to approved if we can't reach Nyx to prevent game blocking
+            return {"approved": True, "reason": "Failed to contact Nyx, proceeding by default"}
 
     async def _prepare_group_context(self, npc_ids: List[int], shared_context: Dict[str, Any]) -> Dict[str, Any]:
         """
