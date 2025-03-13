@@ -405,7 +405,7 @@ async def execute_npc_action(
     context: Dict[str, Any] = None
 ) -> ActionResult:
     """
-    Execute the chosen NPC action.
+    Execute the chosen NPC action with Nyx governance.
     
     Args:
         action: The action to execute
@@ -414,8 +414,47 @@ async def execute_npc_action(
     with function_span("execute_npc_action"):
         perf_start = time.perf_counter()
         context = context or {}
+        npc_id = ctx.context.npc_id
+        user_id = ctx.context.user_id
+        conversation_id = ctx.context.conversation_id
         
         try:
+            # Check with Nyx governor before executing
+            governor = await get_nyx_governor(user_id, conversation_id)
+            
+            # Skip permission check for directive-sourced actions
+            if not action.decision_metadata or action.decision_metadata.get("source") != "nyx_directive":
+                permission = await governor.check_action_permission(
+                    npc_id=npc_id,
+                    action_type=action.type,
+                    action_details=action.model_dump(),
+                    context=context
+                )
+                
+                # If not approved, replace with override or default action
+                if not permission.get("approved", True):
+                    logger.info(f"Nyx rejected action for NPC {npc_id}: {action.type} - {action.description}")
+                    
+                    if permission.get("override_action"):
+                        # Use Nyx's override
+                        override = permission["override_action"]
+                        action = NPCAction(
+                            type=override.get("type", "observe"),
+                            description=override.get("description", "follow Nyx's guidance"),
+                            target=override.get("target", "environment"),
+                            weight=1.0,
+                            decision_metadata={"source": "nyx_override"}
+                        )
+                    else:
+                        # Default safe action if no override provided
+                        action = NPCAction(
+                            type="observe",
+                            description="observe quietly as directed by Nyx",
+                            target="environment",
+                            weight=1.0,
+                            decision_metadata={"source": "nyx_restriction"}
+                        )
+            
             # Record action
             ctx.context.record_decision(action.model_dump())
             
@@ -525,19 +564,20 @@ async def execute_npc_action(
                     tags=tags
                 )
             
-            # Record performance
-            elapsed = time.perf_counter() - perf_start
-            ctx.context.perf_metrics['action_time'].append(elapsed)
-            
+            # Create the result
             result = ActionResult(
                 outcome=outcome,
                 emotional_impact=emotional_impact,
                 target_reactions=target_reactions
             )
             
-            # Report to Nyx
+            # Record performance
+            elapsed = time.perf_counter() - perf_start
+            ctx.context.perf_metrics['action_time'].append(elapsed)
+            
+            # Report to Nyx - critical for governance
             try:
-                await ctx.context.report_action_to_nyx(action, result)
+                await report_action_to_nyx(ctx, action, result)
             except Exception as reporting_error:
                 logger.error(f"Error reporting to Nyx: {reporting_error}")
             
@@ -551,6 +591,45 @@ async def execute_npc_action(
                 outcome=f"NPC attempted to {action.description} but encountered an error: {str(e)}",
                 emotional_impact=-1
             )
+
+async def report_action_to_nyx(
+    ctx: RunContextWrapper[NPCContext],
+    action: NPCAction, 
+    result: ActionResult
+) -> None:
+    """
+    Report significant NPC action to Nyx for awareness and potential override.
+    
+    Args:
+        action: The action that was executed
+        result: The result of the action
+    """
+    try:
+        # Skip reporting for minor/insignificant actions
+        if action.weight < 0.3 and abs(result.emotional_impact) < 2:
+            return
+            
+        # Import here to avoid circular imports
+        from nyx.integrate import NyxNPCIntegrationManager
+        
+        nyx_manager = NyxNPCIntegrationManager(
+            ctx.context.user_id, 
+            ctx.context.conversation_id
+        )
+        
+        # Report the action
+        await nyx_manager.process_npc_action_report({
+            "npc_id": ctx.context.npc_id,
+            "action": action.model_dump(),
+            "result": result.model_dump(),
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        logger.debug(f"Reported action of NPC {ctx.context.npc_id} to Nyx: {action.type}")
+    except Exception as e:
+        logger.error(f"Error reporting action to Nyx: {e}")
+
+
 # -------------------------------------------------------
 # Decision-related agents
 # -------------------------------------------------------
@@ -629,6 +708,19 @@ npc_agent = Agent(
 # -------------------------------------------------------
 # Main NPC class utilizing Agents SDK
 # -------------------------------------------------------
+async def get_nyx_governor(user_id: int, conversation_id: int):
+    """
+    Get Nyx governor instance with delayed import to avoid circular imports.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        NyxGovernor instance
+    """
+    from nyx.nyx_governance import NyxGovernor
+    return NyxGovernor(user_id, conversation_id)
 
 class NPCAgent:
     """
@@ -734,50 +826,140 @@ class NPCAgent:
         
         # Start the background reporting task
         asyncio.create_task(report_metrics())
+
+    async def process_scene_directive(
+        self, 
+        directive_data: Dict[str, Any],
+        context: Dict[str, Any] = None
+    ) -> ActionResult:
+        """
+        Process a scene directive from Nyx.
+        
+        Args:
+            directive_data: The directive data
+            context: Additional context
+            
+        Returns:
+            Result of the directive execution
+        """
+        context = context or {}
+        context["source"] = "nyx_scene_directive"
+        
+        # Convert directive to action
+        action_type = directive_data.get("type", "action")
+        description = directive_data.get("description", "follow scene directive")
+        target = directive_data.get("target", "scene")
+        
+        action = NPCAction(
+            type=action_type,
+            description=description,
+            target=target,
+            weight=1.0,
+            decision_metadata={
+                "source": "nyx_scene_directive",
+                "scene_id": directive_data.get("scene_id")
+            }
+        )
+        
+        # Execute the action
+        result = await execute_npc_action(
+            RunContextWrapper(self.context),
+            action,
+            context
+        )
+        
+        # Provide feedback to Nyx about directive completion
+        try:
+            # Report completion to Nyx
+            from nyx.integrate import NyxNPCIntegrationManager
+            
+            nyx_manager = NyxNPCIntegrationManager(
+                self.user_id, 
+                self.conversation_id
+            )
+            
+            await nyx_manager.report_directive_completion(
+                self.npc_id,
+                directive_data.get("id"),
+                {
+                    "action": action.model_dump(),
+                    "result": result.model_dump(),
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error reporting directive completion: {e}")
+        
+        return result
+
     
     async def make_decision(self, perception_context: Dict[str, Any] = None) -> NPCAction:
-        """Make a decision about what action to take."""
-        # CHANGE: Always check for Nyx directives first
+        """
+        Make a decision about what action to take.
+        
+        Args:
+            perception_context: Optional perception context
+            
+        Returns:
+            NPCAction to perform
+        """
+        # ALWAYS check for Nyx directives first
         nyx_directive = await self._get_current_nyx_directive()
         
         if nyx_directive:
             logger.info(f"NPC {self.npc_id} following Nyx directive: {nyx_directive.get('description', 'unknown')}")
-            return NPCAction(
-                type=nyx_directive.get("type", "observe"),
-                description=nyx_directive.get("description", "follow Nyx's directive"),
-                target=nyx_directive.get("target", "environment"),
-                weight=1.0,
-                decision_metadata={"source": "nyx_directive"}
-            )
             
-        # If no directive or the directive doesn't specify an action, proceed with normal decision-making
-
+            # Extract action data from directive
+            action_type = nyx_directive.get("type", "observe")
+            description = nyx_directive.get("description", "follow Nyx's directive")
+            target = nyx_directive.get("target", "environment")
+            
+            # If this is an override directive with specific action details
+            if "override_action" in nyx_directive:
+                override = nyx_directive["override_action"]
+                action_type = override.get("type", action_type)
+                description = override.get("description", description)
+                target = override.get("target", target)
+            
+            # Create action from directive
+            return NPCAction(
+                type=action_type,
+                description=description,
+                target=target,
+                weight=1.0,
+                decision_metadata={"source": "nyx_directive", "directive_id": nyx_directive.get("id")}
+            )
+        
+        # Only proceed with normal decision-making if no directive exists
         with trace(workflow_name=f"NPC {self.npc_id} Decision"):
             perf_start = time.perf_counter()
             
             try:
-                # Make decision using the decision agent with handoff
-                result = await Runner.run(
-                    decision_agent,
-                    f"Make a decision for NPC {self.npc_id}",
-                    context=self.context
-                )
+                # Use mental model to determine options
+                options = await self._generate_action_options(perception_context)
                 
-                decision = result.final_output
-                if isinstance(decision, dict):
-                    action = NPCAction(**decision)
-                else:
-                    # If output is not properly structured, create a default action
-                    action = NPCAction(
+                # Filter options based on constraints
+                filtered_options = await self._filter_action_options(options, perception_context)
+                
+                if not filtered_options:
+                    # Fallback to safe default if no valid options
+                    logger.warning(f"No valid options for NPC {self.npc_id}, using default")
+                    return NPCAction(
                         type="observe",
-                        description="observe the surroundings",
-                        target="environment"
+                        description="observe surroundings quietly",
+                        target="environment",
+                        weight=0.5,
+                        decision_metadata={"source": "fallback_default"}
                     )
                 
+                # Select best option
+                selected_action = await self._select_best_action(filtered_options, perception_context)
+                
+                # Record performance metrics
                 elapsed = time.perf_counter() - perf_start
                 self.context.perf_metrics['decision_time'].append(elapsed)
                 
-                return action
+                return selected_action
                 
             except Exception as e:
                 elapsed = time.perf_counter() - perf_start
@@ -787,30 +969,53 @@ class NPCAgent:
                 return NPCAction(
                     type="observe",
                     description="observe quietly",
-                    target="environment"
+                    target="environment",
+                    decision_metadata={"source": "error_fallback"}
                 )
 
     async def _get_current_nyx_directive(self) -> Optional[Dict[str, Any]]:
-        """Retrieve current directive from Nyx for this NPC."""
+        """
+        Retrieve current directive from Nyx for this NPC.
+        
+        Returns:
+            Directive data or None if no directive exists
+        """
         try:
+            import asyncpg
+    
             async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
                 async with pool.acquire() as conn:
                     row = await conn.fetchrow(
                         """
                         SELECT directive FROM NyxNPCDirectives
                         WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
-                        AND created_at > NOW() - INTERVAL '10 minutes'
-                        ORDER BY created_at DESC LIMIT 1
+                        AND expires_at > NOW()
+                        ORDER BY priority DESC LIMIT 1
                         """,
                         self.user_id, self.conversation_id, self.npc_id
                     )
                     
                     if row and row["directive"]:
-                        return json.loads(row["directive"])
+                        directive_data = json.loads(row["directive"])
+                        logger.info(f"NPC {self.npc_id} found directive: {directive_data.get('type', 'unknown')}")
+                        return directive_data
+        
+            # Check cache for previously found directive
+            if hasattr(self.context, 'current_directive') and self.context.current_directive:
+                # Check if directive is still valid (not expired)
+                if 'expiry' in self.context.current_directive:
+                    expiry_time = datetime.fromisoformat(self.context.current_directive['expiry'])
+                    if datetime.now() < expiry_time:
+                        return self.context.current_directive
+                
+                # Clear expired directive
+                self.context.current_directive = None
+                
             return None
         except Exception as e:
             logger.error(f"Error retrieving Nyx directive: {e}")
             return None
+
     
     async def perceive_environment(self, context: Dict[str, Any] = None) -> NPCPerception:
         """
@@ -911,26 +1116,3 @@ class NPCAgent:
         for name, pool in self.resource_pools.items():
             stats[name] = pool.stats.copy()
         return stats
-
-    # Add to NPCAgent class in npcs/npc_agent.py
-    async def report_action_to_nyx(self, action: NPCAction, result: ActionResult) -> None:
-        """Report significant NPC action to Nyx for awareness and potential override."""
-        try:
-            # Only report significant actions
-            if action.weight < 0.5 and not result.emotional_impact:
-                return
-                
-            # Import here to avoid circular imports
-            from nyx.integrate import NyxNPCIntegrationManager
-            
-            nyx_manager = NyxNPCIntegrationManager(self.user_id, self.conversation_id)
-            
-            # Report the action
-            await nyx_manager.process_npc_action_report({
-                "npc_id": self.npc_id,
-                "action": action.model_dump(),
-                "result": result.model_dump(),
-                "timestamp": datetime.now().isoformat()
-            })
-        except Exception as e:
-            logger.error(f"Error reporting action to Nyx: {e}")
