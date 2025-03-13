@@ -11,6 +11,164 @@ from db.connection import get_db_connection
 
 logger = logging.getLogger(__name__)
 
+class JointMemoryGraph:
+    """
+    Maintains a unified graph of memories between Nyx and NPCs.
+    This ensures consistent narrative understanding across all agents.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+    
+    async def add_joint_memory(
+        self,
+        memory_text: str,
+        source_type: str,  # "nyx", "npc", "player", "system"
+        source_id: int,
+        shared_with: List[Dict[str, Any]],  # List of entities to share with
+        significance: int = 5,
+        tags: List[str] = [],
+        metadata: Dict[str, Any] = {}
+    ) -> int:
+        """
+        Add a memory that will be shared across entities.
+        
+        Args:
+            memory_text: Text of the memory
+            source_type: Origin entity type
+            source_id: Origin entity ID
+            shared_with: List of entities to share with (e.g. [{"type": "npc", "id": 123}])
+            significance: Memory importance (1-10)
+            tags: List of memory tags
+            metadata: Additional metadata
+            
+        Returns:
+            Memory graph ID
+        """
+        try:
+            # First create the memory graph node
+            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                async with pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO JointMemoryGraph (
+                            user_id, conversation_id, memory_text, source_type, source_id,
+                            significance, tags, metadata, created_at
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                        RETURNING id
+                        """,
+                        self.user_id, self.conversation_id, memory_text, source_type, source_id,
+                        significance, json.dumps(tags), json.dumps(metadata)
+                    )
+                    
+                    memory_graph_id = row["id"]
+                    
+                    # Add edges to shared entities
+                    for entity in shared_with:
+                        await conn.execute(
+                            """
+                            INSERT INTO JointMemoryEdges (
+                                memory_graph_id, entity_type, entity_id, user_id, conversation_id
+                            )
+                            VALUES ($1, $2, $3, $4, $5)
+                            """,
+                            memory_graph_id, entity["type"], entity["id"], self.user_id, self.conversation_id
+                        )
+                    
+                    # Also add to original memory systems
+                    from memory.wrapper import MemorySystem
+                    
+                    memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+                    
+                    # Add to source entity's memory
+                    await memory_system.remember(
+                        entity_type=source_type,
+                        entity_id=source_id,
+                        memory_text=memory_text,
+                        importance="medium" if significance < 7 else "high",
+                        tags=tags + ["joint_memory"],
+                        metadata={**metadata, "joint_memory_id": memory_graph_id}
+                    )
+                    
+                    # Add to shared entities' memories
+                    for entity in shared_with:
+                        # For each entity type, adapt the memory slightly for perspective
+                        adapted_text = memory_text
+                        
+                        # If source is Nyx and target is NPC
+                        if source_type == "nyx" and entity["type"] == "npc":
+                            adapted_text = f"Nyx informed me: {memory_text}"
+                        
+                        # If source is NPC and target is Nyx
+                        elif source_type == "npc" and entity["type"] == "nyx":
+                            # Get NPC name
+                            npc_row = await conn.fetchrow(
+                                """
+                                SELECT npc_name FROM NPCStats
+                                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                                """,
+                                source_id, self.user_id, self.conversation_id
+                            )
+                            
+                            npc_name = npc_row["npc_name"] if npc_row else f"NPC_{source_id}"
+                            adapted_text = f"{npc_name}: {memory_text}"
+                        
+                        # Add memory to target entity
+                        await memory_system.remember(
+                            entity_type=entity["type"],
+                            entity_id=entity["id"],
+                            memory_text=adapted_text,
+                            importance="medium",
+                            tags=tags + ["joint_memory", f"from_{source_type}_{source_id}"],
+                            metadata={**metadata, "joint_memory_id": memory_graph_id}
+                        )
+                    
+                    return memory_graph_id
+                    
+        except Exception as e:
+            logger.error(f"Error adding joint memory: {e}")
+            raise
+
+    async def get_shared_memories(
+        self,
+        entity_type: str,
+        entity_id: int,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Get memories shared with a specific entity.
+        
+        Args:
+            entity_type: Entity type
+            entity_id: Entity ID
+            limit: Maximum memories to return
+            
+        Returns:
+            List of shared memories
+        """
+        try:
+            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        """
+                        SELECT m.* FROM JointMemoryGraph m
+                        JOIN JointMemoryEdges e ON m.id = e.memory_graph_id
+                        WHERE e.entity_type = $1 AND e.entity_id = $2
+                        AND m.user_id = $3 AND m.conversation_id = $4
+                        ORDER BY m.created_at DESC
+                        LIMIT $5
+                        """,
+                        entity_type, entity_id, self.user_id, self.conversation_id, limit
+                    )
+                    
+                    return [dict(row) for row in rows]
+                    
+        except Exception as e:
+            logger.error(f"Error getting shared memories: {e}")
+            return []
+
 class GameEventManager:
     """Manages events that both Nyx and NPCs should be aware of"""
 
