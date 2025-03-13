@@ -1032,6 +1032,49 @@ def create_all_tables():
         );
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NyxNPCDirectives (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            npc_id INTEGER NOT NULL,
+            directive JSONB NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP,
+            priority INTEGER DEFAULT 5
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS JointMemoryGraph (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            memory_text TEXT NOT NULL,
+            source_type VARCHAR(50) NOT NULL,  -- nyx, npc, player, system
+            source_id INTEGER NOT NULL,
+            significance INTEGER DEFAULT 5,
+            tags JSONB DEFAULT '[]'::jsonb,
+            metadata JSONB DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS JointMemoryEdges (
+            id SERIAL PRIMARY KEY,
+            memory_graph_id INTEGER REFERENCES JointMemoryGraph(id),
+            entity_type VARCHAR(50) NOT NULL,
+            entity_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
+CREATE INDEX IF NOT EXISTS idx_joint_memory_edges_entity 
+ON JointMemoryEdges(entity_type, entity_id, user_id, conversation_id);
+
     # Done creating everything:
     conn.commit()
     conn.close()
