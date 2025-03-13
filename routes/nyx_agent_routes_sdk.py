@@ -100,6 +100,15 @@ async def nyx_response():
                 user_id, conversation_id, context["player_name"], addiction_status
             )
         tracker.end_phase()
+
+        # 5. Update narrative arcs   
+        try:
+            from nyx.scene_manager_sdk import update_narrative_arcs_for_interaction
+            await update_narrative_arcs_for_interaction(
+                user_id, conversation_id, user_input, response["message"]
+            )
+        except Exception as e:
+            logging.warning(f"Error updating narrative arcs: {e}")    
         
         # Build complete response
         tracker.start_phase("response_building")
