@@ -234,6 +234,37 @@ async def process_time_advancement(
     
     return time_result
 
+@nyx_agent_bp.route("/nyx_memory_maintenance", methods=["POST"])
+@timed_function(name="nyx_memory_maintenance")
+async def nyx_memory_maintenance():
+    """
+    Manually trigger memory maintenance for Nyx.
+    """
+    try:
+        user_id = session.get("user_id")
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+
+        data = request.get_json() or {}
+        conversation_id = data.get("conversation_id")
+        if not conversation_id:
+            return jsonify({"error": "Missing conversation_id"}), 400
+        
+        # Call the memory maintenance function from SDK
+        from nyx.memory_integration_sdk import perform_memory_maintenance
+        
+        # Run maintenance
+        result = await perform_memory_maintenance(user_id, conversation_id)
+        
+        # Clear caches
+        MEMORY_CACHE.remove_pattern(f"introspection:{user_id}:{conversation_id}")
+        
+        return jsonify({"status": "Memory maintenance completed", "result": result})
+        
+    except Exception as e:
+        logging.exception("[nyx_memory_maintenance] Error")
+        return jsonify({"error": str(e)}), 500
+
 async def process_relationship_events(
     user_id: int, 
     conversation_id: int, 
