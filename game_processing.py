@@ -21,6 +21,7 @@ from db.connection import get_db_connection
 from logic.npc_creation import spawn_multiple_npcs_enhanced, create_and_refine_npc, init_chase_schedule
 from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
+from lore.setting_analyzer import SettingAnalyzer
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 
 DB_DSN = os.getenv("DB_DSN") 
@@ -457,6 +458,16 @@ async def async_process_new_game(user_id, conversation_data):
             count=5
         )
         logging.info("spawn_multiple_npcs => Created NPC IDs: %s", new_npc_ids)
+
+        # Initialize lore based on setting and NPC analysis
+        lore_system = LoreIntegrationSystem(user_id, conversation_id)
+        lore = await lore_system.initialize_game_lore(combined_env)
+        logging.info(f"Lore generated with {len(lore.get('factions', []))} factions based on setting analysis")
+        
+        # Integrate lore with NPCs (feed it back to enhance their knowledge)
+        if new_npc_ids:
+            npc_lore_results = await lore_system.integrate_lore_with_npcs(new_npc_ids)
+            logging.info(f"Lore integrated with {len(npc_lore_results)} NPCs")
 
         # 14) Build aggregator context & produce final narrative
         aggregator_data = await asyncio.to_thread(
