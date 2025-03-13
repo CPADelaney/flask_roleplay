@@ -1,3 +1,5 @@
 1. Enable any number of factions to take place in a conflict (can be 0 for interpersonal, can be 10+ for an 'all out war')
 2. Add the ability for a conflict to require multiple different types of specialized resources
 3. Make narrative-progression NPC specific (eg., the veil doesn't necessarily thin across the board; you can still have somewhat normal interactions with people not actively 'working on' you)
+4. Link agent to Nyx for governance
+5. Integrate other agents for context (eg setting, relationships, npcs, etc; this might be the same as #4?)
