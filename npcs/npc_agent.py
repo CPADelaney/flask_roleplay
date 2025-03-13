@@ -904,3 +904,26 @@ class NPCAgent:
         for name, pool in self.resource_pools.items():
             stats[name] = pool.stats.copy()
         return stats
+
+    # Add to NPCAgent class in npcs/npc_agent.py
+    async def report_action_to_nyx(self, action: NPCAction, result: ActionResult) -> None:
+        """Report significant NPC action to Nyx for awareness and potential override."""
+        try:
+            # Only report significant actions
+            if action.weight < 0.5 and not result.emotional_impact:
+                return
+                
+            # Import here to avoid circular imports
+            from nyx.integrate import NyxNPCIntegrationManager
+            
+            nyx_manager = NyxNPCIntegrationManager(self.user_id, self.conversation_id)
+            
+            # Report the action
+            await nyx_manager.process_npc_action_report({
+                "npc_id": self.npc_id,
+                "action": action.model_dump(),
+                "result": result.model_dump(),
+                "timestamp": datetime.now().isoformat()
+            })
+        except Exception as e:
+            logger.error(f"Error reporting action to Nyx: {e}")
