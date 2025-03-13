@@ -201,6 +201,64 @@ class NyxNPCIntegrationManager:
         """Lazy-load NPCAgentCoordinator to avoid circular imports."""
         from logic.npc_agents.agent_coordinator import NPCAgentCoordinator
         return NPCAgentCoordinator(user_id, conversation_id)
+
+    async def orchestrate_scene(
+        self,
+        location: str,
+        player_action: str = None,
+        involved_npcs: List[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Have Nyx orchestrate an entire scene, directing all NPCs.
+        """
+        # Gather context for the scene
+        context = await self._gather_scene_context(location, player_action, involved_npcs)
+        
+        # Get Nyx's scene directive
+        scene_directive = await self.make_scene_decision(context)
+        
+        # Have NPCs act according to the directive
+        npc_responses = await self._execute_npc_directives(scene_directive)
+        
+        # Create a coherent scene narrative
+        scene_narrative = await self.nyx_agent_sdk.create_scene_narrative(
+            scene_directive, npc_responses, context
+        )
+        
+        return {
+            "narrative": scene_narrative,
+            "npc_responses": npc_responses,
+            "location": location
+        }
+
+    async def orchestrate_scene(
+        self,
+        location: str,
+        player_action: str = None,
+        involved_npcs: List[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Have Nyx orchestrate an entire scene, directing all NPCs.
+        """
+        # Gather context for the scene
+        context = await self._gather_scene_context(location, player_action, involved_npcs)
+        
+        # Get Nyx's scene directive
+        scene_directive = await self.make_scene_decision(context)
+        
+        # Have NPCs act according to the directive
+        npc_responses = await self._execute_npc_directives(scene_directive)
+        
+        # Create a coherent scene narrative
+        scene_narrative = await self.nyx_agent_sdk.create_scene_narrative(
+            scene_directive, npc_responses, context
+        )
+        
+        return {
+            "narrative": scene_narrative,
+            "npc_responses": npc_responses,
+            "location": location
+        }
     
     def _extract_npc_guidance(self, nyx_response):
         """
