@@ -1075,6 +1075,169 @@ def create_all_tables():
 CREATE INDEX IF NOT EXISTS idx_joint_memory_edges_entity 
 ON JointMemoryEdges(entity_type, entity_id, user_id, conversation_id);
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NyxAgentDirectives (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            agent_type VARCHAR(50) NOT NULL,
+            agent_id VARCHAR(50) NOT NULL,
+            directive JSONB NOT NULL,
+            priority INTEGER DEFAULT 5,
+            expires_at TIMESTAMP WITH TIME ZONE,
+            scene_id VARCHAR(50),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            
+            CONSTRAINT agent_directives_user_conversation_fk
+                FOREIGN KEY (user_id, conversation_id)
+                REFERENCES conversations(user_id, id)
+                ON DELETE CASCADE
+        );
+    ''')
+        
+        -- Index for agent directives
+        CREATE INDEX IF NOT EXISTS idx_agent_directives_agent
+        ON NyxAgentDirectives(user_id, conversation_id, agent_type, agent_id);
+        
+        -- Action Tracking Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NyxActionTracking (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            agent_type VARCHAR(50) NOT NULL,
+            agent_id VARCHAR(50) NOT NULL,
+            action_type VARCHAR(50),
+            action_data JSONB,
+            result_data JSONB,
+            status VARCHAR(20),
+            timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            
+            CONSTRAINT action_tracking_user_conversation_fk
+                FOREIGN KEY (user_id, conversation_id)
+                REFERENCES conversations(user_id, id)
+                ON DELETE CASCADE
+        );
+    ''')
+        
+        -- Index for action tracking
+        CREATE INDEX IF NOT EXISTS idx_action_tracking_agent
+        ON NyxActionTracking(user_id, conversation_id, agent_type, agent_id);
+        
+        -- Agent Communication Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NyxAgentCommunication (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            sender_type VARCHAR(50) NOT NULL,
+            sender_id VARCHAR(50) NOT NULL,
+            recipient_type VARCHAR(50) NOT NULL,
+            recipient_id VARCHAR(50) NOT NULL,
+            message_type VARCHAR(50) NOT NULL,
+            message_content JSONB NOT NULL,
+            response_content JSONB,
+            status VARCHAR(20) DEFAULT 'sent',
+            timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            
+            CONSTRAINT agent_communication_user_conversation_fk
+                FOREIGN KEY (user_id, conversation_id)
+                REFERENCES conversations(user_id, id)
+                ON DELETE CASCADE
+        );
+    ''')
+        
+        -- Index for agent communication
+        CREATE INDEX IF NOT EXISTS idx_agent_communication_sender
+        ON NyxAgentCommunication(user_id, conversation_id, sender_type, sender_id);
+        
+        CREATE INDEX IF NOT EXISTS idx_agent_communication_recipient
+        ON NyxAgentCommunication(user_id, conversation_id, recipient_type, recipient_id);
+        
+        -- Joint Memory Graph Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NyxJointMemoryGraph (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            memory_text TEXT NOT NULL,
+            memory_type VARCHAR(50) DEFAULT 'observation',
+            source_type VARCHAR(50) NOT NULL,
+            source_id VARCHAR(50) NOT NULL,
+            significance INTEGER DEFAULT 5,
+            tags JSONB,
+            metadata JSONB,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            
+            CONSTRAINT joint_memory_user_conversation_fk
+                FOREIGN KEY (user_id, conversation_id)
+                REFERENCES conversations(user_id, id)
+                ON DELETE CASCADE
+         );
+    ''')
+        
+        -- Joint Memory Access Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NyxJointMemoryAccess (
+            id SERIAL PRIMARY KEY,
+            memory_id INTEGER NOT NULL,
+            agent_type VARCHAR(50) NOT NULL,
+            agent_id VARCHAR(50) NOT NULL,
+            access_level VARCHAR(20) DEFAULT 'read', -- read, write, delete
+            granted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            
+            CONSTRAINT joint_memory_access_memory_fk
+                FOREIGN KEY (memory_id)
+                REFERENCES NyxJointMemoryGraph(id)
+                ON DELETE CASCADE
+        );
+    ''')
+        
+        -- Narrative Governance Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NyxNarrativeGovernance (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            narrative_stage VARCHAR(50) NOT NULL,
+            governance_policy JSONB NOT NULL,
+            theme_directives JSONB,
+            pacing_directives JSONB,
+            character_directives JSONB,
+            active_from TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            active_until TIMESTAMP WITH TIME ZONE,
+            
+            CONSTRAINT narrative_governance_user_conversation_fk
+                FOREIGN KEY (user_id, conversation_id)
+                REFERENCES conversations(user_id, id)
+                ON DELETE CASCADE
+        );
+    ''')
+        
+        -- Agent Registration Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS NyxAgentRegistry (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            agent_type VARCHAR(50) NOT NULL,
+            agent_id VARCHAR(50) NOT NULL,
+            agent_name VARCHAR(100),
+            capabilities JSONB,
+            status VARCHAR(20) DEFAULT 'active',
+            last_active TIMESTAMP WITH TIME ZONE,
+            first_registered TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            
+            CONSTRAINT agent_registry_user_conversation_fk
+                FOREIGN KEY (user_id, conversation_id)
+                REFERENCES conversations(user_id, id)
+                ON DELETE CASCADE,
+                
+            CONSTRAINT agent_registry_unique
+                UNIQUE (user_id, conversation_id, agent_type, agent_id)
+        );
+    ''')
+
     # Done creating everything:
     conn.commit()
     conn.close()
