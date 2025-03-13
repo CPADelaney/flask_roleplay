@@ -1,9 +1,10 @@
-# npcs/npc_creation_routes.py
+# routes/npc_creation_routes.py
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 import logging
+import asyncio
 
 from npcs.new_npc_creation import NPCCreationHandler
 
@@ -37,7 +38,10 @@ class MultipleNPCResponse(BaseModel):
     npc_ids: List[int]
     message: str
 
-# Dependency for the NPC creation handler
+# Dependency for the NPC creation agent
+def get_npc_agent():
+    return NPCCreationAgent()
+
 def get_npc_handler():
     return NPCCreationHandler()
 
