@@ -1,0 +1,836 @@
+# npcs/npc_handler.py
+
+"""
+NPC interaction handler for managing interactions between NPCs and players.
+Refactored from npc_handler_agent.py.
+"""
+
+import logging
+import json
+import asyncio
+import random
+from typing import List, Dict, Any, Optional
+import os
+import asyncpg
+
+from agents import Agent, Runner, function_tool
+from pydantic import BaseModel, Field
+
+from db.connection import get_db_connection
+from memory.wrapper import MemorySystem
+from logic.activities_logic import get_all_activities, filter_activities_for_npc
+
+# Configuration
+DB_DSN = os.getenv("DB_DSN")
+
+class NPCInteractionInput(BaseModel):
+    npc_id: int
+    player_input: str
+    context: Dict[str, Any] = Field(default_factory=dict)
+    interaction_type: str = "standard_interaction"
+
+class NPCInteractionOutput(BaseModel):
+    npc_id: int
+    npc_name: str
+    response: str
+    stat_changes: Dict[str, int] = Field(default_factory=dict)
+    memory_created: bool = False
+
+class NPCHandler:
+    """Handles NPC interactions with players and other NPCs"""
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        """
+        Initialize the NPC handler.
+        
+        Args:
+            user_id: User/player ID
+            conversation_id: Conversation/scene ID
+        """
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        
+        # Initialize agent for handling NPC interactions
+        self.interaction_agent = Agent(
+            name="InteractionHandler",
+            instructions="""
+            You generate realistic NPC responses to player interactions in a roleplaying game with subtle femdom elements.
+            
+            Each response should:
+            - Match the NPC's personality and stats (dominance, cruelty, etc.)
+            - Be appropriate to the context and location
+            - Incorporate subtle hints of control when appropriate
+            - Consider the NPC's history with the player
+            - Possibly suggest stat changes based on the interaction
+            
+            The responses should maintain a balance between mundane everyday interactions and 
+            subtle power dynamics, with control elements hidden beneath friendly facades.
+            """,
+            output_type=NPCInteractionOutput,
+            tools=[
+                function_tool(self.get_npc_details),
+                function_tool(self.get_npc_memory),
+                function_tool(self.get_relationship_details)
+            ]
+        )
+
+    async def handle_interaction(
+        self,
+        npc_id: int,
+        interaction_type: str,
+        player_input: str,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Handle an interaction between the player and an NPC.
+        
+        Args:
+            npc_id: ID of the NPC
+            interaction_type: Type of interaction (e.g., "standard_interaction", "defiant_response", etc.)
+            player_input: Player's input text
+            context: Additional context for the interaction (optional)
+            
+        Returns:
+            Dictionary with the NPC's response
+        """
+        # Get NPC details
+        npc_details = await self.get_npc_details(npc_id)
+        
+        # Get NPC memories
+        memories = await self.get_npc_memory(npc_id)
+        
+        # Get player relationship
+        relationship = await self.get_relationship_details("npc", npc_id, "player", 0)
+        
+        # Create prompt for the interaction handler
+        context_str = json.dumps(context) if context else "{}"
+        memories_str = json.dumps(memories)
+        relationship_str = json.dumps(relationship)
+        
+        prompt = f"""
+        Generate a response for {npc_details['npc_name']} to the player's input:
+        
+        "{player_input}"
+        
+        NPC Details:
+        {json.dumps(npc_details, indent=2)}
+        
+        Recent memories:
+        {memories_str}
+        
+        Relationship with player:
+        {relationship_str}
+        
+        Interaction type: {interaction_type}
+        Additional context: {context_str}
+        
+        Generate a response that:
+        - Is consistent with the NPC's personality and stats
+        - Considers their memories and relationship with the player
+        - Fits the interaction type and context
+        - Includes subtle elements of control when appropriate
+        - Suggests any relevant stat changes
+        
+        The response should maintain a balance between mundane interaction
+        and subtle power dynamics appropriate to the NPC's character.
+        """
+        
+        # Run the interaction handler
+        result = await Runner.run(
+            self.interaction_agent,
+            prompt
+        )
+        
+        response = result.final_output
+        
+        # Store the interaction in memory if it's significant
+        if response.memory_created:
+            await self._store_interaction_memory(
+                npc_id, 
+                player_input, 
+                response.response
+            )
+        
+        # Apply stat changes if any
+        if response.stat_changes:
+            await self._apply_stat_changes(npc_id, response.stat_changes)
+        
+        return response.dict()
+
+    async def _store_interaction_memory(self, npc_id: int, player_input: str, response: str) -> None:
+        """
+        Store an interaction in the NPC's memory.
+        
+        Args:
+            npc_id: ID of the NPC
+            player_input: Player's input
+            response: NPC's response
+        """
+        conn = await asyncpg.connect(dsn=DB_DSN)
+        try:
+            memory_text = f"Interaction with player: {player_input} - Response: {response}"
+            
+            # Add memory to NPCStats
+            row = await conn.fetchrow("""
+                SELECT memory
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                LIMIT 1
+            """, self.user_id, self.conversation_id, npc_id)
+            
+            existing_memory = []
+            if row and row["memory"]:
+                try:
+                    if isinstance(row["memory"], str):
+                        existing_memory = json.loads(row["memory"])
+                    else:
+                        existing_memory = row["memory"]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            
+            existing_memory.append(memory_text)
+            
+            await conn.execute("""
+                UPDATE NPCStats
+                SET memory = $1
+                WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+            """, json.dumps(existing_memory), self.user_id, self.conversation_id, npc_id)
+            
+            # Also add to unified_memories for better compatibility
+            await conn.execute("""
+                INSERT INTO unified_memories (
+                    entity_type, entity_id, user_id, conversation_id,
+                    memory_text, memory_type, significance, emotional_intensity
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """, "npc", npc_id, self.user_id, self.conversation_id, memory_text, "interaction", 3, 30)
+        finally:
+            await conn.close()
+
+    async def _apply_stat_changes(self, npc_id: int, stat_changes: Dict[str, int]) -> None:
+        """
+        Apply stat changes to an NPC.
+        
+        Args:
+            npc_id: ID of the NPC
+            stat_changes: Dictionary of stat changes
+        """
+        conn = await asyncpg.connect(dsn=DB_DSN)
+        try:
+            for stat, change in stat_changes.items():
+                if stat in ["dominance", "cruelty", "closeness", "trust", "respect", "intensity"]:
+                    # Get current value
+                    row = await conn.fetchrow(f"""
+                        SELECT {stat}
+                        FROM NPCStats
+                        WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                        LIMIT 1
+                    """, self.user_id, self.conversation_id, npc_id)
+                    
+                    if row:
+                        current_value = row[stat]
+                        new_value = max(0, min(100, current_value + change))
+                        
+                        await conn.execute(f"""
+                            UPDATE NPCStats
+                            SET {stat} = $1
+                            WHERE user_id=$2 AND conversation_id=$3 AND npc_id=$4
+                        """, new_value, self.user_id, self.conversation_id, npc_id)
+        finally:
+            await conn.close()
+
+    async def get_npc_details(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Get details about a specific NPC.
+        
+        Args:
+            npc_id: ID of the NPC
+            
+        Returns:
+            Dictionary with NPC details
+        """
+        conn = await asyncpg.connect(dsn=DB_DSN)
+        try:
+            row = await conn.fetchrow("""
+                SELECT npc_id, npc_name, introduced, archetypes, archetype_summary, 
+                       archetype_extras_summary, physical_description, relationships,
+                       dominance, cruelty, closeness, trust, respect, intensity,
+                       hobbies, personality_traits, likes, dislikes, affiliations,
+                       schedule, current_location, sex, age
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                LIMIT 1
+            """, self.user_id, self.conversation_id, npc_id)
+            
+            if not row:
+                return {"error": "NPC not found"}
+            
+            # Process JSON fields
+            archetypes = row["archetypes"]
+            if archetypes:
+                if isinstance(archetypes, str):
+                    try:
+                        archetypes = json.loads(archetypes)
+                    except (json.JSONDecodeError, TypeError):
+                        archetypes = []
+            else:
+                archetypes = []
+            
+            relationships = row["relationships"]
+            if relationships:
+                if isinstance(relationships, str):
+                    try:
+                        relationships = json.loads(relationships)
+                    except (json.JSONDecodeError, TypeError):
+                        relationships = {}
+            else:
+                relationships = {}
+            
+            hobbies = row["hobbies"]
+            if hobbies:
+                if isinstance(hobbies, str):
+                    try:
+                        hobbies = json.loads(hobbies)
+                    except (json.JSONDecodeError, TypeError):
+                        hobbies = []
+            else:
+                hobbies = []
+            
+            personality_traits = row["personality_traits"]
+            if personality_traits:
+                if isinstance(personality_traits, str):
+                    try:
+                        personality_traits = json.loads(personality_traits)
+                    except (json.JSONDecodeError, TypeError):
+                        personality_traits = []
+            else:
+                personality_traits = []
+            
+            likes = row["likes"]
+            if likes:
+                if isinstance(likes, str):
+                    try:
+                        likes = json.loads(likes)
+                    except (json.JSONDecodeError, TypeError):
+                        likes = []
+            else:
+                likes = []
+            
+            dislikes = row["dislikes"]
+            if dislikes:
+                if isinstance(dislikes, str):
+                    try:
+                        dislikes = json.loads(dislikes)
+                    except (json.JSONDecodeError, TypeError):
+                        dislikes = []
+            else:
+                dislikes = []
+            
+            affiliations = row["affiliations"]
+            if affiliations:
+                if isinstance(affiliations, str):
+                    try:
+                        affiliations = json.loads(affiliations)
+                    except (json.JSONDecodeError, TypeError):
+                        affiliations = []
+            else:
+                affiliations = []
+            
+            schedule = row["schedule"]
+            if schedule:
+                if isinstance(schedule, str):
+                    try:
+                        schedule = json.loads(schedule)
+                    except (json.JSONDecodeError, TypeError):
+                        schedule = {}
+            else:
+                schedule = {}
+            
+            return {
+                "npc_id": row["npc_id"],
+                "npc_name": row["npc_name"],
+                "introduced": row["introduced"],
+                "archetypes": archetypes,
+                "archetype_summary": row["archetype_summary"],
+                "archetype_extras_summary": row["archetype_extras_summary"],
+                "physical_description": row["physical_description"],
+                "relationships": relationships,
+                "dominance": row["dominance"],
+                "cruelty": row["cruelty"],
+                "closeness": row["closeness"],
+                "trust": row["trust"],
+                "respect": row["respect"],
+                "intensity": row["intensity"],
+                "hobbies": hobbies,
+                "personality_traits": personality_traits,
+                "likes": likes,
+                "dislikes": dislikes,
+                "affiliations": affiliations,
+                "schedule": schedule,
+                "current_location": row["current_location"],
+                "sex": row["sex"],
+                "age": row["age"]
+            }
+        finally:
+            await conn.close()
+
+    async def get_npc_memory(self, npc_id: int) -> List[Dict[str, Any]]:
+        """
+        Get memories associated with an NPC.
+        
+        Args:
+            npc_id: ID of the NPC
+            
+        Returns:
+            List of memory objects
+        """
+        conn = await asyncpg.connect(dsn=DB_DSN)
+        try:
+            # First check if the NPC has memories in the NPCStats table
+            row = await conn.fetchrow("""
+                SELECT memory
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
+                LIMIT 1
+            """, self.user_id, self.conversation_id, npc_id)
+            
+            if row and row["memory"]:
+                try:
+                    if isinstance(row["memory"], str):
+                        memories = json.loads(row["memory"])
+                    else:
+                        memories = row["memory"]
+                    
+                    return memories
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            
+            # Try the legacy NPCMemories table
+            rows = await conn.fetch("""
+                SELECT id, memory_text, emotional_intensity, significance, memory_type
+                FROM NPCMemories
+                WHERE npc_id=$1 AND status='active'
+                ORDER BY timestamp DESC
+                LIMIT 10
+            """, npc_id)
+            
+            if rows:
+                memories = []
+                for row in rows:
+                    memories.append({
+                        "id": row["id"],
+                        "memory_text": row["memory_text"],
+                        "emotional_intensity": row["emotional_intensity"],
+                        "significance": row["significance"],
+                        "memory_type": row["memory_type"]
+                    })
+                
+                return memories
+            
+            # Finally, try the unified_memories table
+            rows = await conn.fetch("""
+                SELECT id, memory_text, emotional_intensity, significance, memory_type
+                FROM unified_memories
+                WHERE entity_type='npc' AND entity_id=$1 AND user_id=$2 AND conversation_id=$3 AND status='active'
+                ORDER BY timestamp DESC
+                LIMIT 10
+            """, npc_id, self.user_id, self.conversation_id)
+            
+            memories = []
+            for row in rows:
+                memories.append({
+                    "id": row["id"],
+                    "memory_text": row["memory_text"],
+                    "emotional_intensity": row["emotional_intensity"],
+                    "significance": row["significance"],
+                    "memory_type": row["memory_type"]
+                })
+            
+            return memories
+        finally:
+            await conn.close()
+
+    async def get_relationship_details(
+        self,
+        entity1_type: str,
+        entity1_id: int,
+        entity2_type: str,
+        entity2_id: int
+    ) -> Dict[str, Any]:
+        """
+        Get relationship details between two entities.
+        
+        Args:
+            entity1_type: Type of the first entity (e.g., "npc", "player")
+            entity1_id: ID of the first entity
+            entity2_type: Type of the second entity
+            entity2_id: ID of the second entity
+            
+        Returns:
+            Dictionary with relationship details
+        """
+        conn = await asyncpg.connect(dsn=DB_DSN)
+        try:
+            # Try both orientations of the relationship
+            for e1t, e1i, e2t, e2i in [(entity1_type, entity1_id, entity2_type, entity2_id),
+                                       (entity2_type, entity2_id, entity1_type, entity1_id)]:
+                row = await conn.fetchrow("""
+                    SELECT link_id, link_type, link_level, link_history, dynamics, 
+                           group_interaction, relationship_stage, experienced_crossroads,
+                           experienced_rituals
+                    FROM SocialLinks
+                    WHERE user_id=$1 AND conversation_id=$2
+                      AND entity1_type=$3 AND entity1_id=$4
+                      AND entity2_type=$5 AND entity2_id=$6
+                    LIMIT 1
+                """, self.user_id, self.conversation_id, e1t, e1i, e2t, e2i)
+                
+                if row:
+                    # Process JSON fields
+                    link_history = row["link_history"]
+                    if link_history:
+                        try:
+                            if isinstance(link_history, str):
+                                link_history = json.loads(link_history)
+                        except (json.JSONDecodeError, TypeError):
+                            link_history = []
+                    else:
+                        link_history = []
+                    
+                    dynamics = row["dynamics"]
+                    if dynamics:
+                        try:
+                            if isinstance(dynamics, str):
+                                dynamics = json.loads(dynamics)
+                        except (json.JSONDecodeError, TypeError):
+                            dynamics = {}
+                    else:
+                        dynamics = {}
+                    
+                    experienced_crossroads = row["experienced_crossroads"]
+                    if experienced_crossroads:
+                        try:
+                            if isinstance(experienced_crossroads, str):
+                                experienced_crossroads = json.loads(experienced_crossroads)
+                        except (json.JSONDecodeError, TypeError):
+                            experienced_crossroads = {}
+                    else:
+                        experienced_crossroads = {}
+                    
+                    experienced_rituals = row["experienced_rituals"]
+                    if experienced_rituals:
+                        try:
+                            if isinstance(experienced_rituals, str):
+                                experienced_rituals = json.loads(experienced_rituals)
+                        except (json.JSONDecodeError, TypeError):
+                            experienced_rituals = {}
+                    else:
+                        experienced_rituals = {}
+                    
+                    return {
+                        "link_id": row["link_id"],
+                        "entity1_type": e1t,
+                        "entity1_id": e1i,
+                        "entity2_type": e2t,
+                        "entity2_id": e2i,
+                        "link_type": row["link_type"],
+                        "link_level": row["link_level"],
+                        "link_history": link_history,
+                        "dynamics": dynamics,
+                        "group_interaction": row["group_interaction"],
+                        "relationship_stage": row["relationship_stage"],
+                        "experienced_crossroads": experienced_crossroads,
+                        "experienced_rituals": experienced_rituals
+                    }
+            
+            # No relationship found
+            return {
+                "entity1_type": entity1_type,
+                "entity1_id": entity1_id,
+                "entity2_type": entity2_type,
+                "entity2_id": entity2_id,
+                "link_type": "none",
+                "link_level": 0,
+                "link_history": [],
+                "dynamics": {},
+                "relationship_stage": "strangers",
+                "experienced_crossroads": {},
+                "experienced_rituals": {}
+            }
+        finally:
+            await conn.close()
+
+    async def get_nearby_npcs(self, location: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get NPCs that are at a specific location.
+        
+        Args:
+            location: Location to filter by (optional)
+            
+        Returns:
+            List of nearby NPCs
+        """
+        conn = await asyncpg.connect(dsn=DB_DSN)
+        try:
+            if location:
+                rows = await conn.fetch("""
+                    SELECT npc_id, npc_name, current_location, dominance, cruelty
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2 
+                    AND current_location=$3
+                    ORDER BY introduced DESC
+                    LIMIT 5
+                """, self.user_id, self.conversation_id, location)
+            else:
+                rows = await conn.fetch("""
+                    SELECT npc_id, npc_name, current_location, dominance, cruelty
+                    FROM NPCStats
+                    WHERE user_id=$1 AND conversation_id=$2
+                    ORDER BY introduced DESC
+                    LIMIT 5
+                """, self.user_id, self.conversation_id)
+            
+            nearby_npcs = []
+            for row in rows:
+                nearby_npcs.append({
+                    "npc_id": row["npc_id"],
+                    "npc_name": row["npc_name"],
+                    "current_location": row["current_location"],
+                    "dominance": row["dominance"],
+                    "cruelty": row["cruelty"]
+                })
+            
+            return nearby_npcs
+        finally:
+            await conn.close()
+
+    async def process_daily_npc_activities(self) -> Dict[str, Any]:
+        """
+        Process daily activities for all NPCs.
+        Update locations, create memories, and handle NPC interactions.
+        
+        Returns:
+            Dictionary with processing results
+        """
+        conn = await asyncpg.connect(dsn=DB_DSN)
+        try:
+            year, month, day, time_of_day = 1, 1, 1, "Morning"
+            
+            for key in ["CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"]:
+                row = await conn.fetchrow("""
+                    SELECT value
+                    FROM CurrentRoleplay
+                    WHERE user_id=$1 AND conversation_id=$2 AND key=$3
+                """, self.user_id, self.conversation_id, key)
+                
+                if row:
+                    if key == "CurrentYear":
+                        year = int(row["value"]) if row["value"].isdigit() else 1
+                    elif key == "CurrentMonth":
+                        month = int(row["value"]) if row["value"].isdigit() else 1
+                    elif key == "CurrentDay":
+                        day = int(row["value"]) if row["value"].isdigit() else 1
+                    elif key == "TimeOfDay":
+                        time_of_day = row["value"]
+            
+            # Get day name
+            row = await conn.fetchrow("""
+                SELECT value
+                FROM CurrentRoleplay
+                WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
+                LIMIT 1
+            """, self.user_id, self.conversation_id)
+            
+            day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            if row:
+                try:
+                    calendar_data = json.loads(row["value"])
+                    if "days" in calendar_data:
+                        day_names = calendar_data["days"]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            
+            day_of_week = day_names[day % len(day_names)]
+            
+            # Get all NPCs
+            rows = await conn.fetch("""
+                SELECT npc_id, npc_name, schedule, current_location
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2
+            """, self.user_id, self.conversation_id)
+            
+            results = []
+            
+            for row in rows:
+                npc_id = row["npc_id"]
+                npc_name = row["npc_name"]
+                schedule = row["schedule"]
+                current_location = row["current_location"]
+                
+                # Parse schedule
+                if schedule:
+                    try:
+                        if isinstance(schedule, str):
+                            schedule_data = json.loads(schedule)
+                        else:
+                            schedule_data = schedule
+                        
+                        # Check if this day is in the schedule
+                        if day_of_week in schedule_data:
+                            day_schedule = schedule_data[day_of_week]
+                            
+                            # Check if the current time period is in the schedule
+                            if time_of_day in day_schedule:
+                                new_location = day_schedule[time_of_day]
+                                
+                                # Update location if different
+                                if new_location and new_location != current_location:
+                                    await conn.execute("""
+                                        UPDATE NPCStats
+                                        SET current_location=$1
+                                        WHERE npc_id=$2
+                                    """, new_location, npc_id)
+                                    
+                                    # Create memory of location change
+                                    memory_text = f"Moved to {new_location} during {time_of_day} on {day_of_week}."
+                                    
+                                    # Add to unified_memories
+                                    await conn.execute("""
+                                        INSERT INTO unified_memories (
+                                            entity_type, entity_id, user_id, conversation_id,
+                                            memory_text, memory_type, significance, emotional_intensity
+                                        )
+                                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                                    """, "npc", npc_id, self.user_id, self.conversation_id, memory_text, "movement", 2, 10)
+                                    
+                                    results.append({
+                                        "npc_id": npc_id,
+                                        "npc_name": npc_name,
+                                        "action": "moved",
+                                        "old_location": current_location,
+                                        "new_location": new_location
+                                    })
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            
+            # Handle NPC interactions
+            # Get NPCs at the same location
+            location_npcs = {}
+            rows = await conn.fetch("""
+                SELECT npc_id, npc_name, current_location
+                FROM NPCStats
+                WHERE user_id=$1 AND conversation_id=$2
+            """, self.user_id, self.conversation_id)
+            
+            for row in rows:
+                location = row["current_location"]
+                if location not in location_npcs:
+                    location_npcs[location] = []
+                
+                location_npcs[location].append({
+                    "npc_id": row["npc_id"],
+                    "npc_name": row["npc_name"]
+                })
+            
+            # Process interactions for NPCs at the same location
+            for location, npcs in location_npcs.items():
+                if len(npcs) >= 2:
+                    # Randomly select some NPC pairs for interaction
+                    for _ in range(min(3, len(npcs))):
+                        npc1, npc2 = random.sample(npcs, 2)
+                        
+                        # Create a memory of their interaction
+                        interaction_text = f"Interacted with {npc2['npc_name']} at {location} during {time_of_day}."
+                        
+                        # Add to unified_memories for both NPCs
+                        await conn.execute("""
+                            INSERT INTO unified_memories (
+                                entity_type, entity_id, user_id, conversation_id,
+                                memory_text, memory_type, significance, emotional_intensity
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        """, "npc", npc1["npc_id"], self.user_id, self.conversation_id, interaction_text, "interaction", 2, 20)
+                        
+                        interaction_text2 = f"Interacted with {npc1['npc_name']} at {location} during {time_of_day}."
+                        
+                        await conn.execute("""
+                            INSERT INTO unified_memories (
+                                entity_type, entity_id, user_id, conversation_id,
+                                memory_text, memory_type, significance, emotional_intensity
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        """, "npc", npc2["npc_id"], self.user_id, self.conversation_id, interaction_text2, "interaction", 2, 20)
+                        
+                        # Update relationship if needed
+                        # For now, using basic implementation
+                        # In a full refactor, this would call into relationship.py
+                        await self._update_npc_relationship(npc1["npc_id"], npc2["npc_id"])
+                        
+                        results.append({
+                            "type": "interaction",
+                            "npc1": npc1["npc_name"],
+                            "npc2": npc2["npc_name"],
+                            "location": location
+                        })
+            
+            return {
+                "year": year,
+                "month": month,
+                "day": day,
+                "time_of_day": time_of_day,
+                "day_of_week": day_of_week,
+                "results": results
+            }
+        finally:
+            await conn.close()
+
+    async def _update_npc_relationship(self, npc1_id: int, npc2_id: int) -> None:
+        """
+        Update the relationship between two NPCs.
+        
+        Args:
+            npc1_id: ID of the first NPC
+            npc2_id: ID of the second NPC
+        """
+        # Simple implementation - in a full refactor, this would call into npc_relationship.py
+        conn = await asyncpg.connect(dsn=DB_DSN)
+        try:
+            # Check if relationship exists
+            row = await conn.fetchrow("""
+                SELECT link_id, link_level
+                FROM SocialLinks
+                WHERE user_id=$1 AND conversation_id=$2
+                  AND ((entity1_type='npc' AND entity1_id=$3 AND entity2_type='npc' AND entity2_id=$4)
+                   OR  (entity1_type='npc' AND entity1_id=$4 AND entity2_type='npc' AND entity2_id=$3))
+                LIMIT 1
+            """, self.user_id, self.conversation_id, npc1_id, npc2_id)
+            
+            if row:
+                # Update existing relationship
+                link_id = row["link_id"]
+                current_level = row["link_level"]
+                
+                # Small random change to relationship
+                change = random.randint(-1, 2)
+                new_level = max(0, min(100, current_level + change))
+                
+                if new_level != current_level:
+                    await conn.execute("""
+                        UPDATE SocialLinks
+                        SET link_level=$1
+                        WHERE link_id=$2
+                    """, new_level, link_id)
+            else:
+                # Create new relationship
+                link_type = "neutral"
+                link_level = 50  # Default neutral starting point
+                
+                await conn.execute("""
+                    INSERT INTO SocialLinks (
+                        user_id, conversation_id, entity1_type, entity1_id,
+                        entity2_type, entity2_id, link_type, link_level
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """, self.user_id, self.conversation_id, "npc", npc1_id, "npc", npc2_id, link_type, link_level)
+        finally:
+            await conn.close()
