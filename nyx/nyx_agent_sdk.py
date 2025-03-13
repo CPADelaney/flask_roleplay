@@ -129,6 +129,77 @@ async def get_scene_guidance(self, context: Dict[str, Any]) -> Dict[str, Any]:
     return npc_guidance
 
 @function_tool
+async def detect_user_revelations(ctx, user_message: str) -> str:
+    """
+    Detect if user is revealing new preferences or patterns.
+    
+    Args:
+        user_message: The user's message to analyze
+    """
+    lower_message = user_message.lower()
+    revelations = []
+    
+    # Check for explicit kink mentions (migrated from nyx_decision_engine.py)
+    kink_keywords = {
+        "ass": ["ass", "booty", "behind", "rear"],
+        "feet": ["feet", "foot", "toes"],
+        "goth": ["goth", "gothic", "dark", "black clothes"],
+        "tattoos": ["tattoo", "ink", "inked"],
+        "piercings": ["piercing", "pierced", "stud", "ring"],
+        "latex": ["latex", "rubber", "shiny"],
+        "leather": ["leather", "leathery"],
+        "humiliation": ["humiliate", "embarrassed", "ashamed", "pathetic"],
+        "submission": ["submit", "obey", "serve", "kneel"]
+    }
+    
+    for kink, keywords in kink_keywords.items():
+        if any(keyword in lower_message for keyword in keywords):
+            # Check sentiment (simplified)
+            sentiment = "neutral"
+            pos_words = ["like", "love", "enjoy", "good", "great", "nice", "yes", "please"]
+            neg_words = ["don't", "hate", "dislike", "bad", "worse", "no", "never"]
+            
+            pos_count = sum(1 for word in pos_words if word in lower_message)
+            neg_count = sum(1 for word in neg_words if word in lower_message)
+            
+            if pos_count > neg_count:
+                sentiment = "positive"
+                intensity = 0.7
+            elif neg_count > pos_count:
+                sentiment = "negative" 
+                intensity = 0.0
+            else:
+                intensity = 0.4
+                
+            if sentiment != "negative":
+                revelations.append({
+                    "type": "kink_preference",
+                    "kink": kink,
+                    "intensity": intensity,
+                    "source": "explicit_mention"
+                })
+    
+    # Check for behavior patterns (migrated from nyx_decision_engine.py)
+    if "don't tell me what to do" in lower_message or "i won't" in lower_message:
+        revelations.append({
+            "type": "behavior_pattern",
+            "pattern": "resistance",
+            "intensity": 0.6,
+            "source": "explicit_statement"
+        })
+    
+    if "yes mistress" in lower_message or "i'll obey" in lower_message:
+        revelations.append({
+            "type": "behavior_pattern",
+            "pattern": "submission",
+            "intensity": 0.8,
+            "source": "explicit_statement"
+        })
+    
+    return json.dumps(revelations)
+
+
+@function_tool
 async def get_user_model_guidance(ctx) -> str:
     """
     Get guidance for how Nyx should respond based on the user model.
