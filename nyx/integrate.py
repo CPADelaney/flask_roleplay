@@ -259,6 +259,150 @@ class NyxNPCIntegrationManager:
             "npc_responses": npc_responses,
             "location": location
         }
+
+    async def process_npc_action_report(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process action reports from NPCs and potentially override.
+        
+        Args:
+            report: Dictionary with npc_id, action, result
+            
+        Returns:
+            Dictionary with processing result
+        """
+        npc_id = report.get("npc_id")
+        
+        # Store in memory for Nyx's awareness
+        await self.nyx_agent_sdk.memory_system.add_memory(
+            memory_text=f"NPC {npc_id} performed: {report.get('action', {}).get('description', 'unknown action')}",
+            memory_type="observation",
+            memory_scope="game",
+            significance=min(abs(report.get("result", {}).get("emotional_impact", 0)) + 4, 10),
+            tags=["npc_action", f"npc_{npc_id}"],
+            metadata=report
+        )
+        
+        # Check if this action requires an override
+        requires_override = await self._check_if_action_needs_override(report)
+        
+        if requires_override:
+            # Create an override directive
+            await self._create_npc_override_directive(
+                npc_id, 
+                requires_override.get("override_action"), 
+                requires_override.get("reason")
+            )
+            
+            return {
+                "overridden": True,
+                "reason": requires_override.get("reason"),
+                "override_action": requires_override.get("override_action")
+            }
+        
+        return {"processed": True}
+        
+    async def _check_if_action_needs_override(self, report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Check if an NPC action needs to be overridden by Nyx.
+        
+        Args:
+            report: The action report
+            
+        Returns:
+            Override details or None if no override needed
+        """
+        # Import current narrative context
+        narrative_context = await self._get_current_narrative_context()
+        active_arcs = narrative_context.get("active_arcs", [])
+        
+        if not active_arcs:
+            return None
+        
+        current_arc = active_arcs[0]
+        npc_id = report.get("npc_id")
+        action = report.get("action", {})
+        
+        # Check if this NPC has a required role in the current arc
+        npc_arc_role = None
+        for role in current_arc.get("npc_roles", []):
+            if role.get("npc_id") == npc_id:
+                npc_arc_role = role
+                break
+        
+        if not npc_arc_role:
+            return None  # NPC doesn't have a specific role in this arc
+        
+        # Check if action contradicts the required role
+        action_type = action.get("type")
+        target = action.get("target")
+        description = action.get("description", "")
+        
+        # Simple contradiction checks
+        contradictions = []
+        
+        # If NPC is supposed to be friendly but is being hostile
+        if npc_arc_role.get("relationship") == "friendly" and action_type in ["mock", "attack", "threaten"]:
+            contradictions.append({
+                "type": "relationship_contradiction",
+                "severity": "high",
+                "description": f"NPC is supposed to be friendly but performed {action_type}"
+            })
+        
+        # If NPC is supposed to help but is leaving
+        if npc_arc_role.get("required_action") == "help" and action_type == "leave":
+            contradictions.append({
+                "type": "role_contradiction",
+                "severity": "high",
+                "description": f"NPC is supposed to help but is leaving"
+            })
+        
+        # If contradictions found, create override
+        if contradictions:
+            # Determine appropriate override action
+            override_action = {
+                "type": "observe" if action_type != "observe" else "talk",
+                "description": f"reconsider your actions according to your role",
+                "target": target,
+                "weight": 1.0
+            }
+            
+            return {
+                "contradictions": contradictions,
+                "override_action": override_action,
+                "reason": f"Action contradicts NPC's role in current narrative arc: {contradictions[0]['description']}"
+            }
+        
+        return None
+        
+    async def _create_npc_override_directive(
+        self, 
+        npc_id: int, 
+        override_action: Dict[str, Any],
+        reason: str
+    ) -> None:
+        """Create a directive to override an NPC's action."""
+        try:
+            directive = {
+                "type": "action_override",
+                "action": override_action,
+                "reason": reason,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO NyxNPCDirectives (
+                            user_id, conversation_id, npc_id, directive, 
+                            expires_at, priority
+                        )
+                        VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 minute', 10)
+                        """,
+                        self.user_id, self.conversation_id, npc_id, json.dumps(directive)
+                    )
+        except Exception as e:
+            logger.error(f"Error creating override directive: {e}")
     
     def _extract_npc_guidance(self, nyx_response):
         """
