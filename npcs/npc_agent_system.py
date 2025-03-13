@@ -115,6 +115,19 @@ class NPCAgentSystem:
         # Start the maintenance task
         asyncio.create_task(run_maintenance_cycle())
 
+    async def update_npc_directive(self, npc_id: int, directive: Dict[str, Any]) -> Dict[str, Any]:
+        """Process a directive from Nyx for a specific NPC."""
+        if npc_id in self.npc_agents:
+            # Set directive in NPC's context
+            self.npc_agents[npc_id].context.current_directive = directive
+            
+            # Log directive for debugging
+            logger.info(f"NPC {npc_id} received directive from Nyx: {directive}")
+            
+            return {"success": True, "npc_id": npc_id}
+        else:
+            return {"success": False, "error": f"NPC {npc_id} not found"}
+
     async def _get_memory_system(self):
         """Lazy-load the memory system."""
         if self._memory_system is None:
