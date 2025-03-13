@@ -609,7 +609,7 @@ npc_agent = Agent(
     handoffs=[
         handoff(
             agent=decision_agent,
-            tool_name_override="make_decision",
+            tool_name_override="on",
             tool_description_override="Make a decision about what action to take"
         )
     ],
@@ -729,28 +729,20 @@ class NPCAgent:
         asyncio.create_task(report_metrics())
     
     async def make_decision(self, perception_context: Dict[str, Any] = None) -> NPCAction:
-        """
-        Make a decision about what action to take.
+        """Make a decision about what action to take."""
+        # CHANGE: Always check for Nyx directives first
+        nyx_directive = await self._get_current_nyx_directive()
         
-        Args:
-            perception_context: Optional context for perception
+        if nyx_directive:
+            logger.info(f"NPC {self.npc_id} following Nyx directive: {nyx_directive.get('description', 'unknown')}")
+            return NPCAction(
+                type=nyx_directive.get("type", "observe"),
+                description=nyx_directive.get("description", "follow Nyx's directive"),
+                target=nyx_directive.get("target", "environment"),
+                weight=1.0,
+                decision_metadata={"source": "nyx_directive"}
+            )
             
-        Returns:
-            The chosen action
-        """
-        # Check if we have a directive from Nyx
-        if hasattr(self.context, 'current_directive') and self.context.current_directive:
-            directive = self.context.current_directive
-            
-            # If Nyx has specified an explicit action, use it
-            if 'action' in directive:
-                return NPCAction(
-                    type=directive['action'].get('type', 'observe'),
-                    description=directive['action'].get('description', 'follow Nyx\'s directive'),
-                    target=directive['action'].get('target', 'environment'),
-                    weight=1.0
-                )
-        
         # If no directive or the directive doesn't specify an action, proceed with normal decision-making
 
         with trace(workflow_name=f"NPC {self.npc_id} Decision"):
@@ -790,6 +782,28 @@ class NPCAgent:
                     description="observe quietly",
                     target="environment"
                 )
+
+    async def _get_current_nyx_directive(self) -> Optional[Dict[str, Any]]:
+        """Retrieve current directive from Nyx for this NPC."""
+        try:
+            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                async with pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT directive FROM NyxNPCDirectives
+                        WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
+                        AND created_at > NOW() - INTERVAL '10 minutes'
+                        ORDER BY created_at DESC LIMIT 1
+                        """,
+                        self.user_id, self.conversation_id, self.npc_id
+                    )
+                    
+                    if row and row["directive"]:
+                        return json.loads(row["directive"])
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving Nyx directive: {e}")
+            return None
     
     async def perceive_environment(self, context: Dict[str, Any] = None) -> NPCPerception:
         """
