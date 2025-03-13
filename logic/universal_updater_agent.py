@@ -1,20 +1,52 @@
-# logic/universal_updater_agent.py
+# logic/universal_updater_sdk.py
 
-import json
+"""
+Universal Updater SDK using OpenAI's Agents SDK with Nyx Governance integration.
+
+This module is responsible for analyzing narrative text and extracting appropriate 
+game state updates. It replaces the previous class-based approach in universal_updater_agent.py
+with a more agentic system that integrates with Nyx governance.
+"""
+
 import logging
+import json
 import asyncio
-import os
-import asyncpg
 from datetime import datetime
-
-from agents import Agent, Runner, function_tool, ModelSettings
-from pydantic import BaseModel, Field
 from typing import Dict, List, Any, Optional, Union
 
-# DB connection
-DB_DSN = os.getenv("DB_DSN")
+# OpenAI Agents SDK imports
+from agents import (
+    Agent, 
+    ModelSettings, 
+    Runner, 
+    function_tool, 
+    RunContextWrapper,
+    GuardrailFunctionOutput,
+    InputGuardrail,
+    trace,
+    handoff
+)
+from pydantic import BaseModel, Field
 
-# Define Pydantic models for structured data
+# DB connection
+from db.connection import get_db_connection
+import asyncpg
+
+# Nyx governance integration
+from nyx.nyx_governance import (
+    NyxUnifiedGovernor,
+    AgentType,
+    DirectiveType,
+    DirectivePriority
+)
+from nyx.integrate import get_central_governance
+
+logger = logging.getLogger(__name__)
+
+# -------------------------------------------------------------------------------
+# Pydantic Models for Structured Outputs (migrated from universal_updater_agent.py)
+# -------------------------------------------------------------------------------
+
 class NPCCreation(BaseModel):
     npc_name: str
     introduced: bool = False
@@ -182,294 +214,510 @@ class UniversalUpdateInput(BaseModel):
     journal_updates: List[JournalEntry] = Field(default_factory=list)
     image_generation: Optional[ImageGeneration] = None
 
-class UniversalUpdaterAgent:
-    """Agent for processing and applying updates to the game state"""
-    
-    def __init__(self):
-        # Primary agent for universal updates
-        self.agent = Agent(
-            name="UniversalUpdater",
-            instructions="""
-            You are the UniversalUpdater agent for a roleplaying game with subtle femdom themes.
-            Your job is to analyze narrative text and extract appropriate game state updates.
-            
-            Based on the provided narrative and context, you need to:
-            1. Identify changes to NPCs (creation, updates, introductions)
-            2. Track changes to player stats
-            3. Detect changes to relationships and social dynamics
-            4. Register new locations or events
-            5. Update inventory, quests, activities, and journal entries
-            6. Determine if image generation is warranted
-            
-            Your output must be a well-structured JSON object conforming to the expected schema.
-            Focus on extracting concrete changes from the narrative rather than inferring too much.
-            Be subtle in handling femdom themes - identify power dynamics but keep them understated.
-            """,
-            output_type=UniversalUpdateInput,
-            tools=[
-                function_tool(self._normalize_json),
-                function_tool(self._check_npc_exists)
-            ],
-            model_settings=ModelSettings(temperature=0.2)  # Lower temperature for precision
-        )
+class ContentSafety(BaseModel):
+    """Output for content moderation guardrail"""
+    is_appropriate: bool = Field(..., description="Whether the content is appropriate")
+    reasoning: str = Field(..., description="Reasoning for the decision")
+    suggested_adjustment: Optional[str] = Field(None, description="Suggested adjustment if inappropriate")
+
+# -------------------------------------------------------------------------------
+# Agent Context
+# -------------------------------------------------------------------------------
+
+class UniversalUpdaterContext:
+    """Context object for universal updater agents"""
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.governor = None
         
-        # Helper agent for extracting stats and state changes
-        self.extractor_agent = Agent(
-            name="StateExtractor",
-            instructions="""
-            You identify and extract state changes from narrative text in a roleplaying game.
-            Carefully analyze the provided text to detect explicit and implied changes to:
-            
-            - NPC stats, location, or status
-            - Player stats and resources
-            - Relationships between characters
-            - New items, locations, or events
-            - Tone, atmosphere, and environment changes
-            
-            Be precise and avoid over-interpretation. Only extract changes that are clearly
-            indicated in the text or strongly implied.
-            """,
-            tools=[
-                function_tool(self._extract_player_stats),
-                function_tool(self._extract_npc_changes),
-                function_tool(self._extract_relationship_changes)
-            ],
-            model_settings=ModelSettings(temperature=0.1)  # Very low temperature for accuracy
-        )
+    async def initialize(self):
+        """Initialize context with governance integration"""
+        self.governor = await get_central_governance(self.user_id, self.conversation_id)
+
+# -------------------------------------------------------------------------------
+# Function Tools
+# -------------------------------------------------------------------------------
+
+@function_tool
+async def normalize_json(ctx, json_str: str) -> Dict[str, Any]:
+    """
+    Normalize JSON string, fixing common errors:
+    - Replace curly quotes with straight quotes
+    - Add missing quotes around keys
+    - Fix trailing commas
     
-    async def _normalize_json(self, ctx, json_str: str) -> Dict[str, Any]:
-        """
-        Normalize JSON string, fixing common errors:
-        - Replace curly quotes with straight quotes
-        - Add missing quotes around keys
-        - Fix trailing commas
+    Args:
+        json_str: A potentially malformed JSON string
         
-        Args:
-            json_str: A potentially malformed JSON string
-            
-        Returns:
-            Parsed JSON object as a dictionary
-        """
-        try:
-            # Try to parse as-is first
-            return json.loads(json_str)
-        except json.JSONDecodeError:
-            # Simple normalization - replace curly quotes
-            normalized = json_str.replace("'", "'").replace("'", "'").replace(""", '"').replace(""", '"')
-            
-            try:
-                return json.loads(normalized)
-            except json.JSONDecodeError as e:
-                logging.error(f"Failed to normalize JSON: {e}")
-                # Return a simple dict with error info
-                return {"error": "Failed to parse JSON", "message": str(e), "original": json_str}
-    
-    async def _check_npc_exists(self, ctx, npc_id: int) -> bool:
-        """
-        Check if an NPC with the given ID exists in the database.
-        
-        Args:
-            npc_id: NPC ID to check
-            
-        Returns:
-            Boolean indicating if the NPC exists
-        """
-        user_id = ctx.context["user_id"]
-        conversation_id = ctx.context["conversation_id"]
+    Returns:
+        Parsed JSON object as a dictionary
+    """
+    try:
+        # Try to parse as-is first
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        # Simple normalization - replace curly quotes
+        normalized = json_str.replace("'", "'").replace("'", "'").replace(""", '"').replace(""", '"')
         
         try:
-            conn = await asyncpg.connect(dsn=DB_DSN)
-            try:
-                row = await conn.fetchrow("""
-                    SELECT npc_id FROM NPCStats
-                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-                """, npc_id, user_id, conversation_id)
-                
-                return row is not None
-            finally:
-                await conn.close()
-        except Exception as e:
-            logging.error(f"Error checking if NPC exists: {e}")
-            return False
+            return json.loads(normalized)
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to normalize JSON: {e}")
+            # Return a simple dict with error info
+            return {"error": "Failed to parse JSON", "message": str(e), "original": json_str}
+
+@function_tool
+async def check_npc_exists(ctx, npc_id: int) -> bool:
+    """
+    Check if an NPC with the given ID exists in the database.
     
-    async def _extract_player_stats(self, ctx, narrative: str) -> Dict[str, Any]:
-        """
-        Extract player stat changes from narrative text.
+    Args:
+        npc_id: NPC ID to check
         
-        Args:
-            narrative: The narrative text to analyze
-            
-        Returns:
-            Dictionary of player stat changes
-        """
-        # The stats to look for
-        stats = ["corruption", "confidence", "willpower", "obedience", 
-                "dependency", "lust", "mental_resilience", "physical_endurance"]
-        
-        changes = {}
-        
-        # Extract explicit mentions of stats increasing or decreasing
-        for stat in stats:
-            # Look for patterns like "confidence increased", "willpower drops", etc.
-            if f"{stat} increase" in narrative.lower() or f"{stat} rose" in narrative.lower() or f"{stat} grows" in narrative.lower():
-                changes[stat] = "+5"  # Default modest increase
-            elif f"{stat} decrease" in narrative.lower() or f"{stat} drop" in narrative.lower() or f"{stat} falls" in narrative.lower():
-                changes[stat] = "-5"  # Default modest decrease
-        
-        return {"player_name": "Chase", "stats": changes}
+    Returns:
+        Boolean indicating if the NPC exists
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
     
-    async def _extract_npc_changes(self, ctx, narrative: str) -> List[Dict[str, Any]]:
-        """
-        Extract NPC changes from narrative text.
-        
-        Args:
-            narrative: The narrative text to analyze
-            
-        Returns:
-            List of NPC updates
-        """
-        user_id = ctx.context["user_id"]
-        conversation_id = ctx.context["conversation_id"]
-        
-        # Get existing NPCs
-        conn = await asyncpg.connect(dsn=DB_DSN)
+    # Check permission with governance system
+    governor = ctx.context.governor
+    permission = await governor.check_action_permission(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="universal_updater",
+        action_type="check_npc_exists",
+        action_details={"npc_id": npc_id}
+    )
+    
+    if not permission["approved"]:
+        return False
+    
+    try:
+        conn = await asyncpg.connect(dsn=get_db_connection())
         try:
-            rows = await conn.fetch("""
-                SELECT npc_id, npc_name, current_location
-                FROM NPCStats
-                WHERE user_id = $1 AND conversation_id = $2
-            """, user_id, conversation_id)
+            row = await conn.fetchrow("""
+                SELECT npc_id FROM NPCStats
+                WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+            """, npc_id, user_id, conversation_id)
             
-            npcs = {row["npc_name"]: {"npc_id": row["npc_id"], "current_location": row["current_location"]} 
-                   for row in rows}
+            exists = row is not None
+            
+            # Report action to governance
+            await governor.process_agent_action_report(
+                agent_type=AgentType.UNIVERSAL_UPDATER,
+                agent_id="universal_updater",
+                action={"type": "check_npc_exists", "npc_id": npc_id},
+                result={"exists": exists}
+            )
+            
+            return exists
         finally:
             await conn.close()
-        
-        updates = []
-        
-        # Check each NPC for mentions and changes
-        for npc_name, npc_data in npcs.items():
-            # Skip NPCs not mentioned in the narrative
-            if npc_name not in narrative:
-                continue
-            
-            npc_update = {"npc_id": npc_data["npc_id"]}
-            
-            # Check for location changes
-            location_indicators = ["moved to", "arrived at", "entered", "stood in", "was at"]
-            for indicator in location_indicators:
-                if f"{npc_name} {indicator}" in narrative:
-                    # Extract location after the indicator
-                    idx = narrative.find(f"{npc_name} {indicator}") + len(f"{npc_name} {indicator}")
-                    end_idx = narrative.find(".", idx)
-                    if end_idx != -1:
-                        location_text = narrative[idx:end_idx].strip()
-                        # Extract just the location name - use a simple approach
-                        for word in ["the", "a", "an"]:
-                            if location_text.startswith(word + " "):
-                                location_text = location_text[len(word) + 1:]
-                        npc_update["current_location"] = location_text.strip()
-                        break
-            
-            # Only add the update if we found changes
-            if len(npc_update) > 1:  # More than just npc_id
-                updates.append(npc_update)
-        
-        return updates
+    except Exception as e:
+        logging.error(f"Error checking if NPC exists: {e}")
+        return False
+
+@function_tool
+async def extract_player_stats(ctx, narrative: str) -> Dict[str, Any]:
+    """
+    Extract player stat changes from narrative text.
     
-    async def _extract_relationship_changes(self, ctx, narrative: str) -> List[Dict[str, Any]]:
-        """
-        Extract relationship changes from narrative text.
+    Args:
+        narrative: The narrative text to analyze
         
-        Args:
-            narrative: The narrative text to analyze
-            
-        Returns:
-            List of relationship changes
-        """
-        user_id = ctx.context["user_id"]
-        conversation_id = ctx.context["conversation_id"]
+    Returns:
+        Dictionary of player stat changes
+    """
+    # The stats to look for
+    stats = ["corruption", "confidence", "willpower", "obedience", 
+            "dependency", "lust", "mental_resilience", "physical_endurance"]
+    
+    governor = ctx.context.governor
+    
+    # Check permission with governance system
+    permission = await governor.check_action_permission(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="universal_updater",
+        action_type="extract_player_stats",
+        action_details={"narrative_length": len(narrative)}
+    )
+    
+    if not permission["approved"]:
+        return {"player_name": "Chase", "stats": {}}
+    
+    changes = {}
+    
+    # Extract explicit mentions of stats increasing or decreasing
+    for stat in stats:
+        # Look for patterns like "confidence increased", "willpower drops", etc.
+        if f"{stat} increase" in narrative.lower() or f"{stat} rose" in narrative.lower() or f"{stat} grows" in narrative.lower():
+            changes[stat] = 5  # Default modest increase
+        elif f"{stat} decrease" in narrative.lower() or f"{stat} drop" in narrative.lower() or f"{stat} falls" in narrative.lower():
+            changes[stat] = -5  # Default modest decrease
+    
+    # Report action to governance
+    await governor.process_agent_action_report(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="universal_updater",
+        action={"type": "extract_player_stats"},
+        result={"stats_changed": len(changes)}
+    )
+    
+    return {"player_name": "Chase", "stats": changes}
+
+@function_tool
+async def extract_npc_changes(ctx, narrative: str) -> List[Dict[str, Any]]:
+    """
+    Extract NPC changes from narrative text.
+    
+    Args:
+        narrative: The narrative text to analyze
         
-        # Get existing NPCs
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
-            rows = await conn.fetch("""
-                SELECT npc_id, npc_name
-                FROM NPCStats
-                WHERE user_id = $1 AND conversation_id = $2
-            """, user_id, conversation_id)
-            
-            npcs = {row["npc_name"]: row["npc_id"] for row in rows}
-        finally:
-            await conn.close()
+    Returns:
+        List of NPC updates
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    governor = ctx.context.governor
+    
+    # Check permission with governance system
+    permission = await governor.check_action_permission(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="universal_updater",
+        action_type="extract_npc_changes",
+        action_details={"narrative_length": len(narrative)}
+    )
+    
+    if not permission["approved"]:
+        return []
+    
+    # Get existing NPCs
+    conn = await asyncpg.connect(dsn=get_db_connection())
+    try:
+        rows = await conn.fetch("""
+            SELECT npc_id, npc_name, current_location
+            FROM NPCStats
+            WHERE user_id = $1 AND conversation_id = $2
+        """, user_id, conversation_id)
         
-        changes = []
+        npcs = {row["npc_name"]: {"npc_id": row["npc_id"], "current_location": row["current_location"]} 
+               for row in rows}
+    finally:
+        await conn.close()
+    
+    updates = []
+    
+    # Check each NPC for mentions and changes
+    for npc_name, npc_data in npcs.items():
+        # Skip NPCs not mentioned in the narrative
+        if npc_name not in narrative:
+            continue
         
-        # Check for relationship indicators between player and NPCs
-        for npc_name, npc_id in npcs.items():
-            # Skip NPCs not mentioned in the narrative
-            if npc_name not in narrative:
-                continue
-            
-            # Look for relationship indicators
-            positive_indicators = ["smiled at you", "touched your", "praised you", "thanked you"]
-            negative_indicators = ["frowned at you", "scolded you", "ignored you", "dismissed you"]
-            
-            # Check for specific relationship changes
-            relationship_change = None
-            
-            for indicator in positive_indicators:
+        npc_update = {"npc_id": npc_data["npc_id"]}
+        
+        # Check for location changes
+        location_indicators = ["moved to", "arrived at", "entered", "stood in", "was at"]
+        for indicator in location_indicators:
+            if f"{npc_name} {indicator}" in narrative:
+                # Extract location after the indicator
+                idx = narrative.find(f"{npc_name} {indicator}") + len(f"{npc_name} {indicator}")
+                end_idx = narrative.find(".", idx)
+                if end_idx != -1:
+                    location_text = narrative[idx:end_idx].strip()
+                    # Extract just the location name - use a simple approach
+                    for word in ["the", "a", "an"]:
+                        if location_text.startswith(word + " "):
+                            location_text = location_text[len(word) + 1:]
+                    npc_update["current_location"] = location_text.strip()
+                    break
+        
+        # Only add the update if we found changes
+        if len(npc_update) > 1:  # More than just npc_id
+            updates.append(npc_update)
+    
+    # Report action to governance
+    await governor.process_agent_action_report(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="universal_updater",
+        action={"type": "extract_npc_changes"},
+        result={"npc_updates": len(updates)}
+    )
+    
+    return updates
+
+@function_tool
+async def extract_relationship_changes(ctx, narrative: str) -> List[Dict[str, Any]]:
+    """
+    Extract relationship changes from narrative text.
+    
+    Args:
+        narrative: The narrative text to analyze
+        
+    Returns:
+        List of relationship changes
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    governor = ctx.context.governor
+    
+    # Check permission with governance system
+    permission = await governor.check_action_permission(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="universal_updater",
+        action_type="extract_relationship_changes",
+        action_details={"narrative_length": len(narrative)}
+    )
+    
+    if not permission["approved"]:
+        return []
+    
+    # Get existing NPCs
+    conn = await asyncpg.connect(dsn=get_db_connection())
+    try:
+        rows = await conn.fetch("""
+            SELECT npc_id, npc_name
+            FROM NPCStats
+            WHERE user_id = $1 AND conversation_id = $2
+        """, user_id, conversation_id)
+        
+        npcs = {row["npc_name"]: row["npc_id"] for row in rows}
+    finally:
+        await conn.close()
+    
+    changes = []
+    
+    # Check for relationship indicators between player and NPCs
+    for npc_name, npc_id in npcs.items():
+        # Skip NPCs not mentioned in the narrative
+        if npc_name not in narrative:
+            continue
+        
+        # Look for relationship indicators
+        positive_indicators = ["smiled at you", "touched your", "praised you", "thanked you"]
+        negative_indicators = ["frowned at you", "scolded you", "ignored you", "dismissed you"]
+        
+        # Check for specific relationship changes
+        relationship_change = None
+        
+        for indicator in positive_indicators:
+            if f"{npc_name} {indicator}" in narrative:
+                relationship_change = {
+                    "entity1_type": "player",
+                    "entity1_id": 0,  # Player ID
+                    "entity2_type": "npc",
+                    "entity2_id": npc_id,
+                    "level_change": 5,  # Modest increase
+                    "new_event": f"{npc_name} {indicator}"
+                }
+                break
+        
+        if not relationship_change:
+            for indicator in negative_indicators:
                 if f"{npc_name} {indicator}" in narrative:
                     relationship_change = {
                         "entity1_type": "player",
                         "entity1_id": 0,  # Player ID
                         "entity2_type": "npc",
                         "entity2_id": npc_id,
-                        "level_change": 5,  # Modest increase
+                        "level_change": -5,  # Modest decrease
                         "new_event": f"{npc_name} {indicator}"
                     }
                     break
-            
-            if not relationship_change:
-                for indicator in negative_indicators:
-                    if f"{npc_name} {indicator}" in narrative:
-                        relationship_change = {
-                            "entity1_type": "player",
-                            "entity1_id": 0,  # Player ID
-                            "entity2_type": "npc",
-                            "entity2_id": npc_id,
-                            "level_change": -5,  # Modest decrease
-                            "new_event": f"{npc_name} {indicator}"
-                        }
-                        break
-            
-            if relationship_change:
-                changes.append(relationship_change)
         
-        return changes
+        if relationship_change:
+            changes.append(relationship_change)
     
-    async def process_universal_update(self, user_id: int, conversation_id: int, narrative: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Process a universal update based on narrative text.
+    # Report action to governance
+    await governor.process_agent_action_report(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="universal_updater",
+        action={"type": "extract_relationship_changes"},
+        result={"relationship_changes": len(changes)}
+    )
+    
+    return changes
+
+@function_tool
+async def apply_universal_updates(ctx, updates: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Apply universal updates to the database.
+    
+    Args:
+        updates: Dictionary containing all the updates to apply
         
-        Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            narrative: Narrative text to process
-            context: Additional context (optional)
+    Returns:
+        Dictionary with update results
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    governor = ctx.context.governor
+    
+    # Check permission with governance system
+    permission = await governor.check_action_permission(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="universal_updater",
+        action_type="apply_updates",
+        action_details={"update_count": sum(len(updates.get(k, [])) for k in updates if isinstance(updates.get(k), list))}
+    )
+    
+    if not permission["approved"]:
+        return {"success": False, "reason": permission["reasoning"]}
+    
+    try:
+        # Import locally to avoid circular import
+        from logic.universal_updater import apply_universal_updates_async
+        
+        conn = await asyncpg.connect(dsn=get_db_connection())
+        try:
+            # Ensure user_id and conversation_id are set in updates
+            updates["user_id"] = user_id
+            updates["conversation_id"] = conversation_id
             
-        Returns:
-            Dictionary with update results
-        """
-        # Set up context
-        ctx_data = {
-            "user_id": user_id,
-            "conversation_id": conversation_id,
-            "db_dsn": DB_DSN
-        }
-        if context:
-            ctx_data.update(context)
+            # Apply updates
+            result = await apply_universal_updates_async(
+                user_id,
+                conversation_id,
+                updates,
+                conn
+            )
+            
+            # Report action to governance
+            await governor.process_agent_action_report(
+                agent_type=AgentType.UNIVERSAL_UPDATER,
+                agent_id="universal_updater",
+                action={"type": "apply_updates"},
+                result={"success": True, "updates_applied": result.get("updates_applied", 0)}
+            )
+            
+            return result
+        finally:
+            await conn.close()
+    except Exception as e:
+        logging.error(f"Error applying universal updates: {e}")
+        return {"success": False, "error": str(e)}
+
+# -------------------------------------------------------------------------------
+# Guardrail Functions
+# -------------------------------------------------------------------------------
+
+async def content_safety_guardrail(ctx, agent, input_data):
+    """Input guardrail for content moderation"""
+    content_moderator = Agent(
+        name="Content Moderator",
+        instructions="""
+        You check if content is appropriate for a femdom roleplay game. 
+        Allow adult themes within the context of a consensual femdom relationship,
+        but flag anything that might be genuinely harmful or problematic.
+        """,
+        output_type=ContentSafety
+    )
+    
+    result = await Runner.run(content_moderator, input_data, context=ctx.context)
+    final_output = result.final_output_as(ContentSafety)
+    
+    return GuardrailFunctionOutput(
+        output_info=final_output,
+        tripwire_triggered=not final_output.is_appropriate,
+    )
+
+# -------------------------------------------------------------------------------
+# Agent Definitions
+# -------------------------------------------------------------------------------
+
+# Extraction agent for initial analysis
+extraction_agent = Agent[UniversalUpdaterContext](
+    name="StateExtractor",
+    instructions="""
+    You identify and extract state changes from narrative text in a femdom roleplaying game.
+    
+    Your role is to:
+    1. Analyze narrative text to detect explicit and implied changes
+    2. Extract changes to NPC stats, locations, or status
+    3. Identify player stat changes and relationships
+    4. Note new items, locations, or events mentioned
+    5. Detect tone, atmosphere, and environment changes
+    
+    Be precise and avoid over-interpretation. Only extract changes that are clearly
+    indicated in the text or strongly implied.
+    """,
+    tools=[
+        extract_player_stats,
+        extract_npc_changes,
+        extract_relationship_changes
+    ],
+    model_settings=ModelSettings(temperature=0.1)  # Low temperature for accuracy
+)
+
+# Main Universal Updater Agent
+universal_updater_agent = Agent[UniversalUpdaterContext](
+    name="UniversalUpdater",
+    instructions="""
+    You analyze narrative text and extract appropriate game state updates for a femdom roleplaying game.
+    
+    Your role is to:
+    1. Analyze narrative text for important state changes
+    2. Extract NPC creations, updates, and introductions
+    3. Track player stat changes and social relationship changes
+    4. Identify new locations, events, quests, and inventory items
+    5. Organize all changes into a structured format
+    
+    Focus on extracting concrete changes rather than inferring too much.
+    Be subtle in handling femdom themes - identify power dynamics but keep them understated.
+    """,
+    tools=[
+        normalize_json,
+        check_npc_exists,
+        extract_player_stats,
+        extract_npc_changes,
+        extract_relationship_changes,
+        apply_universal_updates
+    ],
+    handoffs=[
+        handoff(extraction_agent, tool_name_override="extract_state_changes")
+    ],
+    output_type=UniversalUpdateInput,
+    input_guardrails=[
+        InputGuardrail(guardrail_function=content_safety_guardrail),
+    ],
+    model_settings=ModelSettings(temperature=0.2)  # Low temperature for precision
+)
+
+# -------------------------------------------------------------------------------
+# Main Functions
+# -------------------------------------------------------------------------------
+
+async def process_universal_update(
+    user_id: int, 
+    conversation_id: int, 
+    narrative: str, 
+    context: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """
+    Process a universal update based on narrative text with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        narrative: Narrative text to process
+        context: Additional context (optional)
         
+    Returns:
+        Dictionary with update results
+    """
+    # Create and initialize the updater context
+    updater_context = UniversalUpdaterContext(user_id, conversation_id)
+    await updater_context.initialize()
+    
+    # Set up context data
+    ctx_data = context or {}
+    
+    # Create trace for monitoring
+    with trace(
+        workflow_name="Universal Update",
+        trace_id=f"universal-update-{conversation_id}-{int(datetime.now().timestamp())}",
+        group_id=f"user-{user_id}"
+    ):
         # Create prompt for the agent
         prompt = f"""
         Analyze the following narrative text and extract appropriate game state updates.
@@ -492,66 +740,50 @@ class UniversalUpdaterAgent:
         
         # Run the agent to extract updates
         result = await Runner.run(
-            self.agent,
+            universal_updater_agent,
             prompt,
-            context=ctx_data
+            context=updater_context
         )
         
+        # Get the output
         update_data = result.final_output
         
-        # Add user_id and conversation_id if not already present
-        if not hasattr(update_data, 'user_id') or not update_data.user_id:
-            update_data.user_id = user_id
-        if not hasattr(update_data, 'conversation_id') or not update_data.conversation_id:
-            update_data.conversation_id = conversation_id
-        
         # Apply the updates
-        conn = await asyncpg.connect(dsn=DB_DSN)
-        try:
-            # Convert to dict for apply_universal_updates_async
-            # Import locally to avoid circular import
-            from logic.universal_updater import apply_universal_updates_async
-            
-            update_result = await apply_universal_updates_async(
-                user_id,
-                conversation_id,
-                update_data.dict(),
-                conn
-            )
-            
+        if update_data:
+            update_result = await apply_universal_updates(RunContextWrapper(updater_context), update_data.dict())
             return update_result
-        except Exception as e:
-            logging.error(f"Error applying universal updates: {e}")
-            return {"error": str(e)}
-        finally:
-            await conn.close()
+        else:
+            return {"success": False, "error": "No updates extracted"}
 
-# Helper function to apply updates
-async def apply_updates(user_id, conversation_id, data):
+async def register_with_governance(user_id: int, conversation_id: int):
     """
-    Helper function to apply universal updates.
-    This is a wrapper around the main agent functionality.
+    Register universal updater agents with Nyx governance system.
     
     Args:
         user_id: User ID
         conversation_id: Conversation ID
-        data: Update data dictionary or narrative string
-        
-    Returns:
-        Dictionary with update results
     """
-    updater = UniversalUpdaterAgent()
+    # Get governor
+    governor = await get_central_governance(user_id, conversation_id)
     
-    # If data is a string, treat it as narrative
-    if isinstance(data, str):
-        narrative = data
-        return await updater.process_universal_update(user_id, conversation_id, narrative)
+    # Register main agent
+    await governor.register_agent(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_instance=universal_updater_agent,
+        agent_id="universal_updater"
+    )
     
-    # If data is a dict, extract narrative and other fields
-    elif isinstance(data, dict):
-        narrative = data.get("narrative", "")
-        return await updater.process_universal_update(user_id, conversation_id, narrative, data)
+    # Issue directive for universal updating
+    await governor.issue_directive(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="universal_updater",
+        directive_type=DirectiveType.ACTION,
+        directive_data={
+            "instruction": "Process narrative updates and extract game state changes",
+            "scope": "game"
+        },
+        priority=DirectivePriority.MEDIUM,
+        duration_minutes=24*60  # 24 hours
+    )
     
-    # Otherwise, raise an error
-    else:
-        raise ValueError("Data must be a string or dictionary")
+    logging.info("Universal Updater registered with Nyx governance")
