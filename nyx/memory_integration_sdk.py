@@ -1326,3 +1326,144 @@ async def _format_memories_for_context(ctx, memories: List[Dict[str, Any]]) -> s
         memory_texts.append(f"I {confidence_marker}: {memory['memory_text']}")
     
     return "\n".join(memory_texts)
+
+    
+# Add to appropriate SDK module
+
+@function_tool
+async def check_maintenance_needs(ctx) -> str:
+    """
+    Check if memory maintenance is needed based on game state.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+        async with pool.acquire() as conn:
+            # Check last maintenance time
+            row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay 
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'LastMaintenanceTime'
+            """, user_id, conversation_id)
+            
+            last_maintenance_time = None
+            if row and row["value"]:
+                try:
+                    last_maintenance_time = datetime.fromisoformat(row["value"])
+                except:
+                    pass
+            
+            # Check memory count
+            memory_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM NyxMemories
+                WHERE user_id = $1 AND conversation_id = $2 AND is_archived = FALSE
+            """, user_id, conversation_id)
+            
+            # Determine if maintenance is needed
+            needs_maintenance = False
+            reason = ""
+            
+            # Time-based: Run maintenance every 6 hours or more
+            if not last_maintenance_time or (datetime.now() - last_maintenance_time).total_seconds() > 21600:  # 6 hours
+                needs_maintenance = True
+                reason = "Time-based maintenance"
+            
+            # Volume-based: Run maintenance if we have a lot of memories
+            elif memory_count > 100:
+                needs_maintenance = True
+                reason = "Volume-based maintenance"
+            
+            # Run maintenance if needed
+            if needs_maintenance:
+                # Perform maintenance
+                await perform_memory_maintenance(ctx)
+                
+                # Update last maintenance time
+                await conn.execute("""
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES ($1, $2, 'LastMaintenanceTime', $3)
+                    ON CONFLICT (user_id, conversation_id, key) 
+                    DO UPDATE SET value = $3
+                """, user_id, conversation_id, datetime.now().isoformat())
+                
+                return json.dumps({
+                    "maintenance_performed": True,
+                    "reason": reason,
+                    "memory_count": memory_count
+                })
+            else:
+                return json.dumps({
+                    "maintenance_performed": False,
+                    "memory_count": memory_count
+                })
+
+@function_tool
+async def perform_memory_maintenance(ctx) -> str:
+    """
+    Perform comprehensive memory maintenance.
+    This includes consolidation, decay, and archiving.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    # First, apply memory decay
+    decay_result = await apply_memory_decay(ctx)
+    
+    # Next, consolidate memories
+    consolidation_result = await consolidate_memories(ctx)
+    
+    # Finally, archive very old memories
+    async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+        async with pool.acquire() as conn:
+            # Archive memories that are very old and insignificant
+            archive_result = await conn.execute("""
+                UPDATE NyxMemories
+                SET is_archived = TRUE
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND significance < 3
+                AND timestamp < NOW() - INTERVAL '30 days'
+                AND times_recalled < 3
+            """, user_id, conversation_id)
+            
+            # Get maintenance statistics
+            stats = await conn.fetch("""
+                SELECT 
+                    memory_type, 
+                    COUNT(*) as count,
+                    AVG(significance) as avg_significance
+                FROM NyxMemories
+                WHERE user_id = $1 AND conversation_id = $2 AND is_archived = FALSE
+                GROUP BY memory_type
+            """, user_id, conversation_id)
+            
+            # Generate a maintenance reflection
+            maintenance_reflection = f"""
+            I've organized my memories, strengthening important ones and letting less significant ones fade.
+            This helps me maintain a clearer picture of our interactions and narrative development.
+            """
+            
+            # Store maintenance reflection
+            await conn.execute("""
+                INSERT INTO NyxMemories (
+                    user_id, conversation_id, memory_text, memory_type,
+                    significance, embedding, timestamp,
+                    tags, times_recalled, is_archived,
+                    metadata
+                )
+                VALUES ($1, $2, $3, 'reflection', 4, $4, CURRENT_TIMESTAMP, 
+                        $5, 0, FALSE, $6)
+            """,
+                user_id,
+                conversation_id,
+                maintenance_reflection,
+                await generate_embedding(maintenance_reflection),
+                ["maintenance", "reflection", "system"],
+                json.dumps({"maintenance": True, "timestamp": datetime.now().isoformat()})
+            )
+    
+    return json.dumps({
+        "decay_applied": True,
+        "consolidation_performed": True,
+        "memory_stats": [dict(row) for row in stats]
+    })
