@@ -3,3 +3,5 @@
 3. Make narrative-progression NPC specific (eg., the veil doesn't necessarily thin across the board; you can still have somewhat normal interactions with people not actively 'working on' you)
 4. Link agent to Nyx for governance
 5. Integrate other agents for context (eg setting, relationships, npcs, etc; this might be the same as #4?)
+6. rework 'influence' because it makes no sense in an immersive context. 
+7. Ensure resources are burned to ensure the roleplay can extend indefinitely.
