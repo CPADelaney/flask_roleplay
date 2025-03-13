@@ -896,9 +896,73 @@ async def reset_governance(user_id: int, conversation_id: int) -> Dict[str, Any]
         get_central_governance.cache = {}
     get_central_governance.cache[cache_key] = governance
     
+    # Register all agent systems with governance
+    registration_results = {
+        "universal_updater": False,
+        "addiction_system": False,
+        "aggregator": False,
+        "inventory_system": False,
+        "scene_manager": False,
+        "memory_system": False
+    }
+    
+    # 1. Register Universal Updater
+    try:
+        from logic.universal_updater_sdk import register_with_governance as register_updater
+        await register_updater(user_id, conversation_id)
+        registration_results["universal_updater"] = True
+        logger.info(f"Universal Updater registered for user {user_id}, conversation {conversation_id}")
+    except Exception as e:
+        logger.error(f"Error registering Universal Updater: {e}")
+    
+    # 2. Register Addiction System
+    try:
+        from logic.addiction_system_sdk import register_with_governance as register_addiction
+        await register_addiction(user_id, conversation_id)
+        registration_results["addiction_system"] = True
+        logger.info(f"Addiction System registered for user {user_id}, conversation {conversation_id}")
+    except Exception as e:
+        logger.error(f"Error registering Addiction System: {e}")
+    
+    # 3. Register Aggregator
+    try:
+        from logic.aggregator_sdk import register_with_governance as register_aggregator
+        await register_aggregator(user_id, conversation_id)
+        registration_results["aggregator"] = True
+        logger.info(f"Aggregator registered for user {user_id}, conversation {conversation_id}")
+    except Exception as e:
+        logger.error(f"Error registering Aggregator: {e}")
+    
+    # 4. Register Inventory System
+    try:
+        from logic.inventory_system_sdk import register_with_governance as register_inventory
+        await register_inventory(user_id, conversation_id)
+        registration_results["inventory_system"] = True
+        logger.info(f"Inventory System registered for user {user_id}, conversation {conversation_id}")
+    except Exception as e:
+        logger.error(f"Error registering Inventory System: {e}")
+    
+    # 5. Initialize Memory System (if separate registration is needed)
+    try:
+        from nyx.memory_integration_sdk import perform_memory_maintenance
+        await perform_memory_maintenance(user_id, conversation_id)
+        registration_results["memory_system"] = True
+        logger.info(f"Memory System maintenance performed for user {user_id}, conversation {conversation_id}")
+    except Exception as e:
+        logger.error(f"Error initializing Memory System: {e}")
+    
+    # 6. Initialize User Model (if necessary)
+    try:
+        from nyx.user_model_sdk import initialize_user_model
+        await initialize_user_model(user_id)
+        logger.info(f"User Model initialized for user {user_id}")
+    except Exception as e:
+        logger.error(f"Error initializing User Model: {e}")
+    
     return {
         "status": "success",
-        "message": f"Reset governance for user {user_id}, conversation {conversation_id}"
+        "message": f"Reset governance for user {user_id}, conversation {conversation_id}",
+        "registrations": registration_results
     }
 
 async def process_story_beat_with_governance(
