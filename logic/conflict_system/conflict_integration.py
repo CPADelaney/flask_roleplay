@@ -1,3 +1,5 @@
+# logic/conflict_system/conflict_integration.py
+
 """
 Conflict System Integration Module
 
