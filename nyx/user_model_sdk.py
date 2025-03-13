@@ -400,6 +400,47 @@ async def get_response_guidance_for_user(
         "custom_guidance": guidance.custom_guidance
     }
 
+@function_tool
+async def calculate_suggested_intensity(ctx, user_model: Dict[str, Any]) -> str:
+    """Calculate suggested intensity level based on user model."""
+    # Start with base preference from personality assessment
+    base_intensity = user_model.get("personality_assessment", {}).get("intensity_preference", 50) / 100.0
+    
+    # Adjust based on behavior patterns
+    behavior = user_model.get("behavior_patterns", {})
+    
+    # If user has shown positive response to intensity, increase
+    aggression = behavior.get("aggression", {}).get("occurrences", 0)
+    submission = behavior.get("submission", {}).get("occurrences", 0)
+    
+    # More aggressive users might want slightly higher intensity
+    if aggression > submission:
+        base_intensity += 0.1
+    
+    # Cap between 0.2 and 0.9
+    intensity = max(0.2, min(0.9, base_intensity))
+    
+    return json.dumps({"suggested_intensity": intensity})
+
+@function_tool
+async def format_behavior_patterns(ctx, behavior_patterns: Dict[str, Any]) -> str:
+    """Format behavior patterns for guidance."""
+    result = {}
+    
+    for category, data in behavior_patterns.items():
+        if "values" in data:
+            # Find most common value
+            most_common = sorted(
+                [(v, d["count"]) for v, d in data["values"].items()],
+                key=lambda x: x[1],
+                reverse=True
+            )
+            
+            if most_common:
+                result[category] = most_common[0][0]
+    
+    return json.dumps(result)
+
 async def initialize_user_model(user_id: int) -> Dict[str, Any]:
     """
     Initialize a new user model if one doesn't exist
