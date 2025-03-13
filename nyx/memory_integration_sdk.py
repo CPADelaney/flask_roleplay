@@ -314,6 +314,150 @@ a useful and well-organized memory system.""",
 
 # ===== Main Functions =====
 
+@function_tool
+async def construct_narrative(
+    ctx, 
+    topic: str, 
+    context: Optional[Dict[str, Any]] = None,
+    limit: int = 5,
+    require_chronological: bool = True
+) -> str:
+    """
+    Construct a coherent narrative from related memories.
+    
+    Args:
+        topic: The topic to construct a narrative about
+        context: Optional context information
+        limit: Maximum number of memories to include
+        require_chronological: Whether to enforce chronological ordering
+    """
+    memory_system = ctx.context.memory_system
+    context = context or {}
+    
+    # Retrieve relevant memories (using SDK approach)
+    memories_result = await retrieve_memories(ctx, query=topic, limit=limit)
+    memories = json.loads(memories_result)
+    
+    if not memories:
+        return json.dumps({
+            "narrative": f"I don't have any significant memories about {topic}.",
+            "sources": [],
+            "confidence": 0.2
+        })
+    
+    # Sort chronologically if required
+    if require_chronological and "timestamp" in memories[0]:
+        memories.sort(key=lambda x: x.get("timestamp", ""))
+    
+    # Extract memory texts
+    memory_texts = [m.get("text", "") for m in memories]
+    source_ids = [m.get("id", "") for m in memories]
+    
+    # Calculate confidence based on memory significance and recall frequency
+    avg_significance = sum(m.get("significance", 0) for m in memories) / len(memories)
+    avg_recalled = sum(m.get("times_recalled", 0) for m in memories) / len(memories)
+    base_confidence = min(0.9, (avg_significance / 10.0) * 0.7 + (min(1.0, avg_recalled / 5.0) * 0.3))
+    
+    # Generate narrative using LLM (implement with SDK approach)
+    prompt = f"""
+    As Nyx, construct a coherent narrative about "{topic}" based on these memories:
+    
+    {memory_texts}
+    
+    Confidence level: {base_confidence:.2f}
+    
+    1. Begin the narrative with an appropriate confidence marker.
+    2. Weave the memories into a coherent story, filling minimal gaps as needed.
+    3. If memories seem contradictory, acknowledge the uncertainty.
+    4. Keep it concise (under 200 words).
+    5. Write in first person as Nyx.
+    """
+    
+    # Call LLM using SDK
+    response = await Runner.run(
+        reflection_agent,
+        prompt,
+        context=ctx.context
+    )
+    
+    reflection = response.final_output_as(MemoryReflection)
+    narrative = reflection.reflection
+    
+    return json.dumps({
+        "narrative": narrative,
+        "sources": source_ids,
+        "confidence": base_confidence,
+        "memory_count": len(memories)
+    })
+
+@function_tool
+async def reconsolidate_memory(ctx, memory_id: int, context: Dict[str, Any] = None) -> str:
+    """
+    Reconsolidate (slightly alter) a memory when it's recalled.
+    This simulates how human memories change slightly each time they're accessed.
+    
+    Args:
+        memory_id: The ID of the memory to reconsolidate
+        context: Current context that might influence reconsolidation
+    """
+    context = context or {}
+    
+    # Get the memory
+    memory_data = await retrieve_memory_by_id(ctx, memory_id=memory_id)
+    memory = json.loads(memory_data)
+    
+    if not memory:
+        return json.dumps({"error": "Memory not found"})
+    
+    memory_text = memory.get("text", "")
+    significance = memory.get("significance", 5)
+    memory_type = memory.get("type", "observation")
+    
+    # Only reconsolidate episodic memories with low/medium significance
+    if memory_type != "observation" or significance >= 8:
+        return json.dumps({"status": "Memory not eligible for reconsolidation"})
+    
+    # Current emotional state can influence reconsolidation
+    current_emotion = context.get("emotional_state", "neutral")
+    
+    # Reconsolidation varies by memory age and significance
+    reconsolidation_strength = min(0.3, significance / 10.0)
+    
+    # Generate a slightly altered version (implement using SDK)
+    prompt = f"""
+    Slightly alter this memory to simulate memory reconsolidation effects.
+    
+    Original memory: {memory_text}
+    Emotional context: {current_emotion}
+    
+    Create a very slight alteration that:
+    1. Maintains the same core information and meaning
+    2. Makes subtle changes to wording or emphasis ({int(reconsolidation_strength * 100)}% alteration)
+    3. Slightly enhances aspects that align with the "{current_emotion}" emotional state
+    4. Never changes key facts, names, or locations
+    
+    Return only the altered text.
+    """
+    
+    # Call LLM using SDK
+    response = await Runner.run(
+        memory_agent,
+        prompt,
+        context=ctx.context
+    )
+    
+    altered_memory = response.text
+    
+    # Update the memory with altered text
+    # Implement using SDK approach
+    update_result = await update_memory(ctx, memory_id=memory_id, memory_text=altered_memory)
+    
+    return json.dumps({
+        "original": memory_text,
+        "altered": altered_memory,
+        "reconsolidation_strength": reconsolidation_strength
+    })
+
 async def process_memory_operation(
     user_id: int,
     conversation_id: int,
