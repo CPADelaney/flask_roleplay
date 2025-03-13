@@ -1,15 +1,13 @@
-# logic/social_links.py
-
+# file: social_links_agentic.py
 """
-FULLY COHESIVE SOCIAL LINKS & RELATIONSHIP MANAGEMENT MODULE
+Comprehensive End-to-End Social Links System with an Agentic approach using OpenAI's Agents SDK.
 
-This module provides:
-  - CRUD functions for the SocialLinks table
-  - Simple and advanced relationship dynamic operations (control, manipulation, etc.)
-  - Crossroad events and ritual logic
-  - An EnhancedRelationshipManager for multi-dimensional relationships
-  - Group/faction logic via NPCGroup and MultiNPCInteractionManager
-  - Utility functions for retrieving/setting relationship summaries, generating multi-NPC scenes, etc.
+Features:
+1) Core CRUD and advanced relationship logic for SocialLinks.
+2) Relationship dynamics, Crossroads, Ritual checking, multi-dimensional relationships.
+3) Function tools bridging your existing Python logic so the LLM-based agent can invoke them.
+4) A "SocialLinksAgent" that uses these tools.
+5) Example usage demonstrating how to run the agent in code.
 """
 
 import json
@@ -18,20 +16,29 @@ import random
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union, Any
 
-# -------------------------------------------------------------------
-# Database Connection
-# -------------------------------------------------------------------
+# ~~~~~~~~~ Agents SDK imports ~~~~~~~~~
+from agents import (
+    Agent,
+    ModelSettings,
+    Runner,
+    function_tool,
+    RunContextWrapper
+)
+from agents.models.openai_responses import OpenAIResponsesModel
+
+# ~~~~~~~~~ DB imports & any other placeholders ~~~~~~~~~
 from db.connection import get_db_connection
 
-# -------------------------------------------------------------------
-# Logging Configuration
-# -------------------------------------------------------------------
+
+# ~~~~~~~~~ Logging Configuration ~~~~~~~~~
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# -------------------------------------------------------------------
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 1) Simple Core CRUD for SocialLinks Table
-# -------------------------------------------------------------------
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 def get_social_link(
     user_id: int,
     conversation_id: int,
@@ -123,10 +130,8 @@ def create_social_link(
                 FROM SocialLinks
                 WHERE user_id=%s
                   AND conversation_id=%s
-                  AND entity1_type=%s
-                  AND entity1_id=%s
-                  AND entity2_type=%s
-                  AND entity2_id=%s
+                  AND entity1_type=%s AND entity1_id=%s
+                  AND entity2_type=%s AND entity2_id=%s
                 """,
                 (user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id),
             )
@@ -229,9 +234,10 @@ def add_link_event(
         conn.close()
 
 
-# -------------------------------------------------------------------
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 2) Relationship Dynamics, Crossroads, Rituals
-# -------------------------------------------------------------------
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 RELATIONSHIP_DYNAMICS = [
     {
         "name": "control",
@@ -452,9 +458,10 @@ SYMBOLIC_GIFTS = [
 ]
 
 
-# -------------------------------------------------------------------
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 3) Support Functions for Relationship Dynamics
-# -------------------------------------------------------------------
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 def get_primary_dynamic(dynamics: Dict[str, int]) -> str:
     """
     Determine the primary relationship dynamic based on highest numeric level in 'dynamics'.
@@ -485,9 +492,10 @@ def get_dynamic_description(dynamic_name: str, level: int) -> str:
     return "Unknown dynamic"
 
 
-# -------------------------------------------------------------------
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 4) Crossroad Checking + Ritual Checking
-# -------------------------------------------------------------------
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 def check_for_relationship_crossroads(user_id: int, conversation_id: int) -> Optional[Dict[str, Any]]:
     """
     Check if any NPC relationship has reached a dynamic level that triggers a Crossroads event.
@@ -496,7 +504,7 @@ def check_for_relationship_crossroads(user_id: int, conversation_id: int) -> Opt
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        # Gather all player-related links
+        # Gather all player-related links (assuming player is entityX_id == user_id, or you might store differently)
         cursor.execute(
             """
             SELECT link_id, entity1_type, entity1_id, entity2_type, entity2_id,
@@ -515,7 +523,6 @@ def check_for_relationship_crossroads(user_id: int, conversation_id: int) -> Opt
         for link in links:
             link_id, e1t, e1id, e2t, e2id, dynamics_json, crossroads_json = link
 
-            # Parse current dynamics
             if isinstance(dynamics_json, str):
                 try:
                     dynamics = json.loads(dynamics_json)
@@ -524,7 +531,6 @@ def check_for_relationship_crossroads(user_id: int, conversation_id: int) -> Opt
             else:
                 dynamics = dynamics_json or {}
 
-            # Parse already-experienced crossroads
             if crossroads_json:
                 if isinstance(crossroads_json, str):
                     try:
@@ -557,7 +563,7 @@ def check_for_relationship_crossroads(user_id: int, conversation_id: int) -> Opt
             # Check each Crossroads
             for crossroads_def in RELATIONSHIP_CROSSROADS:
                 if crossroads_def["name"] in experienced:
-                    continue  # Already triggered
+                    continue
                 dynamic_needed = crossroads_def["dynamic"]
                 trigger_level = crossroads_def["trigger_level"]
                 current_level = dynamics.get(dynamic_needed, 0)
@@ -783,7 +789,6 @@ def check_for_relationship_ritual(user_id: int, conversation_id: int) -> Optiona
         for link in links:
             link_id, e1t, e1id, e2t, e2id, dyn_json, rjson = link
 
-            # Parse
             if isinstance(dyn_json, str):
                 try:
                     dynamics = json.loads(dyn_json)
@@ -925,9 +930,10 @@ def check_for_relationship_ritual(user_id: int, conversation_id: int) -> Optiona
         conn.close()
 
 
-# -------------------------------------------------------------------
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 5) Summaries & Helpers
-# -------------------------------------------------------------------
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 def get_entity_name(
     conn,
     entity_type: str,
@@ -987,7 +993,6 @@ def get_relationship_summary(
 
         link_id, link_type, link_level, dyn_json, hist_json, cr_json, rit_json = row
 
-        # Parse
         if isinstance(dyn_json, str):
             try:
                 dynamics = json.loads(dyn_json)
@@ -1055,9 +1060,10 @@ def get_relationship_summary(
         conn.close()
 
 
-# -------------------------------------------------------------------
-# 6) Enhanced Relationship Manager (Multi-Dimension + Arc)
-# -------------------------------------------------------------------
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 6) Example Enhanced Classes (Optional)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 class RelationshipDimension:
     """
     A specific dimension/aspect of a relationship between entities
@@ -1067,12 +1073,10 @@ class RelationshipDimension:
         self.description = description
         self.min_value = min_value
         self.max_value = max_value
-    
+
     def get_level_description(self, value: int) -> str:
-        """Return a short descriptor based on the current value."""
         rng = self.max_value - self.min_value
         pct = (value - self.min_value) / float(rng)
-
         if pct < 0.2:
             return f"Very Low {self.name}"
         elif pct < 0.4:
@@ -1089,7 +1093,6 @@ class EnhancedRelationshipManager:
     Manages more complex relationships: multiple dimensions,
     potential transitions, tension, etc.
     """
-    # Relationship Dimensions
     RELATIONSHIP_DIMENSIONS = {
         "control": RelationshipDimension("Control", "How much one exerts control", 0, 100),
         "trust": RelationshipDimension("Trust", "Level of trust between entities", -100, 100),
@@ -1104,42 +1107,15 @@ class EnhancedRelationshipManager:
     }
 
     RELATIONSHIP_TYPES = {
-        "dominant": {
-            "primary_dimensions": ["control", "fear", "tension", "manipulation"],
-            "associated_dynamics": "Explicit power over the other, with clear dominance",
-        },
-        "submission": {
-            "primary_dimensions": ["control", "dependency", "fear", "respect"],
-            "associated_dynamics": "One entity submits willingly under another's influence",
-        },
-        "rivalry": {
-            "primary_dimensions": ["tension", "resentment", "respect", "manipulation"],
-            "associated_dynamics": "Entities compete for power or status, with complex tension",
-        },
-        "alliance": {
-            "primary_dimensions": ["trust", "respect", "manipulation"],
-            "associated_dynamics": "Entities cooperate for mutual benefit, though power dynamics remain",
-        },
-        "intimate": {
-            "primary_dimensions": ["intimacy", "dependency", "obsession", "manipulation"],
-            "associated_dynamics": "Deep emotional/physical connection, often with power imbalance",
-        },
-        "familial": {
-            "primary_dimensions": ["control", "dependency", "respect", "resentment"],
-            "associated_dynamics": "Family-like dynamic with inherent power structures",
-        },
-        "mentor": {
-            "primary_dimensions": ["control", "respect", "dependency"],
-            "associated_dynamics": "One guides and shapes the other, with knowledge as power",
-        },
-        "enmity": {
-            "primary_dimensions": ["fear", "resentment", "tension"],
-            "associated_dynamics": "Active hostility or antagonism",
-        },
-        "neutral": {
-            "primary_dimensions": [],
-            "associated_dynamics": "No strong, defining dynamic (default)",
-        },
+        "dominant": {"primary_dimensions": ["control", "fear", "tension", "manipulation"]},
+        "submission": {"primary_dimensions": ["control", "dependency", "fear", "respect"]},
+        "rivalry": {"primary_dimensions": ["tension", "resentment", "respect", "manipulation"]},
+        "alliance": {"primary_dimensions": ["trust", "respect", "manipulation"]},
+        "intimate": {"primary_dimensions": ["intimacy", "dependency", "obsession", "manipulation"]},
+        "familial": {"primary_dimensions": ["control", "dependency", "respect", "resentment"]},
+        "mentor": {"primary_dimensions": ["control", "respect", "dependency"]},
+        "enmity": {"primary_dimensions": ["fear", "resentment", "tension"]},
+        "neutral": {"primary_dimensions": []},
     }
 
     RELATIONSHIP_TRANSITIONS = [
@@ -1148,57 +1124,50 @@ class EnhancedRelationshipManager:
             "from_type": "dominant",
             "to_type": "submission",
             "required_dimensions": {"dependency": 70, "fear": 50, "respect": 40},
-            "description": "The controlled entity fully accepts a submissive role",
         },
         {
             "name": "Rivalry to Alliance",
             "from_type": "rivalry",
             "to_type": "alliance",
             "required_dimensions": {"trust": 50, "respect": 60, "tension": -40},
-            "description": "Former rivals find mutual benefit in cooperation",
         },
         {
             "name": "Alliance to Betrayal",
             "from_type": "alliance",
             "to_type": "enmity",
             "required_dimensions": {"trust": -60, "resentment": 70, "manipulation": 80},
-            "description": "Trust breaks as manipulation is revealed, turning allies into enemies",
         },
         {
             "name": "Mentor to Intimate",
             "from_type": "mentor",
             "to_type": "intimate",
             "required_dimensions": {"intimacy": 70, "obsession": 60, "dependency": 50},
-            "description": "A mentoring relationship crosses personal boundaries, becoming intimate",
         },
         {
             "name": "Enmity to Submission",
             "from_type": "enmity",
             "to_type": "submission",
             "required_dimensions": {"fear": 80, "control": 70, "dependency": 60},
-            "description": "Hatred transforms into fearful submission as control intensifies",
         },
-    }
-
-    # (You can implement advanced create_relationship, update, etc. here if desired.)
+    ]
 
 
-# -------------------------------------------------------------------
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 7) NPCGroup & MultiNPCInteractionManager
-# -------------------------------------------------------------------
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 class NPCGroup:
     """
     Represents a group of NPCs with shared dynamics.
     """
-
     def __init__(self, name: str, description: str, members=None, dynamics=None):
         self.name = name
         self.description = description
-        self.members = members or []
-        self.dynamics = dynamics or {}
+        self.members = members or []   # list of dicts: [{npc_id, npc_name, role, etc.}]
+        self.dynamics = dynamics or {} # e.g. {"hierarchy": 50, "cohesion": 30, ...}
         self.creation_date = datetime.now().isoformat()
         self.last_activity = None
-        self.shared_history = []
+        self.shared_history = []       # record of group events
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -1213,39 +1182,39 @@ class NPCGroup:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]):
-        grp = cls(data["name"], data["description"], data["members"], data["dynamics"])
+        grp = cls(data["name"], data["description"], data.get("members", []), data.get("dynamics", {}))
         grp.creation_date = data.get("creation_date", datetime.now().isoformat())
-        grp.last_activity = data.get("last_activity")
+        grp.last_activity = data.get("last_activity", None)
         grp.shared_history = data.get("shared_history", [])
         return grp
 
 
 class MultiNPCInteractionManager:
     """
-    Manages interactions between multiple NPCs, including group dynamics,
-    factional behavior, and coordinated activities (e.g., multi-NPC scenes).
+    Manages interactions between multiple NPCs, including group dynamics, factional behavior,
+    and coordinated activities (e.g., multi-NPC scenes).
     """
 
     GROUP_DYNAMICS = {
         "hierarchy": {
-            "description": "Formalized power structure within the group",
-            "effects": "Determines chain of command and overrides"
+            "description": "Formalized power structure in the group",
+            "effects": "Chain of command and override authority"
         },
         "cohesion": {
-            "description": "How unified the group is in goals and behavior",
-            "effects": "Affects synergy vs. internal friction"
+            "description": "How unified the group is in goals/behavior",
+            "effects": "Synergy vs. friction; influences group stability"
         },
         "secrecy": {
             "description": "How much the group hides from outsiders",
-            "effects": "Limits what info is shared with non-members"
+            "effects": "Information control and shared secrecy"
         },
         "territoriality": {
             "description": "Protectiveness over members/resources",
-            "effects": "Reactions to perceived threats"
+            "effects": "Reactions to perceived threats or intrusion"
         },
         "exclusivity": {
-            "description": "How difficult it is to join/be accepted",
-            "effects": "Determines how new members are tested"
+            "description": "Difficulty to join / acceptance threshold",
+            "effects": "Initiation tests, membership gating"
         },
     }
 
@@ -1253,59 +1222,56 @@ class MultiNPCInteractionManager:
         "coordinated": {
             "description": "NPCs act in a coordinated, deliberate manner",
             "requirements": {"cohesion": 70},
-            "dialogue_style": "NPCs build on each other's statements"
+            "dialogue_style": "NPCs build on each other's statements smoothly."
         },
         "hierarchical": {
             "description": "NPCs follow a clear status hierarchy",
             "requirements": {"hierarchy": 70},
-            "dialogue_style": "Lower-status NPCs defer to higher-status NPCs"
+            "dialogue_style": "Lower-status NPCs defer to higher-status NPCs."
         },
         "competitive": {
-            "description": "NPCs compete for attention/dominance",
-            "requirements": {"cohesion": -40, "hierarchy": -30},
-            "dialogue_style": "NPCs interrupt, contradict, outshine each other"
+            "description": "NPCs compete for dominance or attention",
+            "requirements": {"cohesion": -40, "hierarchy": -30},  # example negative threshold
+            "dialogue_style": "NPCs interrupt or attempt to outdo each other."
         },
         "consensus": {
             "description": "NPCs seek group agreement before acting",
             "requirements": {"cohesion": 60, "hierarchy": -40},
-            "dialogue_style": "NPCs check with each other, gather opinions"
+            "dialogue_style": "NPCs exchange opinions politely, aiming for unity."
         },
         "protective": {
-            "description": "NPCs protect and support one target",
+            "description": "NPCs protect and defend one target or idea",
             "requirements": {"territoriality": 70},
-            "dialogue_style": "NPCs focus conversation around protecting a member"
+            "dialogue_style": "NPCs focus on ensuring safety or enforcing boundaries."
         },
         "exclusionary": {
-            "description": "NPCs deliberately exclude someone (often the player)",
+            "description": "NPCs deliberately exclude someone (the player or another NPC)",
             "requirements": {"exclusivity": 70},
-            "dialogue_style": "NPCs speak in coded references or inside jokes"
+            "dialogue_style": "NPCs speak in code or inside references, ignoring outsiders."
         },
         "manipulative": {
             "description": "NPCs coordinate to manipulate a target",
             "requirements": {"cohesion": 60, "secrecy": 70},
-            "dialogue_style": "NPCs set conversational traps, do good-cop/bad-cop, etc."
+            "dialogue_style": "NPCs set conversational traps, do good-cop/bad-cop routines."
         },
     }
+
 
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
 
     def create_npc_group(
-        self,
-        name: str,
-        description: str,
-        member_ids: List[int]
+        self, name: str, description: str, member_ids: List[int]
     ) -> Dict[str, Any]:
         """
-        Create a new NPC group, store in DB, and set up relationships among members if needed.
+        Create a new NPC group in the DB, set up relationships among members if needed.
         """
         conn = get_db_connection()
         cursor = conn.cursor()
         try:
-            member_data = []
-
             # Validate each NPC
+            members_data = []
             for npc_id in member_ids:
                 cursor.execute(
                     """
@@ -1313,124 +1279,69 @@ class MultiNPCInteractionManager:
                     FROM NPCStats
                     WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
                     """,
-                    (self.user_id, self.conversation_id, npc_id),
+                    (self.user_id, self.conversation_id, npc_id)
                 )
                 row = cursor.fetchone()
                 if not row:
-                    return {"error": f"NPC with id {npc_id} not found"}
-                member_data.append({
+                    return {"error": f"NPC with ID {npc_id} not found in conversation {self.conversation_id}."}
+                members_data.append({
                     "npc_id": row[0],
                     "npc_name": row[1],
                     "dominance": row[2],
                     "cruelty": row[3],
-                    "joined_date": datetime.now().isoformat(),
-                    "status": "active",
                     "role": "member",
+                    "status": "active",
+                    "joined_date": datetime.now().isoformat()
                 })
 
-            # Generate initial group dynamics somewhat arbitrarily
-            dynamics = {
-                "hierarchy": random.randint(30, 70),
-                "cohesion": random.randint(30, 70),
-                "secrecy": random.randint(30, 70),
-                "territoriality": random.randint(30, 70),
-                "exclusivity": random.randint(30, 70),
-            }
+            # Generate initial group dynamics
+            dynamics = {}
+            for dyn_key in self.GROUP_DYNAMICS.keys():
+                dynamics[dyn_key] = random.randint(20, 80)
 
-            # Possibly define a single leader if dominance range is wide
-            if len(member_data) > 1:
-                sorted_mem = sorted(member_data, key=lambda x: x["dominance"], reverse=True)
-                d_range = sorted_mem[0]["dominance"] - sorted_mem[-1]["dominance"]
-                if d_range > 40:
-                    dynamics["hierarchy"] = random.randint(70, 90)
-                    sorted_mem[0]["role"] = "leader"
-                elif d_range < 10:
-                    dynamics["hierarchy"] = random.randint(10, 30)
+            # Possibly assign a leader if hierarchy is high
+            if len(members_data) > 1 and dynamics["hierarchy"] > 60:
+                # sort by dominance
+                sorted_mem = sorted(members_data, key=lambda x: x["dominance"], reverse=True)
+                # top one is leader, next few can be lieutenants
+                sorted_mem[0]["role"] = "leader"
+                # you can pick additional roles or none
+                # re-assign
+                members_data = sorted_mem
 
-                # Assign roles if hierarchy is high
-                if dynamics["hierarchy"] > 50:
-                    for i, m in enumerate(sorted_mem):
-                        if i == 0:
-                            m["role"] = "leader"
-                        elif i < len(sorted_mem) // 3:
-                            m["role"] = "lieutenant"
-                        else:
-                            m["role"] = "subordinate"
+            # Create NPCGroup object
+            group_obj = NPCGroup(name, description, members_data, dynamics)
 
-            group_obj = NPCGroup(name, description, member_data, dynamics)
-
-            # Insert group into DB
+            # Insert into table
             cursor.execute(
                 """
                 INSERT INTO NPCGroups (user_id, conversation_id, group_name, group_data)
                 VALUES (%s, %s, %s, %s)
                 RETURNING group_id
                 """,
-                (self.user_id, self.conversation_id, name, json.dumps(group_obj.to_dict())),
+                (self.user_id, self.conversation_id, name, json.dumps(group_obj.to_dict()))
             )
             group_id = cursor.fetchone()[0]
 
-            # Create relationships between members if missing
-            for i in range(len(member_ids)):
-                for j in range(i + 1, len(member_ids)):
-                    e1 = member_ids[i]
-                    e2 = member_ids[j]
-                    cursor.execute(
-                        """
-                        SELECT link_id
-                        FROM SocialLinks
-                        WHERE user_id=%s AND conversation_id=%s
-                        AND (
-                            (entity1_type='npc' AND entity1_id=%s AND entity2_type='npc' AND entity2_id=%s)
-                            OR
-                            (entity1_type='npc' AND entity1_id=%s AND entity2_type='npc' AND entity2_id=%s)
-                        )
-                        """,
-                        (self.user_id, self.conversation_id, e1, e2, e2, e1),
-                    )
-                    rel_row = cursor.fetchone()
-                    if not rel_row:
-                        # create with "alliance" if cohesion>50, else "neutral"
-                        rel_type = "alliance" if dynamics["cohesion"] > 50 else "neutral"
-                        create_social_link(
-                            self.user_id, self.conversation_id,
-                            "npc", e1, "npc", e2,
-                            rel_type
-                        )
-
-            # Add memory logs to each NPC about joining the group
-            for mem in member_data:
-                cursor.execute(
-                    """
-                    UPDATE NPCStats
-                    SET memory = COALESCE(memory, '[]'::jsonb) || to_jsonb(%s::text)
-                    WHERE user_id=%s AND conversation_id=%s AND npc_id=%s
-                    """,
-                    (f"I joined the group '{name}'. {description}", self.user_id, self.conversation_id, mem["npc_id"]),
-                )
-
             conn.commit()
-            return {
-                "group_id": group_id,
-                "name": name,
-                "member_count": len(member_data),
-                "dynamics": dynamics,
-                "message": "Group created successfully",
-            }
+            return {"success": True, "group_id": group_id, "message": f"Group '{name}' created successfully."}
         except Exception as e:
             conn.rollback()
-            logger.error(f"Error creating NPC group: {e}")
+            logger.error(f"Error creating group: {e}")
             return {"error": str(e)}
         finally:
             cursor.close()
             conn.close()
 
-    def get_npc_group(self, group_id: int = None, group_name: str = None) -> Dict[str, Any]:
+    def get_npc_group(
+        self, group_id: Optional[int] = None, group_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
-        Retrieve an NPC group by ID or name.
+        Retrieve an NPC group by group_id or group_name. 
+        Returns the group data or an error if not found.
         """
         if not group_id and not group_name:
-            return {"error": "Must provide either group_id or group_name"}
+            return {"error": "Must provide either group_id or group_name."}
 
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1455,33 +1366,450 @@ class MultiNPCInteractionManager:
                 )
             row = cursor.fetchone()
             if not row:
-                return {"error": "Group not found"}
+                return {"error": f"Group not found."}
 
-            group_id, group_name, group_data_json = row
-            group_data = {}
-            if group_data_json:
-                if isinstance(group_data_json, str):
-                    try:
-                        group_data = json.loads(group_data_json)
-                    except json.JSONDecodeError:
-                        group_data = {}
-                else:
-                    group_data = group_data_json
-
-            group = NPCGroup.from_dict(group_data)
+            real_group_id, real_group_name, group_data_json = row
+            if isinstance(group_data_json, str):
+                group_dict = json.loads(group_data_json)
+            else:
+                group_dict = group_data_json
+            # Reconstruct NPCGroup object
+            group_obj = NPCGroup.from_dict(group_dict)
             return {
-                "group_id": group_id,
-                "name": group_name,
-                "description": group.description,
-                "members": group.members,
-                "dynamics": group.dynamics,
-                "creation_date": group.creation_date,
-                "last_activity": group.last_activity,
-                "shared_history": group.shared_history
+                "success": True,
+                "group_id": real_group_id,
+                "group_name": real_group_name,
+                "group_data": group_obj.to_dict(),
             }
         except Exception as e:
-            logger.error(f"Error getting NPC group: {e}")
+            logger.error(f"Error retrieving group: {e}")
             return {"error": str(e)}
         finally:
             cursor.close()
             conn.close()
+
+    def update_group_dynamics(
+        self, group_id: int, changes: Dict[str, int]
+    ) -> Dict[str, Any]:
+        """
+        Apply increments/decrements to the group's dynamics. 
+        Example: changes = {"cohesion": +10, "hierarchy": -5}
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            # fetch existing
+            cursor.execute(
+                """
+                SELECT group_data
+                FROM NPCGroups
+                WHERE user_id=%s AND conversation_id=%s AND group_id=%s
+                """,
+                (self.user_id, self.conversation_id, group_id)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return {"error": "Group not found."}
+            group_data_json = row[0]
+
+            if isinstance(group_data_json, str):
+                group_dict = json.loads(group_data_json)
+            else:
+                group_dict = group_data_json
+
+            # Update
+            group_obj = NPCGroup.from_dict(group_dict)
+            for dyn_key, delta in changes.items():
+                if dyn_key in group_obj.dynamics:
+                    current = group_obj.dynamics[dyn_key]
+                    new_val = max(0, min(100, current + delta))
+                    group_obj.dynamics[dyn_key] = new_val
+
+            # record a quick log
+            group_obj.shared_history.append({
+                "timestamp": datetime.now().isoformat(),
+                "type": "dynamics_update",
+                "details": changes
+            })
+            group_obj.last_activity = datetime.now().isoformat()
+
+            # store back
+            updated_json = json.dumps(group_obj.to_dict())
+            cursor.execute(
+                """
+                UPDATE NPCGroups
+                SET group_data = %s
+                WHERE user_id=%s AND conversation_id=%s AND group_id=%s
+                """,
+                (updated_json, self.user_id, self.conversation_id, group_id)
+            )
+            conn.commit()
+            return {"success": True, "message": "Group dynamics updated."}
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error updating group dynamics: {e}")
+            return {"error": str(e)}
+        finally:
+            cursor.close()
+            conn.close()
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # 2) Determining Interaction Styles & Producing Scenes
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    def determine_interaction_style(self, group_obj: NPCGroup) -> str:
+        """
+        Based on the group's dynamics, pick an appropriate style 
+        from INTERACTION_STYLES if requirements are met.
+        If multiple styles qualify, pick the 'highest priority' or random among them.
+        If none match, default to "neutral."
+        """
+        candidates = []
+        for style_name, style_def in self.INTERACTION_STYLES.items():
+            reqs = style_def["requirements"]
+            meets_all = True
+            for dyn_key, threshold in reqs.items():
+                current_val = group_obj.dynamics.get(dyn_key, 0)
+                # If threshold is positive, require current_val >= threshold
+                # If threshold is negative, require current_val <= abs(threshold)
+                if threshold >= 0 and current_val < threshold:
+                    meets_all = False
+                    break
+                elif threshold < 0 and current_val > abs(threshold):
+                    meets_all = False
+                    break
+            if meets_all:
+                candidates.append(style_name)
+
+        if not candidates:
+            return "neutral"
+        # pick first or random
+        return random.choice(candidates)
+
+    def produce_multi_npc_scene(
+        self,
+        group_id: int,
+        topic: str = "General conversation",
+        extra_context: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Creates a sample scene or conversation snippet among the NPCs in the group, 
+        reflecting the chosen interaction style.
+        """
+        group_info = self.get_npc_group(group_id=group_id)
+        if "error" in group_info:
+            return {"error": group_info["error"]}
+
+        group_data = group_info["group_data"]
+        group_obj = NPCGroup.from_dict(group_data)
+
+        # Determine style
+        style = self.determine_interaction_style(group_obj)
+        style_def = self.INTERACTION_STYLES.get(style, {})
+        dialogue_style_desc = style_def.get("dialogue_style", "Plain interaction.")
+        desc = style_def.get("description", "")
+
+        # Build a short demonstration of how they'd talk
+        # We'll just do a naive approach: list each NPC's 'line' in order
+        random.shuffle(group_obj.members)
+        lines = []
+        for mem in group_obj.members[:3]:  # limit to 3 for brevity
+            name = mem["npc_name"]
+            role = mem.get("role", "member")
+            line = f"{name} ({role}): " \
+                   f"[Responding to {topic} with style '{style}']"
+            lines.append(line)
+
+        # optionally store a small record in the group's shared history
+        group_obj.shared_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "type": "scene_example",
+            "style": style,
+            "topic": topic,
+            "lines": lines
+        })
+        group_obj.last_activity = datetime.now().isoformat()
+
+        # persist changes
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            updated_json = json.dumps(group_obj.to_dict())
+            cursor.execute(
+                """
+                UPDATE NPCGroups
+                SET group_data = %s
+                WHERE user_id=%s AND conversation_id=%s AND group_id=%s
+                """,
+                (updated_json, self.user_id, self.conversation_id, group_id)
+            )
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error storing scene in group: {e}")
+        finally:
+            cursor.close()
+            conn.close()
+
+        scene_text = "\n".join(lines)
+        return {
+            "success": True,
+            "interaction_style": style,
+            "style_description": desc,
+            "dialogue_style": dialogue_style_desc,
+            "scene_preview": scene_text
+        }
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # 3) Additional Utility Methods
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    def list_all_groups(self) -> Dict[str, Any]:
+        """
+        Return a list of all NPC groups for the current user/conversation.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT group_id, group_name, group_data
+                FROM NPCGroups
+                WHERE user_id=%s AND conversation_id=%s
+                """,
+                (self.user_id, self.conversation_id)
+            )
+            rows = cursor.fetchall()
+            results = []
+            for row in rows:
+                g_id, g_name, g_data = row
+                if isinstance(g_data, str):
+                    g_dict = json.loads(g_data)
+                else:
+                    g_dict = g_data
+                results.append({
+                    "group_id": g_id,
+                    "group_name": g_name,
+                    "data": g_dict
+                })
+            return {"groups": results, "count": len(results)}
+        except Exception as e:
+            logger.error(f"Error listing groups: {e}")
+            return {"error": str(e)}
+        finally:
+            cursor.close()
+            conn.close()
+
+    def delete_group(self, group_id: int) -> Dict[str, Any]:
+        """
+        Deletes an NPC group from the DB.
+        NOTE: Potentially also handle cleanup of relationships or references.
+        """
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                DELETE FROM NPCGroups
+                WHERE user_id=%s AND conversation_id=%s AND group_id=%s
+                """,
+                (self.user_id, self.conversation_id, group_id)
+            )
+            if cursor.rowcount < 1:
+                return {"error": "No group found or deletion failed."}
+            conn.commit()
+            return {"success": True, "message": f"Group {group_id} deleted."}
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error deleting group: {e}")
+            return {"error": str(e)}
+        finally:
+            cursor.close()
+            conn.close()
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 8) Tools (function_tool) that the agent can call
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+@function_tool
+async def get_social_link_tool(
+    ctx: RunContextWrapper,
+    user_id: int,
+    conversation_id: int,
+    entity1_type: str,
+    entity1_id: int,
+    entity2_type: str,
+    entity2_id: int
+) -> dict:
+    """
+    Get an existing social link's details if it exists.
+    """
+    link = get_social_link(
+        user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id
+    )
+    if link is None:
+        return {"error": "No link found"}
+    return link
+
+
+@function_tool
+async def create_social_link_tool(
+    ctx: RunContextWrapper,
+    user_id: int,
+    conversation_id: int,
+    entity1_type: str,
+    entity1_id: int,
+    entity2_type: str,
+    entity2_id: int,
+    link_type: str = "neutral",
+    link_level: int = 0
+) -> dict:
+    """
+    Create a new social link, or return the existing link_id if it already exists.
+    """
+    link_id = create_social_link(
+        user_id, conversation_id, entity1_type, entity1_id,
+        entity2_type, entity2_id, link_type, link_level
+    )
+    return {"link_id": link_id, "message": "Link created or fetched."}
+
+
+@function_tool
+async def update_link_type_and_level_tool(
+    ctx: RunContextWrapper,
+    user_id: int,
+    conversation_id: int,
+    link_id: int,
+    new_type: str = None,
+    level_change: int = 0
+) -> dict:
+    """
+    Update an existing link's type and/or level. 
+    Returns updated info or an error if not found.
+    """
+    result = update_link_type_and_level(user_id, conversation_id, link_id, new_type, level_change)
+    if result is None:
+        return {"error": "Link not found or update failed"}
+    return result
+
+
+@function_tool
+async def add_link_event_tool(
+    ctx: RunContextWrapper,
+    user_id: int,
+    conversation_id: int,
+    link_id: int,
+    event_text: str
+) -> dict:
+    """
+    Append an event string to a link's link_history.
+    """
+    add_link_event(user_id, conversation_id, link_id, event_text)
+    return {"success": True, "message": "Event added to link_history"}
+
+
+@function_tool
+async def check_for_crossroads_tool(
+    ctx: RunContextWrapper,
+    user_id: int,
+    conversation_id: int
+) -> dict:
+    """
+    Check if there's a relationship crossroads event triggered. 
+    Returns the first triggered crossroads or None.
+    """
+    result = check_for_relationship_crossroads(user_id, conversation_id)
+    if not result:
+        return {"message": "No crossroads triggered"}
+    return result
+
+
+@function_tool
+async def apply_crossroads_choice_tool(
+    ctx: RunContextWrapper,
+    user_id: int,
+    conversation_id: int,
+    link_id: int,
+    crossroads_name: str,
+    choice_index: int
+) -> dict:
+    """
+    Apply a chosen effect from a triggered crossroads.
+    """
+    return apply_crossroads_choice(
+        user_id, conversation_id, link_id, crossroads_name, choice_index
+    )
+
+
+@function_tool
+async def check_for_ritual_tool(
+    ctx: RunContextWrapper,
+    user_id: int,
+    conversation_id: int
+) -> dict:
+    """
+    Check if there's a relationship ritual event triggered.
+    Returns the first triggered ritual or None.
+    """
+    result = check_for_relationship_ritual(user_id, conversation_id)
+    if not result:
+        return {"message": "No ritual triggered"}
+    return result
+
+
+@function_tool
+async def get_relationship_summary_tool(
+    ctx: RunContextWrapper,
+    user_id: int,
+    conversation_id: int,
+    entity1_type: str,
+    entity1_id: int,
+    entity2_type: str,
+    entity2_id: int
+) -> dict:
+    """
+    Get a summary of the relationship (type, level, last 5 history entries, etc.).
+    """
+    summary = get_relationship_summary(
+        user_id, conversation_id, entity1_type, entity1_id, entity2_type, entity2_id
+    )
+    if not summary:
+        return {"error": "No relationship found"}
+    return summary
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 9) The Agent: "SocialLinksAgent"
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+SocialLinksAgent = Agent(
+    name="SocialLinksAgent",
+    instructions=(
+        "You are a specialized 'Social Links Agent' for a persona-like system. "
+        "You have function tools that let you manage relationships:\n"
+        " - get_social_link_tool(...)\n"
+        " - create_social_link_tool(...)\n"
+        " - update_link_type_and_level_tool(...)\n"
+        " - add_link_event_tool(...)\n"
+        " - check_for_crossroads_tool(...)\n"
+        " - apply_crossroads_choice_tool(...)\n"
+        " - check_for_ritual_tool(...)\n"
+        " - get_relationship_summary_tool(...)\n\n"
+        "Use these tools to retrieve or update relationship data, trigger or apply crossroads, or check for rituals. "
+        "Return helpful final text or JSON summarizing your result."
+    ),
+    model=OpenAIResponsesModel(model="o3-mini"),  # or "gpt-4o", "gpt-3.5-turbo", etc.
+    model_settings=ModelSettings(temperature=0.5),
+    tools=[
+        get_social_link_tool,
+        create_social_link_tool,
+        update_link_type_and_level_tool,
+        add_link_event_tool,
+        check_for_crossroads_tool,
+        apply_crossroads_choice_tool,
+        check_for_ritual_tool,
+        get_relationship_summary_tool
+    ],
+    output_type=None
+)
