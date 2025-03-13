@@ -738,6 +738,21 @@ class NPCAgent:
         Returns:
             The chosen action
         """
+        # Check if we have a directive from Nyx
+        if hasattr(self.context, 'current_directive') and self.context.current_directive:
+            directive = self.context.current_directive
+            
+            # If Nyx has specified an explicit action, use it
+            if 'action' in directive:
+                return NPCAction(
+                    type=directive['action'].get('type', 'observe'),
+                    description=directive['action'].get('description', 'follow Nyx\'s directive'),
+                    target=directive['action'].get('target', 'environment'),
+                    weight=1.0
+                )
+        
+        # If no directive or the directive doesn't specify an action, proceed with normal decision-making
+
         with trace(workflow_name=f"NPC {self.npc_id} Decision"):
             perf_start = time.perf_counter()
             
