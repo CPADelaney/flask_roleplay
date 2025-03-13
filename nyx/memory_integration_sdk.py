@@ -700,3 +700,629 @@ async def create_memory_reflection_on_topic(
         "memory_id": memory_id,
         "topic": topic
     }
+
+# Add to memory_integration_sdk.py
+
+@function_tool
+async def consolidate_memories(ctx) -> str:
+    """
+    Consolidate related memories into higher-level semantic memories.
+    This simulates how episodic memories transform into semantic knowledge over time.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+        async with pool.acquire() as conn:
+            # Find clusters of related memories to consolidate
+            memory_rows = await conn.fetch("""
+                SELECT id, memory_text, tags, embedding
+                FROM NyxMemories
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND memory_type = 'observation'
+                AND is_archived = FALSE
+                AND timestamp < NOW() - INTERVAL '3 days'
+                AND times_recalled >= 2
+            """, user_id, conversation_id)
+            
+            if not memory_rows:
+                return "No memories found suitable for consolidation"
+                
+            # Convert to easily workable format
+            memories = []
+            for row in memory_rows:
+                memories.append({
+                    "id": row["id"],
+                    "text": row["memory_text"],
+                    "tags": row["tags"],
+                    "embedding": row["embedding"],
+                })
+            
+            # Find clusters using embedding similarity
+            clusters = cluster_memories_by_similarity(memories)
+            
+            # For each significant cluster, create a consolidated memory
+            consolidated_count = 0
+            for cluster in clusters:
+                if len(cluster) >= 3:  # Only consolidate clusters with several memories
+                    cluster_ids = [m["id"] for m in cluster]
+                    cluster_texts = [m["text"] for m in cluster]
+                    
+                    # Extract all tags from the cluster
+                    all_tags = []
+                    for m in cluster:
+                        all_tags.extend(m.get("tags", []))
+                    unique_tags = list(set(all_tags))
+                    
+                    # Generate a consolidated summary
+                    summary = await generate_consolidated_summary(cluster_texts)
+                    
+                    # Store the consolidated memory
+                    consolidated_id = await conn.fetchval("""
+                        INSERT INTO NyxMemories (
+                            user_id, conversation_id, memory_text, memory_type,
+                            significance, embedding, timestamp,
+                            tags, times_recalled, is_archived,
+                            metadata
+                        )
+                        VALUES ($1, $2, $3, 'consolidated', 6, $4, CURRENT_TIMESTAMP, 
+                                $5, 0, FALSE, $6)
+                        RETURNING id
+                    """,
+                        user_id,
+                        conversation_id,
+                        summary,
+                        await generate_embedding(summary),
+                        unique_tags + ["consolidated"],
+                        json.dumps({"source_memory_ids": cluster_ids})
+                    )
+                    
+                    # Update the original memories to mark them as consolidated
+                    # But don't archive them yet - they're still valuable
+                    await conn.execute("""
+                        UPDATE NyxMemories
+                        SET is_consolidated = TRUE
+                        WHERE id = ANY($1)
+                    """, cluster_ids)
+                    
+                    consolidated_count += 1
+    
+    return f"Created {consolidated_count} consolidated memories from {len(clusters)} memory clusters"
+
+@function_tool
+async def apply_memory_decay(ctx) -> str:
+    """
+    Apply decay to memories based on age, significance, and recall frequency.
+    This simulates how human memories fade over time, especially less important ones.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+        async with pool.acquire() as conn:
+            # Get memories that haven't been recalled recently
+            memory_rows = await conn.fetch("""
+                SELECT id, significance, times_recalled, 
+                       EXTRACT(EPOCH FROM (NOW() - timestamp)) / 86400 AS days_old,
+                       EXTRACT(EPOCH FROM (NOW() - COALESCE(last_recalled, timestamp))) / 86400 AS days_since_recall
+                FROM NyxMemories
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND is_archived = FALSE
+                AND memory_type = 'observation'  -- Only decay episodic memories
+            """, user_id, conversation_id)
+            
+            decayed_count = 0
+            archived_count = 0
+            
+            for row in memory_rows:
+                memory_id = row["id"]
+                significance = row["significance"]
+                times_recalled = row["times_recalled"]
+                days_old = row["days_old"]
+                days_since_recall = row["days_since_recall"]
+                
+                # Calculate decay factors
+                age_factor = min(1.0, days_old / 30.0)  # Older memories decay more
+                recall_factor = max(0.0, 1.0 - (times_recalled / 10.0))  # Frequently recalled memories decay less
+                
+                # How much to reduce significance
+                # Memories decay faster if they're old AND haven't been recalled recently
+                decay_rate = 0.1 * age_factor * recall_factor
+                if days_since_recall > 7:
+                    decay_rate *= 1.5  # Extra decay for memories not recalled in a week
+                
+                # Apply decay with a floor of 1 for significance
+                new_significance = max(1.0, significance - decay_rate)
+                
+                # If significance drops below threshold, archive the memory
+                if new_significance < 2.0 and days_old > 14:
+                    await conn.execute("""
+                        UPDATE NyxMemories
+                        SET is_archived = TRUE
+                        WHERE id = $1
+                    """, memory_id)
+                    archived_count += 1
+                else:
+                    # Otherwise just update the significance
+                    await conn.execute("""
+                        UPDATE NyxMemories
+                        SET significance = $1
+                        WHERE id = $2
+                    """, new_significance, memory_id)
+                    decayed_count += 1
+    
+    return f"Applied memory decay to {decayed_count} memories and archived {archived_count} memories"
+
+@function_tool
+async def reconsolidate_memory(ctx, memory_id: int) -> str:
+    """
+    Reconsolidate (slightly alter) a memory when it's recalled.
+    This simulates how human memories change slightly each time they're accessed.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    context = ctx.context.query_context or {}
+    
+    async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+        async with pool.acquire() as conn:
+            # Fetch the memory
+            row = await conn.fetchrow("""
+                SELECT memory_text, metadata, significance, memory_type, embedding
+                FROM NyxMemories
+                WHERE id = $1 AND user_id = $2 AND conversation_id = $3
+            """, memory_id, user_id, conversation_id)
+            
+            if not row:
+                return f"Memory with ID {memory_id} not found"
+                
+            memory_text = row["memory_text"]
+            metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+            significance = row["significance"]
+            memory_type = row["memory_type"]
+            
+            # Only reconsolidate episodic memories with low/medium significance
+            # High significance memories are more stable
+            if memory_type != "observation" or significance >= 8:
+                return f"Memory with ID {memory_id} is not eligible for reconsolidation"
+                
+            # Get original form if available
+            original_form = metadata.get("original_form", memory_text)
+            
+            # Current emotional state can influence reconsolidation
+            current_emotion = context.get("emotional_state", "neutral")
+            
+            # Reconsolidation varies by memory age
+            reconsolidation_strength = min(0.3, significance / 10.0)  # Cap at 0.3
+            
+            # Generate a slightly altered version
+            altered_memory = await alter_memory_text(
+                memory_text, 
+                original_form,
+                reconsolidation_strength,
+                current_emotion
+            )
+            
+            # Update metadata to track changes
+            if "reconsolidation_history" not in metadata:
+                metadata["reconsolidation_history"] = []
+                
+            metadata["reconsolidation_history"].append({
+                "previous_text": memory_text,
+                "timestamp": datetime.now().isoformat(),
+                "emotional_context": current_emotion
+            })
+            
+            # Only store last 3 versions to avoid metadata bloat
+            if len(metadata["reconsolidation_history"]) > 3:
+                metadata["reconsolidation_history"] = metadata["reconsolidation_history"][-3:]
+            
+            # Update the memory
+            await conn.execute("""
+                UPDATE NyxMemories
+                SET memory_text = $1, metadata = $2, embedding = $3
+                WHERE id = $4
+            """, 
+                altered_memory, 
+                json.dumps(metadata),
+                await generate_embedding(altered_memory),
+                memory_id
+            )
+    
+    return f"Memory with ID {memory_id} has been reconsolidated"
+
+async def cluster_memories_by_similarity(memories: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """
+    Group memories into clusters based on embedding similarity.
+    This is a simplified version of clustering.
+    """
+    # We'll use a greedy approach for simplicity
+    clusters = []
+    unclustered = memories.copy()
+    
+    while unclustered:
+        # Take the first memory as a seed
+        seed = unclustered.pop(0)
+        current_cluster = [seed]
+        
+        # Find all similar memories
+        i = 0
+        while i < len(unclustered):
+            memory = unclustered[i]
+            
+            # Calculate cosine similarity
+            similarity = np.dot(seed["embedding"], memory["embedding"])
+            if similarity > 0.85:  # Threshold for similarity
+                current_cluster.append(memory)
+                unclustered.pop(i)
+            else:
+                i += 1
+        
+        # If we found a significant cluster, add it
+        if len(current_cluster) > 1:
+            clusters.append(current_cluster)
+    
+    return clusters
+
+async def generate_consolidated_summary(memory_texts: List[str]) -> str:
+    """
+    Generate a consolidated summary of related memories.
+    """
+    joined_texts = "\n".join(memory_texts)
+    
+    prompt = f"""
+    Consolidate these related memory fragments into a single coherent memory:
+    
+    {joined_texts}
+    
+    Create a single paragraph that:
+    1. Captures the essential pattern or theme across these memories
+    2. Generalizes the specific details into broader understanding
+    3. Retains the most significant elements
+    4. Begins with "I've observed that..." or similar phrase
+    """
+    
+    try:
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You consolidate memory fragments into coherent patterns."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_tokens=200
+        )
+        
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        # Fallback
+        return f"I've observed a pattern across several memories: {memory_texts[0]}..."
+
+async def alter_memory_text(
+    memory_text: str, 
+    original_form: str,
+    alteration_strength: float,
+    emotional_context: str
+) -> str:
+    """
+    Slightly alter a memory text based on emotional context.
+    The closer to the original form, the less alteration.
+    """
+    # For minimal changes, we'll use GPT with a specific prompt
+    prompt = f"""
+    Slightly alter this memory to simulate memory reconsolidation effects.
+    
+    Original memory: {original_form}
+    Current memory: {memory_text}
+    Emotional context: {emotional_context}
+    
+    Create a very slight alteration that:
+    1. Maintains the same core information and meaning
+    2. Makes subtle changes to wording or emphasis ({int(alteration_strength * 100)}% alteration)
+    3. Slightly enhances aspects that align with the "{emotional_context}" emotional state
+    4. Never changes key facts, names, or locations
+    
+    Return only the altered text with no explanation.
+    """
+    
+    try:
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You subtly alter memories to simulate reconsolidation effects."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_tokens=200
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        # If GPT fails, make minimal random changes
+        words = memory_text.split()
+        for i in range(len(words)):
+            if random.random() < alteration_strength * 0.2:
+                # Minimal changes like adding "very" or changing emphasis words
+                if words[i] in ["a", "the", "was", "is"]:
+                    continue  # Skip essential words
+                if "good" in words[i]:
+                    words[i] = "very " + words[i]
+                elif "bad" in words[i]:
+                    words[i] = "quite " + words[i]
+        
+        return " ".join(words)
+
+@function_tool
+async def create_semantic_abstraction(ctx, memory_text: str, source_id: int) -> str:
+    """
+    Create a semantic memory (higher-level abstraction) from an episodic memory.
+    This converts concrete experiences into generalized knowledge.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    # Create a prompt for generating a semantic abstraction
+    prompt = f"""
+    Convert this specific observation into a general insight or pattern:
+    
+    Observation: {memory_text}
+    
+    Create a concise semantic memory that:
+    1. Extracts the general principle or pattern from this specific event
+    2. Forms a higher-level abstraction that could apply to similar situations
+    3. Phrases it as a generalized insight rather than a specific event
+    4. Keeps it under 50 words
+    
+    Example transformation:
+    Observation: "Chase hesitated when Monica asked him about his past, changing the subject quickly."
+    Semantic abstraction: "Chase appears uncomfortable discussing his past and employs deflection when questioned about it."
+    """
+    
+    try:
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are an AI that extracts semantic meaning from specific observations."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.4,
+            max_tokens=100
+        )
+        
+        abstraction = response.choices[0].message.content.strip()
+        
+        # Store the semantic memory with a reference to its source
+        async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO NyxMemories (
+                        user_id, conversation_id, memory_text, memory_type,
+                        significance, embedding, timestamp,
+                        tags, times_recalled, is_archived,
+                        metadata
+                    )
+                    VALUES ($1, $2, $3, 'semantic', $4, $5, CURRENT_TIMESTAMP, $6, 0, FALSE, $7)
+                """,
+                    user_id,
+                    conversation_id,
+                    abstraction,
+                    5,  # Moderate significance for semantic memories
+                    await generate_embedding(abstraction),
+                    ["semantic", "abstraction"],
+                    json.dumps({"source_memory_id": source_id})
+                )
+        
+        return f"Created semantic abstraction: '{abstraction}'"
+        
+    except Exception as e:
+        return f"Error creating semantic abstraction: {str(e)}"
+
+@function_tool
+async def enhance_context_with_memories(ctx, base_context: Dict[str, Any], query: str) -> str:
+    """
+    Enhance the provided context with relevant memories.
+    This makes responses more consistent and personalized.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    memory_system = ctx.context.memory_system
+    
+    # Retrieve relevant memories based on the query
+    memories = await memory_system.retrieve_memories(
+        query=query,
+        scopes=["game", "user"],
+        memory_types=["observation", "reflection", "abstraction"],
+        limit=5,
+        min_significance=3,
+        context=base_context
+    )
+    
+    # Extract memory texts and IDs
+    memory_texts = [m["memory_text"] for m in memories]
+    memory_ids = [m["id"] for m in memories]
+    
+    # Generate a narrative about the topic if we have memories
+    narrative = None
+    if memories:
+        narrative_result = await construct_narrative(
+            ctx, 
+            topic=query, 
+            context=base_context,
+            limit=5
+        )
+        narrative_data = json.loads(narrative_result)
+        narrative = narrative_data.get("narrative")
+    
+    # Generate introspection about Nyx's understanding
+    introspection = await generate_introspection(ctx)
+    introspection_data = json.loads(introspection)
+    
+    # Format the enhancement
+    enhancement = {
+        "memory_context": "\n\n### Nyx's Relevant Memories ###\n" + 
+                         "\n".join([f"- {text}" for text in memory_texts]) if memory_texts else "",
+        "narrative_context": f"\n\n### Nyx's Narrative Understanding ###\n{narrative}" if narrative else "",
+        "introspection_context": f"\n\n### Nyx's Self-Reflection ###\n{introspection_data.get('introspection', '')}" 
+                               if introspection_data and "introspection" in introspection_data else "",
+        "referenced_memory_ids": memory_ids
+    }
+    
+    # Combine all enhancements
+    combined_text = ""
+    if enhancement["memory_context"]:
+        combined_text += enhancement["memory_context"]
+    if enhancement["narrative_context"]:
+        combined_text += enhancement["narrative_context"]
+    if enhancement["introspection_context"]:
+        combined_text += enhancement["introspection_context"]
+    
+    # Also include the enhancement object for additional processing
+    enhancement["text"] = combined_text
+    
+    # Create enhanced context
+    enhanced_context = base_context.copy()
+    enhanced_context["memory_context"] = combined_text
+    enhanced_context["memory_ids"] = memory_ids
+    
+    return json.dumps(enhanced_context)
+
+@function_tool
+async def generate_introspection(ctx) -> str:
+    """
+    Generate Nyx's introspection about her own memory and knowledge.
+    This adds metacognitive awareness to the DM character.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    async with asyncpg.create_pool(dsn=DB_DSN) as pool:
+        async with pool.acquire() as conn:
+            # Count memories by type and significance
+            stats = await conn.fetch("""
+                SELECT 
+                    memory_type, 
+                    COUNT(*) as count,
+                    AVG(significance) as avg_significance,
+                    MIN(timestamp) as oldest,
+                    MAX(timestamp) as newest
+                FROM NyxMemories
+                WHERE user_id = $1 AND conversation_id = $2 AND is_archived = FALSE
+                GROUP BY memory_type
+            """, user_id, conversation_id)
+            
+            # Get most frequently recalled memories
+            top_memories = await conn.fetch("""
+                SELECT memory_text, times_recalled
+                FROM NyxMemories
+                WHERE user_id = $1 AND conversation_id = $2 AND is_archived = FALSE
+                ORDER BY times_recalled DESC
+                LIMIT 3
+            """, user_id, conversation_id)
+            
+            # Get player model
+            row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay 
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'NyxPlayerModel'
+            """, user_id, conversation_id)
+            
+            player_model = json.loads(row["value"]) if row and row["value"] else {}
+            
+            # Calculate memory health metrics
+            memory_health = {
+                "total_memories": sum(r["count"] for r in stats),
+                "episodic_ratio": next((r["count"] for r in stats if r["memory_type"] == "observation"), 0) / 
+                                sum(r["count"] for r in stats) if sum(r["count"] for r in stats) > 0 else 0,
+                "average_significance": sum(r["count"] * r["avg_significance"] for r in stats) / 
+                                      sum(r["count"] for r in stats) if sum(r["count"] for r in stats) > 0 else 0,
+                "memory_span_days": (max(r["newest"] for r in stats) - min(r["oldest"] for r in stats)).days 
+                                   if stats else 0,
+                "top_recalled_memories": [{"text": m["memory_text"], "recalled": m["times_recalled"]} for m in top_memories]
+            }
+            
+            # Generate introspection text
+            introspection = await generate_introspection_text(memory_health, player_model)
+            
+            # Return combination of metrics and generated text
+            return json.dumps({
+                "memory_stats": {r["memory_type"]: {"count": r["count"], "avg_significance": r["avg_significance"]} for r in stats},
+                "memory_health": memory_health,
+                "player_understanding": player_model.get("play_style", {}),
+                "introspection": introspection,
+                "confidence": min(1.0, memory_health["total_memories"] / 100)  # More memories = more confidence
+            })
+
+async def generate_introspection_text(memory_health: Dict[str, Any], player_model: Dict[str, Any]) -> str:
+    """
+    Generate natural language introspection about Nyx's own memory state.
+    """
+    # Format key metrics for the prompt
+    memory_count = memory_health["total_memories"]
+    span_days = memory_health["memory_span_days"]
+    avg_sig = memory_health["average_significance"]
+    
+    # Format player understanding
+    play_style = player_model.get("play_style", {})
+    play_style_str = ", ".join([f"{style}: {count}" for style, count in play_style.items() if count > 0])
+    
+    # Top recalled memories
+    top_memories = memory_health.get("top_recalled_memories", [])
+    top_memories_str = "\n".join([f"- {m['text']} (recalled {m['recalled']} times)" for m in top_memories])
+    
+    prompt = f"""
+    As Nyx, generate an introspective reflection on your memory state using these metrics:
+    
+    - Total memories: {memory_count}
+    - Memory span: {span_days} days
+    - Average significance: {avg_sig:.1f}/10
+    - Player tendencies: {play_style_str}
+    
+    Most frequently recalled memories:
+    {top_memories_str}
+    
+    Create a first-person introspection that:
+    1. Reflects on your understanding of Chase (the player)
+    2. Notes any gaps or uncertainties in your knowledge
+    3. Acknowledges how your perspective might be biased or incomplete
+    4. Expresses metacognitive awareness of your role as the narrative guide
+    
+    Keep it natural and conversational, as if you're thinking to yourself.
+    """
+    
+    try:
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are Nyx, the dungeon master, reflecting on your memories and understanding."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=300
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        # Fallback template if GPT fails
+        return f"""
+        I've accumulated {memory_count} memories about Chase and our interactions over {span_days} days.
+        I notice that he tends to be {max(play_style.items(), key=lambda x: x[1])[0] if play_style else 'unpredictable'} in his approach.
+        My understanding feels {'strong' if avg_sig > 7 else 'moderate' if avg_sig > 4 else 'limited'}, 
+        though I wonder what I might be missing or misinterpreting.
+        """
+
+@function_tool
+async def _format_memories_for_context(ctx, memories: List[Dict[str, Any]]) -> str:
+    """Format memories for inclusion in context."""
+    memory_texts = []
+    for memory in memories:
+        relevance = memory.get("relevance", 0.5)
+        confidence_marker = "vividly recall" if relevance > 0.8 else \
+                          "remember" if relevance > 0.6 else \
+                          "think I recall" if relevance > 0.4 else \
+                          "vaguely remember"
+        
+        memory_texts.append(f"I {confidence_marker}: {memory['memory_text']}")
+    
+    return "\n".join(memory_texts)
