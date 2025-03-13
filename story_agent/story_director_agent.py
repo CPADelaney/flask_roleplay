@@ -1,4 +1,4 @@
-# story_director_agent.py
+# story_agent/story_director_agent.py
 
 import asyncio
 import logging
