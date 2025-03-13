@@ -441,6 +441,224 @@ async def format_behavior_patterns(ctx, behavior_patterns: Dict[str, Any]) -> st
     
     return json.dumps(result)
 
+# Add to user_model_sdk.py
+
+@function_tool
+async def track_conversation_response(
+    ctx,
+    user_message: str,
+    nyx_response: str,
+    user_reaction: str = None,
+    conversation_context: Dict[str, Any] = None
+) -> str:
+    """
+    Track a conversation interaction to learn from user responses.
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    user_model_manager = ctx.context.user_model_manager
+    
+    # Get current model
+    user_model = await user_model_manager.get_user_model()
+    
+    # Get conversation history
+    conversation_patterns = user_model.get("conversation_patterns", {
+        "response_types": {},
+        "reaction_patterns": {},
+        "tracked_conversations": []
+    })
+    
+    # Basic tracking of conversation
+    tracked_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "user_message": user_message[:100],  # Truncate for storage
+        "nyx_response_sample": nyx_response[:100],  # Truncate
+        "context": conversation_context,
+        "user_reaction": user_reaction
+    }
+    
+    conversation_patterns["tracked_conversations"].append(tracked_entry)
+    
+    # Keep only most recent 20 conversations
+    if len(conversation_patterns["tracked_conversations"]) > 20:
+        conversation_patterns["tracked_conversations"] = conversation_patterns["tracked_conversations"][-20:]
+    
+    # Store memory
+    await user_model_manager.memory_system.add_memory(
+        memory_text=f"Conversation interaction - User: '{user_message[:50]}...' Nyx: '{nyx_response[:50]}...'",
+        memory_type="observation",
+        memory_scope="user",
+        significance=3,
+        tags=["conversation_pattern"],
+        metadata={
+            "user_message": user_message[:200],
+            "nyx_response": nyx_response[:200],
+            "user_reaction": user_reaction,
+            "context": conversation_context
+        }
+    )
+    
+    # Update user model
+    await user_model_manager.update_user_model({"conversation_patterns": conversation_patterns})
+    
+    return f"Tracked conversation response for user {user_id}"
+
+@function_tool
+async def calculate_suggested_intensity(ctx, user_model: Dict[str, Any]) -> str:
+    """Calculate suggested intensity level based on user model."""
+    # Start with base preference from personality assessment
+    base_intensity = user_model.get("personality_assessment", {}).get("intensity_preference", 50) / 100.0
+    
+    # Adjust based on behavior patterns
+    behavior = user_model.get("behavior_patterns", {})
+    
+    # If user has shown positive response to intensity, increase
+    aggression = behavior.get("aggression", {}).get("occurrences", 0)
+    submission = behavior.get("submission", {}).get("occurrences", 0)
+    
+    # More aggressive users might want slightly higher intensity
+    if aggression > submission:
+        base_intensity += 0.1
+    
+    # Cap between 0.2 and 0.9
+    intensity = max(0.2, min(0.9, base_intensity))
+    
+    return json.dumps({"suggested_intensity": intensity})
+
+@function_tool
+async def analyze_user_revelations(
+    ctx,
+    user_message: str,
+    nyx_response: str = None,
+    context: Dict[str, Any] = None
+) -> str:
+    """
+    Analyze user message for potential preference revelations and behavior patterns.
+    """
+    lower_message = user_message.lower()
+    revelations = []
+    
+    # Check for explicit kink mentions
+    kink_keywords = {
+        "ass": ["ass", "booty", "behind", "rear"],
+        "feet": ["feet", "foot", "toes"],
+        "goth": ["goth", "gothic", "dark", "black clothes"],
+        "tattoos": ["tattoo", "ink", "inked"],
+        "piercings": ["piercing", "pierced", "stud", "ring"],
+        "latex": ["latex", "rubber", "shiny"],
+        "leather": ["leather", "leathery"],
+        "humiliation": ["humiliate", "embarrassed", "ashamed", "pathetic"],
+        "submission": ["submit", "obey", "serve", "kneel"]
+    }
+    
+    for kink, keywords in kink_keywords.items():
+        if any(keyword in lower_message for keyword in keywords):
+            # Check sentiment (simplified)
+            sentiment = "neutral"
+            pos_words = ["like", "love", "enjoy", "good", "great", "nice", "yes", "please"]
+            neg_words = ["don't", "hate", "dislike", "bad", "worse", "no", "never"]
+            
+            pos_count = sum(1 for word in pos_words if word in lower_message)
+            neg_count = sum(1 for word in neg_words if word in lower_message)
+            
+            if pos_count > neg_count:
+                sentiment = "positive"
+                intensity = 0.7
+            elif neg_count > pos_count:
+                sentiment = "negative" 
+                intensity = 0.0
+            else:
+                intensity = 0.4
+                
+            if sentiment != "negative":
+                revelations.append({
+                    "type": "kink_preference",
+                    "kink": kink,
+                    "intensity": intensity,
+                    "source": "explicit_mention"
+                })
+    
+    # Check for behavior patterns
+    if "don't tell me what to do" in lower_message or "i won't" in lower_message:
+        revelations.append({
+            "type": "behavior_pattern",
+            "pattern": "resistance",
+            "intensity": 0.6,
+            "source": "explicit_statement"
+        })
+    
+    if "yes mistress" in lower_message or "i'll obey" in lower_message:
+        revelations.append({
+            "type": "behavior_pattern",
+            "pattern": "submission",
+            "intensity": 0.8,
+            "source": "explicit_statement"
+        })
+        
+    # If no revelations found through simple means, use more sophisticated analysis
+    if not revelations and len(user_message.split()) > 5:
+        # Create a prompt for detecting implicit preferences
+        prompt = f"""
+        Analyze this user message for potential preferences or behavior patterns in a femdom roleplay context:
+        
+        User: "{user_message}"
+        
+        Identify:
+        1. Any explicit or implicit kink preferences
+        2. Behavioral tendencies (submission, resistance, etc.)
+        3. Communication style preferences
+        4. Response to dominant themes
+        
+        Format your response as JSON with 'revelations' as a list of objects, each containing:
+        - type: "kink_preference" or "behavior_pattern"
+        - name/pattern: The specific preference or pattern
+        - intensity: A value from 0 to 1 indicating strength
+        - source: How this was detected
+        - confidence: How confident you are in this detection (0-1)
+        """
+        
+        try:
+            response = await openai.ChatCompletion.acreate(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You analyze user messages to detect preferences and patterns."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=300
+            )
+            
+            # Try to parse JSON response
+            try:
+                analysis = json.loads(response.choices[0].message.content)
+                if "revelations" in analysis:
+                    revelations.extend(analysis["revelations"])
+            except:
+                # If JSON parsing fails, extract what we can
+                pass
+        except Exception as e:
+            pass
+    
+    # Track any detected revelations
+    if revelations:
+        user_model_manager = ctx.context.user_model_manager
+        
+        for revelation in revelations:
+            if revelation["type"] == "kink_preference":
+                await user_model_manager.track_kink_preference(
+                    kink_name=revelation["kink"],
+                    intensity=revelation["intensity"],
+                    detected_from=revelation["source"]
+                )
+            elif revelation["type"] == "behavior_pattern":
+                await user_model_manager.track_behavior_pattern(
+                    pattern_type="response_style",
+                    pattern_value=revelation["pattern"],
+                    intensity=revelation["intensity"]
+                )
+    
+    return json.dumps({"revelations": revelations})
+
 async def initialize_user_model(user_id: int) -> Dict[str, Any]:
     """
     Initialize a new user model if one doesn't exist
