@@ -285,3 +285,69 @@ async def get_directives(user_id):
     except Exception as e:
         logger.error(f"Error getting directives: {e}")
         return jsonify({"error": str(e)}), 500
+
+@nyx_governance_bp.route("/nyx/governance/lore/generate", methods=["POST"])
+@require_login
+async def generate_lore_api(user_id):
+    """Generate comprehensive lore with governance oversight."""
+    data = request.get_json() or {}
+    conversation_id = data.get("conversation_id")
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    environment_desc = data.get("environment_desc")
+    if not environment_desc:
+        return jsonify({"error": "Missing environment_desc parameter"}), 400
+    
+    try:
+        result = await generate_lore_with_governance(
+            user_id, int(conversation_id), environment_desc
+        )
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error generating lore: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@nyx_governance_bp.route("/nyx/governance/lore/integrate_npcs", methods=["POST"])
+@require_login
+async def integrate_lore_with_npcs_api(user_id):
+    """Integrate lore with NPCs with governance oversight."""
+    data = request.get_json() or {}
+    conversation_id = data.get("conversation_id")
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    npc_ids = data.get("npc_ids", [])
+    if not npc_ids:
+        return jsonify({"error": "Missing npc_ids parameter"}), 400
+    
+    try:
+        result = await integrate_lore_with_npcs(
+            user_id, int(conversation_id), npc_ids
+        )
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error integrating lore with NPCs: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@nyx_governance_bp.route("/nyx/governance/lore/scene", methods=["POST"])
+@require_login
+async def generate_scene_with_lore_api(user_id):
+    """Generate a scene description enhanced with lore."""
+    data = request.get_json() or {}
+    conversation_id = data.get("conversation_id")
+    if not conversation_id:
+        return jsonify({"error": "Missing conversation_id parameter"}), 400
+    
+    location = data.get("location")
+    if not location:
+        return jsonify({"error": "Missing location parameter"}), 400
+    
+    try:
+        result = await generate_scene_with_lore(
+            user_id, int(conversation_id), location
+        )
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error generating scene with lore: {e}")
+        return jsonify({"error": str(e)}), 500
