@@ -1562,6 +1562,32 @@ async def reset_governance(user_id: int, conversation_id: int) -> Dict[str, Any]
         logger.info(f"User Model initialized for user {user_id}")
     except Exception as e:
         logger.error(f"Error initializing User Model: {e}")
+
+    try:
+        from logic.time_cycle import register_with_governance as register_time_cycle
+        await register_time_cycle(user_id, conversation_id)
+        registration_results["time_cycle"] = True
+        logger.info(f"Time Cycle registered for user {user_id}, conversation {conversation_id}")
+    except Exception as e:
+        logger.error(f"Error registering Time Cycle: {e}")
+    
+    # Register Lore Agents
+    try:
+        from lore.lore_agents import register_with_governance as register_lore
+        await register_lore(user_id, conversation_id)
+        registration_results["lore_agents"] = True
+        logger.info(f"Lore Agents registered for user {user_id}, conversation {conversation_id}")
+    except Exception as e:
+        logger.error(f"Error registering Lore Agents: {e}")
+    
+    # Register Story Director and specialized agents
+    try:
+        from story_agent.story_director_agent import register_with_governance as register_story_director
+        await register_story_director(user_id, conversation_id)
+        registration_results["story_director"] = True
+        logger.info(f"Story Director registered for user {user_id}, conversation {conversation_id}")
+    except Exception as e:
+        logger.error(f"Error registering Story Director: {e}")
     
     return {
         "status": "success",
