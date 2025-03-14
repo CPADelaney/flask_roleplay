@@ -75,6 +75,57 @@ class LoreIntegrationSystem:
             
             return lore
 
+    async def get_comprehensive_location_context(self, location_name: str, context: str = "public") -> Dict[str, Any]:
+        """
+        Get comprehensive context about a location including cultural, religious, and political information.
+        
+        Args:
+            location_name: Name of the location
+            context: Social context (public, private, court, etc.)
+            
+        Returns:
+            Dictionary with comprehensive location context
+        """
+        # Get basic location details
+        location_details = await self._get_location_details(location_name)
+        
+        # Get cultural information
+        from lore.regional_culture_system import RegionalCultureSystem
+        culture_system = RegionalCultureSystem(self.user_id, self.conversation_id)
+        cultural_info = await culture_system.get_relevant_cultural_info(location_name, context)
+        
+        # Get religious information
+        from lore.religious_distribution_system import ReligiousDistributionSystem
+        religion_system = ReligiousDistributionSystem(self.user_id, self.conversation_id)
+        religion_info = await religion_system.get_location_religion(location_name)
+        
+        # Get political information and conflicts
+        from lore.national_conflict_system import NationalConflictSystem
+        conflict_system = NationalConflictSystem(self.user_id, self.conversation_id)
+        
+        # Determine nation_id from cultural_info
+        nation_id = cultural_info.get("nation", {}).get("id")
+        
+        political_info = {}
+        if nation_id:
+            # Get domestic issues
+            domestic_issues = await conflict_system.get_nation_domestic_issues(nation_id)
+            
+            # Get culture wars
+            culture_wars = await conflict_system.get_nation_culture_wars(nation_id)
+            
+            political_info = {
+                "domestic_issues": domestic_issues,
+                "culture_wars": culture_wars
+            }
+        
+        return {
+            "location": location_details,
+            "cultural_context": cultural_info,
+            "religious_context": religion_info,
+            "political_context": political_info
+        }
+
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="integrate_lore_with_npcs",
