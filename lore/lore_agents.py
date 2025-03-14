@@ -141,3 +141,9 @@ setting_analysis_agent = Agent(
 #
 # End of file
 #
+async def register_with_governance(user_id: int, conversation_id: int):
+    """Register lore agents with Nyx governance system."""
+    from nyx.integrate import get_central_governance
+    from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
+    
+    governor = await get_central_governance(user_id, conversation_id)
