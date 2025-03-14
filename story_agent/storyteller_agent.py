@@ -1,4 +1,4 @@
-# nyx/storyteller_agent.py
+# story_agent/storyteller_agent.py
 
 """
 Unified Storyteller Agent with Nyx Governance integration.
@@ -30,7 +30,6 @@ oversight every step of the way.
 import logging
 import json
 import asyncio
-import random
 import time
 import os
 import asyncpg
@@ -40,7 +39,8 @@ from agents import Agent, Runner, function_tool, handoff
 from pydantic import BaseModel, Field
 
 # Import governance integration
-from nyx.integrate import (
+# Consolidated imports from both nyx.integrate and nyx.enhanced_integration
+from nyx.enhanced_integration import (
     get_central_governance,
     process_story_beat_with_governance,
     broadcast_event_with_governance
@@ -195,7 +195,7 @@ class StorytellerAgent:
         
         # Main coordinating agent with governance-specific tools
         self.agent = Agent(
-            name="StoryManager",
+            name="EnhancedStoryManager",  # Updated to EnhancedStoryManager
             instructions="""
             You coordinate the storytelling process for a roleplaying game with subtle femdom elements
             under the governance of Nyx.
@@ -220,8 +220,8 @@ class StorytellerAgent:
                 function_tool(self.apply_universal_updates),
                 function_tool(self.generate_image_if_needed),
                 function_tool(self.store_message),
-                function_tool(self.check_governance_permission),  # Governance-specific tool
-                function_tool(self.report_action_to_governance)   # Governance-specific tool
+                function_tool(self.check_governance_permission),
+                function_tool(self.report_action_to_governance)
             ]
         )
     
@@ -484,7 +484,16 @@ class StorytellerAgent:
         - Relate to the player's input or activity
         - Include subtle hints of control where appropriate
         - Consider the NPC's recent memories
-        """
+      """
+        
+        # Run the NPC handler
+        result = await Runner.run(
+            self.npc_handler,
+            prompt,
+            context=ctx.context
+        )
+        
+        npc_responses = result.final_output
         
         # Run the NPC handler
         result = await Runner.run(
@@ -992,6 +1001,7 @@ class StorytellerAgent:
         Returns:
             Status of the operation
         """
+        user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
         conn = await asyncpg.connect(dsn=DB_DSN)
@@ -1190,3 +1200,15 @@ def get_storyteller():
         _storyteller_instance = StorytellerAgent()
     
     return _storyteller_instance
+
+# For backward compatibility - this ensures code that specifically calls
+# get_governed_storyteller() still works
+def get_governed_storyteller():
+    """
+    Get (or create) the storyteller agent.
+    This function is maintained for backward compatibility.
+    
+    Returns:
+        The storyteller agent (same as get_storyteller)
+    """
+    return get_storyteller()
