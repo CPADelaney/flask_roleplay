@@ -8,9 +8,14 @@ from db.connection import get_db_connection
 from lore.lore_manager import LoreManager
 from memory.wrapper import MemorySystem
 
+# Import Nyx governance
+from nyx.integrate import get_central_governance
+from nyx.nyx_governance import AgentType, DirectiveType
+from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
+
 class NPCLoreIntegration:
     """
-    Integrates lore into NPC agent behavior and memory systems.
+    Integrates lore into NPC agent behavior and memory systems with Nyx governance oversight.
     """
     
     def __init__(self, user_id: int, conversation_id: int, npc_id: int = None):
@@ -26,12 +31,25 @@ class NPCLoreIntegration:
         self.conversation_id = conversation_id
         self.npc_id = npc_id
         self.lore_manager = LoreManager(user_id, conversation_id)
+        self.governor = None
     
-    async def initialize_npc_lore_knowledge(self, npc_id: int, 
+    async def initialize_governance(self):
+        """Initialize Nyx governance connection"""
+        if not self.governor:
+            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+        return self.governor
+    
+    @with_governance(
+        agent_type=AgentType.NPC,
+        action_type="initialize_npc_lore_knowledge",
+        action_description="Initializing lore knowledge for NPC {npc_id}",
+        id_from_context=lambda ctx: f"npc_{ctx.npc_id}"
+    )
+    async def initialize_npc_lore_knowledge(self, ctx, npc_id: int, 
                                           cultural_background: str,
                                           faction_affiliations: List[str]) -> Dict[str, Any]:
         """
-        Initialize an NPC's knowledge of lore based on their background.
+        Initialize an NPC's knowledge of lore based on their background with Nyx governance oversight.
         
         Args:
             npc_id: ID of the NPC
@@ -184,90 +202,15 @@ class NPCLoreIntegration:
         
         return knowledge_granted
     
-    async def _create_lore_memories(self, npc_id: int, knowledge_granted: Dict[str, List[Dict[str, Any]]]):
+    @with_governance(
+        agent_type=AgentType.NPC,
+        action_type="get_lore_relevant_to_npc_decision",
+        action_description="Getting relevant lore for NPC {npc_id} decision making",
+        id_from_context=lambda ctx: f"npc_{ctx.npc_id}"
+    )
+    async def get_lore_relevant_to_npc_decision(self, ctx, npc_id: int, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Create memories for the most significant lore knowledge.
-        
-        Args:
-            npc_id: ID of the NPC
-            knowledge_granted: Dictionary of granted knowledge
-        """
-        # Get memory system for this NPC
-        memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
-        
-        # Create memories for faction knowledge
-        for faction in knowledge_granted["factions"]:
-            if faction["knowledge_level"] >= 7:
-                # Fetch complete faction data
-                faction_data = await self.lore_manager.get_lore_by_id("Factions", faction["id"])
-                
-                if faction_data:
-                    # Create memory for faction affiliation
-                    memory_text = f"I am affiliated with {faction_data['name']}, a {faction_data['type']} faction. "
-                    
-                    # Add factional values and goals if knowledge is high
-                    if faction["knowledge_level"] >= 8:
-                        values = faction_data.get("values", [])
-                        goals = faction_data.get("goals", [])
-                        
-                        if values:
-                            memory_text += f"We value {', '.join(values[:3])}. "
-                        
-                        if goals:
-                            memory_text += f"Our goals include {', '.join(goals[:2])}."
-                    
-                    # Store the memory
-                    await memory_system.remember(
-                        entity_type="npc",
-                        entity_id=npc_id,
-                        memory_text=memory_text,
-                        importance="high",
-                        tags=["lore", "faction", "identity"]
-                    )
-        
-        # Create memories for cultural knowledge
-        significant_culture = [c for c in knowledge_granted["cultural_elements"] if c["knowledge_level"] >= 6]
-        if significant_culture:
-            # Only create memories for the most significant cultural elements
-            for culture in significant_culture[:3]:
-                culture_data = await self.lore_manager.get_lore_by_id("CulturalElements", culture["id"])
-                
-                if culture_data:
-                    memory_text = f"I observe the {culture_data['name']}, which is a {culture_data['type']}. "
-                    memory_text += culture_data.get("description", "")[:100]
-                    
-                    # Store the memory
-                    await memory_system.remember(
-                        entity_type="npc",
-                        entity_id=npc_id,
-                        memory_text=memory_text,
-                        importance="medium",
-                        tags=["lore", "culture", "beliefs"]
-                    )
-        
-        # Create memories for significant historical events
-        significant_events = [e for e in knowledge_granted["historical_events"] if e["knowledge_level"] >= 7]
-        if significant_events:
-            # Only create memories for the most significant events
-            for event in significant_events[:2]:
-                event_data = await self.lore_manager.get_lore_by_id("HistoricalEvents", event["id"])
-                
-                if event_data:
-                    memory_text = f"I remember the {event_data['name']} which happened {event_data.get('date_description', 'in the past')}. "
-                    memory_text += event_data.get("description", "")[:100]
-                    
-                    # Store the memory
-                    await memory_system.remember(
-                        entity_type="npc",
-                        entity_id=npc_id,
-                        memory_text=memory_text,
-                        importance="medium",
-                        tags=["lore", "history", "event"]
-                    )
-    
-    async def get_lore_relevant_to_npc_decision(self, npc_id: int, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Get lore that's relevant to an NPC's current decision-making context.
+        Get lore that's relevant to an NPC's current decision-making context with Nyx governance oversight.
         
         Args:
             npc_id: ID of the NPC
@@ -368,9 +311,15 @@ class NPCLoreIntegration:
         
         return organized_lore
     
-    async def process_npc_lore_interaction(self, npc_id: int, player_input: str) -> Dict[str, Any]:
+    @with_governance(
+        agent_type=AgentType.NPC,
+        action_type="process_npc_lore_interaction",
+        action_description="Processing lore interaction for NPC {npc_id}",
+        id_from_context=lambda ctx: f"npc_{ctx.npc_id}"
+    )
+    async def process_npc_lore_interaction(self, ctx, npc_id: int, player_input: str) -> Dict[str, Any]:
         """
-        Process a potential lore interaction between the player and an NPC.
+        Process a potential lore interaction between the player and an NPC with Nyx governance oversight.
         Determines if the player is asking about lore and what the NPC knows.
         
         Args:
@@ -471,6 +420,257 @@ class NPCLoreIntegration:
             # This just indicates that it should happen
         
         return result
+    
+    @with_governance(
+        agent_type=AgentType.NPC,
+        action_type="process_npc_lore_discovery",
+        action_description="Processing potential lore discoveries for NPC {npc_id}",
+        id_from_context=lambda ctx: f"npc_{ctx.npc_id}"
+    )
+    async def process_npc_lore_discovery(self, ctx, npc_id: int, location_id: int = None) -> Dict[str, Any]:
+        """
+        Process potential lore discoveries based on NPC location with Nyx governance oversight.
+        
+        Args:
+            npc_id: ID of the NPC
+            location_id: Optional location ID
+            
+        Returns:
+            Discovery results
+        """
+        # If no location provided, get NPC's current location
+        if location_id is None:
+            async with self.lore_manager.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    # Get NPC's current location
+                    location_name = await conn.fetchval("""
+                        SELECT current_location FROM NPCStats
+                        WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                    """, npc_id, self.user_id, self.conversation_id)
+                    
+                    if location_name:
+                        # Get location ID
+                        location_id = await conn.fetchval("""
+                            SELECT id FROM Locations
+                            WHERE location_name = $1 AND user_id = $2 AND conversation_id = $3
+                        """, location_name, self.user_id, self.conversation_id)
+        
+        if not location_id:
+            return {"discoveries": []}
+        
+        # Check for lore discovery opportunities at this location
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                opportunities = await conn.fetch("""
+                    SELECT * FROM LoreDiscoveryOpportunities
+                    WHERE location_id = $1 AND NOT discovered
+                """, location_id)
+                
+                if not opportunities:
+                    return {"discoveries": []}
+                
+                # Process each opportunity
+                discoveries = []
+                
+                for opp in opportunities:
+                    # Check difficulty against NPC traits
+                    difficulty = opp["difficulty"]
+                    
+                    # Get NPC's relevant traits
+                    npc_data = await conn.fetchrow("""
+                        SELECT dominance, personality_traits FROM NPCStats
+                        WHERE npc_id = $1
+                    """, npc_id)
+                    
+                    if not npc_data:
+                        continue
+                    
+                    # Process traits
+                    traits = npc_data["personality_traits"]
+                    if isinstance(traits, str):
+                        try:
+                            import json
+                            traits = json.loads(traits)
+                        except:
+                            traits = []
+                    
+                    # Check for traits that help with discovery
+                    discovery_traits = ["observant", "curious", "inquisitive", "scholarly"]
+                    trait_bonus = sum(2 for trait in discovery_traits if trait in traits)
+                    
+                    # Calculate discovery chance
+                    dominance = npc_data["dominance"] or 50
+                    discovery_score = dominance // 10 + trait_bonus
+                    
+                    # Higher score makes easier discovery
+                    if discovery_score >= difficulty:
+                        # Discovery successful!
+                        
+                        # Get the lore
+                        lore_data = await self.lore_manager.get_lore_by_id(
+                            opp["lore_type"], opp["lore_id"]
+                        )
+                        
+                        if lore_data:
+                            # Grant knowledge to the NPC
+                            knowledge_level = min(7, 10 - difficulty + trait_bonus)
+                            
+                            await self.lore_manager.add_lore_knowledge(
+                                "npc", npc_id,
+                                opp["lore_type"], opp["lore_id"],
+                                knowledge_level=knowledge_level
+                            )
+                            
+                            # Mark as discovered
+                            await conn.execute("""
+                                UPDATE LoreDiscoveryOpportunities
+                                SET discovered = TRUE
+                                WHERE id = $1
+                            """, opp["id"])
+                            
+                            # Add to discoveries list
+                            discoveries.append({
+                                "lore_type": opp["lore_type"],
+                                "lore_id": opp["lore_id"],
+                                "lore_name": lore_data.get("name", "Unknown"),
+                                "knowledge_level": knowledge_level,
+                                "discovery_method": opp["discovery_method"]
+                            })
+                            
+                            # Create memory for the NPC
+                            await self._create_discovery_memory(
+                                npc_id, lore_data, knowledge_level, opp["discovery_method"]
+                            )
+                
+                return {"discoveries": discoveries}
+    
+    async def _create_lore_memories(self, npc_id: int, knowledge_granted: Dict[str, List[Dict[str, Any]]]):
+        """
+        Create memories for the most significant lore knowledge.
+        
+        Args:
+            npc_id: ID of the NPC
+            knowledge_granted: Dictionary of granted knowledge
+        """
+        # Get memory system for this NPC
+        memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+        
+        # Create memories for faction knowledge
+        for faction in knowledge_granted["factions"]:
+            if faction["knowledge_level"] >= 7:
+                # Fetch complete faction data
+                faction_data = await self.lore_manager.get_lore_by_id("Factions", faction["id"])
+                
+                if faction_data:
+                    # Create memory for faction affiliation
+                    memory_text = f"I am affiliated with {faction_data['name']}, a {faction_data['type']} faction. "
+                    
+                    # Add factional values and goals if knowledge is high
+                    if faction["knowledge_level"] >= 8:
+                        values = faction_data.get("values", [])
+                        goals = faction_data.get("goals", [])
+                        
+                        if values:
+                            memory_text += f"We value {', '.join(values[:3])}. "
+                        
+                        if goals:
+                            memory_text += f"Our goals include {', '.join(goals[:2])}."
+                    
+                    # Store the memory
+                    await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        memory_text=memory_text,
+                        importance="high",
+                        tags=["lore", "faction", "identity"]
+                    )
+        
+        # Create memories for cultural knowledge
+        significant_culture = [c for c in knowledge_granted["cultural_elements"] if c["knowledge_level"] >= 6]
+        if significant_culture:
+            # Only create memories for the most significant cultural elements
+            for culture in significant_culture[:3]:
+                culture_data = await self.lore_manager.get_lore_by_id("CulturalElements", culture["id"])
+                
+                if culture_data:
+                    memory_text = f"I observe the {culture_data['name']}, which is a {culture_data['type']}. "
+                    memory_text += culture_data.get("description", "")[:100]
+                    
+                    # Store the memory
+                    await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        memory_text=memory_text,
+                        importance="medium",
+                        tags=["lore", "culture", "beliefs"]
+                    )
+        
+        # Create memories for significant historical events
+        significant_events = [e for e in knowledge_granted["historical_events"] if e["knowledge_level"] >= 7]
+        if significant_events:
+            # Only create memories for the most significant events
+            for event in significant_events[:2]:
+                event_data = await self.lore_manager.get_lore_by_id("HistoricalEvents", event["id"])
+                
+                if event_data:
+                    memory_text = f"I remember the {event_data['name']} which happened {event_data.get('date_description', 'in the past')}. "
+                    memory_text += event_data.get("description", "")[:100]
+                    
+                    # Store the memory
+                    await memory_system.remember(
+                        entity_type="npc",
+                        entity_id=npc_id,
+                        memory_text=memory_text,
+                        importance="medium",
+                        tags=["lore", "history", "event"]
+                    )
+    
+    async def _create_discovery_memory(self, npc_id: int, lore_data: Dict[str, Any],
+                                     knowledge_level: int, discovery_method: str):
+        """
+        Create a memory for the NPC about discovering lore.
+        
+        Args:
+            npc_id: ID of the NPC
+            lore_data: The discovered lore
+            knowledge_level: Level of knowledge gained
+            discovery_method: How it was discovered
+        """
+        # Get memory system
+        memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+        
+        # Create discovery memory
+        lore_name = lore_data.get("name", "something")
+        lore_type = lore_data["lore_type"]
+        
+        # Format the memory based on discovery method
+        if discovery_method == "observation":
+            memory_text = f"I noticed {lore_name} while observing my surroundings."
+        elif discovery_method == "conversation":
+            memory_text = f"I learned about {lore_name} during a conversation."
+        elif discovery_method == "investigation":
+            memory_text = f"I discovered information about {lore_name} by investigating."
+        elif discovery_method == "book":
+            memory_text = f"I read about {lore_name} in a book."
+        else:
+            memory_text = f"I learned about {lore_name}."
+        
+        # Add details based on knowledge level
+        if knowledge_level >= 5:
+            # Add a brief description for higher knowledge levels
+            description = lore_data.get("description", "")
+            if description and len(description) > 150:
+                description = description[:150] + "..."
+            memory_text += f" {description}"
+        
+        # Create the memory
+        await memory_system.remember(
+            entity_type="npc",
+            entity_id=npc_id,
+            memory_text=memory_text,
+            importance="medium" if knowledge_level >= 6 else "low",
+            tags=["lore", "discovery", lore_type.lower()]
+        )
     
     async def _get_npc_personality(self, npc_id: int) -> Dict[str, Any]:
         """
@@ -622,6 +822,19 @@ class NPCLoreIntegration:
         
         # Default for other lore types
         return intro + description
+    
+    async def register_with_nyx_governance(self):
+        """Register with Nyx governance system."""
+        await self.initialize_governance()
+        
+        # Register this integration with governance
+        await self.governor.register_agent(
+            agent_type=AgentType.NPC,
+            agent_id=self.npc_id or "npc_lore_integration",
+            agent_instance=self
+        )
+        
+        logging.info(f"NPCLoreIntegration registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
     
     async def get_npc_faction_knowledge(self, npc_id: int) -> List[Dict[str, Any]]:
         """
