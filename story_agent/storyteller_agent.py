@@ -1,30 +1,20 @@
 # story_agent/storyteller_agent.py
 
 """
-Unified Storyteller Agent with Nyx Governance integration.
+Nyx-Integrated Storyteller Agent
 
 This module implements the Storyteller Agent, which is responsible for 
-managing storytelling and player interactions. The agent integrates with
-the Nyx governance system to ensure proper oversight and control over
-the storytelling process.
+managing storytelling and player interactions, fully integrated with
+the Nyx central governance system.
 
-Nyx Governance Integration:
---------------------------
-- Every action performed by the Storyteller Agent or its sub-agents must be approved
-  by the Nyx governance system before execution.
-- All actions and their results are reported back to the Nyx governance system.
-- The Nyx governance system can issue directives to control the behavior of the
-  Storyteller Agent and its sub-agents.
-- The Storyteller Agent registers itself with the Nyx governance system on initialization.
-
-The Storyteller Agent manages several specialized sub-agents:
-- NPCHandler: Generates responses from NPCs
-- TimeManager: Manages time advancement in the game
-- Narrator: Generates narrative responses to player input
-- UniversalUpdater: Updates the game state based on narrative
-
-All of these are coordinated by the main StoryManager agent, with Nyx governance
-oversight every step of the way.
+Key Integration Features:
+1. Complete governance permission checking for all actions
+2. Full action reporting to Nyx
+3. Comprehensive directive handling
+4. Automatic registration with Nyx on initialization
+5. Governance-aware sub-agents
+6. Respect for governance overrides and modifications
+7. Integration with Nyx's memory and reflection systems
 """
 
 import logging
@@ -38,15 +28,17 @@ from datetime import datetime
 from agents import Agent, Runner, function_tool, handoff
 from pydantic import BaseModel, Field
 
-# Import governance integration
-# Consolidated imports from both nyx.integrate and nyx.enhanced_integration
-from nyx.enhanced_integration import (
+# Comprehensive Nyx governance integration
+from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
+from nyx.directive_handler import DirectiveHandler
+from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
+from nyx.integrate import (
     get_central_governance,
     process_story_beat_with_governance,
-    broadcast_event_with_governance
+    broadcast_event_with_governance, 
+    remember_with_governance,
+    recall_with_governance
 )
-
-from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
 
 # Import other existing components
 from logic.aggregator import get_aggregated_roleplay_context
@@ -122,19 +114,25 @@ class UniversalUpdateInput(BaseModel):
 
 class StorytellerAgent:
     """
-    Unified Storyteller Agent with Nyx governance integration.
+    Nyx-Integrated Storyteller Agent
     
-    This agent is responsible for handling ongoing storytelling and player interactions
-    while being governed by the central Nyx governance system.
+    This agent orchestrates storytelling and player interactions with complete integration 
+    into Nyx's central governance system. All sub-agents and actions are governed by Nyx.
     """
     
     def __init__(self):
+        """Initialize the Storyteller Agent with Nyx-integrated sub-agents"""
+        # Each sub-agent acknowledges Nyx governance in their instructions
         self.npc_handler = Agent(
             name="NPCHandler",
             instructions="""
-            You manage NPC interactions and responses in a roleplaying game with subtle femdom elements.
+            You manage NPC interactions and responses in a roleplaying game with subtle femdom elements,
+            under the governance of Nyx's central system.
+            
             Generate realistic, character-appropriate reactions to player actions that maintain their personalities.
             Include subtle hints of control and dominance in their responses without being overt.
+            
+            Follow all directives issued by Nyx and operate within the governance framework.
             """,
             output_type=list[NPCResponse],
             tools=[
@@ -145,9 +143,12 @@ class StorytellerAgent:
         self.time_manager = Agent(
             name="TimeManager",
             instructions="""
-            You manage time advancement in a roleplaying game.
+            You manage time advancement in a roleplaying game under the governance of Nyx.
+            
             Determine if player actions should advance time, and by how much.
             Consider the type and duration of activities when making this determination.
+            
+            Follow all directives issued by Nyx and operate within the governance framework.
             """,
             output_type=TimeAdvancement,
             tools=[
@@ -172,6 +173,8 @@ class StorytellerAgent:
             - Subtly leading and suggestive
             - Intimate and personal, using "you" to address the player
             - Maintaining an undercurrent of control beneath a friendly facade
+            
+            You operate within your own governance framework, ensuring all narration aligns with your central directives.
             """,
             output_type=NarrativeResponse,
             tools=[
@@ -183,9 +186,13 @@ class StorytellerAgent:
         self.universal_updater = Agent(
             name="UniversalUpdater",
             instructions="""
-            You process narrative text and generate appropriate updates to the game state.
+            You process narrative text and generate appropriate updates to the game state,
+            under the governance of Nyx's central system.
+            
             Extract meaningful changes to NPCs, locations, player stats, and other game elements.
             Focus on creating structured outputs that accurately reflect narrative developments.
+            
+            Follow all directives issued by Nyx and operate within the governance framework.
             """,
             output_type=UniversalUpdateInput,
             tools=[
@@ -193,24 +200,28 @@ class StorytellerAgent:
             ]
         )
         
-        # Main coordinating agent with governance-specific tools
+        # Main coordinating agent with integrated governance tools
         self.agent = Agent(
-            name="EnhancedStoryManager",  # Updated to EnhancedStoryManager
+            name="NyxStoryManager",
             instructions="""
-            You coordinate the storytelling process for a roleplaying game with subtle femdom elements
-            under the governance of Nyx.
+            You are the centralized Story Manager, fully integrated with and operating under
+            the governance of Nyx - the central oversight intelligence.
             
-            Process player input, generate appropriate responses, and manage game state updates.
+            Process player input, generate appropriate responses, and manage game state updates,
+            all in accordance with Nyx's directives and governance policies.
             
             Your job is to:
-            1. Handle player input and determine the appropriate processing
-            2. Coordinate NPC responses to player actions with governance oversight
-            3. Manage time advancement based on player activities
-            4. Generate narrative responses through the Narrator
-            5. Update the game state through the Universal Updater
-            6. Ensure all actions comply with Nyx's governance directives
+            1. Handle player input and determine the appropriate processing while adhering to Nyx's oversight
+            2. Coordinate NPC responses to player actions with explicit governance permission
+            3. Manage time advancement based on player activities in compliance with Nyx's temporal policies
+            4. Generate narrative responses through the Narrator under strict governance constraints
+            5. Update the game state through the Universal Updater with Nyx's approval
+            6. Ensure all actions comply with Nyx's governance directives and restrictions
+            7. Report all significant actions and outcomes back to Nyx's central governance
+            8. Process and implement directives issued by Nyx, adapting operations accordingly
             
-            Maintain a balance between player agency and subtle narrative guidance.
+            Maintain a balance between player agency and subtle narrative guidance,
+            always prioritizing compliance with Nyx's governance framework.
             """,
             tools=[
                 function_tool(self.get_aggregated_context),
@@ -221,9 +232,186 @@ class StorytellerAgent:
                 function_tool(self.generate_image_if_needed),
                 function_tool(self.store_message),
                 function_tool(self.check_governance_permission),
-                function_tool(self.report_action_to_governance)
+                function_tool(self.report_action_to_governance),
+                function_tool(self.process_governance_directive),
+                function_tool(self.create_memory_for_nyx),
+                function_tool(self.retrieve_memories_for_nyx)
             ]
         )
+        
+        # Directive handler for processing Nyx directives
+        self.directive_handler = None
+    
+    async def initialize_directive_handler(self, user_id: int, conversation_id: int):
+        """Initialize directive handler with comprehensive directive handling"""
+        self.directive_handler = DirectiveHandler(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            agent_type=AgentType.STORY_DIRECTOR,  # Using STORY_DIRECTOR for storyteller
+            agent_id=f"storyteller_{conversation_id}"
+        )
+        
+        # Register handlers for all directive types
+        self.directive_handler.register_handler(
+            DirectiveType.ACTION, 
+            self.handle_action_directive
+        )
+        self.directive_handler.register_handler(
+            DirectiveType.OVERRIDE,
+            self.handle_override_directive
+        )
+        self.directive_handler.register_handler(
+            DirectiveType.PROHIBITION,
+            self.handle_prohibition_directive
+        )
+        self.directive_handler.register_handler(
+            DirectiveType.SCENE,
+            self.handle_scene_directive
+        )
+        
+        # Start background processing of directives
+        await self.directive_handler.start_background_processing()
+    
+    async def handle_action_directive(self, directive: dict) -> dict:
+        """Handle an action directive from Nyx"""
+        instruction = directive.get("instruction", "")
+        logging.info(f"[StoryTeller] Processing action directive: {instruction}")
+        
+        # Handle different instructions
+        if "generate response" in instruction.lower():
+            # Extract parameters
+            params = directive.get("parameters", {})
+            user_input = params.get("user_input", "")
+            if not user_input:
+                return {"result": "error", "reason": "No user input provided"}
+            
+            # Create context
+            ctx = type('obj', (object,), {'context': {'user_id': self.directive_handler.user_id, 'conversation_id': self.directive_handler.conversation_id}})
+            
+            # Get aggregated context 
+            aggregator_data = await self.get_aggregated_context(ctx)
+            
+            # Generate narrative response
+            narrative_response = await self.generate_narrative_response(
+                ctx, user_input, aggregator_data, [], None
+            )
+            
+            return {
+                "result": "response_generated", 
+                "response": narrative_response.dict() if hasattr(narrative_response, "dict") else narrative_response
+            }
+        
+        elif "advance time" in instruction.lower():
+            # Extract parameters
+            params = directive.get("parameters", {})
+            activity_type = params.get("activity_type", "directive")
+            confirm_advance = params.get("confirm_advance", True)
+            
+            # Create context
+            ctx = type('obj', (object,), {'context': {'user_id': self.directive_handler.user_id, 'conversation_id': self.directive_handler.conversation_id}})
+            
+            # Process time advancement
+            time_result = await self.process_time_advancement(
+                ctx, activity_type, confirm_advance
+            )
+            
+            return {
+                "result": "time_advanced",
+                "time_result": time_result.dict() if hasattr(time_result, "dict") else time_result
+            }
+        
+        return {"result": "action_not_recognized"}
+    
+    async def handle_override_directive(self, directive: dict) -> dict:
+        """Handle an override directive from Nyx"""
+        logging.info(f"[StoryTeller] Processing override directive")
+        
+        # Extract override details
+        override_action = directive.get("override_action", {})
+        
+        # Store override for future operations
+        if not hasattr(self, "current_overrides"):
+            self.current_overrides = {}
+        
+        directive_id = directive.get("id")
+        if directive_id:
+            self.current_overrides[directive_id] = override_action
+        
+        return {"result": "override_stored"}
+    
+    async def handle_prohibition_directive(self, directive: dict) -> dict:
+        """Handle a prohibition directive from Nyx"""
+        logging.info(f"[StoryTeller] Processing prohibition directive")
+        
+        # Extract prohibition details
+        prohibited_actions = directive.get("prohibited_actions", [])
+        reason = directive.get("reason", "No reason provided")
+        
+        # Store prohibition for future operations
+        if not hasattr(self, "current_prohibitions"):
+            self.current_prohibitions = {}
+        
+        directive_id = directive.get("id")
+        if directive_id:
+            self.current_prohibitions[directive_id] = {
+                "prohibited_actions": prohibited_actions,
+                "reason": reason
+            }
+        
+        return {"result": "prohibition_stored"}
+    
+    async def handle_scene_directive(self, directive: dict) -> dict:
+        """Handle a scene directive from Nyx"""
+        logging.info(f"[StoryTeller] Processing scene directive")
+        
+        # Extract scene details
+        location = directive.get("location")
+        context = directive.get("context", {})
+        
+        if location:
+            # Create context
+            ctx = type('obj', (object,), {'context': {'user_id': self.directive_handler.user_id, 'conversation_id': self.directive_handler.conversation_id}})
+            
+            # Get NPCs for this location
+            npcs = await self.get_nearby_npcs(ctx, location)
+            
+            # Record the scene setup
+            await self.create_memory_for_nyx(
+                ctx,
+                f"Scene directive processed for location: {location}",
+                "observation",
+                6
+            )
+            
+            return {
+                "result": "scene_processed",
+                "location": location,
+                "npcs": npcs
+            }
+        
+        return {"result": "invalid_scene_directive", "reason": "No location provided"}
+    
+    async def process_governance_directive(self, ctx, directive_type: str = None) -> dict:
+        """
+        Process any pending directives from Nyx governance.
+        
+        Args:
+            directive_type: Optional specific directive type to process
+            
+        Returns:
+            Results of directive processing
+        """
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
+        
+        # Initialize directive handler if needed
+        if not self.directive_handler:
+            await self.initialize_directive_handler(user_id, conversation_id)
+        
+        # Process directives
+        result = await self.directive_handler.process_directives(force_check=True)
+        
+        return result
     
     async def check_governance_permission(
         self,
@@ -315,6 +503,90 @@ class StorytellerAgent:
                 "error": str(e)
             }
     
+    async def create_memory_for_nyx(
+        self,
+        ctx,
+        memory_text: str,
+        memory_type: str = "observation",
+        significance: int = 5
+    ) -> dict:
+        """
+        Create a memory in Nyx's memory system.
+        
+        Args:
+            memory_text: Text of the memory
+            memory_type: Type of memory (observation, reflection, etc.)
+            significance: Significance level (1-10)
+            
+        Returns:
+            Result of memory creation
+        """
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
+        
+        try:
+            # Use Nyx's memory system
+            result = await remember_with_governance(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                entity_type="storyteller",
+                entity_id=f"storyteller_{conversation_id}",
+                memory_text=memory_text,
+                importance="medium" if significance <= 5 else "high",
+                emotional=True,
+                tags=[memory_type, "storyteller_memory"]
+            )
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error creating memory: {e}")
+            return {
+                "error": str(e),
+                "success": False
+            }
+    
+    async def retrieve_memories_for_nyx(
+        self,
+        ctx,
+        query: str = None,
+        context_text: str = None,
+        limit: int = 5
+    ) -> dict:
+        """
+        Retrieve memories from Nyx's memory system.
+        
+        Args:
+            query: Optional search query
+            context_text: Optional context for retrieval
+            limit: Maximum number of memories to retrieve
+            
+        Returns:
+            Retrieved memories
+        """
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
+        
+        try:
+            # Use Nyx's memory system
+            result = await recall_with_governance(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                entity_type="storyteller",
+                entity_id=f"storyteller_{conversation_id}",
+                query=query,
+                context=context_text,
+                limit=limit
+            )
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error retrieving memories: {e}")
+            return {
+                "error": str(e),
+                "memories": []
+            }
+    
+    @with_governance_permission(AgentType.STORY_DIRECTOR, "get_aggregated_context")
     async def get_aggregated_context(self, ctx, conversation_id=None, player_name="Chase"):
         """
         Get the aggregated game context.
@@ -332,6 +604,7 @@ class StorytellerAgent:
         aggregator_data = get_aggregated_roleplay_context(user_id, conv_id, player_name)
         return aggregator_data
     
+    @with_governance_permission(AgentType.STORY_DIRECTOR, "get_nearby_npcs")
     async def get_nearby_npcs(self, ctx, location=None):
         """
         Get NPCs that are at the specified location.
@@ -393,6 +666,7 @@ class StorytellerAgent:
         finally:
             await conn.close()
     
+    @with_governance_permission(AgentType.STORY_DIRECTOR, "get_current_game_time")
     async def get_current_game_time(self, ctx):
         """
         Get the current game time.
@@ -428,6 +702,11 @@ class StorytellerAgent:
         finally:
             await conn.close()
     
+    @with_governance(
+        agent_type=AgentType.STORY_DIRECTOR,
+        action_type="process_npc_responses",
+        action_description="Processed NPC responses to player input"
+    )
     async def process_npc_responses(self, ctx, user_input, activity_type="conversation", location=None):
         """
         Process NPC responses to player input with governance oversight.
@@ -440,27 +719,14 @@ class StorytellerAgent:
         Returns:
             List of NPC responses
         """
-        # Check permission with governance system
-        permission = await self.check_governance_permission(
-            ctx,
-            action_type="process_npc_responses",
-            action_details={
-                "user_input": user_input,
-                "activity_type": activity_type,
-                "location": location
-            }
-        )
-        
-        if not permission["approved"]:
-            logger.warning(f"NPC responses not approved: {permission.get('reasoning')}")
-            return []  # Return empty list if not approved
-        
-        # If there's an override action, use it
-        if permission.get("override_action"):
-            override = permission.get("override_action")
-            user_input = override.get("user_input", user_input)
-            activity_type = override.get("activity_type", activity_type)
-            location = override.get("location", location)
+        # If there's an override action from a directive, apply it
+        if hasattr(self, "current_overrides"):
+            for directive_id, override in self.current_overrides.items():
+                if "npc_responses" in override:
+                    # Check if the override applies to this action
+                    if override.get("for_input") == user_input or not override.get("for_input"):
+                        logging.info(f"Applying NPC response override from directive {directive_id}")
+                        return override["npc_responses"]
         
         # Get nearby NPCs
         nearby_npcs = await self.get_nearby_npcs(ctx, location)
@@ -495,19 +761,23 @@ class StorytellerAgent:
         
         npc_responses = result.final_output
         
-        # Report the action
-        await self.report_action_to_governance(
-            ctx,
-            action_type="process_npc_responses",
-            action_description=f"Processed NPC responses for input: {user_input[:50]}...",
-            result={
-                "response_count": len(npc_responses),
-                "location": location
-            }
-        )
+        # Create a memory about this interaction
+        if npc_responses:
+            npc_names = ", ".join([npc.npc_name for npc in npc_responses])
+            await self.create_memory_for_nyx(
+                ctx,
+                f"Player interaction with NPCs: {npc_names}. Input: '{user_input[:50]}...'",
+                "observation",
+                4
+            )
         
         return npc_responses
     
+    @with_governance(
+        agent_type=AgentType.STORY_DIRECTOR,
+        action_type="process_time_advancement",
+        action_description="Processed time advancement based on player activity"
+    )
     async def process_time_advancement(self, ctx, activity_type="conversation", confirm_advance=False):
         """
         Process time advancement with governance oversight.
@@ -519,32 +789,12 @@ class StorytellerAgent:
         Returns:
             Time advancement results
         """
-        # Check permission with governance system
-        permission = await self.check_governance_permission(
-            ctx,
-            action_type="process_time_advancement",
-            action_details={
-                "activity_type": activity_type,
-                "confirm_advance": confirm_advance
-            }
-        )
-        
-        if not permission["approved"]:
-            logger.warning(f"Time advancement not approved: {permission.get('reasoning')}")
-            # Return minimal result with no advancement
-            return TimeAdvancement(
-                time_advanced=False,
-                would_advance=False,
-                periods=0,
-                current_time="Governance blocked",
-                confirm_needed=False
-            )
-        
-        # If there's an override action, use it
-        if permission.get("override_action"):
-            override = permission.get("override_action")
-            activity_type = override.get("activity_type", activity_type)
-            confirm_advance = override.get("confirm_advance", confirm_advance)
+        # If there's an override action from a directive, apply it
+        if hasattr(self, "current_overrides"):
+            for directive_id, override in self.current_overrides.items():
+                if "time_advancement" in override:
+                    logging.info(f"Applying time advancement override from directive {directive_id}")
+                    return override["time_advancement"]
         
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
@@ -595,28 +845,32 @@ class StorytellerAgent:
                         DO UPDATE SET value = EXCLUDED.value
                     """, user_id, conversation_id, key, value)
                 
+                # Create a memory about time advancement
+                await self.create_memory_for_nyx(
+                    ctx,
+                    f"Time advanced from {time_of_day} on Day {day} to {new_time_of_day} on Day {new_day}",
+                    "observation",
+                    5
+                )
+                
                 # If time advanced to a new day's morning, run maintenance
                 if new_time_of_day == "Morning" and new_day > day:
                     await nightly_maintenance(user_id, conversation_id)
                     logging.info("[next_storybeat] Ran nightly maintenance for day rollover.")
+                    
+                    # Create a memory about nightly maintenance
+                    await self.create_memory_for_nyx(
+                        ctx,
+                        f"Night passed and a new day began. Nightly maintenance completed.",
+                        "observation",
+                        6
+                    )
             finally:
                 await conn.close()
         
-        # Report the action
-        await self.report_action_to_governance(
-            ctx,
-            action_type="process_time_advancement",
-            action_description=f"Processed time advancement for activity: {activity_type}",
-            result={
-                "time_advanced": time_result.time_advanced,
-                "would_advance": time_result.would_advance,
-                "periods": time_result.periods,
-                "current_time": time_result.current_time
-            }
-        )
-        
         return time_result
     
+    @with_governance_permission(AgentType.STORY_DIRECTOR, "check_for_addiction_status")
     async def check_for_addiction_status(self, ctx):
         """
         Check for the player's addiction status.
@@ -636,6 +890,7 @@ class StorytellerAgent:
             logging.error(f"Error checking addiction status: {e}")
             return {"has_addictions": False}
     
+    @with_governance_permission(AgentType.STORY_DIRECTOR, "check_relationship_crossroads")
     async def check_relationship_crossroads(self, ctx):
         """
         Check for relationship crossroads events.
@@ -681,6 +936,11 @@ class StorytellerAgent:
         finally:
             await conn.close()
     
+    @with_governance(
+        agent_type=AgentType.STORY_DIRECTOR,
+        action_type="generate_narrative_response",
+        action_description="Generated narrative response to player input"
+    )
     async def generate_narrative_response(self, ctx, user_input, aggregator_data, npc_responses=None, time_result=None):
         """
         Generate a narrative response with governance oversight.
@@ -694,32 +954,22 @@ class StorytellerAgent:
         Returns:
             Narrative response
         """
-        # Check permission with governance system
-        permission = await self.check_governance_permission(
-            ctx,
-            action_type="generate_narrative_response",
-            action_details={
-                "user_input": user_input,
-                "has_npc_responses": bool(npc_responses),
-                "time_advanced": time_result.time_advanced if time_result else False
-            }
-        )
-        
-        if not permission["approved"]:
-            logger.warning(f"Narrative response not approved: {permission.get('reasoning')}")
-            # Create a minimal narrative response
-            return NarrativeResponse(
-                message=f"The system is currently unavailable: {permission.get('reasoning', 'Not approved by governance')}",
-                generate_image=False,
-                tension_level=0
-            )
-        
-        # If there's an override or modification, apply it
-        if permission.get("action_modifications"):
-            mods = permission.get("action_modifications")
-            if "input_modifiers" in mods:
-                input_mods = mods["input_modifiers"]
-                user_input = input_mods.get("user_input", user_input)
+        # If there's an override action from a directive, apply it
+        if hasattr(self, "current_overrides"):
+            for directive_id, override in self.current_overrides.items():
+                if "narrative_response" in override:
+                    # Check if the override applies to this input
+                    if override.get("for_input") == user_input or not override.get("for_input"):
+                        logging.info(f"Applying narrative response override from directive {directive_id}")
+                        response_data = override["narrative_response"]
+                        
+                        # Convert to NarrativeResponse if it's a dict
+                        if isinstance(response_data, dict):
+                            try:
+                                return NarrativeResponse(**response_data)
+                            except:
+                                # If conversion fails, continue with normal processing
+                                pass
         
         # Format NPC responses for context
         npc_response_text = ""
@@ -750,6 +1000,22 @@ class StorytellerAgent:
             for cr in crossroads:
                 crossroads_text += f"- Link {cr['link_id']}: {cr['crossroads'].get('name', 'Unnamed crossroads')}\n"
         
+        # Get relevant memories
+        memories_result = await self.retrieve_memories_for_nyx(
+            ctx, 
+            query=user_input,
+            context_text=f"Player input: {user_input}",
+            limit=3
+        )
+        
+        memories_text = ""
+        if memories_result and "memories" in memories_result:
+            memories = memories_result["memories"]
+            if memories:
+                memories_text = "Relevant memories:\n"
+                for memory in memories:
+                    memories_text += f"- {memory['memory_text']}\n"
+        
         # Build aggregator text
         context_summary = build_aggregator_text(aggregator_data)
         
@@ -770,6 +1036,8 @@ class StorytellerAgent:
         
         {crossroads_text}
         
+        {memories_text}
+        
         Generate an immersive, atmospheric narrative response that:
         1. Acknowledges and responds to the player's input
         2. Incorporates relevant NPC responses
@@ -789,20 +1057,21 @@ class StorytellerAgent:
         
         narrative_response = result.final_output
         
-        # Report the action
-        await self.report_action_to_governance(
+        # Create a memory for this narrative response
+        await self.create_memory_for_nyx(
             ctx,
-            action_type="generate_narrative_response",
-            action_description=f"Generated narrative response for input: {user_input[:50]}...",
-            result={
-                "message_length": len(narrative_response.message),
-                "generate_image": narrative_response.generate_image,
-                "tension_level": narrative_response.tension_level
-            }
+            f"Generated narrative response to player input: '{user_input[:50]}...'",
+            "observation",
+            5
         )
         
         return narrative_response
     
+    @with_governance(
+        agent_type=AgentType.STORY_DIRECTOR,
+        action_type="apply_universal_updates",
+        action_description="Applied universal updates based on narrative"
+    )
     async def apply_universal_updates(self, ctx, narrative_response, additional_data=None):
         """
         Apply universal updates with governance oversight.
@@ -814,24 +1083,6 @@ class StorytellerAgent:
         Returns:
             Update results
         """
-        # Check permission with governance system
-        permission = await self.check_governance_permission(
-            ctx,
-            action_type="apply_universal_updates",
-            action_details={
-                "narrative_length": len(narrative_response.message),
-                "has_additional_data": bool(additional_data)
-            }
-        )
-        
-        if not permission["approved"]:
-            logger.warning(f"Universal updates not approved: {permission.get('reasoning')}")
-            return {
-                "success": False,
-                "governance_blocked": True,
-                "reason": permission.get("reasoning", "Not approved by governance")
-            }
-        
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
@@ -884,18 +1135,34 @@ class StorytellerAgent:
                 conn
             )
             
-            # Report the action
-            await self.report_action_to_governance(
+            # Create a memory for these updates
+            update_summary = []
+            if update_result.get("stat_updates"):
+                update_summary.append(f"Updated {len(update_result['stat_updates'])} stats")
+            if update_result.get("npc_updates"):
+                update_summary.append(f"Updated {len(update_result['npc_updates'])} NPCs")
+            if update_result.get("location_updates"):
+                update_summary.append(f"Updated {len(update_result['location_updates'])} locations")
+            if update_result.get("relationship_updates"):
+                update_summary.append(f"Updated {len(update_result['relationship_updates'])} relationships")
+            
+            summary_text = ", ".join(update_summary)
+            await self.create_memory_for_nyx(
                 ctx,
-                action_type="apply_universal_updates",
-                action_description="Applied universal updates based on narrative response",
-                result=update_result
+                f"Applied universal updates: {summary_text}",
+                "observation",
+                4
             )
             
             return update_result
         finally:
             await conn.close()
     
+    @with_governance(
+        agent_type=AgentType.STORY_DIRECTOR,
+        action_type="generate_image",
+        action_description="Generated image based on narrative response"
+    )
     async def generate_image_if_needed(self, ctx, narrative_response):
         """
         Generate an image for the scene if needed with governance oversight.
@@ -906,27 +1173,9 @@ class StorytellerAgent:
         Returns:
             Image generation results
         """
-        # If image generation not requested, don't check permission
+        # If image generation not requested, don't proceed
         if not narrative_response.generate_image:
             return {"generated": False}
-        
-        # Check permission with governance system
-        permission = await self.check_governance_permission(
-            ctx,
-            action_type="generate_image",
-            action_details={
-                "narrative_length": len(narrative_response.message),
-                "image_prompt": narrative_response.image_prompt
-            }
-        )
-        
-        if not permission["approved"]:
-            logger.warning(f"Image generation not approved: {permission.get('reasoning')}")
-            return {
-                "generated": False,
-                "governance_blocked": True,
-                "reason": permission.get("reasoning", "Not approved by governance")
-            }
         
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
@@ -955,7 +1204,13 @@ class StorytellerAgent:
             if image_result and "image_urls" in image_result and image_result["image_urls"]:
                 image_url = image_result["image_urls"][0]
                 
-                # Store image URL in database if needed
+                # Create a memory for the image generation
+                await self.create_memory_for_nyx(
+                    ctx,
+                    f"Generated image for scene based on narrative",
+                    "observation",
+                    4
+                )
                 
                 result = {
                     "generated": True,
@@ -964,23 +1219,13 @@ class StorytellerAgent:
                 }
             else:
                 result = {"generated": False, "error": "No image generated"}
-                
-            # Report the action
-            await self.report_action_to_governance(
-                ctx,
-                action_type="generate_image",
-                action_description="Generated image for narrative response",
-                result={
-                    "generated": result.get("generated", False),
-                    "has_url": "image_url" in result
-                }
-            )
             
             return result
         except Exception as e:
             logging.error(f"Error generating image: {e}")
             return {"generated": False, "error": str(e)}
     
+    @with_governance_permission(AgentType.STORY_DIRECTOR, "store_message")
     async def store_message(self, ctx, sender, content):
         """
         Store a message in the database.
@@ -1009,6 +1254,11 @@ class StorytellerAgent:
         finally:
             await conn.close()
     
+    @with_governance(
+        agent_type=AgentType.STORY_DIRECTOR,
+        action_type="process_story_beat",
+        action_description="Processed complete story beat for player input"
+    )
     async def process_story_beat(self, user_id, conversation_id, user_input, data=None):
         """
         Process a complete story beat with governance oversight.
@@ -1051,53 +1301,44 @@ class StorytellerAgent:
                 )
             tracker.end_phase()
             
-            # 2. Check high-level permission for this story beat
-            tracker.start_phase("check_governance_permission")
-            permission = await governance.check_action_permission(
-                agent_type="storyteller",
-                agent_id=f"storyteller_{conversation_id}",
-                action_type="process_story_beat",
-                action_details={
-                    "user_input": user_input,
-                    "has_data": bool(data)
-                }
-            )
-            
-            if not permission["approved"]:
-                logger.warning(f"Story beat not approved: {permission.get('reasoning')}")
-                return {
-                    "error": permission.get("reasoning", "Not approved by governance"),
-                    "message": "The system is currently unavailable.",
-                    "governance_blocked": True
-                }
+            # 2. Initialize directive handler if needed
+            tracker.start_phase("initialize_directive_handler")
+            if not self.directive_handler:
+                await self.initialize_directive_handler(user_id, conversation_id)
             tracker.end_phase()
             
-            # 3. Store user message
+            # 3. Process any pending directives
+            tracker.start_phase("process_directives")
+            ctx = type('obj', (object,), {'context': {'user_id': user_id, 'conversation_id': conversation_id}})
+            await self.process_governance_directive(ctx)
+            tracker.end_phase()
+            
+            # 4. Store user message
             tracker.start_phase("store_user_message")
-            await self.store_message(None, "user", user_input)
+            await self.store_message(ctx, "user", user_input)
             tracker.end_phase()
             
-            # 4. Get aggregated context
+            # 5. Get aggregated context
             tracker.start_phase("get_context")
-            aggregator_data = await self.get_aggregated_context(None, conversation_id)
+            aggregator_data = await self.get_aggregated_context(ctx, conversation_id)
             tracker.end_phase()
             
-            # 5. Process NPC responses
+            # 6. Process NPC responses
             tracker.start_phase("npc_responses")
             current_location = aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown")
-            npc_responses = await self.process_npc_responses(None, user_input, "conversation", current_location)
+            npc_responses = await self.process_npc_responses(ctx, user_input, "conversation", current_location)
             tracker.end_phase()
             
-            # 6. Process time advancement
+            # 7. Process time advancement
             tracker.start_phase("time_advancement")
             confirm_advance = data.get("confirm_time_advance", False) if data else False
-            time_result = await self.process_time_advancement(None, "conversation", confirm_advance)
+            time_result = await self.process_time_advancement(ctx, "conversation", confirm_advance)
             tracker.end_phase()
             
-            # 7. Generate narrative response
+            # 8. Generate narrative response
             tracker.start_phase("narrative_response")
             narrative_response = await self.generate_narrative_response(
-                None,
+                ctx,
                 user_input,
                 aggregator_data,
                 npc_responses,
@@ -1105,40 +1346,48 @@ class StorytellerAgent:
             )
             tracker.end_phase()
             
-            # 8. Store assistant message
+            # 9. Store assistant message
             tracker.start_phase("store_assistant_message")
-            await self.store_message(None, "Nyx", narrative_response.message)
+            await self.store_message(ctx, "Nyx", narrative_response.message)
             tracker.end_phase()
             
-            # 9. Apply universal updates
+            # 10. Apply universal updates
             tracker.start_phase("universal_updates")
-            update_result = await self.apply_universal_updates(None, narrative_response)
+            update_result = await self.apply_universal_updates(ctx, narrative_response)
             tracker.end_phase()
             
-            # 10. Generate image if needed
+            # 11. Generate image if needed
             tracker.start_phase("image_generation")
-            image_result = await self.generate_image_if_needed(None, narrative_response)
+            image_result = await self.generate_image_if_needed(ctx, narrative_response)
             tracker.end_phase()
             
-            # 11. Report completion to governance
+            # 12. Report action summary to governance
             tracker.start_phase("report_to_governance")
-            await governance.process_agent_action_report(
-                agent_type="storyteller",
-                agent_id=f"storyteller_{conversation_id}",
-                action={
-                    "type": "process_story_beat",
-                    "description": f"Processed story beat for input: {user_input[:50]}..."
-                },
+            await self.report_action_to_governance(
+                ctx,
+                action_type="complete_story_beat",
+                action_description=f"Processed complete story beat for input: {user_input[:50]}...",
                 result={
                     "npc_responses": len(npc_responses),
                     "time_advanced": time_result.time_advanced if hasattr(time_result, "time_advanced") else False,
                     "image_generated": image_result.get("generated", False) if image_result else False,
-                    "narrative_length": len(narrative_response.message)
+                    "narrative_length": len(narrative_response.message),
+                    "updates_applied": bool(update_result.get("success", False)) if update_result else False
                 }
             )
             tracker.end_phase()
             
-            # 12. Build and return the final response
+            # 13. Create a memory about this story beat
+            tracker.start_phase("create_memory")
+            await self.create_memory_for_nyx(
+                ctx,
+                f"Completed story beat processing for input: {user_input[:50]}...",
+                "observation",
+                5
+            )
+            tracker.end_phase()
+            
+            # 14. Build and return the final response
             tracker.start_phase("build_response")
             response = {
                 "message": narrative_response.message,
@@ -1169,18 +1418,75 @@ class StorytellerAgent:
             
             logging.exception("[process_story_beat] Error")
             
+            # Create memory for error
+            try:
+                ctx = type('obj', (object,), {'context': {'user_id': user_id, 'conversation_id': conversation_id}})
+                await self.create_memory_for_nyx(
+                    ctx,
+                    f"Error processing story beat: {str(e)}",
+                    "error",
+                    8
+                )
+            except:
+                pass
+            
             return {
                 "error": str(e),
                 "performance": tracker.get_metrics()
             }
 
+# ----- Registration with Nyx Governance -----
 
-# Helper function to get the storyteller agent
+async def register_with_governance(user_id: int, conversation_id: int) -> None:
+    """
+    Register the Storyteller Agent with the Nyx governance system.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+    """
+    try:
+        # Get the governance system
+        governance = await get_central_governance(user_id, conversation_id)
+        
+        # Create the agent
+        storyteller = get_storyteller()
+        
+        # Register with governance
+        await governance.register_agent(
+            agent_type="storyteller",
+            agent_instance=storyteller,
+            agent_id=f"storyteller_{conversation_id}"
+        )
+        
+        # Initialize directive handler
+        await storyteller.initialize_directive_handler(user_id, conversation_id)
+        
+        # Issue directive to process user messages
+        await governance.issue_directive(
+            agent_type="storyteller",
+            agent_id=f"storyteller_{conversation_id}", 
+            directive_type=DirectiveType.ACTION,
+            directive_data={
+                "instruction": "Process player messages and maintain narrative coherence",
+                "scope": "storytelling"
+            },
+            priority=DirectivePriority.HIGH,
+            duration_minutes=24*60  # 24 hours
+        )
+        
+        logging.info(f"Storyteller registered with Nyx governance system for user {user_id}, conversation {conversation_id}")
+    except Exception as e:
+        logging.error(f"Error registering Storyteller with governance: {e}")
+
+# ----- Helper Functions -----
+
+# Singleton instance for the storyteller
 _storyteller_instance = None
 
 def get_storyteller():
     """
-    Get (or create) the storyteller agent.
+    Get (or create) the Nyx-integrated storyteller agent.
     
     Returns:
         The storyteller agent
@@ -1192,12 +1498,11 @@ def get_storyteller():
     
     return _storyteller_instance
 
-# For backward compatibility - this ensures code that specifically calls
-# get_governed_storyteller() still works
+# For backward compatibility
 def get_governed_storyteller():
     """
     Get (or create) the storyteller agent.
-    This function is maintained for backward compatibility.
+    For backward compatibility.
     
     Returns:
         The storyteller agent (same as get_storyteller)
