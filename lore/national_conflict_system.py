@@ -1517,3 +1517,65 @@ class NationalConflictSystem:
         )
         
         logging.info(f"NationalConflictSystem registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_culture_war",
+        action_description="Generating culture war for nation {nation_id}",
+        id_from_context=lambda ctx: "national_conflict_system"
+    )
+    async def generate_culture_war(self, ctx, nation_id: int) -> Dict[str, Any]:
+        """
+        Generate a culture war around music, media, art, or lifestyle with governance oversight.
+        
+        Args:
+            nation_id: ID of the nation
+            
+        Returns:
+            Details of the culture war
+        """
+        # Create run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get nation details
+        nation_data = await self._get_nation_data(nation_id)
+        
+        # Create agent for culture war generation
+        culture_agent = Agent(
+            name="CultureWarAgent",
+            instructions="You create realistic culture wars for fantasy nations.",
+            model="o3-mini"
+        )
+        
+        # Determine culture war type (music, media, fashion, art, lifestyle)
+        culture_war_types = ["music_movement", "media_controversy", "fashion_rebellion", 
+                           "art_movement", "lifestyle_conflict", "generational_divide"]
+        
+        culture_war_type = random.choice(culture_war_types)
+        
+        # Create prompt for the agent
+        prompt = f"""
+        Generate a {culture_war_type} culture war for this nation:
+        
+        NATION:
+        {json.dumps(nation_data, indent=2)}
+        
+        Create a detailed culture war that:
+        1. Has two clear opposing sides with specific values
+        2. Involves popular culture (music, media, fashion, etc.)
+        3. Reflects the nation's matriarchal power structures
+        4. Has both older and younger generations taking sides
+        
+        Return a JSON object with:
+        - type: "{culture_war_type}"
+        - name: Name of this cultural conflict
+        - description: Detailed description
+        - traditional_side: Description of the traditional/conservative side
+        - progressive_side: Description of the progressive/change side
+        - cultural_artifacts: Array of songs, shows, books, styles central to the conflict
+        - key_figures: Array of important figures on both sides
+        - venues: Places where this conflict plays out
+        - media_coverage: How media covers this conflict
+        - political_alignment: How it aligns with political factions
+        - current_status: Current state of the conflict
+        """
