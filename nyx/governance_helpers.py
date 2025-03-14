@@ -144,3 +144,154 @@ def with_governance_permission(
         return wrapper
     
     return decorator
+
+async def report_action(
+    user_id: int,
+    conversation_id: int,
+    agent_type: str,
+    agent_id: Union[int, str],
+    action: Dict[str, Any],
+    result: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Standard function to report actions to the governance system.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        agent_type: Type of agent (use AgentType constants)
+        agent_id: ID of agent instance
+        action: Information about the action performed
+        result: Result of the action
+        
+    Returns:
+        Dictionary with reporting results
+    """
+    try:
+        # Get governance system
+        governance = await get_central_governance(user_id, conversation_id)
+        
+        # Report action
+        report_result = await governance.process_agent_action_report(
+            agent_type=agent_type,
+            agent_id=agent_id,
+            action=action,
+            result=result
+        )
+        
+        return report_result
+    except Exception as e:
+        logger.error(f"Error reporting action: {e}")
+        logger.error(traceback.format_exc())
+        
+        # Return basic result in case of error
+        return {
+            "reported": False,
+            "error": str(e)
+        }
+
+def with_action_reporting(
+    agent_type: str,
+    action_description: str,
+    id_from_context: Optional[Callable] = None,
+    extract_result: Optional[Callable] = None
+):
+    """
+    Decorator to ensure an action is reported to governance.
+    
+    Args:
+        agent_type: Type of agent (use AgentType constants)
+        action_description: Description of the action
+        id_from_context: Optional function to extract agent_id from context
+        extract_result: Optional function to extract result details
+        
+    Returns:
+        Decorator function
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(self, ctx, *args, **kwargs):
+            # Extract user_id and conversation_id from context
+            user_id = ctx.context.get("user_id") if hasattr(ctx, "context") else getattr(ctx, "user_id", None)
+            conversation_id = ctx.context.get("conversation_id") if hasattr(ctx, "context") else getattr(ctx, "conversation_id", None)
+            
+            if not user_id or not conversation_id:
+                logger.warning(f"Missing user_id or conversation_id in context for {func.__name__}")
+                return await func(self, ctx, *args, **kwargs)
+            
+            # Determine agent_id
+            if id_from_context:
+                agent_id = id_from_context(ctx)
+            else:
+                agent_id = getattr(self, "agent_id", f"{agent_type}_{conversation_id}")
+            
+            # Execute function
+            result = await func(self, ctx, *args, **kwargs)
+            
+            # Create action details
+            action = {
+                "type": func.__name__,
+                "description": action_description.format(
+                    **{k: str(v)[:100] for k, v in kwargs.items()}
+                )
+            }
+            
+            # Extract result details for reporting
+            result_details = {}
+            if extract_result:
+                result_details = extract_result(result)
+            elif isinstance(result, dict):
+                # Extract basic details from result
+                for key in ["success", "message", "count", "length"]:
+                    if key in result:
+                        result_details[key] = result[key]
+            
+            # Report action
+            report_result = await report_action(
+                user_id,
+                conversation_id,
+                agent_type,
+                agent_id,
+                action,
+                result_details
+            )
+            
+            # If result is a dict, attach reporting info
+            if isinstance(result, dict):
+                result["governance_reported"] = report_result.get("reported", False)
+            
+            return result
+        
+        return wrapper
+    
+    return decorator
+
+def with_governance(
+    agent_type: str,
+    action_type: str,
+    action_description: str,
+    id_from_context: Optional[Callable] = None,
+    extract_result: Optional[Callable] = None
+):
+    """
+    Combined decorator for both permission checks and action reporting.
+    
+    Args:
+        agent_type: Type of agent (use AgentType constants)
+        action_type: Type of action being performed
+        action_description: Description of the action
+        id_from_context: Optional function to extract agent_id from context
+        extract_result: Optional function to extract result details
+        
+    Returns:
+        Decorator function
+    """
+    def decorator(func):
+        # Apply both decorators
+        permission_check = with_governance_permission(agent_type, action_type, id_from_context)
+        action_report = with_action_reporting(agent_type, action_description, id_from_context, extract_result)
+        
+        # Apply in correct order - permission check first, then action report
+        return action_report(permission_check(func))
+    
+    return decorator
