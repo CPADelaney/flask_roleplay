@@ -13,6 +13,14 @@ import json
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, Tuple
+from memory.memory_nyx_integration import (
+    get_memory_nyx_bridge,
+    remember_through_nyx,
+    recall_through_nyx,
+    create_belief_through_nyx,
+    run_maintenance_through_nyx
+)
+from memory.memory_agent_sdk import create_memory_agent, MemorySystemContext
 
 import asyncpg
 
@@ -72,10 +80,11 @@ class NyxCentralGovernance:
         # Components for specialized areas
         self.story_integration = StoryIntegration(user_id, conversation_id, self.governor)
         self.new_game_integration = NewGameIntegration(user_id, conversation_id, self.governor)
+        self.memory_integration = MemoryIntegration(user_id, conversation_id, self.governor)  # Add this line
         
         # Used to track registered agents
         self.registered_agents = {}
-    
+
     async def initialize(self):
         """Initialize the governance system and ensure database tables exist."""
         await self.governor.setup_database_tables()
@@ -83,31 +92,35 @@ class NyxCentralGovernance:
         # Register core system agents
         await self._register_core_agents()
         
+        # Initialize memory integration
+        await self.memory_integration.initialize()
+        
         logger.info(f"NyxCentralGovernance initialized for user {self.user_id}, conversation {self.conversation_id}")
     
     async def _register_core_agents(self):
         """Register core system agents with the governor."""
-        # Initialize and register story director
+        # Initialize and register memory agent
         try:
-            story_director, _ = await initialize_story_director(self.user_id, self.conversation_id)
-            await self.governor.register_agent(AgentType.STORY_DIRECTOR, story_director)
+            memory_context = MemorySystemContext(self.user_id, self.conversation_id)
+            memory_agent = create_memory_agent(self.user_id, self.conversation_id)
+            await self.governor.register_agent(AgentType.MEMORY_MANAGER, memory_agent)
             
-            # Issue general directive for story management
+            # Issue general directive for memory management
             await self.governor.issue_directive(
-                agent_type=AgentType.STORY_DIRECTOR,
-                agent_id="director",
+                agent_type=AgentType.MEMORY_MANAGER,
+                agent_id="memory_manager",
                 directive_type=DirectiveType.ACTION,
                 directive_data={
-                    "instruction": "Maintain narrative coherence and ensure femdom themes are subtle in early stages.",
+                    "instruction": "Maintain entity memories and ensure proper consolidation.",
                     "scope": "global"
                 },
-                priority=DirectivePriority.HIGH,
+                priority=DirectivePriority.MEDIUM,
                 duration_minutes=24*60  # 24 hours
             )
             
-            logger.info("Story Director registered with governance system")
+            logger.info("Memory Manager registered with governance system")
         except Exception as e:
-            logger.error(f"Error registering Story Director: {e}")
+            logger.error(f"Error registering Memory Manager: {e}")
         
         # Initialize and register new game agent
         try:
@@ -335,6 +348,160 @@ class EnhancedJointMemoryGraph(JointMemoryGraph):
         )
         
         return memory_id
+
+class MemoryIntegration:
+    """
+    Integration for Memory Manager with governance oversight.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int, governor: NyxUnifiedGovernor):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.governor = governor
+        self.memory_bridge = None
+    
+    async def initialize(self):
+        """Initialize the memory integration."""
+        self.memory_bridge = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
+        return self
+    
+    async def remember(
+        self,
+        entity_type: str,
+        entity_id: int,
+        memory_text: str,
+        importance: str = "medium",
+        emotional: bool = True,
+        tags: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Create a memory with governance oversight.
+        
+        Args:
+            entity_type: Type of entity
+            entity_id: ID of the entity
+            memory_text: The memory text
+            importance: Importance level
+            emotional: Whether to analyze emotional content
+            tags: Optional tags
+        """
+        return await self.memory_bridge.remember(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            memory_text=memory_text,
+            importance=importance,
+            emotional=emotional,
+            tags=tags
+        )
+    
+    async def recall(
+        self,
+        entity_type: str,
+        entity_id: int,
+        query: Optional[str] = None,
+        context: Optional[str] = None,
+        limit: int = 5
+    ) -> Dict[str, Any]:
+        """
+        Recall memories with governance oversight.
+        
+        Args:
+            entity_type: Type of entity
+            entity_id: ID of the entity
+            query: Optional search query
+            context: Current context
+            limit: Maximum number of memories to return
+        """
+        return await self.memory_bridge.recall(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            query=query,
+            context=context,
+            limit=limit
+        )
+    
+    async def create_belief(
+        self,
+        entity_type: str,
+        entity_id: int,
+        belief_text: str,
+        confidence: float = 0.7
+    ) -> Dict[str, Any]:
+        """
+        Create a belief with governance oversight.
+        
+        Args:
+            entity_type: Type of entity
+            entity_id: ID of the entity
+            belief_text: The belief statement
+            confidence: Confidence in this belief
+        """
+        return await self.memory_bridge.create_belief(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            belief_text=belief_text,
+            confidence=confidence
+        )
+    
+    async def run_memory_maintenance(
+        self,
+        entity_type: str,
+        entity_id: int
+    ) -> Dict[str, Any]:
+        """
+        Run memory maintenance with governance oversight.
+        
+        Args:
+            entity_type: Type of entity
+            entity_id: ID of the entity
+        """
+        return await self.memory_bridge.run_maintenance(
+            entity_type=entity_type,
+            entity_id=entity_id
+        )
+    
+    async def issue_memory_directive(
+        self,
+        directive_data: Dict[str, Any],
+        priority: int = DirectivePriority.MEDIUM,
+        duration_minutes: int = 30
+    ) -> int:
+        """
+        Issue a directive to the memory manager.
+        
+        Args:
+            directive_data: Directive data
+            priority: Directive priority
+            duration_minutes: Duration in minutes
+            
+        Returns:
+            Directive ID
+        """
+        directive_id = await self.governor.issue_directive(
+            agent_type=AgentType.MEMORY_MANAGER,
+            agent_id="memory_manager",
+            directive_type=DirectiveType.ACTION,
+            directive_data=directive_data,
+            priority=priority,
+            duration_minutes=duration_minutes
+        )
+        
+        return directive_id
+    
+    async def process_memory_directive(
+        self,
+        directive_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Process a directive for the memory system.
+        
+        Args:
+            directive_data: The directive data
+            
+        Returns:
+            Results of processing the directive
+        """
+        return await self.memory_bridge.process_memory_directive(directive_data)
 
 
 class EnhancedGameEventManager(GameEventManager):
@@ -1125,4 +1292,67 @@ async def add_joint_memory_with_governance(
     return await governance.memory_graph.add_joint_memory(
         memory_text, source_type, source_id, shared_with,
         significance, tags, metadata
+    )
+
+async def remember_with_governance(
+    user_id: int,
+    conversation_id: int,
+    entity_type: str,
+    entity_id: int,
+    memory_text: str,
+    importance: str = "medium",
+    emotional: bool = True,
+    tags: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Create a memory with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        entity_type: Type of entity
+        entity_id: ID of the entity
+        memory_text: The memory text
+        importance: Importance level
+        emotional: Whether to analyze emotional content
+        tags: Optional tags
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    return await governance.memory_integration.remember(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        memory_text=memory_text,
+        importance=importance,
+        emotional=emotional,
+        tags=tags
+    )
+
+async def recall_with_governance(
+    user_id: int,
+    conversation_id: int,
+    entity_type: str,
+    entity_id: int,
+    query: Optional[str] = None,
+    context: Optional[str] = None,
+    limit: int = 5
+) -> Dict[str, Any]:
+    """
+    Recall memories with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        entity_type: Type of entity
+        entity_id: ID of the entity
+        query: Optional search query
+        context: Current context
+        limit: Maximum number of memories to return
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    return await governance.memory_integration.recall(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        query=query,
+        context=context,
+        limit=limit
     )
