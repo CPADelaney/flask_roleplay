@@ -814,3 +814,24 @@ TimeCycleAgent = Agent[TimeCycleContext](
     # You could also add guardrails or more advanced instructions here.
 )
 
+async def register_with_governance(user_id: int, conversation_id: int):
+    """Register time cycle agent with Nyx governance system."""
+    governor = await get_central_governance(user_id, conversation_id)
+    await governor.register_agent(
+        agent_type=AgentType.UNIVERSAL_UPDATER,  # Or create a specific TIME_MANAGER type
+        agent_instance=TimeCycleAgent,
+        agent_id="time_cycle"
+    )
+    # Issue directive for time management
+    await governor.issue_directive(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        agent_id="time_cycle",
+        directive_type=DirectiveType.ACTION,
+        directive_data={
+            "instruction": "Manage time advancement and associated events",
+            "scope": "game"
+        },
+        priority=DirectivePriority.MEDIUM,
+        duration_minutes=24*60  # 24 hours
+    )
+    logging.info("Time cycle agent registered with Nyx governance")
