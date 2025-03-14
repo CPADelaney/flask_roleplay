@@ -44,16 +44,188 @@ from lore.lore_tools import (
 # Initialize cache for lore items
 LORE_CACHE = LoreCache(max_size=1000, ttl=7200)  # 2 hour TTL, larger cache
 
-class MatriarchalPowerStructureFramework:
+# Add this at the top of your file, after the imports but before any other classes
+
+class BaseLoreManager:
+    """
+    Base class for all lore management systems.
+    Provides common functionality for governance registration,
+    database access, and authorization.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        """
+        Initialize the base lore manager.
+        
+        Args:
+            user_id: ID of the user
+            conversation_id: ID of the conversation
+        """
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.lore_manager = LoreManager(user_id, conversation_id)
+        self.governor = None
+        self.initialized = False
+        
+    async def initialize_governance(self):
+        """
+        Initialize Nyx governance connection.
+        
+        Returns:
+            The governance instance
+        """
+        if not self.governor:
+            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+        return self.governor
+    
+    async def ensure_initialized(self):
+        """
+        Ensure governance is initialized and any necessary tables exist.
+        Should be overridden by derived classes to include table initialization.
+        """
+        if not self.initialized:
+            await self.ensure_initialized()
+            self.initialized = True
+    
+    async def register_with_governance(
+        self, 
+        agent_type: AgentType, 
+        agent_id: str, 
+        directive_text: str, 
+        scope: str = "world_building",
+        priority: DirectivePriority = DirectivePriority.MEDIUM
+    ):
+        """
+        Register with Nyx governance system.
+        
+        Args:
+            agent_type: Type of agent (from AgentType enum)
+            agent_id: Unique ID for this agent
+            directive_text: Text describing the directive
+            scope: Scope of the directive
+            priority: Priority level for the directive
+        """
+        await self.ensure_initialized()
+        
+        # Register this system with governance
+        await self.governor.register_agent(
+            agent_type=agent_type,
+            agent_id=agent_id,
+            agent_instance=self
+        )
+        
+        # Issue a directive
+        await self.governor.issue_directive(
+            agent_type=agent_type,
+            agent_id=agent_id,
+            directive_type=DirectiveType.ACTION,
+            directive_data={
+                "instruction": directive_text,
+                "scope": scope
+            },
+            priority=priority,
+            duration_minutes=24*60  # 24 hours
+        )
+        
+        logging.info(f"{agent_id} registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
+    
+    async def check_permission(
+        self, 
+        agent_type: AgentType, 
+        agent_id: str, 
+        action_type: str, 
+        action_details: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Check if an action is permitted by governance system.
+        
+        Args:
+            agent_type: Type of agent
+            agent_id: ID of the agent
+            action_type: Type of action
+            action_details: Details of the action
+            
+        Returns:
+            Dictionary with permission result
+        """
+        await self.ensure_initialized()
+        
+        permission = await self.governor.check_action_permission(
+            agent_type=agent_type,
+            agent_id=agent_id,
+            action_type=action_type,
+            action_details=action_details
+        )
+        
+        return permission
+    
+    async def report_action(
+        self, 
+        agent_type: AgentType, 
+        agent_id: str, 
+        action: Dict[str, Any], 
+        result: Dict[str, Any]
+    ):
+        """
+        Report an action to the governance system.
+        
+        Args:
+            agent_type: Type of agent
+            agent_id: ID of the agent
+            action: Action details
+            result: Result of the action
+        """
+        await self.ensure_initialized()
+        
+        await self.governor.process_agent_action_report(
+            agent_type=agent_type,
+            agent_id=agent_id,
+            action=action,
+            result=result
+        )
+    
+    async def get_connection_pool(self):
+        """
+        Get a database connection pool.
+        
+        Returns:
+            Database connection pool
+        """
+        return await self.lore_manager.get_connection_pool()
+    
+    def create_run_context(self, ctx=None):
+        """
+        Create a run context for agents.
+        
+        Args:
+            ctx: Optional existing context
+            
+        Returns:
+            RunContextWrapper instance
+        """
+        if ctx:
+            return RunContextWrapper(context=ctx.context)
+        else:
+            return RunContextWrapper(context={
+                "user_id": self.user_id,
+                "conversation_id": self.conversation_id
+            })
+    
+    async def initialize_tables(self):
+        """
+        Initialize database tables.
+        Should be overridden by derived classes.
+        """
+        pass
+
+class MatriarchalPowerStructureFramework(BaseLoreManager):
     """
     Defines core principles for power dynamics in femdom settings,
     ensuring consistency across all generated lore.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.lore_manager = LoreManager(user_id, conversation_id)
+        super().__init__(user_id, conversation_id)
         self.core_principles = self._initialize_core_principles()
         
     def _initialize_core_principles(self) -> Dict[str, Any]:
@@ -263,7 +435,7 @@ class MatriarchalPowerStructureFramework:
         
         return expressions
 
-class LoreDynamicsSystem:
+class LoreDynamicsSystem(BaseLoreManager):
     """
     Consolidated system for evolving world lore, generating emergent events,
     expanding content, and managing how the world changes over time.
@@ -271,22 +443,19 @@ class LoreDynamicsSystem:
     """
     
     def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.lore_manager = LoreManager(user_id, conversation_id)
+        super().__init__(user_id, conversation_id)
         self.faith_system = ReligionManager(user_id, conversation_id)
         self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
-        self.governor = None
-        
-    async def initialize_governance(self):
-        """Initialize Nyx governance connection"""
-        if not self.governor:
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        return self.governor
+    
+    async def ensure_initialized(self):
+        """Ensure system is initialized"""
+        if not self.initialized:
+            await super().ensure_initialized()
+            await self.initialize_tables()
     
     async def initialize_tables(self):
         """Ensure required tables exist"""
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Ensure LoreChangeHistory table exists
                 history_table_exists = await conn.fetchval("""
@@ -321,20 +490,13 @@ class LoreDynamicsSystem:
         action_description="Evolving lore with event",
         id_from_context=lambda ctx: "lore_dynamics"
     )
+    
     async def evolve_lore_with_event(self, event_description: str) -> Dict[str, Any]:
-        """
-        Update world lore based on a significant narrative event
+        # Ensure initialized
+        await self.ensure_initialized()
         
-        Args:
-            event_description: Description of the narrative event
-            
-        Returns:
-            Dictionary with lore updates
-        """
-        # Check permissions with governance system
-        await self.initialize_governance()
-        
-        permission = await self.governor.check_action_permission(
+        # Check permissions
+        permission = await self.check_permission(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="lore_generator",
             action_type="evolve_lore_with_event",
@@ -358,7 +520,7 @@ class LoreDynamicsSystem:
         new_elements = await self._generate_consequential_lore(event_description, affected_elements)
         
         # 5. Report to governance system
-        await self.governor.process_agent_action_report(
+        await self.report_action(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="lore_generator",
             action={
@@ -407,7 +569,7 @@ class LoreDynamicsSystem:
             "NotableFigures"
         ]
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 for lore_type in lore_types:
                     try:
@@ -616,7 +778,7 @@ class LoreDynamicsSystem:
         Args:
             updates: List of updates to apply
         """
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 for update in updates:
                     lore_type = update['lore_type']
@@ -855,7 +1017,7 @@ class LoreDynamicsSystem:
             Summary of maturation changes
         """
         # Check permissions with governance system
-        await self.initialize_governance()
+        await self.ensure_initialized()
         
         permission = await self.governor.check_action_permission(
             agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -940,7 +1102,7 @@ class LoreDynamicsSystem:
         run_ctx = RunContextWrapper(context=ctx.context)
         
         # Get current world state for context
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get active factions
                 factions = await conn.fetch("""
@@ -1138,7 +1300,7 @@ class LoreDynamicsSystem:
             season = random.choice(seasons)
             
         # Get relevant data for context
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get cultural elements
                 cultural_elements = await conn.fetch("""
@@ -1321,7 +1483,7 @@ class LoreDynamicsSystem:
         run_ctx = RunContextWrapper(context=ctx.context)
         
         # Get existing nations for context
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check how many nations we already have
                 nation_count = await conn.fetchval("""
@@ -1488,7 +1650,7 @@ class LoreDynamicsSystem:
         run_ctx = RunContextWrapper(context=ctx.context)
         
         # Get existing factions for context
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get existing factions
                 existing_factions = await conn.fetch("""
@@ -1642,7 +1804,7 @@ class LoreDynamicsSystem:
             location_types = ["settlement", "wilderness", "landmark", "dungeon", "ruin"]
         
         # Get context for location generation
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get existing locations
                 existing_locations = await conn.fetch("""
@@ -1786,7 +1948,7 @@ class LoreDynamicsSystem:
             element_types = ["tradition", "custom", "taboo", "holiday", "ceremony", "social norm", "art form"]
         
         # Get context for cultural element generation
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get existing cultural elements
                 existing_elements = await conn.fetch("""
@@ -2024,7 +2186,7 @@ class LoreDynamicsSystem:
     
     async def _fetch_world_state(self) -> Dict[str, Any]:
         """Fetch current world state from database"""
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Example query - adjust based on your schema
                 world_state = await conn.fetchrow("""
@@ -2049,7 +2211,7 @@ class LoreDynamicsSystem:
         if not lore_id:
             return []
             
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 try:
                     # Example query - adjust based on your schema
@@ -2104,7 +2266,7 @@ class LoreDynamicsSystem:
         if not lore_id:
             return []
             
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 try:
                     # Example query - adjust based on your schema
@@ -2126,7 +2288,7 @@ class LoreDynamicsSystem:
         if not element_ids:
             return []
             
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 try:
                     # Example query - adjust based on your schema
@@ -2146,7 +2308,7 @@ class LoreDynamicsSystem:
         if not power_shifts:
             return
             
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 try:
                     # Get current power hierarchy
@@ -2170,28 +2332,16 @@ class LoreDynamicsSystem:
                 except Exception as e:
                     logging.error(f"Error updating world power balance: {e}")
     
+      
+    # Register this system with governance
     async def register_with_governance(self):
         """Register with Nyx governance system."""
-        await self.initialize_governance()
-        
-        # Register this system with governance
-        await self.governor.register_agent(
+        await super().register_with_governance(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="lore_dynamics",
-            agent_instance=self
-        )
-        
-        # Issue a directive for lore dynamics
-        await self.governor.issue_directive(
-            agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="lore_dynamics",
-            directive_type=DirectiveType.ACTION,
-            directive_data={
-                "instruction": "Evolve, expand, and develop world lore through emergent events and natural maturation.",
-                "scope": "world_building"
-            },
-            priority=DirectivePriority.MEDIUM,
-            duration_minutes=24*60  # 24 hours
+            directive_text="Evolve, expand, and develop world lore through emergent events and natural maturation.",
+            scope="world_building",
+            priority=DirectivePriority.MEDIUM
         )
         
         logging.info(f"LoreDynamicsSystem registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
@@ -2214,7 +2364,7 @@ class LoreDynamicsSystem:
         relationship_changes = {}
         
         # Get nation relationships
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get current relations
                 relations = await conn.fetch("""
@@ -2607,7 +2757,7 @@ class LoreDynamicsSystem:
         Returns:
             Region details
         """
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get region details
                 region = await conn.fetchrow("""
@@ -2639,7 +2789,7 @@ class LoreDynamicsSystem:
         Returns:
             List of territorial conflicts
         """
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if we have a dedicated conflicts table
                 has_conflicts_table = await conn.fetchval("""
@@ -2682,7 +2832,7 @@ class LoreDynamicsSystem:
         # This would implement territory transfer logic
         # For this example, we'll use a simplified placeholder
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get conflict details
                 conflict = await conn.fetchrow("""
@@ -2784,7 +2934,7 @@ class LoreDynamicsSystem:
             logging.error(f"Error getting conflicts: {e}")
             
         # Get major factions
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get major factions
                 factions = await conn.fetch("""
@@ -2838,7 +2988,7 @@ class LoreDynamicsSystem:
         connections = []
         
         # Check for potential faction connections
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Find factions that might connect to this character
                 character_description = character_data.get('description', '')
@@ -3681,7 +3831,7 @@ class LoreDynamicsSystem:
         changes = []
         
         # Choose a random sample of urban myths to evolve
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if we have a dedicated urban myths table
                 has_urban_myths_table = await conn.fetchval("""
@@ -3873,7 +4023,7 @@ class LoreDynamicsSystem:
         changes = []
         
         # Choose a random sample of cultural elements to develop
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 rows = await conn.fetch("""
                     SELECT id, name, type, description, significance, practiced_by
@@ -4038,7 +4188,7 @@ class LoreDynamicsSystem:
         changes = []
         
         # Load some faction data to work with
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get factions
                 factions = await conn.fetch("""
@@ -4422,7 +4572,7 @@ class LoreDynamicsSystem:
         changes = []
         
         # Check if we have a dedicated notable figures table
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 has_notable_figures_table = await conn.fetchval("""
                     SELECT EXISTS (
@@ -4625,27 +4775,24 @@ class LoreDynamicsSystem:
         
         return changes
         
-class UrbanMythManager:
+class UrbanMythManager(BaseLoreManager):
     """
     Manager for urban myths, local stories, and folk tales that develop organically
     across different regions and communities.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.lore_manager = LoreManager(user_id, conversation_id)
-        self.governor = None
-        
-    async def initialize_governance(self):
-        """Initialize Nyx governance connection"""
-        if not self.governor:
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        return self.governor
+        super().__init__(user_id, conversation_id)
+    
+    async def ensure_initialized(self):
+        """Ensure system is initialized"""
+        if not self.initialized:
+            await super().ensure_initialized()
+            await self.initialize_tables()
         
     async def initialize_tables(self):
         """Ensure urban myth tables exist"""
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if UrbanMyths table exists
                 table_exists = await conn.fetchval("""
@@ -4724,7 +4871,7 @@ class UrbanMythManager:
         regions_known = regions_known or ["local area"]
         
         # Store in database
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 myth_id = await conn.fetchval("""
                     INSERT INTO UrbanMyths (
@@ -4757,7 +4904,7 @@ class UrbanMythManager:
         # Ensure tables exist
         await self.initialize_tables()
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if we have a direct match where this location is the origin
                 direct_myths = await conn.fetch("""
@@ -4895,27 +5042,24 @@ class UrbanMythManager:
             logging.error(f"Failed to parse LLM response for urban myths: {response_text}")
             return []
 
-class LocalHistoryManager:
+class LocalHistoryManager(BaseLoreManager):
     """
     Manager for local histories, events, and landmarks that are specific
     to particular locations rather than the broader world history.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.lore_manager = LoreManager(user_id, conversation_id)
-        self.governor = None
-        
-    async def initialize_governance(self):
-        """Initialize Nyx governance connection"""
-        if not self.governor:
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        return self.governor
+        super().__init__(user_id, conversation_id)
+    
+    async def ensure_initialized(self):
+        """Ensure system is initialized"""
+        if not self.initialized:
+            await super().ensure_initialized()
+            await self.initialize_tables()
         
     async def initialize_tables(self):
         """Ensure local history tables exist"""
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if LocalHistories table exists
                 local_history_exists = await conn.fetchval("""
@@ -5039,7 +5183,7 @@ class LocalHistoryManager:
         embedding = await generate_embedding(embedding_text)
         
         # Store in database
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 event_id = await conn.fetchval("""
                     INSERT INTO LocalHistories (
@@ -5100,7 +5244,7 @@ class LocalHistoryManager:
         embedding = await generate_embedding(embedding_text)
         
         # Store in database
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 landmark_id = await conn.fetchval("""
                     INSERT INTO Landmarks (
@@ -5136,7 +5280,7 @@ class LocalHistoryManager:
         # Ensure tables exist
         await self.initialize_tables()
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 events = await conn.fetch("""
                     SELECT id, event_name, description, date_description, significance,
@@ -5168,7 +5312,7 @@ class LocalHistoryManager:
         # Ensure tables exist
         await self.initialize_tables()
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 landmarks = await conn.fetch("""
                     SELECT id, name, landmark_type, description, historical_significance,
@@ -5428,7 +5572,7 @@ class LocalHistoryManager:
     
     async def _get_world_history_context(self) -> str:
         """Get relevant world history for context when generating local history"""
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Try to get world history from WorldLore
                 world_history = await conn.fetchval("""
@@ -5455,7 +5599,7 @@ class LocalHistoryManager:
     
     async def _get_controlling_factions(self, location_id: int) -> List[Dict[str, Any]]:
         """Get factions that control a specific location"""
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get location details first
                 location = await conn.fetchrow("""
@@ -5504,27 +5648,24 @@ class LocalHistoryManager:
                 # If still nothing, return empty list
                 return []
 
-class EducationalSystemManager:
+class EducationalSystemManager(BaseLoreManager):
     """
     Manages how knowledge is taught and passed down across generations
     within the matriarchal society, including formal and informal systems.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.lore_manager = LoreManager(user_id, conversation_id)
-        self.governor = None
-        
-    async def initialize_governance(self):
-        """Initialize Nyx governance connection"""
-        if not self.governor:
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        return self.governor
+        super().__init__(user_id, conversation_id)
+    
+    async def ensure_initialized(self):
+        """Ensure system is initialized"""
+        if not self.initialized:
+            await super().ensure_initialized()
+            await self.initialize_tables()
         
     async def initialize_tables(self):
         """Ensure educational system tables exist"""
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if EducationalSystems table exists
                 table_exists = await conn.fetchval("""
@@ -5637,7 +5778,7 @@ class EducationalSystemManager:
         embedding = await generate_embedding(embedding_text)
         
         # Store in database
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 system_id = await conn.fetchval("""
                     INSERT INTO EducationalSystems (
@@ -5698,7 +5839,7 @@ class EducationalSystemManager:
         embedding = await generate_embedding(embedding_text)
         
         # Store in database
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 tradition_id = await conn.fetchval("""
                     INSERT INTO KnowledgeTraditions (
@@ -5734,7 +5875,7 @@ class EducationalSystemManager:
         })
         
         # Get factions for context
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 factions = await conn.fetch("""
                     SELECT name, type FROM Factions
@@ -5865,7 +6006,7 @@ class EducationalSystemManager:
         })
         
         # Get cultural elements for context
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 elements = await conn.fetch("""
                     SELECT name, type, description FROM CulturalElements
@@ -5973,27 +6114,24 @@ class EducationalSystemManager:
             logging.error(f"Failed to parse LLM response for knowledge traditions: {response_text}")
             return []
 
-class GeopoliticalSystemManager:
+class GeopoliticalSystemManager(BaseLoreManager):
     """
     Manages the geopolitical landscape of the world, including countries,
     regions, foreign relations, and international power dynamics.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.lore_manager = LoreManager(user_id, conversation_id)
-        self.governor = None
-        
-    async def initialize_governance(self):
-        """Initialize Nyx governance connection"""
-        if not self.governor:
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        return self.governor
+        super().__init__(user_id, conversation_id)
+    
+    async def ensure_initialized(self):
+        """Ensure system is initialized"""
+        if not self.initialized:
+            await super().ensure_initialized()
+            await self.initialize_tables()
         
     async def initialize_tables(self):
         """Ensure geopolitical system tables exist"""
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if Nations table exists
                 nations_exist = await conn.fetchval("""
@@ -6115,7 +6253,7 @@ class GeopoliticalSystemManager:
         embedding = await generate_embedding(embedding_text)
         
         # Store in database
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 nation_id = await conn.fetchval("""
                     INSERT INTO Nations (
@@ -6177,7 +6315,7 @@ class GeopoliticalSystemManager:
         notable_alliances = notable_alliances or []
         
         # Store in database
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 relation_id = await conn.fetchval("""
                     INSERT INTO InternationalRelations (
@@ -6217,7 +6355,7 @@ class GeopoliticalSystemManager:
         # Ensure tables exist
         await self.initialize_tables()
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 nations = await conn.fetch("""
                     SELECT id, name, government_type, description, relative_power,
@@ -6250,7 +6388,7 @@ class GeopoliticalSystemManager:
         # Ensure tables exist
         await self.initialize_tables()
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get relations where this nation is either nation1 or nation2
                 relations = await conn.fetch("""
@@ -6304,7 +6442,7 @@ class GeopoliticalSystemManager:
         })
         
         # Get world lore for context
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Try to get world history for context
                 world_history = await conn.fetchval("""
@@ -6617,28 +6755,25 @@ class GeopoliticalSystemManager:
 # Initialize cache for faiths
 FAITH_CACHE = LoreCache(max_size=200, ttl=7200)  # 2 hour TTL
 
-class ReligionManager:
+class ReligionManager(BaseLoreManager):
     """
     Comprehensive system for managing religions, faiths, and belief systems
     within the matriarchal society, including both creation and distribution.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.lore_manager = LoreManager(user_id, conversation_id)
-        self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id) 
-        self.governor = None
-        
-    async def initialize_governance(self):
-        """Initialize Nyx governance connection"""
-        if not self.governor:
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        return self.governor
+        super().__init__(user_id, conversation_id)
+        self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
+    
+    async def ensure_initialized(self):
+        """Ensure system is initialized"""
+        if not self.initialized:
+            await super().ensure_initialized()
+            await self.initialize_tables()
         
     async def initialize_tables(self):
         """Ensure all religion-related tables exist"""
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # --- Core Faith Tables ---
                 
@@ -7034,7 +7169,7 @@ class ReligionManager:
         embedding_text = f"{name} {gender} {' '.join(domain)} {description}"
         embedding = await generate_embedding(embedding_text)
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 deity_id = await conn.fetchval("""
                     INSERT INTO Deities (
@@ -7109,7 +7244,7 @@ class ReligionManager:
         embedding_text = f"{name} {description} {origin_story} {matriarchal_elements}"
         embedding = await generate_embedding(embedding_text)
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheon_id = await conn.fetchval("""
                     INSERT INTO Pantheons (
@@ -7180,7 +7315,7 @@ class ReligionManager:
         embedding_text = f"{name} {practice_type} {description} {purpose}"
         embedding = await generate_embedding(embedding_text)
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 practice_id = await conn.fetchval("""
                     INSERT INTO ReligiousPractices (
@@ -7255,7 +7390,7 @@ class ReligionManager:
         embedding_text = f"{name} {site_type} {description} {clergy_type}"
         embedding = await generate_embedding(embedding_text)
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 site_id = await conn.fetchval("""
                     INSERT INTO HolySites (
@@ -7327,7 +7462,7 @@ class ReligionManager:
         embedding_text = f"{name} {text_type} {description} {' '.join(key_teachings)}"
         embedding = await generate_embedding(embedding_text)
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 text_id = await conn.fetchval("""
                     INSERT INTO ReligiousTexts (
@@ -7406,7 +7541,7 @@ class ReligionManager:
         embedding_text = f"{name} {order_type} {description} {gender_composition}"
         embedding = await generate_embedding(embedding_text)
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 order_id = await conn.fetchval("""
                     INSERT INTO ReligiousOrders (
@@ -7472,7 +7607,7 @@ class ReligionManager:
         embedding_text = f"{name} {conflict_type} {description} {core_disagreement}"
         embedding = await generate_embedding(embedding_text)
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 conflict_id = await conn.fetchval("""
                     INSERT INTO ReligiousConflicts (
@@ -7508,7 +7643,7 @@ class ReligionManager:
         run_ctx = RunContextWrapper(context=ctx.context)
         
         # Get world info for context
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get foundation lore for context
                 foundation_lore = await conn.fetch("""
@@ -7673,7 +7808,7 @@ class ReligionManager:
         run_ctx = RunContextWrapper(context=ctx.context)
         
         # Get pantheon info
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get pantheon details
                 pantheon = await conn.fetchrow("""
@@ -7794,7 +7929,7 @@ class ReligionManager:
         run_ctx = RunContextWrapper(context=ctx.context)
         
         # Get pantheon and location info
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get pantheon details
                 pantheon = await conn.fetchrow("""
@@ -7973,7 +8108,7 @@ class ReligionManager:
         run_ctx = RunContextWrapper(context=ctx.context)
         
         # Get pantheon info
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get pantheon details
                 pantheon = await conn.fetchrow("""
@@ -8082,7 +8217,7 @@ class ReligionManager:
         run_ctx = RunContextWrapper(context=ctx.context)
         
         # Get pantheon info
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get pantheon details
                 pantheon = await conn.fetchrow("""
@@ -8209,7 +8344,7 @@ class ReligionManager:
         run_ctx = RunContextWrapper(context=ctx.context)
         
         # Get pantheon info
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get pantheon details
                 pantheon = await conn.fetchrow("""
@@ -8345,7 +8480,7 @@ class ReligionManager:
         nations = await self.geopolitical_manager.get_all_nations(run_ctx)
         
         # Get pantheons through the faith system
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 pantheons = await conn.fetch("""
                     SELECT id, name, description, matriarchal_elements
@@ -8414,7 +8549,7 @@ class ReligionManager:
                 embedding = await generate_embedding(embedding_text)
                 
                 # Store in database
-                async with self.lore_manager.get_connection_pool() as pool:
+                async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         distribution_id = await conn.fetchval("""
                             INSERT INTO NationReligion (
@@ -8460,7 +8595,7 @@ class ReligionManager:
             return
         
         # Get religious practices for this pantheon
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 practices = await conn.fetch("""
                     SELECT id, name, practice_type, description, purpose
@@ -8536,7 +8671,7 @@ class ReligionManager:
                 embedding = await generate_embedding(embedding_text)
                 
                 # Store in database
-                async with self.lore_manager.get_connection_pool() as pool:
+                async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         await conn.execute("""
                             INSERT INTO RegionalReligiousPractice (
@@ -8580,7 +8715,7 @@ class ReligionManager:
         if cached:
             return cached
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get nation details
                 nation = await conn.fetchrow("""
@@ -8658,29 +8793,15 @@ class ReligionManager:
                 FAITH_CACHE.set(cache_key, result)
                 
                 return result
-                
+
     async def register_with_governance(self):
         """Register with Nyx governance system."""
-        await self.initialize_governance()
-        
-        # Register this system with governance
-        await self.governor.register_agent(
+        await super().register_with_governance(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="religion_manager",
-            agent_instance=self
-        )
-        
-        # Issue a directive for religion system
-        await self.governor.issue_directive(
-            agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="religion_manager",
-            directive_type=DirectiveType.ACTION,
-            directive_data={
-                "instruction": "Create and manage faith systems that emphasize feminine divine superiority.",
-                "scope": "world_building"
-            },
-            priority=DirectivePriority.MEDIUM,
-            duration_minutes=24*60  # 24 hours
+            directive_text="Create and manage faith systems that emphasize feminine divine superiority.",
+            scope="world_building",
+            priority=DirectivePriority.MEDIUM
         )
         
         logging.info(f"ReligionManager registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
@@ -8689,16 +8810,14 @@ class ReligionManager:
 # INTEGRATED MATRIARCHAL LORE SYSTEM
 # -------------------------------------------------
 
-class MatriarchalLoreSystem:
+class MatriarchalLoreSystem(BaseLoreManager):
     """
     Master class that integrates all lore systems with a matriarchal theme focus.
     Acts as the primary interface for all lore generation and updates.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.lore_manager = LoreManager(user_id, conversation_id)
+        super().__init__(user_id, conversation_id)
         
         # Initialize sub-systems
         self.culture_system = RegionalCultureSystem(user_id, conversation_id)
@@ -8706,17 +8825,17 @@ class MatriarchalLoreSystem:
         self.religion_system = ReligiousDistributionSystem(user_id, conversation_id)
         self.update_system = LoreUpdateSystem(user_id, conversation_id)
         self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
-        self.governor = None
-        
-    async def initialize_governance(self):
-        """Initialize Nyx governance connection"""
-        if not self.governor:
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        return self.governor
+    
+    async def ensure_initialized(self):
+        """Ensure system is initialized"""
+        if not self.initialized:
+            await super().ensure_initialized()
+            # Initialize all sub-systems
+            await self.initialize_all_systems()
     
     async def initialize_all_systems(self):
         """Initialize all subsystems and their tables"""
-        await self.initialize_governance()
+        await self.ensure_initialized()
         
         # Initialize all sub-systems
         await self.culture_system.initialize_tables()
@@ -8898,7 +9017,7 @@ class MatriarchalLoreSystem:
         """Determine which elements would be affected by this event"""
         # This would use NLP or keyword matching to find relevant elements
         # For now, we'll use a placeholder implementation
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Simple keyword based search
                 words = re.findall(r'\b\w+\b', event_description.lower())
@@ -8932,7 +9051,7 @@ class MatriarchalLoreSystem:
         if not element_ids:
             return []
             
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 elements = await conn.fetch("""
                     SELECT lore_id, name, lore_type, description
@@ -8947,7 +9066,7 @@ class MatriarchalLoreSystem:
         if not updates:
             return
             
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 async with conn.transaction():
                     for update in updates:
@@ -9276,28 +9395,25 @@ class MatriarchalThemingUtils:
 # REGIONAL CULTURE SYSTEM
 # -------------------------------------------------
 
-class RegionalCultureSystem:
+class RegionalCultureSystem(BaseLoreManager):
     """
     Manages culturally specific norms, customs, manners, and languages
     across different regions and nations.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.lore_manager = LoreManager(user_id, conversation_id)
+        super().__init__(user_id, conversation_id)
         self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
-        self.governor = None
-        
-    async def initialize_governance(self):
-        """Initialize Nyx governance connection"""
-        if not self.governor:
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        return self.governor
+    
+    async def ensure_initialized(self):
+        """Ensure system is initialized"""
+        if not self.initialized:
+            await super().ensure_initialized()
+            await self.initialize_tables()
         
     async def initialize_tables(self):
         """Ensure regional culture tables exist"""
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if Languages table exists
                 languages_exist = await conn.fetchval("""
@@ -9522,7 +9638,7 @@ class RegionalCultureSystem:
                 embedding = await generate_embedding(embedding_text)
                 
                 # Store in database
-                async with self.lore_manager.get_connection_pool() as pool:
+                async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         language_id = await conn.fetchval("""
                             INSERT INTO Languages (
@@ -9574,7 +9690,7 @@ class RegionalCultureSystem:
         run_ctx = RunContextWrapper(context=ctx.context)
         
         # Get nation details
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 nation = await conn.fetchrow("""
                     SELECT id, name, government_type, matriarchy_level, cultural_traits
@@ -9644,7 +9760,7 @@ class RegionalCultureSystem:
                 embedding = await generate_embedding(embedding_text)
                 
                 # Store in database
-                async with self.lore_manager.get_connection_pool() as pool:
+                async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         norm_id = await conn.fetchval("""
                             INSERT INTO CulturalNorms (
@@ -9696,7 +9812,7 @@ class RegionalCultureSystem:
         run_ctx = RunContextWrapper(context=ctx.context)
         
         # Get nation details
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 nation = await conn.fetchrow("""
                     SELECT id, name, government_type, matriarchy_level, cultural_traits
@@ -9765,7 +9881,7 @@ class RegionalCultureSystem:
                 embedding = await generate_embedding(embedding_text)
                 
                 # Store in database
-                async with self.lore_manager.get_connection_pool() as pool:
+                async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         etiquette_id = await conn.fetchval("""
                             INSERT INTO Etiquette (
@@ -9823,7 +9939,7 @@ class RegionalCultureSystem:
         if cached:
             return cached
         
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Get nation details
                 nation = await conn.fetchrow("""
@@ -9879,28 +9995,25 @@ class RegionalCultureSystem:
 # NATIONAL CONFLICT SYSTEM
 # -------------------------------------------------
 
-class NationalConflictSystem:
+class NationalConflictSystem(BaseLoreManager):
     """
     System for managing, generating, and evolving national and international
     conflicts that serve as background elements in the world.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.lore_manager = LoreManager(user_id, conversation_id)
+        super().__init__(user_id, conversation_id)
         self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
-        self.governor = None
-        
-    async def initialize_governance(self):
-        """Initialize Nyx governance connection"""
-        if not self.governor:
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
-        return self.governor
+    
+    async def ensure_initialized(self):
+        """Ensure system is initialized"""
+        if not self.initialized:
+            await super().ensure_initialized()
+            await self.initialize_tables()
         
     async def initialize_tables(self):
         """Ensure conflict system tables exist"""
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 # Check if Conflicts table exists
                 conflicts_exist = await conn.fetchval("""
@@ -10076,7 +10189,7 @@ class NationalConflictSystem:
         run_ctx = RunContextWrapper(context=ctx.context)
         
         # Get nation details
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 nation = await conn.fetchrow("""
                     SELECT id, name, government_type, matriarchy_level, cultural_traits
@@ -10202,7 +10315,7 @@ class NationalConflictSystem:
                 embedding = await generate_embedding(embedding_text)
                 
                 # Store in database
-                async with self.lore_manager.get_connection_pool() as pool:
+                async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         issue_id = await conn.fetchval("""
                             INSERT INTO DomesticIssues (
@@ -10305,7 +10418,7 @@ class NationalConflictSystem:
                 embedding = await generate_embedding(embedding_text)
                 
                 # Store in database
-                async with self.lore_manager.get_connection_pool() as pool:
+                async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         await conn.execute("""
                             INSERT INTO DomesticNews (
@@ -10437,7 +10550,7 @@ class NationalConflictSystem:
                 embedding = await generate_embedding(embedding_text)
                 
                 # Store in database
-                async with self.lore_manager.get_connection_pool() as pool:
+                async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         conflict_id = await conn.fetchval("""
                             INSERT INTO NationalConflicts (
@@ -10538,7 +10651,7 @@ class NationalConflictSystem:
                 embedding = await generate_embedding(embedding_text)
                 
                 # Store in database
-                async with self.lore_manager.get_connection_pool() as pool:
+                async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         await conn.execute("""
                             INSERT INTO ConflictNews (
@@ -10576,7 +10689,7 @@ class NationalConflictSystem:
             return cached
         
         # Query database for active conflicts
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 conflicts = await conn.fetch("""
                     SELECT * FROM NationalConflicts
@@ -10615,7 +10728,7 @@ class NationalConflictSystem:
             return cached
         
         # Query database for domestic issues
-        async with self.lore_manager.get_connection_pool() as pool:
+        async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 issues = await conn.fetch("""
                     SELECT * FROM DomesticIssues
