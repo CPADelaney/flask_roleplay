@@ -3,6 +3,12 @@
 import logging
 import asyncio
 from typing import Dict, List, Any, Optional
+from agents import trace
+
+# Nyx governance integration
+from nyx.integrate import get_central_governance
+from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
+from nyx.governance_helpers import with_governance_permission, with_action_reporting, with_governance
 
 from lore.dynamic_lore_generator import DynamicLoreGenerator
 from lore.lore_manager import LoreManager
@@ -12,7 +18,9 @@ from db.connection import get_db_connection
 
 class LoreIntegrationSystem:
     """
-    Integrates lore with other game systems, including:
+    Integrates lore with other game systems with full Nyx governance oversight.
+    
+    Systems includes:
     - NPC knowledge and behavior
     - Quests and narrative
     - Conflicts and faction dynamics
@@ -20,15 +28,29 @@ class LoreIntegrationSystem:
     """
     
     def __init__(self, user_id: int, conversation_id: int):
+        """Initialize the lore integration system."""
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.lore_manager = LoreManager(user_id, conversation_id)
         self.npc_lore = NPCLoreIntegration(user_id, conversation_id)
         self.lore_generator = DynamicLoreGenerator(user_id, conversation_id)
+        self.governor = None
         
+    async def initialize_governance(self):
+        """Initialize Nyx governance connection"""
+        if not self.governor:
+            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+        return self.governor
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="initialize_game_lore",
+        action_description="Initializing comprehensive lore for environment: {environment_desc}",
+        id_from_context=lambda ctx: "lore_integration"
+    )
     async def initialize_game_lore(self, environment_desc: str) -> Dict[str, Any]:
         """
-        Initialize comprehensive lore for a new game.
+        Initialize comprehensive lore for a new game with Nyx governance oversight.
         
         Args:
             environment_desc: Description of the game environment
@@ -36,17 +58,32 @@ class LoreIntegrationSystem:
         Returns:
             Dict of all generated lore
         """
-        # Generate complete interconnected lore
-        lore = await self.lore_generator.generate_complete_lore(environment_desc)
-        
-        # Store the lore in compact form for narrative context
-        await self._store_lore_summary(lore)
-        
-        return lore
-    
+        # Create trace for monitoring
+        with trace(
+            workflow_name="Lore Initialization",
+            trace_id=f"lore-init-{self.conversation_id}-{int(datetime.now().timestamp())}",
+            group_id=f"user-{self.user_id}"
+        ):
+            # Generate complete interconnected lore
+            lore = await self.lore_generator.generate_complete_lore(environment_desc)
+            
+            # Store the lore in compact form for narrative context
+            await self._store_lore_summary(lore)
+            
+            # Integrate with memory system
+            await self._integrate_with_memory_system(lore)
+            
+            return lore
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="integrate_lore_with_npcs",
+        action_description="Integrating lore with {len(npc_ids)} NPCs",
+        id_from_context=lambda ctx: "lore_npc_integration"
+    )
     async def integrate_lore_with_npcs(self, npc_ids: List[int]) -> Dict[str, Any]:
         """
-        Integrate lore with NPCs by giving them appropriate knowledge.
+        Integrate lore with NPCs by giving them appropriate knowledge with Nyx governance oversight.
         
         Args:
             npc_ids: List of NPC IDs to integrate lore with
@@ -79,10 +116,16 @@ class LoreIntegrationSystem:
             }
         
         return results
-    
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_npc_lore_response",
+        action_description="Generating lore-based response for NPC {npc_id}",
+        id_from_context=lambda ctx: "npc_lore_response"
+    )
     async def generate_npc_lore_response(self, npc_id: int, player_input: str) -> Dict[str, Any]:
         """
-        Generate a lore-based response from an NPC based on player question.
+        Generate a lore-based response from an NPC based on player question with Nyx governance oversight.
         
         Args:
             npc_id: ID of the NPC
@@ -120,10 +163,16 @@ class LoreIntegrationSystem:
                 "response": interaction.get("message", "I don't know much about that."),
                 "lore_shared": False
             }
-    
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="enhance_context_with_lore",
+        action_description="Enhancing context with relevant lore",
+        id_from_context=lambda ctx: "lore_context_enhancement"
+    )
     async def enhance_gpt_context_with_lore(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Enhance GPT context with relevant lore for better responses.
+        Enhance GPT context with relevant lore for better responses with Nyx governance oversight.
         
         Args:
             context: Current context dict for GPT
@@ -167,10 +216,16 @@ class LoreIntegrationSystem:
                 enhanced_context["location_lore"] = location_lore
         
         return enhanced_context
-    
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_scene_with_lore",
+        action_description="Generating scene with lore for location: {location}",
+        id_from_context=lambda ctx: "lore_scene_generation"
+    )
     async def generate_scene_description_with_lore(self, location: str) -> Dict[str, Any]:
         """
-        Generate a scene description enhanced with relevant lore.
+        Generate a scene description enhanced with relevant lore with Nyx governance oversight.
         
         Args:
             location: Current location name
@@ -228,7 +283,7 @@ class LoreIntegrationSystem:
         
         response = await get_chatgpt_response(
             self.conversation_id,
-            system_prompt="You are a master of atmospheric scene descriptions that subtly incorporate worldbuilding.",
+            system_prompt="You are an AI that specializes in atmospheric scene descriptions that subtly incorporate worldbuilding.",
             user_prompt=prompt
         )
         
@@ -238,10 +293,16 @@ class LoreIntegrationSystem:
             result["enhanced_description"] = str(response)
         
         return result
-    
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="update_lore_after_event",
+        action_description="Updating lore after narrative event: {event_description}",
+        id_from_context=lambda ctx: "lore_event_update"
+    )
     async def update_lore_after_narrative_event(self, event_description: str) -> Dict[str, Any]:
         """
-        Update world lore after a significant narrative event.
+        Update world lore after a significant narrative event with Nyx governance oversight.
         
         Args:
             event_description: Description of the narrative event
@@ -250,10 +311,16 @@ class LoreIntegrationSystem:
             Dict of lore updates
         """
         return await self.lore_generator.evolve_lore_with_event(event_description)
-    
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="get_quest_lore_context",
+        action_description="Getting lore context for quest {quest_id}",
+        id_from_context=lambda ctx: "quest_lore_context"
+    )
     async def get_quest_lore_context(self, quest_id: int) -> Dict[str, Any]:
         """
-        Get lore context relevant to a specific quest.
+        Get lore context relevant to a specific quest with Nyx governance oversight.
         
         Args:
             quest_id: Quest ID to get context for
@@ -291,9 +358,17 @@ class LoreIntegrationSystem:
             "quest_lore": quest_lore,
             "relevant_lore": relevant_lore
         }
-    
+
     async def _store_lore_summary(self, lore: Dict[str, Any]) -> None:
-        """Store a compact summary of the generated lore for quick reference."""
+        """
+        Store a compact summary of the generated lore for quick reference with Nyx integration.
+        
+        Args:
+            lore: Complete lore dictionary
+        """
+        # Initialize governance if needed
+        await self.initialize_governance()
+        
         try:
             import json
             conn = get_db_connection()
@@ -317,12 +392,123 @@ class LoreIntegrationSystem:
             """, (self.user_id, self.conversation_id, json.dumps(summary)))
             
             conn.commit()
+            
+            # Report action to governance
+            await self.governor.process_agent_action_report(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="lore_integration",
+                action={
+                    "type": "store_lore_summary",
+                    "description": "Stored compact lore summary for reference"
+                },
+                result={
+                    "summary_size": len(json.dumps(summary)),
+                    "faction_count": summary["faction_count"]
+                }
+            )
+            
         except Exception as e:
             logging.error(f"Error storing lore summary: {e}")
         finally:
             cursor.close()
             conn.close()
-    
+            
+    async def _integrate_with_memory_system(self, lore: Dict[str, Any]) -> None:
+        """
+        Integrate generated lore with Nyx's memory system.
+        
+        Args:
+            lore: The generated lore
+        """
+        # Initialize governance if needed
+        await self.initialize_governance()
+        
+        # Get memory system from Nyx
+        memory_system = await self.governor.get_memory_system()
+        
+        # Store foundation lore in memory
+        if "world_lore" in lore:
+            for key, value in lore["world_lore"].items():
+                if isinstance(value, str):
+                    await memory_system.add_memory(
+                        memory_text=f"World lore - {key}: {value[:100]}...",
+                        memory_type="lore",
+                        memory_scope="game",
+                        significance=7,
+                        tags=["lore", "world", key]
+                    )
+        
+        # Store factions in memory
+        if "factions" in lore:
+            for faction in lore["factions"]:
+                name = faction.get('name', 'Unknown faction')
+                desc = faction.get('description', '')[:100] + '...'
+                await memory_system.add_memory(
+                    memory_text=f"Faction: {name} - {desc}",
+                    memory_type="lore",
+                    memory_scope="game",
+                    significance=6,
+                    tags=["lore", "faction", name]
+                )
+        
+        # Store cultural elements in memory
+        if "cultural_elements" in lore:
+            for element in lore["cultural_elements"]:
+                name = element.get('name', 'Unknown culture')
+                desc = element.get('description', '')[:100] + '...'
+                await memory_system.add_memory(
+                    memory_text=f"Cultural element: {name} - {desc}",
+                    memory_type="lore",
+                    memory_scope="game",
+                    significance=6,
+                    tags=["lore", "culture", name]
+                )
+        
+        # Store historical events in memory
+        if "historical_events" in lore:
+            for event in lore["historical_events"]:
+                name = event.get('name', 'Unknown event')
+                desc = event.get('description', '')[:100] + '...'
+                await memory_system.add_memory(
+                    memory_text=f"Historical event: {name} - {desc}",
+                    memory_type="lore",
+                    memory_scope="game",
+                    significance=6,
+                    tags=["lore", "history", name]
+                )
+        
+        # Store locations in memory
+        if "locations" in lore:
+            for location in lore["locations"]:
+                name = location.get('name', 'Unknown location')
+                desc = location.get('description', '')[:100] + '...'
+                await memory_system.add_memory(
+                    memory_text=f"Location: {name} - {desc}",
+                    memory_type="lore",
+                    memory_scope="game",
+                    significance=6,
+                    tags=["lore", "location", name]
+                )
+                
+        # Report action to governance
+        await self.governor.process_agent_action_report(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="lore_integration",
+            action={
+                "type": "integrate_with_memory",
+                "description": "Integrated lore with memory system"
+            },
+            result={
+                "memory_entries_added": (
+                    len(lore.get("world_lore", {})) +
+                    len(lore.get("factions", [])) +
+                    len(lore.get("cultural_elements", [])) +
+                    len(lore.get("historical_events", [])) +
+                    len(lore.get("locations", []))
+                )
+            }
+        )
+
     async def _get_npc_details(self, npc_id: int) -> Dict[str, Any]:
         """Get details for an NPC from the database."""
         try:
