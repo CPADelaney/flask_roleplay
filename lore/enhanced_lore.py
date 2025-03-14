@@ -6099,3 +6099,3507 @@ class EmergentLoreSystem:
         if len(matriarchal_nations) > len(non_matriarchal_nations) + 1:
             target_matriarchy_level = random.randint(1, 4)
         # If we have more non-matriarchal nations, make this one
+
+class FaithSystem:
+    """
+    Comprehensive system for managing religions, faiths, and belief systems
+    within the matriarchal society with full Nyx governance integration.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.lore_manager = LoreManager(user_id, conversation_id)
+        self.governor = None
+        
+    async def initialize_governance(self):
+        """Initialize Nyx governance connection"""
+        if not self.governor:
+            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+        return self.governor
+        
+    async def initialize_tables(self):
+        """Ensure faith system tables exist"""
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Check if Deities table exists
+                deities_exist = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'deities'
+                    );
+                """)
+                
+                if not deities_exist:
+                    # Create the table
+                    await conn.execute("""
+                        CREATE TABLE Deities (
+                            id SERIAL PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            gender TEXT NOT NULL, -- female, male, non-binary, etc.
+                            domain TEXT[] NOT NULL, -- love, war, knowledge, etc.
+                            description TEXT NOT NULL,
+                            iconography TEXT,
+                            holy_symbol TEXT,
+                            sacred_animals TEXT[],
+                            sacred_colors TEXT[],
+                            relationships JSONB, -- relationships with other deities
+                            rank INTEGER CHECK (rank BETWEEN 1 AND 10), -- importance in pantheon
+                            worshippers TEXT[], -- types of people who worship
+                            pantheon_id INTEGER,
+                            embedding VECTOR(1536)
+                        );
+                    """)
+                    
+                    # Create index
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_deities_embedding 
+                        ON Deities USING ivfflat (embedding vector_cosine_ops);
+                    """)
+                    
+                    logging.info("Deities table created")
+                
+                # Check if Pantheons table exists
+                pantheons_exist = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'pantheons'
+                    );
+                """)
+                
+                if not pantheons_exist:
+                    # Create the table
+                    await conn.execute("""
+                        CREATE TABLE Pantheons (
+                            id SERIAL PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            description TEXT NOT NULL,
+                            origin_story TEXT NOT NULL,
+                            major_holy_days TEXT[],
+                            cosmic_structure TEXT, -- how the cosmos is organized
+                            afterlife_beliefs TEXT,
+                            creation_myth TEXT,
+                            geographical_spread TEXT[], -- regions where worshipped
+                            dominant_nations TEXT[], -- nations where dominant
+                            primary_worshippers TEXT[], -- demographics who worship
+                            matriarchal_elements TEXT NOT NULL, -- how it reinforces matriarchy
+                            taboos TEXT[],
+                            embedding VECTOR(1536)
+                        );
+                    """)
+                    
+                    # Create index
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_pantheons_embedding 
+                        ON Pantheons USING ivfflat (embedding vector_cosine_ops);
+                    """)
+                    
+                    logging.info("Pantheons table created")
+                
+                # Check if ReligiousPractices table exists
+                practices_exist = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'religiouspractices'
+                    );
+                """)
+                
+                if not practices_exist:
+                    # Create the table
+                    await conn.execute("""
+                        CREATE TABLE ReligiousPractices (
+                            id SERIAL PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            practice_type TEXT NOT NULL, -- ritual, ceremony, prayer, etc.
+                            description TEXT NOT NULL,
+                            frequency TEXT, -- daily, weekly, yearly, etc.
+                            required_elements TEXT[], -- components needed
+                            performed_by TEXT[], -- priests, all worshippers, etc.
+                            purpose TEXT NOT NULL, -- blessing, protection, etc.
+                            restricted_to TEXT[], -- if limited to certain people
+                            deity_id INTEGER,
+                            pantheon_id INTEGER,
+                            embedding VECTOR(1536)
+                        );
+                    """)
+                    
+                    # Create index
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_religiouspractices_embedding 
+                        ON ReligiousPractices USING ivfflat (embedding vector_cosine_ops);
+                    """)
+                    
+                    logging.info("ReligiousPractices table created")
+                
+                # Check if HolySites table exists
+                sites_exist = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'holysites'
+                    );
+                """)
+                
+                if not sites_exist:
+                    # Create the table
+                    await conn.execute("""
+                        CREATE TABLE HolySites (
+                            id SERIAL PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            site_type TEXT NOT NULL, -- temple, shrine, sacred grove, etc.
+                            description TEXT NOT NULL,
+                            location_id INTEGER, -- reference to Locations table
+                            location_description TEXT, -- if not linked to location
+                            deity_id INTEGER,
+                            pantheon_id INTEGER,
+                            clergy_type TEXT, -- priestesses, clerics, etc.
+                            clergy_hierarchy TEXT[], -- ranks in order
+                            pilgrimage_info TEXT,
+                            miracles_reported TEXT[],
+                            restrictions TEXT[], -- who can enter
+                            architectural_features TEXT,
+                            embedding VECTOR(1536)
+                        );
+                    """)
+                    
+                    # Create index
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_holysites_embedding 
+                        ON HolySites USING ivfflat (embedding vector_cosine_ops);
+                    """)
+                    
+                    logging.info("HolySites table created")
+                
+                # Check if ReligiousTexts table exists
+                texts_exist = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'religioustexts'
+                    );
+                """)
+                
+                if not texts_exist:
+                    # Create the table
+                    await conn.execute("""
+                        CREATE TABLE ReligiousTexts (
+                            id SERIAL PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            text_type TEXT NOT NULL, -- scripture, hymnal, prayer book, etc.
+                            description TEXT NOT NULL,
+                            authorship TEXT, -- divine, prophetic, etc.
+                            key_teachings TEXT[] NOT NULL,
+                            restricted_to TEXT[], -- if access is limited
+                            deity_id INTEGER,
+                            pantheon_id INTEGER,
+                            notable_passages TEXT[],
+                            age_description TEXT, -- how old it is
+                            embedding VECTOR(1536)
+                        );
+                    """)
+                    
+                    # Create index
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_religioustexts_embedding 
+                        ON ReligiousTexts USING ivfflat (embedding vector_cosine_ops);
+                    """)
+                    
+                    logging.info("ReligiousTexts table created")
+                
+                # Check if ReligiousOrders table exists
+                orders_exist = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'religiousorders'
+                    );
+                """)
+                
+                if not orders_exist:
+                    # Create the table
+                    await conn.execute("""
+                        CREATE TABLE ReligiousOrders (
+                            id SERIAL PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            order_type TEXT NOT NULL, -- monastic, military, scholarly, etc.
+                            description TEXT NOT NULL,
+                            founding_story TEXT,
+                            headquarters TEXT,
+                            hierarchy_structure TEXT[],
+                            vows TEXT[],
+                            practices TEXT[],
+                            deity_id INTEGER,
+                            pantheon_id INTEGER,
+                            gender_composition TEXT, -- female-only, primarily female, mixed, etc.
+                            special_abilities TEXT[],
+                            notable_members TEXT[],
+                            embedding VECTOR(1536)
+                        );
+                    """)
+                    
+                    # Create index
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_religiousorders_embedding 
+                        ON ReligiousOrders USING ivfflat (embedding vector_cosine_ops);
+                    """)
+                    
+                    logging.info("ReligiousOrders table created")
+                
+                # Check if ReligiousConflicts table exists
+                conflicts_exist = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'religiousconflicts'
+                    );
+                """)
+                
+                if not conflicts_exist:
+                    # Create the table
+                    await conn.execute("""
+                        CREATE TABLE ReligiousConflicts (
+                            id SERIAL PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            conflict_type TEXT NOT NULL, -- schism, holy war, theological debate, etc.
+                            description TEXT NOT NULL,
+                            beginning_date TEXT,
+                            resolution_date TEXT,
+                            status TEXT, -- ongoing, resolved, dormant, etc.
+                            parties_involved TEXT[] NOT NULL,
+                            core_disagreement TEXT NOT NULL,
+                            casualties TEXT,
+                            historical_impact TEXT,
+                            embedding VECTOR(1536)
+                        );
+                    """)
+                    
+                    # Create index
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_religiousconflicts_embedding 
+                        ON ReligiousConflicts USING ivfflat (embedding vector_cosine_ops);
+                    """)
+                    
+                    logging.info("ReligiousConflicts table created")
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_deity",
+        action_description="Adding deity: {name}",
+        id_from_context=lambda ctx: "faith_system"
+    )
+    async def add_deity(
+        self, 
+        ctx,
+        name: str,
+        gender: str,
+        domain: List[str],
+        description: str,
+        pantheon_id: Optional[int] = None,
+        iconography: Optional[str] = None,
+        holy_symbol: Optional[str] = None,
+        sacred_animals: Optional[List[str]] = None,
+        sacred_colors: Optional[List[str]] = None,
+        relationships: Optional[Dict[str, str]] = None,
+        rank: int = 5,
+        worshippers: Optional[List[str]] = None
+    ) -> int:
+        """
+        Add a deity to the database with governance oversight.
+        
+        Args:
+            name: Name of the deity
+            gender: Gender of the deity (female, male, non-binary, etc.)
+            domain: List of domains the deity controls
+            description: Detailed description
+            pantheon_id: Optional ID of the pantheon this deity belongs to
+            iconography: Optional description of how the deity is depicted
+            holy_symbol: Optional description of the deity's holy symbol
+            sacred_animals: Optional list of sacred animals
+            sacred_colors: Optional list of sacred colors
+            relationships: Optional dict of relationships with other deities
+            rank: Importance in pantheon (1-10)
+            worshippers: Optional list of types of people who worship
+            
+        Returns:
+            ID of the created deity
+        """
+        # Ensure tables exist
+        await self.initialize_tables()
+        
+        # Set defaults for optional parameters
+        sacred_animals = sacred_animals or []
+        sacred_colors = sacred_colors or []
+        relationships = relationships or {}
+        worshippers = worshippers or []
+        
+        # Generate embedding for semantic search
+        embedding_text = f"{name} {gender} {' '.join(domain)} {description}"
+        embedding = await generate_embedding(embedding_text)
+        
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                deity_id = await conn.fetchval("""
+                    INSERT INTO Deities (
+                        name, gender, domain, description, pantheon_id,
+                        iconography, holy_symbol, sacred_animals, sacred_colors,
+                        relationships, rank, worshippers, embedding
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    RETURNING id
+                """, name, gender, domain, description, pantheon_id,
+                     iconography, holy_symbol, sacred_animals, sacred_colors,
+                     json.dumps(relationships), rank, worshippers, embedding)
+                
+                # Clear relevant cache
+                FAITH_CACHE.invalidate_pattern("deity")
+                
+                return deity_id
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_pantheon",
+        action_description="Adding pantheon: {name}",
+        id_from_context=lambda ctx: "faith_system"
+    )
+    async def add_pantheon(
+        self, 
+        ctx,
+        name: str,
+        description: str,
+        origin_story: str,
+        matriarchal_elements: str,
+        creation_myth: Optional[str] = None,
+        afterlife_beliefs: Optional[str] = None,
+        cosmic_structure: Optional[str] = None,
+        major_holy_days: Optional[List[str]] = None,
+        geographical_spread: Optional[List[str]] = None,
+        dominant_nations: Optional[List[str]] = None,
+        primary_worshippers: Optional[List[str]] = None,
+        taboos: Optional[List[str]] = None
+    ) -> int:
+        """
+        Add a pantheon to the database with governance oversight.
+        
+        Args:
+            name: Name of the pantheon
+            description: General description
+            origin_story: How the pantheon came to be
+            matriarchal_elements: How it reinforces matriarchy
+            creation_myth: Optional creation myth
+            afterlife_beliefs: Optional afterlife beliefs
+            cosmic_structure: Optional cosmic structure
+            major_holy_days: Optional list of major holy days
+            geographical_spread: Optional list of regions where worshipped
+            dominant_nations: Optional list of nations where dominant
+            primary_worshippers: Optional list of demographics who worship
+            taboos: Optional list of taboos
+            
+        Returns:
+            ID of the created pantheon
+        """
+        # Ensure tables exist
+        await self.initialize_tables()
+        
+        # Set defaults for optional parameters
+        major_holy_days = major_holy_days or []
+        geographical_spread = geographical_spread or []
+        dominant_nations = dominant_nations or []
+        primary_worshippers = primary_worshippers or []
+        taboos = taboos or []
+        
+        # Generate embedding for semantic search
+        embedding_text = f"{name} {description} {origin_story} {matriarchal_elements}"
+        embedding = await generate_embedding(embedding_text)
+        
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                pantheon_id = await conn.fetchval("""
+                    INSERT INTO Pantheons (
+                        name, description, origin_story, matriarchal_elements,
+                        creation_myth, afterlife_beliefs, cosmic_structure,
+                        major_holy_days, geographical_spread, dominant_nations,
+                        primary_worshippers, taboos, embedding
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    RETURNING id
+                """, name, description, origin_story, matriarchal_elements,
+                     creation_myth, afterlife_beliefs, cosmic_structure,
+                     major_holy_days, geographical_spread, dominant_nations,
+                     primary_worshippers, taboos, embedding)
+                
+                # Clear relevant cache
+                FAITH_CACHE.invalidate_pattern("pantheon")
+                
+                return pantheon_id
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_religious_practice",
+        action_description="Adding religious practice: {name}",
+        id_from_context=lambda ctx: "faith_system"
+    )
+    async def add_religious_practice(
+        self, 
+        ctx,
+        name: str,
+        practice_type: str,
+        description: str,
+        purpose: str,
+        frequency: Optional[str] = None,
+        required_elements: Optional[List[str]] = None,
+        performed_by: Optional[List[str]] = None,
+        restricted_to: Optional[List[str]] = None,
+        deity_id: Optional[int] = None,
+        pantheon_id: Optional[int] = None
+    ) -> int:
+        """
+        Add a religious practice to the database with governance oversight.
+        
+        Args:
+            name: Name of the practice
+            practice_type: Type of practice (ritual, ceremony, etc.)
+            description: Detailed description
+            purpose: Purpose of the practice
+            frequency: Optional frequency (daily, yearly, etc.)
+            required_elements: Optional list of components needed
+            performed_by: Optional list of who performs it
+            restricted_to: Optional list of who it's restricted to
+            deity_id: Optional ID of associated deity
+            pantheon_id: Optional ID of associated pantheon
+            
+        Returns:
+            ID of the created practice
+        """
+        # Ensure tables exist
+        await self.initialize_tables()
+        
+        # Set defaults for optional parameters
+        required_elements = required_elements or []
+        performed_by = performed_by or []
+        restricted_to = restricted_to or []
+        
+        # Generate embedding for semantic search
+        embedding_text = f"{name} {practice_type} {description} {purpose}"
+        embedding = await generate_embedding(embedding_text)
+        
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                practice_id = await conn.fetchval("""
+                    INSERT INTO ReligiousPractices (
+                        name, practice_type, description, purpose,
+                        frequency, required_elements, performed_by,
+                        restricted_to, deity_id, pantheon_id, embedding
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    RETURNING id
+                """, name, practice_type, description, purpose,
+                     frequency, required_elements, performed_by,
+                     restricted_to, deity_id, pantheon_id, embedding)
+                
+                # Clear relevant cache
+                FAITH_CACHE.invalidate_pattern("practice")
+                
+                return practice_id
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_holy_site",
+        action_description="Adding holy site: {name}",
+        id_from_context=lambda ctx: "faith_system"
+    )
+    async def add_holy_site(
+        self, 
+        ctx,
+        name: str,
+        site_type: str,
+        description: str,
+        clergy_type: str,
+        location_id: Optional[int] = None,
+        location_description: Optional[str] = None,
+        deity_id: Optional[int] = None,
+        pantheon_id: Optional[int] = None,
+        clergy_hierarchy: Optional[List[str]] = None,
+        pilgrimage_info: Optional[str] = None,
+        miracles_reported: Optional[List[str]] = None,
+        restrictions: Optional[List[str]] = None,
+        architectural_features: Optional[str] = None
+    ) -> int:
+        """
+        Add a holy site to the database with governance oversight.
+        
+        Args:
+            name: Name of the holy site
+            site_type: Type of site (temple, shrine, etc.)
+            description: Detailed description
+            clergy_type: Type of clergy (priestesses, etc.)
+            location_id: Optional ID in Locations table
+            location_description: Optional description if no location_id
+            deity_id: Optional ID of associated deity
+            pantheon_id: Optional ID of associated pantheon
+            clergy_hierarchy: Optional list of ranks in hierarchy
+            pilgrimage_info: Optional information on pilgrimages
+            miracles_reported: Optional list of reported miracles
+            restrictions: Optional list of restrictions on entry
+            architectural_features: Optional description of features
+            
+        Returns:
+            ID of the created holy site
+        """
+        # Ensure tables exist
+        await self.initialize_tables()
+        
+        # Set defaults for optional parameters
+        clergy_hierarchy = clergy_hierarchy or []
+        miracles_reported = miracles_reported or []
+        restrictions = restrictions or []
+        
+        # Generate embedding for semantic search
+        embedding_text = f"{name} {site_type} {description} {clergy_type}"
+        embedding = await generate_embedding(embedding_text)
+        
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                site_id = await conn.fetchval("""
+                    INSERT INTO HolySites (
+                        name, site_type, description, clergy_type,
+                        location_id, location_description, deity_id,
+                        pantheon_id, clergy_hierarchy, pilgrimage_info,
+                        miracles_reported, restrictions, architectural_features,
+                        embedding
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    RETURNING id
+                """, name, site_type, description, clergy_type,
+                     location_id, location_description, deity_id,
+                     pantheon_id, clergy_hierarchy, pilgrimage_info,
+                     miracles_reported, restrictions, architectural_features,
+                     embedding)
+                
+                # Clear relevant cache
+                FAITH_CACHE.invalidate_pattern("site")
+                
+                return site_id
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_religious_text",
+        action_description="Adding religious text: {name}",
+        id_from_context=lambda ctx: "faith_system"
+    )
+    async def add_religious_text(
+        self, 
+        ctx,
+        name: str,
+        text_type: str,
+        description: str,
+        key_teachings: List[str],
+        authorship: Optional[str] = None,
+        restricted_to: Optional[List[str]] = None,
+        deity_id: Optional[int] = None,
+        pantheon_id: Optional[int] = None,
+        notable_passages: Optional[List[str]] = None,
+        age_description: Optional[str] = None
+    ) -> int:
+        """
+        Add a religious text to the database with governance oversight.
+        
+        Args:
+            name: Name of the text
+            text_type: Type of text (scripture, hymnal, etc.)
+            description: Detailed description
+            key_teachings: List of key teachings
+            authorship: Optional description of authorship
+            restricted_to: Optional list of who can access it
+            deity_id: Optional ID of associated deity
+            pantheon_id: Optional ID of associated pantheon
+            notable_passages: Optional list of notable passages
+            age_description: Optional description of age
+            
+        Returns:
+            ID of the created text
+        """
+        # Ensure tables exist
+        await self.initialize_tables()
+        
+        # Set defaults for optional parameters
+        restricted_to = restricted_to or []
+        notable_passages = notable_passages or []
+        
+        # Generate embedding for semantic search
+        embedding_text = f"{name} {text_type} {description} {' '.join(key_teachings)}"
+        embedding = await generate_embedding(embedding_text)
+        
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                text_id = await conn.fetchval("""
+                    INSERT INTO ReligiousTexts (
+                        name, text_type, description, key_teachings,
+                        authorship, restricted_to, deity_id,
+                        pantheon_id, notable_passages, age_description,
+                        embedding
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    RETURNING id
+                """, name, text_type, description, key_teachings,
+                     authorship, restricted_to, deity_id,
+                     pantheon_id, notable_passages, age_description,
+                     embedding)
+                
+                # Clear relevant cache
+                FAITH_CACHE.invalidate_pattern("text")
+                
+                return text_id
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_religious_order",
+        action_description="Adding religious order: {name}",
+        id_from_context=lambda ctx: "faith_system"
+    )
+    async def add_religious_order(
+        self, 
+        ctx,
+        name: str,
+        order_type: str,
+        description: str,
+        gender_composition: str,
+        founding_story: Optional[str] = None,
+        headquarters: Optional[str] = None,
+        hierarchy_structure: Optional[List[str]] = None,
+        vows: Optional[List[str]] = None,
+        practices: Optional[List[str]] = None,
+        deity_id: Optional[int] = None,
+        pantheon_id: Optional[int] = None,
+        special_abilities: Optional[List[str]] = None,
+        notable_members: Optional[List[str]] = None
+    ) -> int:
+        """
+        Add a religious order to the database with governance oversight.
+        
+        Args:
+            name: Name of the order
+            order_type: Type of order (monastic, military, etc.)
+            description: Detailed description
+            gender_composition: Gender makeup (female-only, etc.)
+            founding_story: Optional founding story
+            headquarters: Optional headquarters location
+            hierarchy_structure: Optional list of ranks
+            vows: Optional list of vows taken
+            practices: Optional list of practices
+            deity_id: Optional ID of associated deity
+            pantheon_id: Optional ID of associated pantheon
+            special_abilities: Optional list of special abilities
+            notable_members: Optional list of notable members
+            
+        Returns:
+            ID of the created order
+        """
+        # Ensure tables exist
+        await self.initialize_tables()
+        
+        # Set defaults for optional parameters
+        hierarchy_structure = hierarchy_structure or []
+        vows = vows or []
+        practices = practices or []
+        special_abilities = special_abilities or []
+        notable_members = notable_members or []
+        
+        # Generate embedding for semantic search
+        embedding_text = f"{name} {order_type} {description} {gender_composition}"
+        embedding = await generate_embedding(embedding_text)
+        
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                order_id = await conn.fetchval("""
+                    INSERT INTO ReligiousOrders (
+                        name, order_type, description, gender_composition,
+                        founding_story, headquarters, hierarchy_structure,
+                        vows, practices, deity_id, pantheon_id,
+                        special_abilities, notable_members, embedding
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    RETURNING id
+                """, name, order_type, description, gender_composition,
+                     founding_story, headquarters, hierarchy_structure,
+                     vows, practices, deity_id, pantheon_id,
+                     special_abilities, notable_members, embedding)
+                
+                # Clear relevant cache
+                FAITH_CACHE.invalidate_pattern("order")
+                
+                return order_id
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_religious_conflict",
+        action_description="Adding religious conflict: {name}",
+        id_from_context=lambda ctx: "faith_system"
+    )
+    async def add_religious_conflict(
+        self, 
+        ctx,
+        name: str,
+        conflict_type: str,
+        description: str,
+        parties_involved: List[str],
+        core_disagreement: str,
+        beginning_date: Optional[str] = None,
+        resolution_date: Optional[str] = None,
+        status: str = "ongoing",
+        casualties: Optional[str] = None,
+        historical_impact: Optional[str] = None
+    ) -> int:
+        """
+        Add a religious conflict to the database with governance oversight.
+        
+        Args:
+            name: Name of the conflict
+            conflict_type: Type of conflict (schism, holy war, etc.)
+            description: Detailed description
+            parties_involved: List of parties involved
+            core_disagreement: Central point of disagreement
+            beginning_date: Optional textual beginning date
+            resolution_date: Optional textual resolution date
+            status: Status (ongoing, resolved, dormant, etc.)
+            casualties: Optional description of casualties
+            historical_impact: Optional description of impact
+            
+        Returns:
+            ID of the created conflict
+        """
+        # Ensure tables exist
+        await self.initialize_tables()
+        
+        # Generate embedding for semantic search
+        embedding_text = f"{name} {conflict_type} {description} {core_disagreement}"
+        embedding = await generate_embedding(embedding_text)
+        
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                conflict_id = await conn.fetchval("""
+                    INSERT INTO ReligiousConflicts (
+                        name, conflict_type, description, parties_involved,
+                        core_disagreement, beginning_date, resolution_date,
+                        status, casualties, historical_impact, embedding
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    RETURNING id
+                """, name, conflict_type, description, parties_involved,
+                     core_disagreement, beginning_date, resolution_date,
+                     status, casualties, historical_impact, embedding)
+                
+                # Clear relevant cache
+                FAITH_CACHE.invalidate_pattern("conflict")
+                
+                return conflict_id
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_pantheon",
+        action_description="Generating pantheon for the world",
+        id_from_context=lambda ctx: "faith_system"
+    )
+    async def generate_pantheon(self, ctx) -> Dict[str, Any]:
+        """
+        Generate a complete pantheon for the world with governance oversight.
+        
+        Returns:
+            Dictionary with the pantheon and its deities
+        """
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get world info for context
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get foundation lore for context
+                foundation_lore = await conn.fetch("""
+                    SELECT category, description FROM WorldLore
+                    WHERE category in ('cosmology', 'magic_system', 'social_structure')
+                """)
+                
+                foundation_context = {}
+                for row in foundation_lore:
+                    foundation_context[row['category']] = row['description']
+                
+                # Get some geographical regions for context
+                regions = await conn.fetch("""
+                    SELECT name FROM GeographicRegions
+                    LIMIT 5
+                """)
+                
+                region_names = [r['name'] for r in regions]
+                
+                # Get nations for context
+                nations = await conn.fetch("""
+                    SELECT name, matriarchy_level FROM Nations
+                    ORDER BY matriarchy_level DESC
+                    LIMIT 5
+                """)
+                
+                nation_context = ""
+                for row in nations:
+                    nation_context += f"{row['name']} (matriarchy level: {row['matriarchy_level']}), "
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate a complete feminine-dominated pantheon for a matriarchal fantasy world.
+        
+        WORLD CONTEXT:
+        Cosmology: {foundation_context.get('cosmology', 'Not available')}
+        Magic System: {foundation_context.get('magic_system', 'Not available')}
+        Social Structure: {foundation_context.get('social_structure', 'Not available')}
+        
+        Geographic Regions: {', '.join(region_names)}
+        Nations: {nation_context}
+        
+        Create a pantheon that:
+        1. Is predominantly female with goddesses in all major positions of power
+        2. Includes a few male deities in subservient or specialized roles
+        3. Has a clear hierarchical structure reinforcing feminine dominance
+        4. Includes domains that reflect gender power dynamics
+        5. Has a cosmic structure that reinforces matriarchal principles
+        
+        Return a JSON object with:
+        1. "pantheon" - details about the overall pantheon
+        2. "deities" - array of deity objects
+        
+        For the pantheon include:
+        - name, description, origin_story, matriarchal_elements, creation_myth,
+          afterlife_beliefs, cosmic_structure, major_holy_days, geographical_spread,
+          dominant_nations, primary_worshippers, taboos
+        
+        For each deity include:
+        - name, gender, domain (array), description, iconography, holy_symbol,
+          sacred_animals (array), sacred_colors (array), rank (1-10),
+          worshippers (array), relationships (to other deities as an object)
+        """
+        
+        # Create an agent for pantheon generation
+        pantheon_agent = Agent(
+            name="PantheonGenerationAgent",
+            instructions="You create religious pantheons for matriarchal fantasy worlds.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(pantheon_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            pantheon_data = json.loads(response_text)
+            
+            # Ensure we have both pantheon and deities
+            if not all([
+                isinstance(pantheon_data, dict),
+                "pantheon" in pantheon_data,
+                "deities" in pantheon_data,
+                isinstance(pantheon_data["deities"], list)
+            ]):
+                raise ValueError("Invalid pantheon structure in response")
+            
+            # Save the pantheon
+            pantheon_info = pantheon_data["pantheon"]
+            deities_info = pantheon_data["deities"]
+            
+            # Create the pantheon
+            pantheon_id = await self.add_pantheon(
+                run_ctx,
+                name=pantheon_info.get("name", "The Pantheon"),
+                description=pantheon_info.get("description", ""),
+                origin_story=pantheon_info.get("origin_story", ""),
+                matriarchal_elements=pantheon_info.get("matriarchal_elements", ""),
+                creation_myth=pantheon_info.get("creation_myth"),
+                afterlife_beliefs=pantheon_info.get("afterlife_beliefs"),
+                cosmic_structure=pantheon_info.get("cosmic_structure"),
+                major_holy_days=pantheon_info.get("major_holy_days"),
+                geographical_spread=pantheon_info.get("geographical_spread"),
+                dominant_nations=pantheon_info.get("dominant_nations"),
+                primary_worshippers=pantheon_info.get("primary_worshippers"),
+                taboos=pantheon_info.get("taboos")
+            )
+            
+            # Create each deity
+            created_deities = []
+            for deity in deities_info:
+                try:
+                    deity_id = await self.add_deity(
+                        run_ctx,
+                        name=deity.get("name", "Unnamed Deity"),
+                        gender=deity.get("gender", "female"),
+                        domain=deity.get("domain", []),
+                        description=deity.get("description", ""),
+                        pantheon_id=pantheon_id,
+                        iconography=deity.get("iconography"),
+                        holy_symbol=deity.get("holy_symbol"),
+                        sacred_animals=deity.get("sacred_animals"),
+                        sacred_colors=deity.get("sacred_colors"),
+                        relationships=deity.get("relationships", {}),
+                        rank=deity.get("rank", 5),
+                        worshippers=deity.get("worshippers")
+                    )
+                    
+                    deity["id"] = deity_id
+                    created_deities.append(deity)
+                except Exception as e:
+                    logging.error(f"Error creating deity {deity.get('name')}: {e}")
+            
+            # Return the created pantheon and deities
+            return {
+                "pantheon": {**pantheon_info, "id": pantheon_id},
+                "deities": created_deities
+            }
+            
+        except Exception as e:
+            logging.error(f"Error generating pantheon: {e}")
+            return {"error": str(e)}
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_religious_practices",
+        action_description="Generating religious practices for pantheon: {pantheon_id}",
+        id_from_context=lambda ctx: "faith_system"
+    )
+    async def generate_religious_practices(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
+        """
+        Generate religious practices for a pantheon with governance oversight.
+        
+        Args:
+            pantheon_id: ID of the pantheon
+            
+        Returns:
+            List of generated religious practices
+        """
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get pantheon info
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get pantheon details
+                pantheon = await conn.fetchrow("""
+                    SELECT * FROM Pantheons
+                    WHERE id = $1
+                """, pantheon_id)
+                
+                if not pantheon:
+                    return {"error": "Pantheon not found"}
+                
+                # Get the deities in this pantheon
+                deities = await conn.fetch("""
+                    SELECT id, name, gender, domain, rank
+                    FROM Deities
+                    WHERE pantheon_id = $1
+                    ORDER BY rank DESC
+                """, pantheon_id)
+                
+                # Convert to dictionaries
+                pantheon_data = dict(pantheon)
+                deities_data = [dict(deity) for deity in deities]
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate religious practices for this pantheon:
+        
+        PANTHEON: {pantheon_data.get('name')}
+        DESCRIPTION: {pantheon_data.get('description')}
+        
+        DEITIES:
+        {json.dumps(deities_data, indent=2)}
+        
+        Create 5-7 religious practices that:
+        1. Reinforce matriarchal dominance themes
+        2. Include varied practice types (daily rituals, seasonal ceremonies, rites of passage, etc.)
+        3. Provide specific details on how they're performed
+        4. Show which deities they are associated with
+        
+        Return a JSON array where each practice has:
+        - name: Name of the practice
+        - practice_type: Type of practice (ritual, ceremony, prayer, etc.)
+        - description: Detailed description of the practice
+        - purpose: Purpose of the practice
+        - frequency: How often it's performed
+        - required_elements: Array of required components
+        - performed_by: Array of who performs it
+        - restricted_to: Array of who it's restricted to (if applicable)
+        - deity_id: ID of the associated deity (use exact IDs from the provided deity list)
+        """
+        
+        # Create an agent for practice generation
+        practice_agent = Agent(
+            name="ReligiousPracticeAgent",
+            instructions="You create religious practices for fantasy pantheons.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(practice_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            practices = json.loads(response_text)
+            
+            # Ensure we got a list
+            if not isinstance(practices, list):
+                if isinstance(practices, dict):
+                    practices = [practices]
+                else:
+                    practices = []
+            
+            # Save each practice
+            created_practices = []
+            for practice in practices:
+                try:
+                    practice_id = await self.add_religious_practice(
+                        run_ctx,
+                        name=practice.get("name", "Unnamed Practice"),
+                        practice_type=practice.get("practice_type", "ritual"),
+                        description=practice.get("description", ""),
+                        purpose=practice.get("purpose", "worship"),
+                        frequency=practice.get("frequency"),
+                        required_elements=practice.get("required_elements"),
+                        performed_by=practice.get("performed_by"),
+                        restricted_to=practice.get("restricted_to"),
+                        deity_id=practice.get("deity_id"),
+                        pantheon_id=pantheon_id
+                    )
+                    
+                    practice["id"] = practice_id
+                    created_practices.append(practice)
+                except Exception as e:
+                    logging.error(f"Error creating religious practice {practice.get('name')}: {e}")
+            
+            return created_practices
+        except Exception as e:
+            logging.error(f"Error generating religious practices: {e}")
+            return []
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_holy_sites",
+        action_description="Generating holy sites for pantheon: {pantheon_id}",
+        id_from_context=lambda ctx: "faith_system"
+    )
+    async def generate_holy_sites(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
+        """
+        Generate holy sites for a pantheon with governance oversight.
+        
+        Args:
+            pantheon_id: ID of the pantheon
+            
+        Returns:
+            List of generated holy sites
+        """
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get pantheon and location info
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get pantheon details
+                pantheon = await conn.fetchrow("""
+                    SELECT name, description, geographical_spread, dominant_nations
+                    FROM Pantheons
+                    WHERE id = $1
+                """, pantheon_id)
+                
+                if not pantheon:
+                    return {"error": "Pantheon not found"}
+                
+                # Get the major deities in this pantheon
+                deities = await conn.fetch("""
+                    SELECT id, name, gender, domain
+                    FROM Deities
+                    WHERE pantheon_id = $1 AND rank >= 6
+                    ORDER BY rank DESC
+                """, pantheon_id)
+                
+                # Get potential locations
+                locations = await conn.fetch("""
+                    SELECT id, location_name, description
+                    FROM Locations
+                    LIMIT 10
+                """)
+                
+                # Convert to dictionaries
+                pantheon_data = dict(pantheon)
+                deities_data = [dict(deity) for deity in deities]
+                location_data = [dict(location) for location in locations]
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate holy sites for this pantheon:
+        
+        PANTHEON: {pantheon_data.get('name')}
+        DESCRIPTION: {pantheon_data.get('description')}
+        
+        MAJOR DEITIES:
+        {json.dumps(deities_data, indent=2)}
+        
+        POTENTIAL LOCATIONS:
+        {json.dumps(location_data, indent=2)}
+        
+        Create 3-5 holy sites that:
+        1. Reflect matriarchal dominance in architecture and function
+        2. Include sites for major deities and some for the pantheon as a whole
+        3. Have distinct clergy systems with feminine leadership
+        4. Include varied site types (temples, shrines, sacred groves, etc.)
+        
+        Return a JSON array where each site has:
+        - name: Name of the holy site
+        - site_type: Type of site (temple, shrine, sacred grove, etc.)
+        - description: Detailed description
+        - clergy_type: Type of clergy (priestesses, etc.)
+        - location_id: ID of the location (use exact IDs from the provided locations, or null)
+        - location_description: Description of the location if no location_id provided
+        - deity_id: ID of the associated deity (use exact IDs from the provided deities, or null)
+        - clergy_hierarchy: Array of ranks in the clergy hierarchy
+        - pilgrimage_info: Information about pilgrimages (if applicable)
+        - miracles_reported: Array of reported miracles (if applicable)
+        - restrictions: Array of restrictions on entry
+        - architectural_features: Architectural features of the site
+        """
+        
+        # Create an agent for holy site generation
+        site_agent = Agent(
+            name="HolySiteAgent",
+            instructions="You create holy sites for fantasy pantheons.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(site_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            sites = json.loads(response_text)
+            
+            # Ensure we got a list
+            if not isinstance(sites, list):
+                if isinstance(sites, dict):
+                    sites = [sites]
+                else:
+                    sites = []
+            
+            # Save each holy site
+            created_sites = []
+            for site in sites:
+                try:
+                    site_id = await self.add_holy_site(
+                        run_ctx,
+                        name=site.get("name", "Unnamed Site"),
+                        site_type=site.get("site_type", "temple"),
+                        description=site.get("description", ""),
+                        clergy_type=site.get("clergy_type", "priestesses"),
+                        location_id=site.get("location_id"),
+                        location_description=site.get("location_description"),
+                        deity_id=site.get("deity_id"),
+                        pantheon_id=pantheon_id,
+                        clergy_hierarchy=site.get("clergy_hierarchy"),
+                        pilgrimage_info=site.get("pilgrimage_info"),
+                        miracles_reported=site.get("miracles_reported"),
+                        restrictions=site.get("restrictions"),
+                        architectural_features=site.get("architectural_features")
+                    )
+                    
+                    site["id"] = site_id
+                    created_sites.append(site)
+                except Exception as e:
+                    logging.error(f"Error creating holy site {site.get('name')}: {e}")
+            
+            return created_sites
+        except Exception as e:
+            logging.error(f"Error generating holy sites: {e}")
+            return []
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_complete_faith_system",
+        action_description="Generating complete faith system for the world",
+        id_from_context=lambda ctx: "faith_system"
+    )
+    async def generate_complete_faith_system(self, ctx) -> Dict[str, Any]:
+        """
+        Generate a complete faith system for the world with governance oversight.
+        
+        Returns:
+            Dictionary with all faith system components
+        """
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # 1. Generate pantheon
+        pantheon_data = await self.generate_pantheon(run_ctx)
+        
+        if "error" in pantheon_data:
+            return pantheon_data
+            
+        pantheon_id = pantheon_data["pantheon"]["id"]
+        
+        # 2. Generate religious practices
+        practices = await self.generate_religious_practices(run_ctx, pantheon_id)
+        
+        # 3. Generate holy sites
+        holy_sites = await self.generate_holy_sites(run_ctx, pantheon_id)
+        
+        # 4. Generate religious texts
+        religious_texts = await self._generate_religious_texts(run_ctx, pantheon_id)
+        
+        # 5. Generate religious orders
+        religious_orders = await self._generate_religious_orders(run_ctx, pantheon_id)
+        
+        # 6. Generate religious conflicts
+        religious_conflicts = await self._generate_religious_conflicts(run_ctx, pantheon_id)
+        
+        # Combine all results
+        result = {
+            "pantheon": pantheon_data["pantheon"],
+            "deities": pantheon_data["deities"],
+            "practices": practices,
+            "holy_sites": holy_sites,
+            "religious_texts": religious_texts,
+            "religious_orders": religious_orders,
+            "religious_conflicts": religious_conflicts
+        }
+        
+        return result
+    
+    async def _generate_religious_texts(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
+        """Helper method to generate religious texts for a pantheon"""
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get pantheon info
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get pantheon details
+                pantheon = await conn.fetchrow("""
+                    SELECT name, description, creation_myth
+                    FROM Pantheons
+                    WHERE id = $1
+                """, pantheon_id)
+                
+                if not pantheon:
+                    return []
+                
+                # Get the deities in this pantheon
+                deities = await conn.fetch("""
+                    SELECT id, name, gender, domain, rank
+                    FROM Deities
+                    WHERE pantheon_id = $1
+                    ORDER BY rank DESC
+                """, pantheon_id)
+                
+                # Convert to dictionaries
+                pantheon_data = dict(pantheon)
+                deities_data = [dict(deity) for deity in deities]
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate religious texts for this pantheon:
+        
+        PANTHEON: {pantheon_data.get('name')}
+        DESCRIPTION: {pantheon_data.get('description')}
+        CREATION MYTH: {pantheon_data.get('creation_myth')}
+        
+        DEITIES:
+        {json.dumps(deities_data[:5], indent=2)}
+        
+        Create 3-5 religious texts that:
+        1. Reinforce matriarchal principles and feminine divine superiority
+        2. Include varied text types (core scripture, commentaries, prayers, etc.)
+        3. Describe who has access to each text
+        4. Include specific key teachings
+        
+        Return a JSON array where each text has:
+        - name: Name of the text
+        - text_type: Type of text (scripture, hymnal, prayer book, etc.)
+        - description: Detailed description
+        - key_teachings: Array of key teachings
+        - authorship: Description of authorship
+        - restricted_to: Array of who can access it (if applicable)
+        - deity_id: ID of the associated deity (use exact IDs from the provided deities, or null)
+        - notable_passages: Array of notable passages
+        - age_description: Description of the text's age
+        """
+        
+        # Create an agent for text generation
+        text_agent = Agent(
+            name="ReligiousTextAgent",
+            instructions="You create religious texts for fantasy pantheons.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(text_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            texts = json.loads(response_text)
+            
+            # Ensure we got a list
+            if not isinstance(texts, list):
+                if isinstance(texts, dict):
+                    texts = [texts]
+                else:
+                    texts = []
+            
+            # Save each religious text
+            created_texts = []
+            for text in texts:
+                try:
+                    text_id = await self.add_religious_text(
+                        run_ctx,
+                        name=text.get("name", "Unnamed Text"),
+                        text_type=text.get("text_type", "scripture"),
+                        description=text.get("description", ""),
+                        key_teachings=text.get("key_teachings", []),
+                        authorship=text.get("authorship"),
+                        restricted_to=text.get("restricted_to"),
+                        deity_id=text.get("deity_id"),
+                        pantheon_id=pantheon_id,
+                        notable_passages=text.get("notable_passages"),
+                        age_description=text.get("age_description")
+                    )
+                    
+                    text["id"] = text_id
+                    created_texts.append(text)
+                except Exception as e:
+                    logging.error(f"Error creating religious text {text.get('name')}: {e}")
+            
+            return created_texts
+        except Exception as e:
+            logging.error(f"Error generating religious texts: {e}")
+            return []
+    
+    async def _generate_religious_orders(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
+        """Helper method to generate religious orders for a pantheon"""
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get pantheon info
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get pantheon details
+                pantheon = await conn.fetchrow("""
+                    SELECT name, description, matriarchal_elements
+                    FROM Pantheons
+                    WHERE id = $1
+                """, pantheon_id)
+                
+                if not pantheon:
+                    return []
+                
+                # Get the deities in this pantheon
+                deities = await conn.fetch("""
+                    SELECT id, name, gender, domain, rank
+                    FROM Deities
+                    WHERE pantheon_id = $1
+                    ORDER BY rank DESC
+                """, pantheon_id)
+                
+                # Get holy sites for potential headquarters
+                holy_sites = await conn.fetch("""
+                    SELECT id, name, site_type
+                    FROM HolySites
+                    WHERE pantheon_id = $1
+                    LIMIT 5
+                """, pantheon_id)
+                
+                # Convert to dictionaries
+                pantheon_data = dict(pantheon)
+                deities_data = [dict(deity) for deity in deities]
+                site_data = [dict(site) for site in holy_sites]
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate religious orders for this pantheon:
+        
+        PANTHEON: {pantheon_data.get('name')}
+        DESCRIPTION: {pantheon_data.get('description')}
+        MATRIARCHAL ELEMENTS: {pantheon_data.get('matriarchal_elements')}
+        
+        DEITIES:
+        {json.dumps(deities_data[:5], indent=2)}
+        
+        HOLY SITES (potential headquarters):
+        {json.dumps(site_data, indent=2)}
+        
+        Create 3-4 religious orders that:
+        1. Heavily emphasize female leadership and matriarchal structure
+        2. Include varied order types (monastic, military, scholarly, etc.)
+        3. Have clear gender compositions (most should be female-dominated)
+        4. Include details on hierarchies and practices
+        
+        Return a JSON array where each order has:
+        - name: Name of the order
+        - order_type: Type of order (monastic, military, scholarly, etc.)
+        - description: Detailed description
+        - gender_composition: Gender makeup (female-only, primarily female, mixed, etc.)
+        - founding_story: Founding story
+        - headquarters: Headquarters location (can reference holy sites)
+        - hierarchy_structure: Array of ranks in hierarchy (from highest to lowest)
+        - vows: Array of vows taken by members
+        - practices: Array of practices
+        - deity_id: ID of the associated deity (use exact IDs from the provided deities, or null)
+        - special_abilities: Array of special abilities (if applicable)
+        - notable_members: Array of notable members (if applicable)
+        """
+        
+        # Create an agent for order generation
+        order_agent = Agent(
+            name="ReligiousOrderAgent",
+            instructions="You create religious orders for fantasy pantheons.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(order_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            orders = json.loads(response_text)
+            
+            # Ensure we got a list
+            if not isinstance(orders, list):
+                if isinstance(orders, dict):
+                    orders = [orders]
+                else:
+                    orders = []
+            
+            # Save each religious order
+            created_orders = []
+            for order in orders:
+                try:
+                    order_id = await self.add_religious_order(
+                        run_ctx,
+                        name=order.get("name", "Unnamed Order"),
+                        order_type=order.get("order_type", "monastic"),
+                        description=order.get("description", ""),
+                        gender_composition=order.get("gender_composition", "female-only"),
+                        founding_story=order.get("founding_story"),
+                        headquarters=order.get("headquarters"),
+                        hierarchy_structure=order.get("hierarchy_structure"),
+                        vows=order.get("vows"),
+                        practices=order.get("practices"),
+                        deity_id=order.get("deity_id"),
+                        pantheon_id=pantheon_id,
+                        special_abilities=order.get("special_abilities"),
+                        notable_members=order.get("notable_members")
+                    )
+                    
+                    order["id"] = order_id
+                    created_orders.append(order)
+                except Exception as e:
+                    logging.error(f"Error creating religious order {order.get('name')}: {e}")
+            
+            return created_orders
+        except Exception as e:
+            logging.error(f"Error generating religious orders: {e}")
+            return []
+    
+    async def _generate_religious_conflicts(self, ctx, pantheon_id: int) -> List[Dict[str, Any]]:
+        """Helper method to generate religious conflicts for a pantheon"""
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get pantheon info
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get pantheon details
+                pantheon = await conn.fetchrow("""
+                    SELECT name, description, matriarchal_elements
+                    FROM Pantheons
+                    WHERE id = $1
+                """, pantheon_id)
+                
+                if not pantheon:
+                    return []
+                
+                # Get religious orders for potential conflict parties
+                orders = await conn.fetch("""
+                    SELECT id, name, order_type, gender_composition
+                    FROM ReligiousOrders
+                    WHERE pantheon_id = $1
+                    LIMIT 5
+                """, pantheon_id)
+                
+                # Get nations for potential conflicts
+                nations = await conn.fetch("""
+                    SELECT id, name, government_type, matriarchy_level
+                    FROM Nations
+                    LIMIT 5
+                """)
+                
+                # Convert to dictionaries
+                pantheon_data = dict(pantheon)
+                order_data = [dict(order) for order in orders]
+                nation_data = [dict(nation) for nation in nations]
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate religious conflicts for this pantheon:
+        
+        PANTHEON: {pantheon_data.get('name')}
+        DESCRIPTION: {pantheon_data.get('description')}
+        
+        RELIGIOUS ORDERS (potential conflict parties):
+        {json.dumps(order_data, indent=2)}
+        
+        NATIONS (potential conflict locations):
+        {json.dumps(nation_data, indent=2)}
+        
+        Create 2-3 religious conflicts that:
+        1. Show theological or power struggles within the faith
+        2. Include conflicts that highlight gender dynamics (not just female vs male)
+        3. Include different conflict types (schisms, theological debates, holy wars)
+        4. Have realistic core disagreements
+        
+        Return a JSON array where each conflict has:
+        - name: Name of the conflict
+        - conflict_type: Type of conflict (schism, holy war, theological debate, etc.)
+        - description: Detailed description
+        - parties_involved: Array of parties involved
+        - core_disagreement: Central point of disagreement
+        - beginning_date: Textual beginning date
+        - resolution_date: Textual resolution date (if resolved)
+        - status: Status (ongoing, resolved, dormant)
+        - casualties: Description of casualties (if applicable)
+        - historical_impact: Description of historical impact
+        """
+        
+        # Create an agent for conflict generation
+        conflict_agent = Agent(
+            name="ReligiousConflictAgent",
+            instructions="You create religious conflicts for fantasy pantheons.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(conflict_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            conflicts = json.loads(response_text)
+            
+            # Ensure we got a list
+            if not isinstance(conflicts, list):
+                if isinstance(conflicts, dict):
+                    conflicts = [conflicts]
+                else:
+                    conflicts = []
+            
+            # Save each religious conflict
+            created_conflicts = []
+            for conflict in conflicts:
+                try:
+                    conflict_id = await self.add_religious_conflict(
+                        run_ctx,
+                        name=conflict.get("name", "Unnamed Conflict"),
+                        conflict_type=conflict.get("conflict_type", "schism"),
+                        description=conflict.get("description", ""),
+                        parties_involved=conflict.get("parties_involved", []),
+                        core_disagreement=conflict.get("core_disagreement", ""),
+                        beginning_date=conflict.get("beginning_date"),
+                        resolution_date=conflict.get("resolution_date"),
+                        status=conflict.get("status", "ongoing"),
+                        casualties=conflict.get("casualties"),
+                        historical_impact=conflict.get("historical_impact")
+                    )
+                    
+                    conflict["id"] = conflict_id
+                    created_conflicts.append(conflict)
+                except Exception as e:
+                    logging.error(f"Error creating religious conflict {conflict.get('name')}: {e}")
+            
+            return created_conflicts
+        except Exception as e:
+            logging.error(f"Error generating religious conflicts: {e}")
+            return []
+    
+    async def register_with_governance(self):
+        """Register with Nyx governance system."""
+        await self.initialize_governance()
+        
+        # Register this system with governance
+        await self.governor.register_agent(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="faith_system",
+            agent_instance=self
+        )
+        
+        # Issue a directive for faith system
+        await self.governor.issue_directive(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="faith_system",
+            directive_type=DirectiveType.ACTION,
+            directive_data={
+                "instruction": "Create and manage faith systems that emphasize feminine divine superiority.",
+                "scope": "world_building"
+            },
+            priority=DirectivePriority.MEDIUM,
+            duration_minutes=24*60  # 24 hours
+        )
+        
+        logging.info(f"FaithSystem registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
+
+
+# -------------------------------------------------------------------------------
+# Enhanced Lore Integration Functions
+# -------------------------------------------------------------------------------
+
+async def register_all_enhanced_lore_systems(user_id: int, conversation_id: int) -> Dict[str, bool]:
+    """
+    Register all enhanced lore systems with Nyx governance.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Dictionary of registration results
+    """
+    # Get the Nyx governance system
+    governance = await get_central_governance(user_id, conversation_id)
+    
+    # Track registration results
+    registration_results = {}
+    
+    # Register faith system
+    try:
+        faith_system = FaithSystem(user_id, conversation_id)
+        await faith_system.register_with_governance()
+        registration_results["faith_system"] = True
+        logging.info("Faith system registered with Nyx governance")
+    except Exception as e:
+        logging.error(f"Error registering faith system: {e}")
+        registration_results["faith_system"] = False
+    
+    # Register lore evolution system
+    try:
+        lore_evolution = LoreEvolutionSystem(user_id, conversation_id)
+        await lore_evolution.initialize_governance()
+        registration_results["lore_evolution"] = True
+        logging.info("Lore evolution system registered with Nyx governance")
+    except Exception as e:
+        logging.error(f"Error registering lore evolution system: {e}")
+        registration_results["lore_evolution"] = False
+    
+    # Register emergent lore system
+    try:
+        emergent_lore = EmergentLoreSystem(user_id, conversation_id)
+        await emergent_lore.register_with_governance()
+        registration_results["emergent_lore"] = True
+        logging.info("Emergent lore system registered with Nyx governance")
+    except Exception as e:
+        logging.error(f"Error registering emergent lore system: {e}")
+        registration_results["emergent_lore"] = False
+    
+    # Issue directives for cooperative operation
+    await governance.issue_directive(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        agent_id="lore_generator",
+        directive_type=DirectiveType.ACTION,
+        directive_data={
+            "instruction": "Collaborate with enhanced lore systems to ensure consistent world development.",
+            "scope": "global"
+        },
+        priority=DirectivePriority.MEDIUM,
+        duration_minutes=24*60  # 24 hours
+    )
+    
+    return registration_results
+
+async def initialize_enhanced_lore_tables(user_id: int, conversation_id: int) -> bool:
+    """
+    Initialize all necessary database tables for enhanced lore systems.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Success status
+    """
+    try:
+        # Initialize faith system tables
+        faith_system = FaithSystem(user_id, conversation_id)
+        await faith_system.initialize_tables()
+        
+        # Initialize any other necessary tables
+        # (Most systems use existing tables)
+        
+        return True
+    except Exception as e:
+        logging.error(f"Error initializing enhanced lore tables: {e}")
+        return False
+
+async def generate_initial_enhanced_lore(user_id: int, conversation_id: int) -> Dict[str, Any]:
+    """
+    Generate initial enhanced lore for a new game world.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Dictionary of all generated lore
+    """
+    # Track generated lore
+    generated_lore = {}
+    
+    # Generate faith system
+    try:
+        faith_system = FaithSystem(user_id, conversation_id)
+        await faith_system.initialize_governance()
+        
+        # Create run context
+        run_ctx = RunContextWrapper(context={
+            "user_id": user_id,
+            "conversation_id": conversation_id
+        })
+        
+        faith_data = await faith_system.generate_complete_faith_system(run_ctx)
+        generated_lore["faith_system"] = faith_data
+        logging.info(f"Generated faith system with {len(faith_data.get('deities', []))} deities")
+    except Exception as e:
+        logging.error(f"Error generating faith system: {e}")
+        generated_lore["faith_system_error"] = str(e)
+    
+    # Generate cyclical events for the year
+    try:
+        emergent_lore = EmergentLoreSystem(user_id, conversation_id)
+        await emergent_lore.initialize_governance()
+        
+        # Create run context
+        run_ctx = RunContextWrapper(context={
+            "user_id": user_id,
+            "conversation_id": conversation_id
+        })
+        
+        # Generate seasonal events
+        seasonal_events = []
+        for season in ["spring", "summer", "fall", "winter"]:
+            event = await emergent_lore.generate_cyclical_event(run_ctx, season=season)
+            seasonal_events.append(event)
+        
+        # Generate solstice and equinox events
+        solstice_event = await emergent_lore.generate_cyclical_event(run_ctx, season="summer", is_solstice=True)
+        equinox_event = await emergent_lore.generate_cyclical_event(run_ctx, season="spring", is_equinox=True)
+        
+        seasonal_events.extend([solstice_event, equinox_event])
+        generated_lore["seasonal_events"] = seasonal_events
+        logging.info(f"Generated {len(seasonal_events)} seasonal events")
+    except Exception as e:
+        logging.error(f"Error generating seasonal events: {e}")
+        generated_lore["seasonal_events_error"] = str(e)
+    
+    return generated_lore
+
+async def evolve_world_over_time(user_id: int, conversation_id: int, days_passed: int = 30) -> Dict[str, Any]:
+    """
+    Evolve the world over time, simulating the passage of days or weeks.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        days_passed: Number of days to simulate
+        
+    Returns:
+        Dictionary of evolution results
+    """
+    evolution_results = {}
+    
+    # Use LoreEvolutionSystem to mature lore
+    try:
+        lore_evolution = LoreEvolutionSystem(user_id, conversation_id)
+        await lore_evolution.initialize_governance()
+        
+        maturation = await lore_evolution.mature_lore_over_time(days_passed)
+        evolution_results["lore_maturation"] = maturation
+        logging.info(f"Matured lore over {days_passed} days with {maturation.get('changes_applied', 0)} changes")
+    except Exception as e:
+        logging.error(f"Error maturing lore: {e}")
+        evolution_results["lore_maturation_error"] = str(e)
+    
+    # Generate random emergent events based on time passed
+    try:
+        emergent_lore = EmergentLoreSystem(user_id, conversation_id)
+        await emergent_lore.initialize_governance()
+        
+        # Create run context
+        run_ctx = RunContextWrapper(context={
+            "user_id": user_id,
+            "conversation_id": conversation_id
+        })
+        
+        # Scale number of events with time passed, but randomize
+        num_events = max(1, min(5, days_passed // 10))
+        num_events = random.randint(1, num_events)
+        
+        emergent_events = []
+        for _ in range(num_events):
+            event = await emergent_lore.generate_emergent_event(run_ctx)
+            emergent_events.append(event)
+        
+        evolution_results["emergent_events"] = emergent_events
+        logging.info(f"Generated {len(emergent_events)} emergent events")
+    except Exception as e:
+        logging.error(f"Error generating emergent events: {e}")
+        evolution_results["emergent_events_error"] = str(e)
+    
+    # Maybe add a new nation if enough time has passed
+    if days_passed >= 60 and random.random() < 0.3:  # 30% chance if 60+ days
+        try:
+            # Create run context
+            run_ctx = RunContextWrapper(context={
+                "user_id": user_id,
+                "conversation_id": conversation_id
+            })
+            
+            new_nation = await emergent_lore.generate_additional_nation(run_ctx)
+            evolution_results["new_nation"] = new_nation
+            logging.info(f"Generated new nation: {new_nation.get('name', 'Unknown')}")
+        except Exception as e:
+            logging.error(f"Error generating new nation: {e}")
+            evolution_results["new_nation_error"] = str(e)
+    
+    return evolution_results
+
+
+class EmergentLoreSystem:
+    """
+    System for generating emergent lore, events, and developments
+    to ensure the world evolves organically over time.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.lore_manager = LoreManager(user_id, conversation_id)
+        self.faith_system = FaithSystem(user_id, conversation_id)
+        self.governor = None
+        
+    async def initialize_governance(self):
+        """Initialize Nyx governance connection"""
+        if not self.governor:
+            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+        return self.governor
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_emergent_event",
+        action_description="Generating emergent world event",
+        id_from_context=lambda ctx: "emergent_lore"
+    )
+    async def generate_emergent_event(self, ctx) -> Dict[str, Any]:
+        """
+        Generate a random emergent event in the world with governance oversight.
+        
+        Returns:
+            Event details and lore impact
+        """
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get current world state for context
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get active factions
+                factions = await conn.fetch("""
+                    SELECT id, name, type, description
+                    FROM Factions
+                    ORDER BY RANDOM()
+                    LIMIT 3
+                """)
+                
+                # Get some nations
+                nations = await conn.fetch("""
+                    SELECT id, name, government_type
+                    FROM Nations
+                    ORDER BY RANDOM()
+                    LIMIT 3
+                """)
+                
+                # Get some locations
+                locations = await conn.fetch("""
+                    SELECT id, location_name, description
+                    FROM Locations
+                    ORDER BY RANDOM()
+                    LIMIT 3
+                """)
+                
+                # Convert to lists
+                faction_data = [dict(faction) for faction in factions]
+                nation_data = [dict(nation) for nation in nations]
+                location_data = [dict(location) for location in locations]
+        
+        # Determine event type
+        event_types = [
+            "political_shift", "military_conflict", "natural_disaster",
+            "cultural_development", "technological_advancement", "religious_event",
+            "economic_change", "diplomatic_incident"
+        ]
+        
+        # Weight certain events based on available data
+        weights = [1] * len(event_types)
+        
+        # More likely to generate faction-related events if we have factions
+        if faction_data:
+            faction_event_indices = [0, 1, 3, 6, 7]  # political, military, cultural, economic, diplomatic
+            for idx in faction_event_indices:
+                if idx < len(weights):
+                    weights[idx] += 1
+        
+        # More likely to generate nation-related events if we have nations
+        if nation_data:
+            nation_event_indices = [0, 1, 7]  # political, military, diplomatic
+            for idx in nation_event_indices:
+                if idx < len(weights):
+                    weights[idx] += 1
+        
+        # More likely to generate location-related events if we have locations
+        if location_data:
+            location_event_indices = [2, 3, 5]  # natural, cultural, religious
+            for idx in location_event_indices:
+                if idx < len(weights):
+                    weights[idx] += 1
+        
+        # Select event type
+        event_type = random.choices(event_types, weights=weights, k=1)[0]
+        
+        # Create a prompt based on event type
+        if event_type == "political_shift":
+            entities = faction_data if faction_data else nation_data
+            prompt = f"""
+            Generate a political shift event for this world:
+            
+            POTENTIAL ENTITIES INVOLVED:
+            {json.dumps(entities, indent=2)}
+            
+            Create a significant political shift event that:
+            1. Changes power dynamics in a meaningful way
+            2. Is specific and detailed enough to impact the world
+            3. Reinforces or challenges matriarchal power structures
+            4. Could lead to interesting narrative developments
+            
+            Return a JSON object with:
+            - event_name: Name of the event
+            - event_type: "political_shift"
+            - description: Detailed description
+            - entities_involved: Array of entity names involved
+            - instigator: The primary instigating entity
+            - immediate_consequences: Array of immediate consequences
+            - potential_long_term_effects: Array of potential long-term effects
+            - affected_lore_categories: Array of lore categories this would affect
+            """
+            
+        elif event_type == "military_conflict":
+            prompt = f"""
+            Generate a military conflict event for this world:
+            
+            POTENTIAL NATIONS INVOLVED:
+            {json.dumps(nation_data, indent=2)}
+            
+            POTENTIAL FACTIONS INVOLVED:
+            {json.dumps(faction_data, indent=2)}
+            
+            POTENTIAL LOCATIONS:
+            {json.dumps(location_data, indent=2)}
+            
+            Create a military conflict that:
+            1. Involves clear aggressor and defender sides
+            2. Has a specific cause and objective
+            3. Creates opportunities for heroism and character development
+            4. Shows how warfare operates in a matriarchal society
+            
+            Return a JSON object with:
+            - event_name: Name of the conflict
+            - event_type: "military_conflict"
+            - description: Detailed description
+            - aggressor: Entity that initiated the conflict
+            - defender: Entity defending against aggression
+            - location: Where the conflict is primarily occurring
+            - cause: What caused the conflict
+            - scale: Scale of the conflict (skirmish, battle, war, etc.)
+            - current_status: Current status of the conflict
+            - casualties: Description of casualties
+            - affected_lore_categories: Array of lore categories this would affect
+            """
+            
+        elif event_type == "natural_disaster":
+            prompt = f"""
+            Generate a natural disaster event for this world:
+            
+            POTENTIAL LOCATIONS AFFECTED:
+            {json.dumps(location_data, indent=2)}
+            
+            Create a natural disaster that:
+            1. Has a significant impact on the affected area
+            2. Could have supernatural or magical elements
+            3. Creates opportunities for societal response that highlights values
+            4. Changes the physical landscape in some way
+            
+            Return a JSON object with:
+            - event_name: Name of the disaster
+            - event_type: "natural_disaster"
+            - description: Detailed description
+            - disaster_type: Type of disaster (earthquake, flood, magical storm, etc.)
+            - primary_location: Primary location affected
+            - secondary_locations: Array of secondarily affected locations
+            - severity: Severity level (1-10)
+            - immediate_impact: Description of immediate impact
+            - response: How communities and leadership are responding
+            - supernatural_elements: Any supernatural aspects (if applicable)
+            - affected_lore_categories: Array of lore categories this would affect
+            """
+            
+        elif event_type == "cultural_development":
+            prompt = f"""
+            Generate a cultural development event for this world:
+            
+            POTENTIAL LOCATIONS:
+            {json.dumps(location_data, indent=2)}
+            
+            POTENTIAL FACTIONS:
+            {json.dumps(faction_data, indent=2)}
+            
+            Create a cultural development that:
+            1. Introduces a new tradition, art form, or cultural practice
+            2. Comes from a specific community or demographic
+            3. Has meaning within the matriarchal power structure
+            4. Could spread to other communities
+            
+            Return a JSON object with:
+            - event_name: Name of the cultural development
+            - event_type: "cultural_development"
+            - description: Detailed description
+            - development_type: Type of development (tradition, art form, practice, etc.)
+            - originating_group: Group where it originated
+            - significance: Social significance
+            - symbolism: Symbolic meaning
+            - reception: How different groups have received it
+            - spread_potential: Likelihood of spreading (1-10)
+            - affected_lore_categories: Array of lore categories this would affect
+            """
+            
+        elif event_type == "technological_advancement":
+            prompt = f"""
+            Generate a technological or magical advancement event for this world:
+            
+            POTENTIAL LOCATIONS:
+            {json.dumps(location_data, indent=2)}
+            
+            POTENTIAL FACTIONS:
+            {json.dumps(faction_data, indent=2)}
+            
+            Create a technological or magical advancement that:
+            1. Changes how something is done in the world
+            2. Was developed by specific individuals or groups
+            3. Has both benefits and potential drawbacks
+            4. Reinforces matriarchal control of knowledge or resources
+            
+            Return a JSON object with:
+            - event_name: Name of the advancement
+            - event_type: "technological_advancement"
+            - description: Detailed description
+            - advancement_type: Type (technological, magical, alchemical, etc.)
+            - creator: Who created or discovered it
+            - applications: Potential applications
+            - limitations: Current limitations
+            - control: Who controls access to this advancement
+            - societal_impact: How it impacts society
+            - affected_lore_categories: Array of lore categories this would affect
+            """
+            
+        elif event_type == "religious_event":
+            prompt = f"""
+            Generate a religious event for this world:
+            
+            POTENTIAL LOCATIONS:
+            {json.dumps(location_data, indent=2)}
+            
+            Create a religious event that:
+            1. Has significance within an existing faith system
+            2. Could be interpreted as divine intervention or revelation
+            3. Affects religious practices or beliefs
+            4. Reinforces the feminine divine nature of the world
+            
+            Return a JSON object with:
+            - event_name: Name of the religious event
+            - event_type: "religious_event"
+            - description: Detailed description
+            - event_category: Type of event (miracle, prophecy, divine manifestation, etc.)
+            - location: Where it occurred
+            - witnesses: Who witnessed it
+            - religious_significance: Significance to believers
+            - skeptic_explanation: How skeptics explain it
+            - faith_impact: How it impacts faith practices
+            - affected_lore_categories: Array of lore categories this would affect
+            """
+            
+        elif event_type == "economic_change":
+            prompt = f"""
+            Generate an economic change event for this world:
+            
+            POTENTIAL NATIONS:
+            {json.dumps(nation_data, indent=2)}
+            
+            POTENTIAL FACTIONS:
+            {json.dumps(faction_data, indent=2)}
+            
+            Create an economic change that:
+            1. Shifts resource distribution or trade patterns
+            2. Affects multiple groups or regions
+            3. Creates winners and losers
+            4. Shows how economic power relates to matriarchal control
+            
+            Return a JSON object with:
+            - event_name: Name of the economic change
+            - event_type: "economic_change"
+            - description: Detailed description
+            - change_type: Type of change (trade shift, resource discovery, currency change, etc.)
+            - primary_causes: What caused the change
+            - beneficiaries: Who benefits
+            - disadvantaged: Who is disadvantaged
+            - resource_involved: Primary resource or commodity involved
+            - wealth_redistribution: How wealth is being redistributed
+            - affected_lore_categories: Array of lore categories this would affect
+            """
+            
+        else:  # diplomatic_incident
+            prompt = f"""
+            Generate a diplomatic incident for this world:
+            
+            POTENTIAL NATIONS:
+            {json.dumps(nation_data, indent=2)}
+            
+            POTENTIAL FACTIONS:
+            {json.dumps(faction_data, indent=2)}
+            
+            Create a diplomatic incident that:
+            1. Creates tension between two or more groups
+            2. Stems from a specific action or misunderstanding
+            3. Requires diplomatic resolution
+            4. Highlights cultural differences or values
+            
+            Return a JSON object with:
+            - event_name: Name of the diplomatic incident
+            - event_type: "diplomatic_incident"
+            - description: Detailed description
+            - parties_involved: Array of involved parties
+            - instigating_action: What triggered the incident
+            - cultural_factors: Cultural factors at play
+            - severity: Severity level (1-10)
+            - potential_resolutions: Possible ways to resolve it
+            - current_status: Current diplomatic status
+            - affected_lore_categories: Array of lore categories this would affect
+            """
+        
+        # Create an agent for event generation
+        event_agent = Agent(
+            name="EmergentEventAgent",
+            instructions="You create emergent world events for fantasy settings.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(event_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            event_data = json.loads(response_text)
+            
+            # Create a unified event description for lore evolution
+            event_description = event_data.get("description", "")
+            event_name = event_data.get("event_name", "Unnamed Event")
+            
+            # Use the LoreEvolutionSystem to evolve the lore based on this event
+            lore_evolution = LoreEvolutionSystem(self.user_id, self.conversation_id)
+            lore_updates = await lore_evolution.evolve_lore_with_event(
+                f"{event_name}: {event_description}"
+            )
+            
+            # Add the lore updates to the event data
+            event_data["lore_updates"] = lore_updates
+            
+            # Return the combined data
+            return event_data
+            
+        except Exception as e:
+            logging.error(f"Error generating emergent event: {e}")
+            return {"error": str(e)}
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_cyclical_event",
+        action_description="Generating cyclical seasonal event",
+        id_from_context=lambda ctx: "emergent_lore"
+    )
+    async def generate_cyclical_event(self, ctx, season: str = None, is_solstice: bool = False, is_equinox: bool = False) -> Dict[str, Any]:
+        """
+        Generate a cyclical seasonal event with governance oversight.
+        
+        Args:
+            season: Optional season (spring, summer, fall, winter)
+            is_solstice: Whether this is a solstice event
+            is_equinox: Whether this is an equinox event
+            
+        Returns:
+            Cyclical event details
+        """
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Set default season if not provided
+        if not season:
+            seasons = ["spring", "summer", "fall", "winter"]
+            season = random.choice(seasons)
+            
+        # Get relevant data for context
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get cultural elements
+                cultural_elements = await conn.fetch("""
+                    SELECT name, type, description
+                    FROM CulturalElements
+                    WHERE type IN ('festival', 'tradition', 'ceremony', 'ritual')
+                    ORDER BY RANDOM()
+                    LIMIT 3
+                """)
+                
+                # Get religious practices
+                religious_practices = await conn.fetch("""
+                    SELECT name, practice_type, description, frequency
+                    FROM ReligiousPractices
+                    WHERE frequency LIKE '%annual%' OR frequency LIKE '%seasonal%'
+                    ORDER BY RANDOM()
+                    LIMIT 3
+                """)
+                
+                # Get suitable locations
+                locations = await conn.fetch("""
+                    SELECT location_name, description
+                    FROM Locations
+                    ORDER BY RANDOM()
+                    LIMIT 3
+                """)
+                
+                # Convert to lists
+                cultural_data = [dict(element) for element in cultural_elements]
+                religious_data = [dict(practice) for practice in religious_practices]
+                location_data = [dict(location) for location in locations]
+        
+        # Determine event type and special modifiers
+        event_subtypes = ["festival", "ritual", "harvest", "hunt", "pilgrimage", "market", "ceremony"]
+        
+        if is_solstice:
+            event_subtypes.extend(["celestial alignment", "divine manifestation", "magical surge"])
+        if is_equinox:
+            event_subtypes.extend(["balance ritual", "transition ceremony", "world renewal"])
+            
+        if season == "spring":
+            event_subtypes.extend(["planting", "fertility rite", "renewal ceremony"])
+        elif season == "summer":
+            event_subtypes.extend(["sun celebration", "competition", "coming of age"])
+        elif season == "fall":
+            event_subtypes.extend(["harvest festival", "ancestor veneration", "preparation ritual"])
+        elif season == "winter":
+            event_subtypes.extend(["endurance trial", "darkness ritual", "shelter ceremony"])
+            
+        event_subtype = random.choice(event_subtypes)
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate a cyclical {season} {event_subtype} event for a matriarchal fantasy world.
+        
+        EXISTING CULTURAL ELEMENTS:
+        {json.dumps(cultural_data, indent=2)}
+        
+        EXISTING RELIGIOUS PRACTICES:
+        {json.dumps(religious_data, indent=2)}
+        
+        POTENTIAL LOCATIONS:
+        {json.dumps(location_data, indent=2)}
+        
+        SPECIAL MODIFIERS:
+        Solstice Event: {"Yes" if is_solstice else "No"}
+        Equinox Event: {"Yes" if is_equinox else "No"}
+        
+        Create a cyclical event that:
+        1. Is tied to the {season} season specifically
+        2. Reinforces matriarchal power and feminine divine connection
+        3. Involves community participation with specific roles
+        4. Has cultural and possibly religious significance
+        
+        Return a JSON object with:
+        - event_name: Name of the cyclical event
+        - event_type: "cyclical_event"
+        - subtype: The specific type of event (festival, ritual, etc.)
+        - season: The associated season
+        - description: Detailed description
+        - frequency: How often it occurs
+        - duration: How long it lasts
+        - locations: Where it's celebrated
+        - primary_participants: Who leads or conducts the event
+        - community_role: How the community participates
+        - religious_significance: Any religious meaning
+        - cultural_significance: Cultural meaning and importance
+        - material_components: Required materials or preparations
+        - traditions: Specific traditions associated with this event
+        - gender_roles: How gender influences participation
+        """
+        
+        # Create an agent for cyclical event generation
+        cyclical_agent = Agent(
+            name="CyclicalEventAgent",
+            instructions="You create seasonal festivals and cyclical events for fantasy worlds.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(cyclical_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            event_data = json.loads(response_text)
+            
+            # Store this as a cultural element in the database
+            try:
+                # Prepare the data
+                name = event_data.get("event_name", f"{season.capitalize()} {event_subtype.capitalize()}")
+                description = event_data.get("description", "")
+                
+                cultural_description = description
+                if "cultural_significance" in event_data:
+                    cultural_description += f"\n\nCultural Significance: {event_data['cultural_significance']}"
+                if "traditions" in event_data:
+                    traditions = event_data.get("traditions", [])
+                    if isinstance(traditions, list):
+                        cultural_description += f"\n\nTraditions: {', '.join(traditions)}"
+                    else:
+                        cultural_description += f"\n\nTraditions: {traditions}"
+                        
+                event_data["stored_as_cultural_element"] = True
+                
+                # Add to CulturalElements
+                element_id = await self.lore_manager.add_cultural_element(
+                    name=name,
+                    element_type=event_data.get("subtype", "festival"),
+                    description=cultural_description,
+                    practiced_by=event_data.get("locations", []),
+                    significance=8,  # Cyclical events are quite significant
+                    historical_origin=f"This {event_data.get('subtype', 'event')} developed as a {season} celebration."
+                )
+                
+                event_data["cultural_element_id"] = element_id
+                
+                # If it has religious significance, also add as a religious practice
+                if "religious_significance" in event_data and event_data.get("religious_significance"):
+                    religious_description = description
+                    religious_description += f"\n\nReligious Significance: {event_data['religious_significance']}"
+                    
+                    # Add to ReligiousPractices
+                    practice_id = await self.faith_system.add_religious_practice(
+                        run_ctx,
+                        name=name,
+                        practice_type=event_data.get("subtype", "festival"),
+                        description=religious_description,
+                        purpose="seasonal celebration",
+                        frequency=f"Annual ({season})",
+                        required_elements=event_data.get("material_components", [])
+                    )
+                    
+                    event_data["religious_practice_id"] = practice_id
+                    event_data["stored_as_religious_practice"] = True
+            except Exception as e:
+                logging.error(f"Error storing cyclical event: {e}")
+                event_data["storage_error"] = str(e)
+            
+            return event_data
+            
+        except Exception as e:
+            logging.error(f"Error generating cyclical event: {e}")
+            return {"error": str(e)}
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_additional_nation",
+        action_description="Generating additional nation for the world",
+        id_from_context=lambda ctx: "emergent_lore"
+    )
+    async def generate_additional_nation(self, ctx) -> Dict[str, Any]:
+        """
+        Generate an additional nation with governance oversight.
+        
+        Returns:
+            New nation details
+        """
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get existing nations for context
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Check how many nations we already have
+                nation_count = await conn.fetchval("""
+                    SELECT COUNT(*) FROM Nations
+                """)
+                
+                # Get existing nations
+                existing_nations = await conn.fetch("""
+                    SELECT name, government_type, matriarchy_level, neighboring_nations
+                    FROM Nations
+                    LIMIT 10
+                """)
+                
+                # Get pantheons for religious context
+                pantheons = await conn.fetch("""
+                    SELECT name, description
+                    FROM Pantheons
+                    LIMIT 3
+                """)
+                
+                # Get some cultural elements for context
+                cultural_elements = await conn.fetch("""
+                    SELECT name, type, description
+                    FROM CulturalElements
+                    ORDER BY RANDOM()
+                    LIMIT 5
+                """)
+                
+                # Convert to lists
+                nation_data = [dict(nation) for nation in existing_nations]
+                pantheon_data = [dict(pantheon) for pantheon in pantheons]
+                cultural_data = [dict(element) for element in cultural_elements]
+        
+        # Determine if this should be a matriarchal or non-matriarchal nation
+        # Keep a balance in the world
+        matriarchal_nations = [n for n in nation_data if n.get("matriarchy_level", 0) >= 7]
+        non_matriarchal_nations = [n for n in nation_data if n.get("matriarchy_level", 0) <= 3]
+        
+        # Default to a medium matriarchy level
+        target_matriarchy_level = random.randint(4, 7)
+        
+        # If we have more matriarchal nations, make this one less matriarchal
+        if len(matriarchal_nations) > len(non_matriarchal_nations) + 1:
+            target_matriarchy_level = random.randint(1, 4)
+        # If we have more non-matriarchal nations, make this one more matriarchal
+        elif len(non_matriarchal_nations) > len(matriarchal_nations):
+            target_matriarchy_level = random.randint(7, 10)
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate a new nation for a fantasy world with existing nations:
+        
+        EXISTING NATIONS:
+        {json.dumps(nation_data, indent=2)}
+        
+        RELIGIOUS CONTEXT:
+        {json.dumps(pantheon_data, indent=2)}
+        
+        CULTURAL CONTEXT:
+        {json.dumps(cultural_data, indent=2)}
+        
+        Create a nation that:
+        1. Has a matriarchy level of approximately {target_matriarchy_level}/10
+        2. Is distinct from existing nations
+        3. Has logical geographic connections to some existing nations
+        4. Has rich cultural and political details
+        
+        Return a JSON object with:
+        - name: Name of the nation
+        - government_type: Type of government
+        - description: Detailed description
+        - relative_power: Power level (1-10)
+        - matriarchy_level: How matriarchal (1-10, with 10 being totally female dominated)
+        - population_scale: Scale of population (small, medium, large, vast)
+        - major_resources: Array of key resources
+        - major_cities: Array of key cities/settlements
+        - cultural_traits: Array of defining cultural traits
+        - notable_features: Other notable features
+        - neighboring_nations: Array of nations that border this one (use exact names from the existing nations list)
+        """
+        
+        # Create an agent for nation generation
+        nation_agent = Agent(
+            name="NationGenerationAgent",
+            instructions="You create nations for fantasy worlds.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(nation_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            nation_data = json.loads(response_text)
+            
+            # Create the nation in the geopolitical system
+            from lore.enhanced_lore import GeopoliticalSystemManager
+            geopolitical_system = GeopoliticalSystemManager(self.user_id, self.conversation_id)
+            
+            # Add the nation
+            nation_id = await geopolitical_system.add_nation(
+                run_ctx,
+                name=nation_data.get("name", "Unnamed Nation"),
+                government_type=nation_data.get("government_type", "monarchy"),
+                description=nation_data.get("description", ""),
+                relative_power=nation_data.get("relative_power", 5),
+                matriarchy_level=nation_data.get("matriarchy_level", target_matriarchy_level),
+                population_scale=nation_data.get("population_scale", "medium"),
+                major_resources=nation_data.get("major_resources", []),
+                major_cities=nation_data.get("major_cities", []),
+                cultural_traits=nation_data.get("cultural_traits", []),
+                notable_features=nation_data.get("notable_features", ""),
+                neighboring_nations=nation_data.get("neighboring_nations", [])
+            )
+            
+            # Update the nation data with the ID
+            nation_data["id"] = nation_id
+            
+            # Create international relations
+            neighboring_nations = nation_data.get("neighboring_nations", [])
+            if neighboring_nations:
+                # Get IDs of neighboring nations
+                async with self.lore_manager.get_connection_pool() as pool:
+                    async with pool.acquire() as conn:
+                        for neighbor_name in neighboring_nations:
+                            neighbor_id = await conn.fetchval("""
+                                SELECT id FROM Nations
+                                WHERE name = $1
+                            """, neighbor_name)
+                            
+                            if neighbor_id:
+                                # Determine relationship type based on matriarchy level difference
+                                neighbor_matriarchy = await conn.fetchval("""
+                                    SELECT matriarchy_level FROM Nations
+                                    WHERE id = $1
+                                """, neighbor_id)
+                                
+                                matriarchy_diff = abs(nation_data.get("matriarchy_level", 5) - (neighbor_matriarchy or 5))
+                                
+                                # Greater difference means more tension
+                                relationship_quality = max(1, 10 - matriarchy_diff)
+                                
+                                if relationship_quality >= 7:
+                                    relationship_type = "ally"
+                                    description = f"{nation_data.get('name')} and {neighbor_name} maintain friendly diplomatic relations."
+                                elif relationship_quality >= 4:
+                                    relationship_type = "neutral"
+                                    description = f"{nation_data.get('name')} and {neighbor_name} maintain cautious but functional diplomatic relations."
+                                else:
+                                    relationship_type = "rival"
+                                    description = f"{nation_data.get('name')} and {neighbor_name} have tense and occasionally hostile relations."
+                                
+                                # Create the relation
+                                await geopolitical_system.add_international_relation(
+                                    run_ctx,
+                                    nation1_id=nation_id,
+                                    nation2_id=neighbor_id,
+                                    relationship_type=relationship_type,
+                                    relationship_quality=relationship_quality,
+                                    description=description
+                                )
+            
+            return nation_data
+            
+        except Exception as e:
+            logging.error(f"Error generating additional nation: {e}")
+            return {"error": str(e)}
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_historical_figure",
+        action_description="Generating historical figure for the world",
+        id_from_context=lambda ctx: "emergent_lore"
+    )
+    async def generate_historical_figure(self, ctx) -> Dict[str, Any]:
+        """
+        Generate a historical figure with governance oversight.
+        
+        Returns:
+            Historical figure details
+        """
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get context for figure generation
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get some historical events for context
+                historical_events = await conn.fetch("""
+                    SELECT name, description, date_description
+                    FROM HistoricalEvents
+                    ORDER BY RANDOM()
+                    LIMIT 3
+                """)
+                
+                # Get some nations for context
+                nations = await conn.fetch("""
+                    SELECT name, government_type, matriarchy_level
+                    FROM Nations
+                    ORDER BY RANDOM()
+                    LIMIT 3
+                """)
+                
+                # Get some factions for context
+                factions = await conn.fetch("""
+                    SELECT name, type, description
+                    FROM Factions
+                    ORDER BY RANDOM()
+                    LIMIT 3
+                """)
+                
+                # Convert to lists
+                event_data = [dict(event) for event in historical_events]
+                nation_data = [dict(nation) for nation in nations]
+                faction_data = [dict(faction) for faction in factions]
+        
+        # Determine gender distribution
+        # In a matriarchal world, more historical figures should be female
+        genders = ["female", "female", "female", "male", "non-binary"]
+        figure_gender = random.choice(genders)
+        
+        # Adjust prompt based on gender
+        gender_context = ""
+        if figure_gender == "female":
+            gender_context = "Create a female historical figure who exemplifies feminine power and authority."
+        elif figure_gender == "male":
+            gender_context = "Create a male historical figure who represents an unusual or noteworthy role for men in matriarchal society."
+        else:  # non-binary
+            gender_context = "Create a non-binary historical figure who carved a unique path in the gendered power structures."
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate a historical figure for a matriarchal fantasy world:
+        
+        HISTORICAL EVENTS:
+        {json.dumps(event_data, indent=2)}
+        
+        NATIONS:
+        {json.dumps(nation_data, indent=2)}
+        
+        FACTIONS:
+        {json.dumps(faction_data, indent=2)}
+        
+        {gender_context}
+        
+        Create a detailed historical figure that:
+        1. Had significant impact on the world
+        2. Has a compelling personal story
+        3. Is connected to existing historical events or factions when appropriate
+        4. Reflects the matriarchal power dynamics of the world
+        
+        Return a JSON object with:
+        - name: Full name of the figure
+        - gender: Gender (female, male, non-binary)
+        - title: Primary title or position
+        - birth_date: Approximate birth date or period
+        - death_date: Approximate death date or period (if deceased)
+        - is_alive: Whether they're still alive
+        - nationality: Nation of origin
+        - affiliations: Array of factions or groups they were affiliated with
+        - description: Detailed personal description
+        - appearance: Physical appearance
+        - personality: Key personality traits
+        - accomplishments: Array of major accomplishments
+        - legacy: Lasting impact on the world
+        - relationships: Key relationships with other figures or groups
+        - controversy: Any controversial aspects
+        - historical_events: Array of historical events they participated in
+        """
+        
+        # Create an agent for historical figure generation
+        figure_agent = Agent(
+            name="HistoricalFigureAgent",
+            instructions="You create detailed historical figures for fantasy worlds.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(figure_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            figure_data = json.loads(response_text)
+            
+            # Create a world lore entry for this figure
+            name = figure_data.get("name", "Unnamed Figure")
+            title = figure_data.get("title", "")
+            description = figure_data.get("description", "")
+            
+            full_description = f"{description}\n\n"
+            
+            if "accomplishments" in figure_data:
+                accomplishments = figure_data.get("accomplishments", [])
+                if isinstance(accomplishments, list):
+                    full_description += f"Accomplishments: {', '.join(accomplishments)}\n\n"
+                else:
+                    full_description += f"Accomplishments: {accomplishments}\n\n"
+                    
+            if "legacy" in figure_data:
+                full_description += f"Legacy: {figure_data.get('legacy')}\n\n"
+                
+            if "controversy" in figure_data:
+                full_description += f"Controversy: {figure_data.get('controversy')}\n\n"
+            
+            # Store as WorldLore
+            try:
+                lore_id = await self.lore_manager.add_world_lore(
+                    name=f"{name}, {title}",
+                    category="historical_figure",
+                    description=full_description,
+                    significance=8,  # Historical figures are significant
+                    tags=["historical_figure", "biography", figure_data.get("gender", "unknown")]
+                )
+                
+                figure_data["lore_id"] = lore_id
+                figure_data["stored_as_world_lore"] = True
+            except Exception as e:
+                logging.error(f"Error storing historical figure as world lore: {e}")
+                figure_data["storage_error"] = str(e)
+            
+            return figure_data
+            
+        except Exception as e:
+            logging.error(f"Error generating historical figure: {e}")
+            return {"error": str(e)}
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_cultural_evolution",
+        action_description="Generating cultural evolution for the world",
+        id_from_context=lambda ctx: "emergent_lore"
+    )
+    async def generate_cultural_evolution(self, ctx) -> Dict[str, Any]:
+        """
+        Generate cultural evolution with governance oversight.
+        
+        Returns:
+            Cultural evolution details
+        """
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get cultural elements for context
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get existing cultural elements
+                cultural_elements = await conn.fetch("""
+                    SELECT id, name, type, description, practiced_by
+                    FROM CulturalElements
+                    ORDER BY RANDOM()
+                    LIMIT 5
+                """)
+                
+                # Get nations for context
+                nations = await conn.fetch("""
+                    SELECT name, government_type, matriarchy_level, cultural_traits
+                    FROM Nations
+                    ORDER BY RANDOM()
+                    LIMIT 3
+                """)
+                
+                # Convert to lists
+                element_data = [dict(element) for element in cultural_elements]
+                nation_data = [dict(nation) for nation in nations]
+        
+        # Select a random element to evolve
+        if not element_data:
+            return {"error": "No cultural elements found to evolve"}
+            
+        target_element = random.choice(element_data)
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate a cultural evolution for this existing cultural element:
+        
+        TARGET ELEMENT:
+        {json.dumps(target_element, indent=2)}
+        
+        NATIONAL CONTEXT:
+        {json.dumps(nation_data, indent=2)}
+        
+        Create a cultural evolution that:
+        1. Shows how the element changes over time
+        2. Introduces new variations, interpretations, or practices
+        3. Explains the factors driving the change
+        4. Maintains connection to matriarchal themes
+        
+        Return a JSON object with:
+        - element_id: ID of the element being evolved (use exact ID from the provided data)
+        - element_name: Name of the element (should match provided data)
+        - evolution_type: Type of evolution (spread, schism, formalization, adaptation, etc.)
+        - description: Detailed description of how it's evolving
+        - original_form: Brief description of its original form
+        - evolved_form: Detailed description of its new form
+        - catalyst: What caused this evolution
+        - regions_affected: Where this evolution is occurring
+        - resistance: Any resistance to this evolution
+        - timeline: How long this evolution has been happening
+        """
+        
+        # Create an agent for cultural evolution
+        evolution_agent = Agent(
+            name="CulturalEvolutionAgent",
+            instructions="You create cultural evolutions for fantasy worlds.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(evolution_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            evolution_data = json.loads(response_text)
+            
+            # Update the existing cultural element
+            element_id = evolution_data.get("element_id")
+            
+            if element_id:
+                try:
+                    # Get the original element
+                    async with self.lore_manager.get_connection_pool() as pool:
+                        async with pool.acquire() as conn:
+                            original = await conn.fetchrow("""
+                                SELECT name, description, practiced_by
+                                FROM CulturalElements
+                                WHERE id = $1
+                            """, element_id)
+                            
+                            if original:
+                                # Prepare the updated description
+                                evolved_description = evolution_data.get("evolved_form", "")
+                                evolution_context = f"\n\nEvolution: {evolution_data.get('description', '')}"
+                                if evolution_data.get("catalyst"):
+                                    evolution_context += f"\n\nCatalyst for Change: {evolution_data.get('catalyst')}"
+                                    
+                                full_description = evolved_description + evolution_context
+                                
+                                # Update the practiced_by field if needed
+                                practiced_by = original["practiced_by"] or []
+                                regions_affected = evolution_data.get("regions_affected", [])
+                                
+                                if isinstance(regions_affected, list):
+                                    for region in regions_affected:
+                                        if region not in practiced_by:
+                                            practiced_by.append(region)
+                                elif isinstance(regions_affected, str) and regions_affected not in practiced_by:
+                                    practiced_by.append(regions_affected)
+                                
+                                # Update the element in the database
+                                await conn.execute("""
+                                    UPDATE CulturalElements
+                                    SET description = $1, practiced_by = $2
+                                    WHERE id = $3
+                                """, full_description, practiced_by, element_id)
+                                
+                                evolution_data["update_successful"] = True
+                                evolution_data["practiced_by"] = practiced_by
+                except Exception as e:
+                    logging.error(f"Error updating cultural element: {e}")
+                    evolution_data["update_error"] = str(e)
+            
+            return evolution_data
+            
+        except Exception as e:
+            logging.error(f"Error generating cultural evolution: {e}")
+            return {"error": str(e)}
+    
+    async def register_with_governance(self):
+        """Register with Nyx governance system."""
+        await self.initialize_governance()
+        
+        # Register this system with governance
+        await self.governor.register_agent(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="emergent_lore",
+            agent_instance=self
+        )
+        
+        # Issue a directive for emergent lore
+        await self.governor.issue_directive(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="emergent_lore",
+            directive_type=DirectiveType.ACTION,
+            directive_data={
+                "instruction": "Generate emergent lore and events to ensure the world evolves organically over time.",
+                "scope": "world_building"
+            },
+            priority=DirectivePriority.MEDIUM,
+            duration_minutes=24*60  # 24 hours
+        )
+        
+        logging.info(f"EmergentLoreSystem registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
+
+
+class LoreExpansionSystem:
+    """
+    System for expanding lore beyond what was initially generated,
+    adding new elements as needed for world coherence and depth.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.lore_manager = LoreManager(user_id, conversation_id)
+        self.governor = None
+        
+    async def initialize_governance(self):
+        """Initialize Nyx governance connection"""
+        if not self.governor:
+            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+        return self.governor
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_additional_faction",
+        action_description="Generating additional faction for the world",
+        id_from_context=lambda ctx: "lore_expansion"
+    )
+    async def generate_additional_faction(self, ctx, faction_type: str = None) -> Dict[str, Any]:
+        """
+        Generate an additional faction with governance oversight.
+        
+        Args:
+            faction_type: Optional type of faction to generate
+            
+        Returns:
+            New faction details
+        """
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Get existing factions for context
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get existing factions
+                existing_factions = await conn.fetch("""
+                    SELECT name, type, description, values, goals
+                    FROM Factions
+                    LIMIT 10
+                """)
+                
+                # Get nations for context
+                nations = await conn.fetch("""
+                    SELECT name, government_type, matriarchy_level
+                    FROM Nations
+                    LIMIT 5
+                """)
+                
+                # Get some cultural elements for context
+                cultural_elements = await conn.fetch("""
+                    SELECT name, type, description
+                    FROM CulturalElements
+                    ORDER BY RANDOM()
+                    LIMIT 5
+                """)
+                
+                # Convert to lists
+                faction_data = [dict(faction) for faction in existing_factions]
+                nation_data = [dict(nation) for nation in nations]
+                cultural_data = [dict(element) for element in cultural_elements]
+        
+        # If faction_type not specified, select one that's underrepresented
+        if not faction_type:
+            faction_types = ["political", "religious", "criminal", "mercantile", "academic", "military", "social"]
+            existing_types = [f.get("type", "").lower() for f in faction_data]
+            
+            # Count each type
+            type_counts = {}
+            for t in faction_types:
+                type_counts[t] = sum(1 for et in existing_types if t in et)
+            
+            # Find underrepresented types
+            min_count = min(type_counts.values()) if type_counts else 0
+            underrepresented = [t for t, c in type_counts.items() if c == min_count]
+            
+            # Choose one randomly from underrepresented
+            faction_type = random.choice(underrepresented if underrepresented else faction_types)
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate a new {faction_type} faction for a matriarchal fantasy world:
+        
+        EXISTING FACTIONS:
+        {json.dumps(faction_data, indent=2)}
+        
+        NATIONS:
+        {json.dumps(nation_data, indent=2)}
+        
+        CULTURAL CONTEXT:
+        {json.dumps(cultural_data, indent=2)}
+        
+        Create a {faction_type} faction that:
+        1. Is distinct from existing factions
+        2. Has a clear role and purpose in the world
+        3. Has interesting values and goals
+        4. Reflects matriarchal power dynamics
+        5. Has potential for interesting stories and conflicts
+        
+        Return a JSON object with:
+        - name: Name of the faction
+        - type: Type of faction (should include "{faction_type}")
+        - description: Detailed description
+        - values: Array of core values
+        - goals: Array of primary goals
+        - headquarters: Main location or headquarters
+        - founding_story: How the faction was founded
+        - rivals: Array of rival factions or groups
+        - allies: Array of allied factions or groups
+        - territory: Areas where they operate
+        - resources: Key resources they control
+        - hierarchy_type: Structure of leadership
+        - secret_knowledge: Any secret knowledge they possess
+        - public_reputation: How they're viewed publicly
+        - color_scheme: Colors associated with them
+        - symbol_description: Their emblem or symbol
+        """
+        
+        # Create an agent for faction generation
+        faction_agent = Agent(
+            name="FactionGenerationAgent",
+            instructions="You create factions for fantasy worlds.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(faction_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            faction_data = json.loads(response_text)
+            
+            # Add faction to database
+            faction_id = await self.lore_manager.add_faction(
+                name=faction_data.get("name", f"Unnamed {faction_type.capitalize()} Faction"),
+                faction_type=faction_data.get("type", faction_type),
+                description=faction_data.get("description", ""),
+                values=faction_data.get("values", []),
+                goals=faction_data.get("goals", []),
+                headquarters=faction_data.get("headquarters"),
+                founding_story=faction_data.get("founding_story"),
+                rivals=faction_data.get("rivals", []),
+                allies=faction_data.get("allies", []),
+                territory=faction_data.get("territory"),
+                resources=faction_data.get("resources", []),
+                hierarchy_type=faction_data.get("hierarchy_type"),
+                secret_knowledge=faction_data.get("secret_knowledge"),
+                public_reputation=faction_data.get("public_reputation"),
+                color_scheme=faction_data.get("color_scheme"),
+                symbol_description=faction_data.get("symbol_description")
+            )
+            
+            # Update with the ID
+            faction_data["id"] = faction_id
+            
+            return faction_data
+            
+        except Exception as e:
+            logging.error(f"Error generating additional faction: {e}")
+            return {"error": str(e)}
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_additional_locations",
+        action_description="Generating additional locations for the world",
+        id_from_context=lambda ctx: "lore_expansion"
+    )
+    async def generate_additional_locations(self, ctx, location_types: List[str] = None, count: int = 3) -> List[Dict[str, Any]]:
+        """
+        Generate additional locations with governance oversight.
+        
+        Args:
+            location_types: Optional types of locations to generate
+            count: Number of locations to generate
+            
+        Returns:
+            List of new location details
+        """
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Set default location types if not provided
+        if not location_types:
+            location_types = ["settlement", "wilderness", "landmark", "dungeon", "ruin"]
+        
+        # Get context for location generation
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get existing locations
+                existing_locations = await conn.fetch("""
+                    SELECT location_name, description
+                    FROM Locations
+                    LIMIT 10
+                """)
+                
+                # Get nations for context
+                nations = await conn.fetch("""
+                    SELECT name, government_type
+                    FROM Nations
+                    LIMIT 5
+                """)
+                
+                # Get factions for context
+                factions = await conn.fetch("""
+                    SELECT name, type
+                    FROM Factions
+                    LIMIT 5
+                """)
+                
+                # Convert to lists
+                location_data = [dict(location) for location in existing_locations]
+                nation_data = [dict(nation) for nation in nations]
+                faction_data = [dict(faction) for faction in factions]
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate {count} new locations for a matriarchal fantasy world.
+        
+        EXISTING LOCATIONS:
+        {json.dumps(location_data, indent=2)}
+        
+        NATIONS:
+        {json.dumps(nation_data, indent=2)}
+        
+        FACTIONS:
+        {json.dumps(faction_data, indent=2)}
+        
+        LOCATION TYPES TO INCLUDE:
+        {json.dumps(location_types, indent=2)}
+        
+        Create {count} locations that:
+        1. Are diverse in type and purpose
+        2. Include detailed descriptions
+        3. Have connections to factions, nations, or existing locations
+        4. Reflect matriarchal power dynamics in their design or purpose
+        5. Have potential for interesting stories and encounters
+        
+        Return a JSON array where each location has:
+        - name: Name of the location
+        - type: Type of location (should be one from the provided types)
+        - description: Detailed description
+        - controlling_faction: Which faction controls it (if any)
+        - nation: Which nation it's in (if any)
+        - notable_features: Array of notable features
+        - hidden_secrets: Array of hidden secrets
+        - strategic_importance: Any strategic importance
+        - population: Description of population (if inhabited)
+        - points_of_interest: Array of interesting places within
+        """
+        
+        # Create an agent for location generation
+        location_agent = Agent(
+            name="LocationGenerationAgent",
+            instructions="You create locations for fantasy worlds.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(location_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            locations = json.loads(response_text)
+            
+            # Ensure we got a list
+            if not isinstance(locations, list):
+                if isinstance(locations, dict):
+                    locations = [locations]
+                else:
+                    locations = []
+            
+            # Add each location
+            created_locations = []
+            for location in locations:
+                try:
+                    # Update the database in the standard way using the expected tables
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    
+                    # Add to Locations table
+                    cursor.execute("""
+                        INSERT INTO Locations (user_id, conversation_id, location_name, description)
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING id
+                    """, (self.user_id, self.conversation_id, location.get("name"), location.get("description")))
+                    
+                    location_id = cursor.fetchone()[0]
+                    
+                    # Add to LocationLore table
+                    cursor.execute("""
+                        INSERT INTO LocationLore (
+                            location_id, founding_story, hidden_secrets, local_legends, historical_significance
+                        )
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (
+                        location_id,
+                        f"This {location.get('type', 'location')} was established as {location.get('name')}.",
+                        location.get("hidden_secrets", []),
+                        [],  # local_legends
+                        location.get("strategic_importance", "")
+                    ))
+                    
+                    conn.commit()
+                    
+                    # Update the location with its ID
+                    location["id"] = location_id
+                    created_locations.append(location)
+                    
+                except Exception as e:
+                    logging.error(f"Error adding location {location.get('name')}: {e}")
+                finally:
+                    cursor.close()
+                    conn.close()
+            
+            return created_locations
+            
+        except Exception as e:
+            logging.error(f"Error generating additional locations: {e}")
+            return []
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_additional_cultural_elements",
+        action_description="Generating additional cultural elements",
+        id_from_context=lambda ctx: "lore_expansion"
+    )
+    async def generate_additional_cultural_elements(self, ctx, element_types: List[str] = None, count: int = 3) -> List[Dict[str, Any]]:
+        """
+        Generate additional cultural elements with governance oversight.
+        
+        Args:
+            element_types: Optional types of elements to generate
+            count: Number of elements to generate
+            
+        Returns:
+            List of new cultural element details
+        """
+        # Create the run context
+        run_ctx = RunContextWrapper(context=ctx.context)
+        
+        # Set default element types if not provided
+        if not element_types:
+            element_types = ["tradition", "custom", "taboo", "holiday", "ceremony", "social norm", "art form"]
+        
+        # Get context for cultural element generation
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get existing cultural elements
+                existing_elements = await conn.fetch("""
+                    SELECT name, type, description
+                    FROM CulturalElements
+                    LIMIT 10
+                """)
+                
+                # Get nations for context
+                nations = await conn.fetch("""
+                    SELECT name, cultural_traits
+                    FROM Nations
+                    LIMIT 5
+                """)
+                
+                # Get factions for context
+                factions = await conn.fetch("""
+                    SELECT name, type, values
+                    FROM Factions
+                    LIMIT 5
+                """)
+                
+                # Convert to lists
+                element_data = [dict(element) for element in existing_elements]
+                nation_data = [dict(nation) for nation in nations]
+                faction_data = [dict(faction) for faction in factions]
+        
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate {count} new cultural elements for a matriarchal fantasy world.
+        
+        EXISTING CULTURAL ELEMENTS:
+        {json.dumps(element_data, indent=2)}
+        
+        NATIONS AND THEIR CULTURAL TRAITS:
+        {json.dumps(nation_data, indent=2)}
+        
+        FACTIONS AND THEIR VALUES:
+        {json.dumps(faction_data, indent=2)}
+        
+        ELEMENT TYPES TO INCLUDE:
+        {json.dumps(element_types, indent=2)}
+        
+        Create {count} cultural elements that:
+        1. Are diverse in type and purpose
+        2. Include detailed descriptions
+        3. Clearly connect to groups that practice them
+        4. Reflect matriarchal power dynamics
+        5. Feel authentic to a richly developed culture
+        
+        Return a JSON array where each element has:
+        - name: Name of the cultural element
+        - type: Type of element (should be one from the provided types)
+        - description: Detailed description
+        - practiced_by: Array of groups who practice this element
+        - historical_origin: How the element originated
+        - significance: Importance from 1-10
+        - related_elements: Any related cultural elements
+        - gender_aspects: How gender influences this element
+        """
+        
+        # Create an agent for cultural element generation
+        cultural_agent = Agent(
+            name="CulturalElementAgent",
+            instructions="You create cultural elements for fantasy worlds.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(cultural_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            elements = json.loads(response_text)
+            
+            # Ensure we got a list
+            if not isinstance(elements, list):
+                if isinstance(elements, dict):
+                    elements = [elements]
+                else:
+                    elements = []
+            
+            # Add each cultural element
+            created_elements = []
+            for element in elements:
+                try:
+                    # Add to database using lore_manager
+                    element_id = await self.lore_manager.add_cultural_element(
+                        name=element.get("name", f"Unnamed {element.get('type', 'Custom')}"),
+                        element_type=element.get("type", "custom"),
+                        description=element.get("description", ""),
+                        practiced_by=element.get("practiced_by", []),
+                        significance=element.get("significance", 5),
+                        historical_origin=element.get("historical_origin")
+                    )
+                    
+                    # Update the element with its ID
+                    element["id"] = element_id
+                    created_elements.append(element)
+                    
+                except Exception as e:
+                    logging.error(f"Error adding cultural element {element.get('name')}: {e}")
+            
+            return created_elements
+            
+        except Exception as e:
+            logging.error(f"Error generating additional cultural elements: {e}")
+            return []
+    
+    async def register_with_governance(self):
+        """Register with Nyx governance system."""
+        await self.initialize_governance()
+        
+        # Register this system with governance
+        await self.governor.register_agent(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="lore_expansion",
+            agent_instance=self
+        )
+        
+        # Issue a directive for lore expansion
+        await self.governor.issue_directive(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="lore_expansion",
+            directive_type=DirectiveType.ACTION,
+            directive_data={
+                "instruction": "Expand lore with new elements as needed to maintain world coherence and depth.",
+                "scope": "world_building"
+            },
+            priority=DirectivePriority.MEDIUM,
+            duration_minutes=24*60  # 24 hours
+        )
+        
+        logging.info(f"LoreExpansionSystem registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
+
+
+# Update registration function to include the new system
+async def register_all_enhanced_lore_systems(user_id: int, conversation_id: int) -> Dict[str, bool]:
+    """
+    Register all enhanced lore systems with Nyx governance.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Dictionary of registration results
+    """
+    # Get the Nyx governance system
+    governance = await get_central_governance(user_id, conversation_id)
+    
+    # Track registration results
+    registration_results = {}
+    
+    # Register faith system
+    try:
+        faith_system = FaithSystem(user_id, conversation_id)
+        await faith_system.register_with_governance()
+        registration_results["faith_system"] = True
+        logging.info("Faith system registered with Nyx governance")
+    except Exception as e:
+        logging.error(f"Error registering faith system: {e}")
+        registration_results["faith_system"] = False
+    
+    # Register lore evolution system
+    try:
+        lore_evolution = LoreEvolutionSystem(user_id, conversation_id)
+        await lore_evolution.initialize_governance()
+        registration_results["lore_evolution"] = True
+        logging.info("Lore evolution system registered with Nyx governance")
+    except Exception as e:
+        logging.error(f"Error registering lore evolution system: {e}")
+        registration_results["lore_evolution"] = False
+    
+    # Register emergent lore system
+    try:
+        emergent_lore = EmergentLoreSystem(user_id, conversation_id)
+        await emergent_lore.register_with_governance()
+        registration_results["emergent_lore"] = True
+        logging.info("Emergent lore system registered with Nyx governance")
+    except Exception as e:
+        logging.error(f"Error registering emergent lore system: {e}")
+        registration_results["emergent_lore"] = False
+    
+    # Register lore expansion system
+    try:
+        lore_expansion = LoreExpansionSystem(user_id, conversation_id)
+        await lore_expansion.register_with_governance()
+        registration_results["lore_expansion"] = True
+        logging.info("Lore expansion system registered with Nyx governance")
+    except Exception as e:
+        logging.error(f"Error registering lore expansion system: {e}")
+        registration_results["lore_expansion"] = False
+    
+    # Issue directives for cooperative operation
+    await governance.issue_directive(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        agent_id="lore_generator",
+        directive_type=DirectiveType.ACTION,
+        directive_data={
+            "instruction": "Collaborate with enhanced lore systems to ensure consistent world development.",
+            "scope": "global"
+        },
+        priority=DirectivePriority.MEDIUM,
+        duration_minutes=24*60  # 24 hours
+    )
+    
+    return registration_results
