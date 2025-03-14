@@ -4042,23 +4042,4 @@ async def generate_cultural_evolution(self, ctx) -> Dict[str, Any]:
 # These methods would be implemented similarly to the other add_* methods 
 # in the classes above
 
-# 7. Update LoreEvolutionSystem with missing methods
-# Add these references to the class definition so they're properly included
-class LoreEvolutionSystem(BaseLoreSystem):
-    # Existing methods...
-    
-    # Add references to the missing methods
-    _evolve_urban_myths = _evolve_urban_myths
-    _develop_cultural_elements = _develop_cultural_elements
-    _shift_geopolitical_landscape = _shift_geopolitical_landscape
-    _evolve_notable_figures = _evolve_notable_figures
 
-# 8. Update EmergentLoreSystem with missing methods
-# Add these references to the class definition so they're properly included
-class EmergentLoreSystem(BaseLoreSystem):
-    # Existing methods...
-    
-    # Add references to the missing methods
-    generate_additional_nation = generate_additional_nation
-    generate_historical_figure = generate_historical_figure
-    generate_cultural_evolution = generate_cultural_evolution
