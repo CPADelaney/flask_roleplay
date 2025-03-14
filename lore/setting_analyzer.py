@@ -2,23 +2,44 @@
 
 import logging
 import json
-from typing import Dict, Any
+from typing import Dict, Any, List
 from db.connection import get_db_connection
+
+# Import Nyx governance
+from nyx.integrate import get_central_governance
+from nyx.nyx_governance import AgentType
+from nyx.governance_helpers import with_governance, with_governance_permission
 
 class SettingAnalyzer:
     """
     Analyzes the setting's NPC data to feed into an agentic tool 
-    that generates organizations, etc.
+    that generates organizations, with full Nyx governance integration.
     """
 
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
+        self.governor = None
 
-    def aggregate_npc_data(self) -> Dict[str, Any]:
+    async def initialize_governance(self):
+        """Initialize Nyx governance integration"""
+        if not self.governor:
+            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+        return self.governor
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="aggregate_npc_data",
+        action_description="Aggregating NPC data for setting analysis",
+        id_from_context=lambda ctx: "setting_analyzer"
+    )
+    async def aggregate_npc_data(self, ctx) -> Dict[str, Any]:
         """
-        Collect all NPC data (likes, hobbies, archetypes, affiliations) into a unified format,
-        but do NOT call GPT here. Just gather data for the sub-agent.
+        Collect all NPC data (likes, hobbies, archetypes, affiliations) into a unified format
+        with Nyx governance oversight.
+        
+        Returns:
+            Dictionary with aggregated NPC data
         """
         try:
             conn = get_db_connection()
@@ -83,8 +104,8 @@ class SettingAnalyzer:
                 "archetype_summary": archetype_summary
             })
 
-        # Optionally get the environment desc from your DB
-        setting_desc, setting_name = self._get_current_setting_info()
+        # Get the environment desc and setting name from DB
+        setting_desc, setting_name = await self._get_current_setting_info()
 
         return {
             "setting_name": setting_name,
@@ -99,7 +120,96 @@ class SettingAnalyzer:
             }
         }
 
-    def _get_current_setting_info(self):
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="analyze_setting_demographics",
+        action_description="Analyzing setting demographics and social structure",
+        id_from_context=lambda ctx: "setting_analyzer"
+    )
+    async def analyze_setting_demographics(self, ctx) -> Dict[str, Any]:
+        """
+        Analyze the demographics and social structure of the setting with Nyx governance oversight.
+        
+        Returns:
+            Dictionary with demographic analysis
+        """
+        # First get the aggregated NPC data
+        npc_data = await self.aggregate_npc_data(ctx)
+        
+        # Group NPCs by location
+        locations = {}
+        for npc in npc_data["npcs"]:
+            location = npc.get("current_location")
+            if location:
+                if location not in locations:
+                    locations[location] = []
+                locations[location].append(npc)
+        
+        # Count archetypes
+        archetype_counts = {}
+        for npc in npc_data["npcs"]:
+            for archetype in npc.get("archetypes", []):
+                if archetype not in archetype_counts:
+                    archetype_counts[archetype] = 0
+                archetype_counts[archetype] += 1
+        
+        # Count affiliations
+        affiliation_counts = {}
+        for npc in npc_data["npcs"]:
+            for affiliation in npc.get("affiliations", []):
+                if affiliation not in affiliation_counts:
+                    affiliation_counts[affiliation] = 0
+                affiliation_counts[affiliation] += 1
+        
+        return {
+            "setting_name": npc_data["setting_name"],
+            "total_npcs": len(npc_data["npcs"]),
+            "locations": {
+                location: len(npcs) for location, npcs in locations.items()
+            },
+            "archetype_distribution": archetype_counts,
+            "affiliation_distribution": affiliation_counts,
+            "setting_description": npc_data["setting_description"]
+        }
+
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_organizations",
+        action_description="Generating organizations based on setting analysis",
+        id_from_context=lambda ctx: "setting_analyzer"
+    )
+    async def generate_organizations(self, ctx) -> Dict[str, Any]:
+        """
+        Generate organizations based on setting analysis with Nyx governance oversight.
+        
+        This method will:
+        1. Analyze the setting data
+        2. Send the data to an LLM for organization generation
+        3. Return structured organization data
+        
+        Returns:
+            Dictionary with generated organizations
+        """
+        # First, analyze the setting
+        setting_data = await self.analyze_setting_demographics(ctx)
+        
+        # This would call an LLM via an agent system
+        # For now, we'll just import and call a generic function
+        from lore.lore_agents import analyze_setting
+        
+        organizations = await analyze_setting(
+            ctx,
+            setting_data["setting_description"],
+            setting_data["npcs"] if "npcs" in setting_data else []
+        )
+        
+        return {
+            "setting_name": setting_data["setting_name"],
+            "organizations": organizations,
+            "organization_count": sum(len(category) for category in organizations.values() if isinstance(category, list))
+        }
+
+    async def _get_current_setting_info(self):
         """
         Helper to fetch the current setting name and environment desc from the DB.
         """
@@ -129,3 +239,29 @@ class SettingAnalyzer:
             conn.close()
 
         return setting_desc, setting_name
+        
+    async def register_with_governance(self):
+        """Register with Nyx governance system."""
+        await self.initialize_governance()
+        
+        # Register this analyzer with governance
+        await self.governor.register_agent(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="setting_analyzer",
+            agent_instance=self
+        )
+        
+        # Issue a directive for setting analysis
+        await self.governor.issue_directive(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="setting_analyzer",
+            directive_type="ACTION",
+            directive_data={
+                "instruction": "Analyze setting data to generate coherent organizations.",
+                "scope": "setting"
+            },
+            priority=5,  # Medium priority
+            duration_minutes=24*60  # 24 hours
+        )
+        
+        logging.info(f"SettingAnalyzer registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
