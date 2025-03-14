@@ -85,7 +85,7 @@ class AgentType:
     ACTIVITY_ANALYZER = "activity_analyzer"
     SCENE_MANAGER = "scene_manager"
     UNIVERSAL_UPDATER = "universal_updater"
-
+    MEMORY_MANAGER = "memory_manager"  # Add this new agent type
 
 # -------------------------------------------------------------------------
 # Unified Class: NyxUnifiedGovernor
@@ -873,6 +873,57 @@ class NyxUnifiedGovernor:
             logger.error(f"Error getting recent similar actions: {e}")
             return []
 
+    # Add to the _check_memory_manager_intervention method in NyxUnifiedGovernor class
+    async def _check_memory_manager_intervention(self, agent_id, action, result):
+        """
+        Check if intervention is needed for memory manager actions.
+        
+        Args:
+            agent_id: Agent ID
+            action: Action performed
+            result: Result of the action
+        
+        Returns:
+            Intervention data or None
+        """
+        # Check for specific scenarios requiring intervention
+        
+        # 1. If creating potentially harmful memories
+        if action.get("operation") == "remember" and "error" in result:
+            return {
+                "reason": f"Memory creation error: {result.get('error')}",
+                "override_action": {
+                    "type": "recover",
+                    "description": "Recover from memory creation error",
+                    "parameters": {"retry": True}
+                }
+            }
+        
+        # 2. If retrieving excessive memories
+        if action.get("operation") == "recall" and len(result.get("memories", [])) > 20:
+            return {
+                "reason": "Excessive memory retrieval may impact performance",
+                "override_action": {
+                    "type": "optimize",
+                    "description": "Limit memory retrieval to improve performance",
+                    "parameters": {"max_memories": 20}
+                }
+            }
+        
+        # 3. If creating beliefs with extreme confidence
+        if action.get("operation") == "create_belief" and action.get("confidence", 0) > 0.95:
+            return {
+                "reason": "Creating beliefs with excessive confidence",
+                "override_action": {
+                    "type": "moderate",
+                    "description": "Reduce belief confidence to more reasonable level",
+                    "parameters": {"max_confidence": 0.9}
+                }
+            }
+        
+        # No intervention needed
+        return None
+
     # ---------------------------------------------------------------------
     # GENERAL-AGENT INTERVENTION LOGIC (from ultimate_governor)
     # ---------------------------------------------------------------------
@@ -899,7 +950,8 @@ class NyxUnifiedGovernor:
             AgentType.RELATIONSHIP_MANAGER: self._check_relationship_manager_intervention,
             AgentType.ACTIVITY_ANALYZER: self._check_activity_analyzer_intervention,
             AgentType.SCENE_MANAGER: self._check_scene_manager_intervention,
-            AgentType.UNIVERSAL_UPDATER: self._check_universal_updater_intervention
+            AgentType.UNIVERSAL_UPDATER: self._check_universal_updater_intervention,
+            AgentType.MEMORY_MANAGER: self._check_memory_manager_intervention
         }
 
         if agent_type in intervention_rules:
