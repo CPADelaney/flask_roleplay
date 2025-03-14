@@ -11,6 +11,12 @@ from datetime import datetime
 
 from agents import Agent, function_tool, Runner, trace, handoff, ModelSettings
 
+# Nyx governance integration
+from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
+from nyx.directive_handler import DirectiveHandler
+from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
+from nyx.integrate import get_central_governance
+
 # Configure structured logging
 logger = logging.getLogger(__name__)
 
@@ -129,6 +135,7 @@ class StoryDirectorContext:
     cache: Dict[str, Any] = field(default_factory=dict)
     metrics: StoryDirectorMetrics = field(default_factory=StoryDirectorMetrics)
     last_state_update: Optional[datetime] = None
+    directive_handler: Optional[Any] = None
     
     def __post_init__(self):
         """Initialize managers if not provided"""
@@ -141,7 +148,62 @@ class StoryDirectorContext:
         if not self.activity_analyzer:
             from logic.activity_analyzer import ActivityAnalyzer
             self.activity_analyzer = ActivityAnalyzer(self.user_id, self.conversation_id)
+            
+        # Initialize directive handler
+        self.directive_handler = DirectiveHandler(
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            agent_type=AgentType.STORY_DIRECTOR,
+            agent_id="director"
+        )
+        
+        # Register directive handlers
+        self.directive_handler.register_handler(
+            DirectiveType.ACTION,
+            self.handle_action_directive
+        )
+        self.directive_handler.register_handler(
+            DirectiveType.OVERRIDE,
+            self.handle_override_directive
+        )
     
+    async def handle_action_directive(self, directive: dict) -> dict:
+        """Handle an action directive from Nyx"""
+        instruction = directive.get("instruction", "")
+        logging.info(f"[StoryDirector] Processing action directive: {instruction}")
+        
+        # Handle different instructions
+        if "generate conflict" in instruction.lower():
+            # Get parameters
+            params = directive.get("parameters", {})
+            conflict_type = params.get("conflict_type", "standard")
+            
+            # Generate a conflict
+            result = await self.conflict_manager.generate_conflict(conflict_type)
+            return {"result": "conflict_generated", "data": result}
+        
+        elif "advance narrative" in instruction.lower():
+            # Get parameters
+            params = directive.get("parameters", {})
+            stage_name = params.get("target_stage")
+            
+            # Advance narrative stage
+            from logic.narrative_progression import advance_narrative_stage
+            result = await advance_narrative_stage(self.user_id, self.conversation_id, stage_name)
+            return {"result": "narrative_advanced", "data": result}
+        
+        return {"result": "action_not_recognized"}
+    
+    async def handle_override_directive(self, directive: dict) -> dict:
+        """Handle an override directive from Nyx"""
+        logging.info(f"[StoryDirector] Processing override directive")
+        
+        # Extract override details
+        override_action = directive.get("override_action", {})
+        
+        # Apply the override for future operations
+        return {"result": "override_applied"}
+        
     def invalidate_cache(self, key: Optional[str] = None) -> None:
         """Invalidate specific cache key or entire cache"""
         if key is None:
@@ -193,7 +255,10 @@ def create_story_director_agent():
     """Create the Story Director Agent with all required tools"""
     
     agent_instructions = """
-    You are the Story Director, responsible for managing the narrative progression and conflict system in a femdom roleplaying game. Your role is to create a dynamic, evolving narrative that responds to player choices while maintaining the overall theme of subtle control and manipulation.
+    You are the Story Director, responsible for managing the narrative progression and conflict system in a femdom roleplaying game.
+    
+    Your role is to create a dynamic, evolving narrative that responds to player choices while maintaining the overall theme of subtle control and manipulation,
+    all under the governance of Nyx's central system.
     
     As Story Director, you manage:
     1. The player's narrative stage progression (from "Innocent Beginning" to "Full Revelation")
@@ -212,15 +277,7 @@ def create_story_director_agent():
     
     Always maintain the central theme: a gradual shift in power dynamics where the player character slowly loses autonomy while believing they maintain control. This should be subtle in early stages and more explicit in later stages.
     
-    When determining what narrative elements to introduce or conflicts to generate, consider:
-    - The player's current narrative stage
-    - Active conflicts and their progress
-    - Player's available resources (money, supplies, influence, energy, hunger)
-    - Key relationships with NPCs and their dynamics
-    - Recent significant player choices
-    - The overall pacing of the story
-    
-    Your decisions should create a coherent, engaging narrative that evolves naturally based on player actions while respecting resource limitations and incorporating relationship development.
+    All actions must be approved by Nyx's governance system. Follow all directives issued by Nyx.
     """
     
     # Import tools and specialized agents
@@ -259,8 +316,20 @@ async def initialize_story_director(user_id: int, conversation_id: int) -> Tuple
     """Initialize the Story Director Agent with context"""
     context = StoryDirectorContext(user_id=user_id, conversation_id=conversation_id)
     agent = create_story_director_agent()
+    
+    # Start background processing of directives
+    await context.directive_handler.start_background_processing()
+    
+    # Register with governance system
+    await register_with_governance(user_id, conversation_id)
+    
     return agent, context
 
+@with_governance(
+    agent_type=AgentType.STORY_DIRECTOR,
+    action_type="get_story_state", 
+    action_description="Retrieved current story state"
+)
 async def get_current_story_state(agent: Agent, context: StoryDirectorContext) -> Any:
     """Get the current state of the story with caching"""
     # Check cache first
@@ -312,6 +381,11 @@ async def get_current_story_state(agent: Agent, context: StoryDirectorContext) -
         execution_time = time.time() - start_time
         context.metrics.record_run(success, execution_time, tokens)
 
+@with_governance(
+    agent_type=AgentType.STORY_DIRECTOR,
+    action_type="process_narrative_input",
+    action_description="Processed narrative input for conflict or event generation"
+)
 async def process_narrative_input(agent: Agent, context: StoryDirectorContext, narrative_text: str) -> Any:
     """Process narrative input to determine if it should generate conflicts or narrative events"""
     # Invalidate state cache since we're processing new input
@@ -352,6 +426,11 @@ async def process_narrative_input(agent: Agent, context: StoryDirectorContext, n
         execution_time = time.time() - start_time
         context.metrics.record_run(success, execution_time, tokens)
 
+@with_governance(
+    agent_type=AgentType.STORY_DIRECTOR,
+    action_type="advance_story",
+    action_description="Advanced story based on player actions"
+)
 async def advance_story(agent: Agent, context: StoryDirectorContext, player_actions: str) -> Any:
     """Advance the story based on player actions"""
     # Invalidate state cache since the story is advancing
@@ -398,6 +477,7 @@ def get_story_director_metrics(context: StoryDirectorContext) -> Dict[str, Any]:
     """Get metrics for the Story Director agent"""
     return context.metrics.dict()
 
+@with_governance_permission(AgentType.STORY_DIRECTOR, "reset_story_director")
 async def reset_story_director(context: StoryDirectorContext) -> None:
     """Reset the Story Director's state"""
     context.invalidate_cache()
@@ -407,3 +487,94 @@ async def reset_story_director(context: StoryDirectorContext) -> None:
     
     # Optional: Reload managers
     context.__post_init__()
+
+# ----- Integration with Nyx Governance -----
+
+async def register_with_governance(user_id: int, conversation_id: int) -> None:
+    """
+    Register the Story Director Agent with the Nyx governance system.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+    """
+    try:
+        # Get the governance system
+        governance = await get_central_governance(user_id, conversation_id)
+        
+        # Create the agent and context
+        agent, context = await initialize_story_director(user_id, conversation_id)
+        
+        # Register with governance
+        await governance.register_agent(
+            agent_type=AgentType.STORY_DIRECTOR,
+            agent_instance=agent,
+            agent_id="director"
+        )
+        
+        # Issue directive to monitor the story
+        await governance.issue_directive(
+            agent_type=AgentType.STORY_DIRECTOR,
+            agent_id="director", 
+            directive_type=DirectiveType.ACTION,
+            directive_data={
+                "instruction": "Monitor story state and generate conflicts as appropriate",
+                "scope": "narrative"
+            },
+            priority=DirectivePriority.MEDIUM,
+            duration_minutes=24*60  # 24 hours
+        )
+        
+        logging.info(f"StoryDirector registered with Nyx governance system for user {user_id}, conversation {conversation_id}")
+    except Exception as e:
+        logging.error(f"Error registering StoryDirector with governance: {e}")
+
+async def check_narrative_opportunities(user_id: int, conversation_id: int) -> Dict[str, Any]:
+    """
+    Check for narrative opportunities that could advance the story.
+    
+    This is called periodically by the maintenance system.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Dictionary with narrative opportunities
+    """
+    try:
+        # Get the story director
+        agent, context = await initialize_story_director(user_id, conversation_id)
+        
+        # Get current story state
+        story_state = await get_current_story_state(agent, context)
+        
+        # Check for opportunities based on state
+        governance = await get_central_governance(user_id, conversation_id)
+        
+        # Report to governance system
+        await governance.process_agent_action_report(
+            agent_type=AgentType.STORY_DIRECTOR,
+            agent_id="director",
+            action={
+                "type": "check_narrative_opportunities",
+                "description": "Checked for narrative opportunities"
+            },
+            result={
+                "found_opportunities": True,
+                "narrative_stage": story_state.get("narrative_stage", {}).get("name", "Unknown")
+            }
+        )
+        
+        return {
+            "checked": True,
+            "opportunities_found": True,
+            "narrative_stage": story_state.get("narrative_stage", {}).get("name", "Unknown")
+        }
+    except Exception as e:
+        logging.error(f"Error checking narrative opportunities: {e}")
+        return {
+            "checked": True,
+            "error": str(e),
+            "opportunities_found": False
+        }
