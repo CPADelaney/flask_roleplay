@@ -122,6 +122,789 @@ class NationalConflictSystem:
                     """)
                     
                     logging.info("ConflictNews table created")
+
+                # Check if DomesticIssues table exists
+                domestic_exists = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'domesticissues'
+                    );
+                """)
+                
+                if not domestic_exists:
+                    # Create the table
+                    await conn.execute("""
+                        CREATE TABLE DomesticIssues (
+                            id SERIAL PRIMARY KEY,
+                            nation_id INTEGER NOT NULL,
+                            name TEXT NOT NULL,
+                            issue_type TEXT NOT NULL, -- civil_rights, political_controversy, economic_crisis, etc.
+                            description TEXT NOT NULL,
+                            severity INTEGER CHECK (severity BETWEEN 1 AND 10),
+                            status TEXT NOT NULL, -- emerging, active, waning, resolved
+                            start_date TEXT NOT NULL,
+                            end_date TEXT, -- NULL if ongoing
+                            supporting_factions TEXT[], -- Groups supporting one side
+                            opposing_factions TEXT[], -- Groups opposing
+                            neutral_factions TEXT[], -- Groups remaining neutral
+                            affected_demographics TEXT[], -- Demographics most affected
+                            public_opinion JSONB, -- Opinion distribution
+                            government_response TEXT, -- How the government is responding
+                            recent_developments TEXT[], -- Recent events in this issue
+                            political_impact TEXT, -- Impact on political landscape
+                            social_impact TEXT, -- Impact on society
+                            economic_impact TEXT, -- Economic consequences
+                            potential_resolution TEXT, -- Potential ways it might resolve
+                            embedding VECTOR(1536),
+                            FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE
+                        );
+                    """)
+                    
+                    # Create index
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_domesticissues_embedding 
+                        ON DomesticIssues USING ivfflat (embedding vector_cosine_ops);
+                        
+                        CREATE INDEX IF NOT EXISTS idx_domesticissues_nation
+                        ON DomesticIssues(nation_id);
+                    """)
+                    
+                    logging.info("DomesticIssues table created")
+                
+                    # Check if DomesticNews table exists
+                    domestic_news_exist = await conn.fetchval("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_name = 'domesticnews'
+                        );
+                    """)
+                    
+                    if not domestic_news_exist:
+                        # Create the table
+                        await conn.execute("""
+                            CREATE TABLE DomesticNews (
+                                id SERIAL PRIMARY KEY,
+                                issue_id INTEGER NOT NULL,
+                                headline TEXT NOT NULL,
+                                content TEXT NOT NULL,
+                                publication_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                source_faction TEXT, -- Faction perspective
+                                bias TEXT, -- supporting, opposing, neutral
+                                embedding VECTOR(1536),
+                                FOREIGN KEY (issue_id) REFERENCES DomesticIssues(id) ON DELETE CASCADE
+                            );
+                        """)
+                        
+                        # Create index
+                        await conn.execute("""
+                            CREATE INDEX IF NOT EXISTS idx_domesticnews_embedding 
+                            ON DomesticNews USING ivfflat (embedding vector_cosine_ops);
+                        """)
+                        
+                        logging.info("DomesticNews table created")
+        
+        @with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            action_type="generate_domestic_issues",
+            action_description="Generating domestic issues for nation {nation_id}",
+            id_from_context=lambda ctx: "national_conflict_system"
+        )
+        async def generate_domestic_issues(self, ctx, nation_id: int, count: int = 2) -> List[Dict[str, Any]]:
+            """
+            Generate domestic issues for a specific nation with governance oversight.
+            
+            Args:
+                nation_id: ID of the nation
+                count: Number of issues to generate
+                
+            Returns:
+                List of generated domestic issues
+            """
+            # Create the run context
+            run_ctx = RunContextWrapper(context=ctx.context)
+            
+            # Get nation details
+            async with self.lore_manager.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    nation = await conn.fetchrow("""
+                        SELECT id, name, government_type, matriarchy_level, cultural_traits
+                        FROM Nations
+                        WHERE id = $1
+                    """, nation_id)
+                    
+                    if not nation:
+                        return []
+                    
+                    nation_data = dict(nation)
+                    
+                    # Get factions in this nation
+                    factions = await conn.fetch("""
+                        SELECT id, name, type, description, values
+                        FROM Factions
+                        WHERE $1 = ANY(territory)
+                    """, nation_data.get("name"))
+                    
+                    faction_data = [dict(faction) for faction in factions]
+            
+            # Create agent for domestic issue generation
+            issue_agent = Agent(
+                name="DomesticIssueAgent",
+                instructions="You create realistic domestic political and social issues for fantasy nations.",
+                model="o3-mini"
+            )
+            
+            # Determine issue types based on nation characteristics
+            issue_types = []
+            
+            # Higher matriarchy has different issues than lower
+            matriarchy_level = nation_data.get("matriarchy_level", 5)
+            
+            if matriarchy_level >= 8:
+                # High matriarchy issues
+                issue_types.extend([
+                    "male_rights_movement", "traditionalist_opposition", "matriarchy_reform", 
+                    "male_separatism", "gender_hierarchy_legislation"
+                ])
+            elif matriarchy_level <= 3:
+                # Low matriarchy issues
+                issue_types.extend([
+                    "feminist_movement", "equality_legislation", "patriarchal_opposition",
+                    "female_leadership_controversy", "gender_role_debates"
+                ])
+            else:
+                # Balanced matriarchy issues
+                issue_types.extend([
+                    "gender_balance_debate", "power_sharing_reform", "traditionalist_vs_progressive"
+                ])
+            
+            # Universal issue types
+            universal_issues = [
+                "economic_crisis", "environmental_disaster", "disease_outbreak",
+                "succession_dispute", "religious_controversy", "tax_reform",
+                "military_service_debate", "trade_regulation", "education_policy",
+                "infrastructure_development", "foreign_policy_shift", "corruption_scandal",
+                "resource_scarcity", "technological_change", "constitutional_crisis",
+                "land_rights_dispute", "criminal_justice_reform", "public_safety_concerns",
+                "media_censorship", "social_services_funding"
+            ]
+            
+            issue_types.extend(universal_issues)
+            
+            # Generate issues
+            issues = []
+            selected_types = random.sample(issue_types, min(count, len(issue_types)))
+            
+            for issue_type in selected_types:
+                # Create prompt for the agent
+                prompt = f"""
+                Generate a domestic political or social issue for this nation:
+                
+                NATION:
+                {json.dumps(nation_data, indent=2)}
+                
+                FACTIONS:
+                {json.dumps(faction_data, indent=2)}
+                
+                Create a {issue_type} issue that:
+                1. Makes sense given the nation's characteristics
+                2. Creates realistic societal tension and debate
+                3. Involves multiple factions or groups
+                4. Considers the matriarchal level of the society ({matriarchy_level}/10)
+                
+                Return a JSON object with:
+                - name: Name of the issue/controversy
+                - issue_type: "{issue_type}"
+                - description: Detailed description
+                - severity: Severity level (1-10)
+                - status: Current status (emerging, active, waning, resolved)
+                - start_date: When it started (narrative date)
+                - supporting_factions: Groups supporting one side
+                - opposing_factions: Groups opposing
+                - neutral_factions: Groups remaining neutral
+                - affected_demographics: Demographics most affected
+                - public_opinion: Object describing opinion distribution
+                - government_response: How the government is responding
+                - recent_developments: Array of recent events in this issue
+                - political_impact: Impact on political landscape
+                - social_impact: Impact on society
+                - economic_impact: Economic consequences
+                - potential_resolution: Potential ways it might resolve
+                """
+                
+                # Get response from agent
+                result = await Runner.run(issue_agent, prompt, context=run_ctx.context)
+                
+                try:
+                    # Parse response
+                    issue_data = json.loads(result.final_output)
+                    
+                    # Ensure required fields exist
+                    if not all(k in issue_data for k in ["name", "description", "issue_type"]):
+                        continue
+                    
+                    # Add nation_id
+                    issue_data["nation_id"] = nation_id
+                    
+                    # Generate embedding
+                    embedding_text = f"{issue_data['name']} {issue_data['description']} {issue_data['issue_type']}"
+                    embedding = await generate_embedding(embedding_text)
+                    
+                    # Store in database
+                    async with self.lore_manager.get_connection_pool() as pool:
+                        async with pool.acquire() as conn:
+                            issue_id = await conn.fetchval("""
+                                INSERT INTO DomesticIssues (
+                                    nation_id, name, issue_type, description, severity,
+                                    status, start_date, supporting_factions, opposing_factions,
+                                    neutral_factions, affected_demographics, public_opinion,
+                                    government_response, recent_developments, political_impact,
+                                    social_impact, economic_impact, potential_resolution, embedding
+                                )
+                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                                RETURNING id
+                            """, 
+                            nation_id,
+                            issue_data.get("name"), 
+                            issue_data.get("issue_type"),
+                            issue_data.get("description"),
+                            issue_data.get("severity", 5),
+                            issue_data.get("status", "active"),
+                            issue_data.get("start_date", "Recently"),
+                            issue_data.get("supporting_factions", []),
+                            issue_data.get("opposing_factions", []),
+                            issue_data.get("neutral_factions", []),
+                            issue_data.get("affected_demographics", []),
+                            json.dumps(issue_data.get("public_opinion", {})),
+                            issue_data.get("government_response", ""),
+                            issue_data.get("recent_developments", []),
+                            issue_data.get("political_impact", ""),
+                            issue_data.get("social_impact", ""),
+                            issue_data.get("economic_impact", ""),
+                            issue_data.get("potential_resolution", ""),
+                            embedding)
+                            
+                            # Generate initial news about this issue
+                            await self._generate_domestic_news(run_ctx, issue_id, issue_data, nation_data)
+                            
+                            # Add to result
+                            issue_data["id"] = issue_id
+                            issues.append(issue_data)
+                            
+                except Exception as e:
+                    logging.error(f"Error generating domestic issue: {e}")
+            
+            return issues
+        
+        async def _generate_domestic_news(
+            self, 
+            ctx, 
+            issue_id: int, 
+            issue_data: Dict[str, Any],
+            nation_data: Dict[str, Any]
+        ) -> None:
+            """Generate initial news articles about a domestic issue"""
+            # Create agent for news generation
+            news_agent = Agent(
+                name="DomesticNewsAgent",
+                instructions="You create realistic news articles about domestic political issues.",
+                model="o3-mini"
+            )
+            
+            # Generate news articles from different perspectives
+            biases = ["supporting", "opposing", "neutral"]
+            
+            for bias in biases:
+                # Create prompt for the agent
+                prompt = f"""
+                Generate a news article about this domestic issue from a {bias} perspective:
+                
+                ISSUE:
+                {json.dumps(issue_data, indent=2)}
+                
+                NATION:
+                {json.dumps(nation_data, indent=2)}
+                
+                Create a news article that:
+                1. Has a clear {bias} bias toward the issue
+                2. Includes quotes from relevant figures
+                3. Covers the key facts but with the appropriate spin
+                4. Has a catchy headline
+                
+                Return a JSON object with:
+                - headline: The article headline
+                - content: The full article content (300-500 words)
+                - source_faction: The faction or institution publishing this
+                """
+                
+                # Get response from agent
+                result = await Runner.run(news_agent, prompt, context=ctx.context)
+                
+                try:
+                    # Parse response
+                    news_data = json.loads(result.final_output)
+                    
+                    # Ensure required fields exist
+                    if not all(k in news_data for k in ["headline", "content"]):
+                        continue
+                    
+                    # Generate embedding
+                    embedding_text = f"{news_data['headline']} {news_data['content'][:200]}"
+                    embedding = await generate_embedding(embedding_text)
+                    
+                    # Store in database
+                    async with self.lore_manager.get_connection_pool() as pool:
+                        async with pool.acquire() as conn:
+                            await conn.execute("""
+                                INSERT INTO DomesticNews (
+                                    issue_id, headline, content, source_faction, bias, embedding
+                                )
+                                VALUES ($1, $2, $3, $4, $5, $6)
+                            """, 
+                            issue_id,
+                            news_data.get("headline"), 
+                            news_data.get("content"),
+                            news_data.get("source_faction", "Unknown Source"),
+                            bias,
+                            embedding)
+                            
+                except Exception as e:
+                    logging.error(f"Error generating domestic news: {e}")
+        
+        @with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            action_type="evolve_domestic_issues",
+            action_description="Evolving domestic issues for nation {nation_id}",
+            id_from_context=lambda ctx: "national_conflict_system"
+        )
+        async def evolve_domestic_issues(self, ctx, nation_id: int, days_passed: int = 7) -> List[Dict[str, Any]]:
+            """
+            Evolve domestic issues over time with governance oversight.
+            
+            Args:
+                nation_id: ID of the nation
+                days_passed: Number of days to simulate passing
+                
+            Returns:
+                List of updated domestic issues
+            """
+            # Create the run context
+            run_ctx = RunContextWrapper(context=ctx.context)
+            
+            # Get active domestic issues
+            async with self.lore_manager.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    issues = await conn.fetch("""
+                        SELECT * FROM DomesticIssues
+                        WHERE nation_id = $1 AND status != 'resolved'
+                    """, nation_id)
+                    
+                    issue_data = [dict(issue) for issue in issues]
+                    
+                    # Get nation details
+                    nation = await conn.fetchrow("""
+                        SELECT id, name, government_type, matriarchy_level
+                        FROM Nations
+                        WHERE id = $1
+                    """, nation_id)
+                    
+                    nation_data = dict(nation) if nation else {}
+            
+            if not issue_data or not nation_data:
+                return []
+            
+            # Create agent for issue evolution
+            evolution_agent = Agent(
+                name="DomesticIssueEvolutionAgent",
+                instructions="You evolve domestic political issues realistically over time.",
+                model="o3-mini"
+            )
+            
+            # Update each issue
+            updated_issues = []
+            for issue in issue_data:
+                # Calculate probability of change based on issue type and severity
+                change_probability = min(0.8, (issue.get("severity", 5) / 10) + (days_passed / 30))
+                
+                if random.random() > change_probability:
+                    continue  # No change for this issue
+                
+                # Create prompt for the agent
+                prompt = f"""
+                Evolve this domestic issue after {days_passed} days have passed:
+                
+                CURRENT ISSUE STATE:
+                {json.dumps(issue, indent=2)}
+                
+                NATION:
+                {json.dumps(nation_data, indent=2)}
+                
+                Progress this issue realistically by:
+                1. Determining if it escalates, de-escalates, or remains similar
+                2. Generating 1-2 new developments that have occurred
+                3. Updating public opinion, government response, and impacts
+                4. Considering if it might be resolved or reach a new phase
+                
+                Return a JSON object with:
+                - id: The original issue ID
+                - status: Updated status (emerging, active, waning, resolved)
+                - severity: Updated severity (1-10)
+                - new_developments: Array of 1-2 new developments to add
+                - public_opinion: Updated public opinion object
+                - government_response: Updated government response
+                - political_impact: Updated political impact
+                - social_impact: Updated social impact
+                - economic_impact: Updated economic impact
+                - end_date: End date if resolved, otherwise null
+                - resolution_description: Description of resolution if resolved
+                """
+                
+                # Get response from agent
+                result = await Runner.run(evolution_agent, prompt, context=run_ctx.context)
+                
+                try:
+                    # Parse response
+                    update_data = json.loads(result.final_output)
+                    
+                    # Ensure required fields exist
+                    if "id" not in update_data or update_data["id"] != issue["id"]:
+                        continue
+                    
+                    # Get new developments to add
+                    new_developments = update_data.get("new_developments", [])
+                    
+                    # Combine with existing developments but limit to most recent 10
+                    all_developments = issue.get("recent_developments", []) + new_developments
+                    if len(all_developments) > 10:
+                        all_developments = all_developments[-10:]
+                    
+                    # Update issue in database
+                    async with self.lore_manager.get_connection_pool() as pool:
+                        async with pool.acquire() as conn:
+                            await conn.execute("""
+                                UPDATE DomesticIssues
+                                SET status = $1,
+                                    severity = $2,
+                                    recent_developments = $3,
+                                    public_opinion = $4,
+                                    government_response = $5,
+                                    political_impact = $6,
+                                    social_impact = $7,
+                                    economic_impact = $8,
+                                    end_date = $9
+                                WHERE id = $10
+                            """, 
+                            update_data.get("status", issue.get("status")),
+                            update_data.get("severity", issue.get("severity")),
+                            all_developments,
+                            json.dumps(update_data.get("public_opinion", {})),
+                            update_data.get("government_response", issue.get("government_response")),
+                            update_data.get("political_impact", issue.get("political_impact")),
+                            update_data.get("social_impact", issue.get("social_impact")),
+                            update_data.get("economic_impact", issue.get("economic_impact")),
+                            update_data.get("end_date") if update_data.get("status") == "resolved" else None,
+                            issue["id"])
+                    
+                    # Generate news about the development
+                    if new_developments:
+                        # Choose a random bias perspective for this news update
+                        bias = random.choice(["supporting", "opposing", "neutral"])
+                        await self._generate_domestic_update_news(
+                            run_ctx, 
+                            issue["id"], 
+                            {**issue, **update_data, "recent_developments": new_developments}, 
+                            nation_data,
+                            bias
+                        )
+                    
+                    # Add to result
+                    updated = {**issue, **update_data, "recent_developments": all_developments}
+                    updated_issues.append(updated)
+                    
+                    # Clear cache
+                    CONFLICT_CACHE.invalidate_pattern(f"domestic_issue_{issue['id']}")
+                    
+                except Exception as e:
+                    logging.error(f"Error evolving domestic issue {issue['id']}: {e}")
+            
+            return updated_issues
+        
+        async def _generate_domestic_update_news(
+            self, 
+            ctx, 
+            issue_id: int, 
+            issue_data: Dict[str, Any],
+            nation_data: Dict[str, Any],
+            bias: str = "neutral"
+        ) -> None:
+            """Generate news update about issue developments"""
+            # Create agent for news generation
+            news_agent = Agent(
+                name="DomesticNewsUpdateAgent",
+                instructions="You create realistic news updates about domestic political issues.",
+                model="o3-mini"
+            )
+            
+            # Focus on most recent development
+            recent_development = issue_data.get("recent_developments", ["No new developments"])[0]
+            
+            # Create prompt for the agent
+            prompt = f"""
+            Generate a news update about this domestic issue development from a {bias} perspective:
+            
+            ISSUE:
+            {json.dumps(issue_data, indent=2)}
+            
+            RECENT DEVELOPMENT:
+            {recent_development}
+            
+            NATION:
+            {json.dumps(nation_data, indent=2)}
+            
+            Create a news article that:
+            1. Focuses on the recent development
+            2. Has a clear {bias} bias
+            3. Includes quotes from officials or involved parties
+            4. Has a catchy headline
+            
+            Return a JSON object with:
+            - headline: The article headline
+            - content: The full article content (200-300 words)
+            - source_faction: Which group or outlet is publishing this
+            """
+            
+            # Get response from agent
+            result = await Runner.run(news_agent, prompt, context=ctx.context)
+            
+            try:
+                # Parse response
+                news_data = json.loads(result.final_output)
+                
+                # Ensure required fields exist
+                if not all(k in news_data for k in ["headline", "content"]):
+                    return
+                
+                # Generate embedding
+                embedding_text = f"{news_data['headline']} {news_data['content'][:200]}"
+                embedding = await generate_embedding(embedding_text)
+                
+                # Store in database
+                async with self.lore_manager.get_connection_pool() as pool:
+                    async with pool.acquire() as conn:
+                        await conn.execute("""
+                            INSERT INTO DomesticNews (
+                                issue_id, headline, content, source_faction, bias, embedding
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                        """, 
+                        issue_id,
+                        news_data.get("headline"), 
+                        news_data.get("content"),
+                        news_data.get("source_faction", "Unknown Source"),
+                        bias,
+                        embedding)
+                        
+            except Exception as e:
+                logging.error(f"Error generating domestic news update: {e}")
+        
+        @with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            action_type="get_nation_domestic_issues",
+            action_description="Getting domestic issues for nation {nation_id}",
+            id_from_context=lambda ctx: "national_conflict_system"
+        )
+        async def get_nation_domestic_issues(self, ctx, nation_id: int) -> List[Dict[str, Any]]:
+            """
+            Get all domestic issues for a nation with governance oversight.
+            
+            Args:
+                nation_id: ID of the nation
+                
+            Returns:
+                List of domestic issues
+            """
+            # Check cache first
+            cache_key = f"nation_domestic_issues_{nation_id}_{self.user_id}_{self.conversation_id}"
+            cached = CONFLICT_CACHE.get(cache_key)
+            if cached:
+                return cached
+            
+            # Query database for domestic issues
+            async with self.lore_manager.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    issues = await conn.fetch("""
+                        SELECT * FROM DomesticIssues
+                        WHERE nation_id = $1
+                        ORDER BY severity DESC
+                    """, nation_id)
+                    
+                    # Convert to list of dicts
+                    result = [dict(issue) for issue in issues]
+                    
+                    # Parse JSON fields
+                    for issue in result:
+                        if "public_opinion" in issue and issue["public_opinion"]:
+                            try:
+                                issue["public_opinion"] = json.loads(issue["public_opinion"])
+                            except:
+                                pass
+                    
+                    # Cache result
+                    CONFLICT_CACHE.set(cache_key, result)
+                    
+                    return result
+        
+        @with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            action_type="get_domestic_issue_news",
+            action_description="Getting news for domestic issue {issue_id}",
+            id_from_context=lambda ctx: "national_conflict_system"
+        )
+        async def get_domestic_issue_news(self, ctx, issue_id: int) -> List[Dict[str, Any]]:
+            """
+            Get news articles about a specific domestic issue with governance oversight.
+            
+            Args:
+                issue_id: ID of the issue
+                
+            Returns:
+                List of news articles
+            """
+            # Check cache first
+            cache_key = f"domestic_news_{issue_id}_{self.user_id}_{self.conversation_id}"
+            cached = CONFLICT_CACHE.get(cache_key)
+            if cached:
+                return cached
+            
+            # Query database for news about this issue
+            async with self.lore_manager.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    news = await conn.fetch("""
+                        SELECT n.*
+                        FROM DomesticNews n
+                        WHERE n.issue_id = $1
+                        ORDER BY n.publication_date DESC
+                    """, issue_id)
+                    
+                    # Convert to list of dicts
+                    result = [dict(article) for article in news]
+                    
+                    # Cache result
+                    CONFLICT_CACHE.set(cache_key, result)
+                    
+                    return result
+        
+        @with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            action_type="get_all_recent_news",
+            action_description="Getting all recent news",
+            id_from_context=lambda ctx: "national_conflict_system"
+        )
+        async def get_all_recent_news(self, ctx, limit: int = 10) -> Dict[str, List[Dict[str, Any]]]:
+            """
+            Get all recent news across international conflicts and domestic issues with governance oversight.
+            
+            Args:
+                limit: Maximum number of news articles to return per category
+                
+            Returns:
+                Dictionary with international and domestic news
+            """
+            # Check cache first
+            cache_key = f"all_recent_news_{limit}_{self.user_id}_{self.conversation_id}"
+            cached = CONFLICT_CACHE.get(cache_key)
+            if cached:
+                return cached
+            
+            # Query database for recent international news
+            async with self.lore_manager.get_connection_pool() as pool:
+                async with pool.acquire() as conn:
+                    int_news = await conn.fetch("""
+                        SELECT n.*, nations.name as source_nation_name, c.name as conflict_name
+                        FROM ConflictNews n
+                        LEFT JOIN Nations ON n.source_nation = Nations.id
+                        LEFT JOIN NationalConflicts c ON n.conflict_id = c.id
+                        ORDER BY n.publication_date DESC
+                        LIMIT $1
+                    """, limit)
+                    
+                    # Get domestic news
+                    dom_news = await conn.fetch("""
+                        SELECT n.*, i.name as issue_name, i.nation_id
+                        FROM DomesticNews n
+                        JOIN DomesticIssues i ON n.issue_id = i.id
+                        ORDER BY n.publication_date DESC
+                        LIMIT $1
+                    """, limit)
+                    
+                    # Join with nation names
+                    nations_map = {}
+                    for row in dom_news:
+                        nation_id = row["nation_id"]
+                        if nation_id not in nations_map:
+                            nation = await conn.fetchrow("""
+                                SELECT name FROM Nations WHERE id = $1
+                            """, nation_id)
+                            nations_map[nation_id] = nation["name"] if nation else "Unknown Nation"
+                    
+                    # Convert to list of dicts
+                    int_result = [dict(article) for article in int_news]
+                    dom_result = []
+                    
+                    for article in dom_news:
+                        article_dict = dict(article)
+                        article_dict["nation_name"] = nations_map.get(article["nation_id"], "Unknown Nation")
+                        dom_result.append(article_dict)
+                    
+                    # Compile result
+                    result = {
+                        "international_news": int_result,
+                        "domestic_news": dom_result
+                    }
+                    
+                    # Cache result
+                    CONFLICT_CACHE.set(cache_key, result)
+                    
+                    return result
+    
+        # Initialize the world with both international conflicts AND domestic issues
+        async def initialize_world_conflicts(self, ctx):
+            """Initialize the world with conflicts and domestic issues"""
+            # First generate international conflicts
+            conflicts = await self.generate_initial_conflicts(ctx, count=3)
+            
+            # Then generate domestic issues for each nation
+            nations = await self.geopolitical_manager.get_all_nations(ctx)
+            
+            domestic_issues = []
+            for nation in nations:
+                nation_issues = await self.generate_domestic_issues(ctx, nation["id"], count=2)
+                domestic_issues.extend(nation_issues)
+            
+            return {
+                "international_conflicts": conflicts,
+                "domestic_issues": domestic_issues
+            }
+            
+        # Evolve both international conflicts AND domestic issues over time
+        async def evolve_all_conflicts(self, ctx, days_passed: int = 7):
+            """Evolve all conflicts and domestic issues over time"""
+            # First evolve international conflicts
+            evolved_conflicts = await self.evolve_conflicts(ctx, days_passed)
+            
+            # Then evolve domestic issues for each nation
+            evolved_issues = []
+            
+            # Get all nations
+            nations = await self.geopolitical_manager.get_all_nations(ctx)
+            
+            for nation in nations:
+                nation_issues = await self.evolve_domestic_issues(ctx, nation["id"], days_passed)
+                evolved_issues.extend(nation_issues)
+            
+            return {
+                "evolved_international_conflicts": evolved_conflicts,
+                "evolved_domestic_issues": evolved_issues
+            }
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
