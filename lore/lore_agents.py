@@ -147,8 +147,63 @@ async def register_with_governance(user_id: int, conversation_id: int):
     from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
     
     governor = await get_central_governance(user_id, conversation_id)
+    
+    # Register all lore agents
     await governor.register_agent(
-        agent_type=AgentType.NARRATIVE_CRAFTER,  # Or create a LORE_AGENT type
+        agent_type=AgentType.NARRATIVE_CRAFTER,
         agent_instance=foundation_lore_agent,
         agent_id="foundation_lore"
-    )    
+    )
+    
+    await governor.register_agent(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        agent_instance=factions_agent,
+        agent_id="factions"
+    )
+    
+    await governor.register_agent(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        agent_instance=cultural_agent,
+        agent_id="cultural"
+    )
+    
+    await governor.register_agent(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        agent_instance=history_agent,
+        agent_id="history"
+    )
+    
+    await governor.register_agent(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        agent_instance=locations_agent,
+        agent_id="locations"
+    )
+    
+    await governor.register_agent(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        agent_instance=quests_agent,
+        agent_id="quests"
+    )
+    
+    # Also register the setting analysis agent if available
+    if 'setting_analysis_agent' in globals():
+        await governor.register_agent(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_instance=setting_analysis_agent,
+            agent_id="setting_analysis"
+        )
+    
+    # Issue a general directive for lore maintenance
+    await governor.issue_directive(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        agent_id="foundation_lore",  # Primary lore agent
+        directive_type=DirectiveType.ACTION,
+        directive_data={
+            "instruction": "Maintain world lore consistency and integrate with other systems.",
+            "scope": "global"
+        },
+        priority=DirectivePriority.MEDIUM,
+        duration_minutes=24*60  # 24 hours
+    )
+    
+    logger.info(f"All lore agents registered with governance system for user {user_id}, conversation {conversation_id}")
