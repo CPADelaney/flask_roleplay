@@ -1606,7 +1606,7 @@ async def get_central_governance(user_id: int, conversation_id: int) -> NyxCentr
 
 async def reset_governance(user_id: int, conversation_id: int) -> Dict[str, Any]:
     """
-    Reset the governance system for a user/conversation.
+    Reset the governance system for a user/conversation and register all agents.
     
     Args:
         user_id: User ID
@@ -1630,100 +1630,202 @@ async def reset_governance(user_id: int, conversation_id: int) -> Dict[str, Any]
         get_central_governance.cache = {}
     get_central_governance.cache[cache_key] = governance
     
-    # Register all agent systems with governance
-    registration_results = {
-        "universal_updater": False,
-        "addiction_system": False,
-        "aggregator": False,
-        "inventory_system": False,
-        "scene_manager": False,
-        "memory_system": False
-    }
+    # Initialize registry to track registration results
+    registration_results = {}
     
-    # 1. Register Universal Updater
-    try:
-        from logic.universal_updater_sdk import register_with_governance as register_updater
-        await register_updater(user_id, conversation_id)
-        registration_results["universal_updater"] = True
-        logger.info(f"Universal Updater registered for user {user_id}, conversation {conversation_id}")
-    except Exception as e:
-        logger.error(f"Error registering Universal Updater: {e}")
-    
-    # 2. Register Addiction System
-    try:
-        from logic.addiction_system_sdk import register_with_governance as register_addiction
-        await register_addiction(user_id, conversation_id)
-        registration_results["addiction_system"] = True
-        logger.info(f"Addiction System registered for user {user_id}, conversation {conversation_id}")
-    except Exception as e:
-        logger.error(f"Error registering Addiction System: {e}")
-    
-    # 3. Register Aggregator
-    try:
-        from logic.aggregator_sdk import register_with_governance as register_aggregator
-        await register_aggregator(user_id, conversation_id)
-        registration_results["aggregator"] = True
-        logger.info(f"Aggregator registered for user {user_id}, conversation {conversation_id}")
-    except Exception as e:
-        logger.error(f"Error registering Aggregator: {e}")
-    
-    # 4. Register Inventory System
-    try:
-        from logic.inventory_system_sdk import register_with_governance as register_inventory
-        await register_inventory(user_id, conversation_id)
-        registration_results["inventory_system"] = True
-        logger.info(f"Inventory System registered for user {user_id}, conversation {conversation_id}")
-    except Exception as e:
-        logger.error(f"Error registering Inventory System: {e}")
-    
-    # 5. Initialize Memory System (if separate registration is needed)
-    try:
-        from nyx.memory_integration_sdk import perform_memory_maintenance
-        await perform_memory_maintenance(user_id, conversation_id)
-        registration_results["memory_system"] = True
-        logger.info(f"Memory System maintenance performed for user {user_id}, conversation {conversation_id}")
-    except Exception as e:
-        logger.error(f"Error initializing Memory System: {e}")
-    
-    # 6. Initialize User Model (if necessary)
-    try:
-        from nyx.user_model_sdk import initialize_user_model
-        await initialize_user_model(user_id)
-        logger.info(f"User Model initialized for user {user_id}")
-    except Exception as e:
-        logger.error(f"Error initializing User Model: {e}")
-
-    try:
-        from logic.time_cycle import register_with_governance as register_time_cycle
-        await register_time_cycle(user_id, conversation_id)
-        registration_results["time_cycle"] = True
-        logger.info(f"Time Cycle registered for user {user_id}, conversation {conversation_id}")
-    except Exception as e:
-        logger.error(f"Error registering Time Cycle: {e}")
-    
-    # Register Lore Agents
-    try:
-        from lore.lore_agents import register_with_governance as register_lore
-        await register_lore(user_id, conversation_id)
-        registration_results["lore_agents"] = True
-        logger.info(f"Lore Agents registered for user {user_id}, conversation {conversation_id}")
-    except Exception as e:
-        logger.error(f"Error registering Lore Agents: {e}")
-    
-    # Register Story Director and specialized agents
-    try:
-        from story_agent.story_director_agent import register_with_governance as register_story_director
-        await register_story_director(user_id, conversation_id)
-        registration_results["story_director"] = True
-        logger.info(f"Story Director registered for user {user_id}, conversation {conversation_id}")
-    except Exception as e:
-        logger.error(f"Error registering Story Director: {e}")
+    # Register all agents using a standardized approach
+    await register_all_agents(governance, user_id, conversation_id, registration_results)
     
     return {
         "status": "success",
         "message": f"Reset governance for user {user_id}, conversation {conversation_id}",
         "registrations": registration_results
     }
+
+async def register_all_agents(
+    governance: NyxCentralGovernance, 
+    user_id: int, 
+    conversation_id: int,
+    registration_results: Dict[str, bool]
+) -> None:
+    """
+    Register all agents with the governance system in a standardized way.
+    
+    Args:
+        governance: The governance instance
+        user_id: User ID
+        conversation_id: Conversation ID
+        registration_results: Dictionary to track registration results
+    """
+    # Define agent registration configurations
+    agent_configs = [
+        {
+            "name": "universal_updater",
+            "register_func": "logic.universal_updater_sdk.register_with_governance",
+            "agent_type": AgentType.UNIVERSAL_UPDATER,
+            "agent_id": "universal_updater",
+            "priority": DirectivePriority.MEDIUM,
+            "directive": {
+                "instruction": "Process narrative updates and extract game state changes",
+                "scope": "game"
+            }
+        },
+        {
+            "name": "addiction_system",
+            "register_func": "logic.addiction_system_sdk.register_with_governance",
+            "agent_type": AgentType.UNIVERSAL_UPDATER,
+            "agent_id": "addiction_system",
+            "priority": DirectivePriority.MEDIUM,
+            "directive": {
+                "instruction": "Monitor player addictions and apply appropriate effects",
+                "scope": "game"
+            }
+        },
+        {
+            "name": "aggregator",
+            "register_func": "logic.aggregator_sdk.register_with_governance",
+            "agent_type": AgentType.UNIVERSAL_UPDATER,
+            "agent_id": "aggregator",
+            "priority": DirectivePriority.MEDIUM,
+            "directive": {
+                "instruction": "Aggregate game data to provide context for other systems",
+                "scope": "game"
+            }
+        },
+        {
+            "name": "inventory_system",
+            "register_func": "logic.inventory_system_sdk.register_with_governance",
+            "agent_type": AgentType.UNIVERSAL_UPDATER,
+            "agent_id": "inventory_system",
+            "priority": DirectivePriority.MEDIUM,
+            "directive": {
+                "instruction": "Manage player inventory with proper validation and tracking",
+                "scope": "game"
+            }
+        },
+        {
+            "name": "time_cycle",
+            "register_func": "logic.time_cycle.register_with_governance",
+            "agent_type": AgentType.UNIVERSAL_UPDATER,
+            "agent_id": "time_cycle",
+            "priority": DirectivePriority.MEDIUM,
+            "directive": {
+                "instruction": "Manage time advancement and associated events",
+                "scope": "game"
+            }
+        },
+        {
+            "name": "lore_agents",
+            "register_func": "lore.lore_agents.register_with_governance",
+            "agent_type": AgentType.NARRATIVE_CRAFTER,
+            "agent_id": "lore_generator",
+            "priority": DirectivePriority.MEDIUM,
+            "directive": {
+                "instruction": "Generate and maintain lore for the game world",
+                "scope": "narrative"
+            }
+        },
+        {
+            "name": "story_director",
+            "register_func": "story_agent.story_director_agent.register_with_governance",
+            "agent_type": AgentType.STORY_DIRECTOR,
+            "agent_id": "director",
+            "priority": DirectivePriority.HIGH,
+            "directive": {
+                "instruction": "Manage narrative progression and story elements",
+                "scope": "narrative"
+            }
+        },
+        {
+            "name": "storyteller",
+            "register_func": "story_agent.storyteller_agent.register_with_governance",
+            "agent_type": "storyteller",
+            "agent_id": f"storyteller_{conversation_id}",
+            "priority": DirectivePriority.HIGH,
+            "directive": {
+                "instruction": "Process narrative input and generate immersive responses",
+                "scope": "narrative"
+            }
+        },
+        {
+            "name": "conflict_system",
+            "register_func": "logic.conflict_system.conflict_integration.register_with_governance",
+            "agent_type": AgentType.CONFLICT_ANALYST,
+            "agent_id": "conflict_manager",
+            "priority": DirectivePriority.MEDIUM,
+            "directive": {
+                "instruction": "Manage conflicts and their progression in the game world",
+                "scope": "game"
+            }
+        },
+        {
+            "name": "memory_system",
+            "register_func": "memory.memory_agent_sdk.register_with_governance",
+            "agent_type": AgentType.MEMORY_MANAGER,
+            "agent_id": "memory_manager",
+            "priority": DirectivePriority.MEDIUM,
+            "directive": {
+                "instruction": "Manage entity memories and ensure proper consolidation",
+                "scope": "global"
+            }
+        },
+        {
+            "name": "new_game_system",
+            "agent_getter": "new_game_agent.NewGameAgent",
+            "agent_type": AgentType.UNIVERSAL_UPDATER,
+            "agent_id": "new_game",
+            "priority": DirectivePriority.HIGH,
+            "directive": {
+                "instruction": "Initialize new game environments and scenarios",
+                "scope": "initialization"
+            }
+        }
+    ]
+    
+    # Register each agent
+    for config in agent_configs:
+        name = config["name"]
+        registration_results[name] = False
+        
+        try:
+            # If register_func is specified, import and call it
+            if "register_func" in config:
+                module_path, func_name = config["register_func"].rsplit('.', 1)
+                module = __import__(module_path, fromlist=[func_name])
+                register_func = getattr(module, func_name)
+                await register_func(user_id, conversation_id)
+                
+            # If agent_getter is specified, get instance and register directly
+            elif "agent_getter" in config:
+                module_path, class_name = config["agent_getter"].rsplit('.', 1)
+                module = __import__(module_path, fromlist=[class_name])
+                agent_class = getattr(module, class_name)
+                agent_instance = agent_class()
+                
+                await governance.register_agent(
+                    agent_type=config["agent_type"],
+                    agent_instance=agent_instance,
+                    agent_id=config["agent_id"]
+                )
+            
+            # Issue standard directive to the agent
+            if "directive" in config:
+                await governance.issue_directive(
+                    agent_type=config["agent_type"],
+                    agent_id=config["agent_id"],
+                    directive_type=DirectiveType.ACTION,
+                    directive_data=config["directive"],
+                    priority=config["priority"],
+                    duration_minutes=24*60  # 24 hours
+                )
+            
+            # Mark as successful
+            registration_results[name] = True
+            logger.info(f"{name.title()} registered for user {user_id}, conversation {conversation_id}")
+            
+        except Exception as e:
+            logger.error(f"Error registering {name}: {e}")
+            registration_results[name] = False
 
 async def process_story_beat_with_governance(
     user_id: int, 
