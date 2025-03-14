@@ -11,6 +11,12 @@ from pydantic import BaseModel, Field
 from agents import Agent, Runner, function_tool, trace, handoff, ModelSettings
 from agents.exceptions import AgentsException, ModelBehaviorError
 
+# Nyx governance integration
+from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
+from nyx.directive_handler import DirectiveHandler
+from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
+from nyx.integrate import get_central_governance
+
 logger = logging.getLogger(__name__)
 
 # ----- Configuration -----
@@ -31,6 +37,7 @@ class AgentContext:
     user_id: int
     conversation_id: int
     player_name: str = "Chase"
+    directive_handler: Optional[Any] = None
     
     # Track metrics
     runs: int = 0
@@ -39,6 +46,19 @@ class AgentContext:
     total_tokens: int = 0
     execution_times: List[float] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    
+    def __post_init__(self):
+        """Initialize directive handler"""
+        self.directive_handler = None  # Lazily initialized when agent type is known
+    
+    def initialize_directive_handler(self, agent_type: str, agent_id: str):
+        """Initialize the directive handler for this agent"""
+        self.directive_handler = DirectiveHandler(
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            agent_type=agent_type,
+            agent_id=agent_id
+        )
     
     def record_run(self, success: bool, execution_time: float, tokens: int = 0) -> None:
         """Record metrics for a run"""
@@ -65,21 +85,99 @@ class AgentContext:
             "errors": self.errors
         }
 
+# ----- Specialized Context Classes -----
+
+@dataclass
+class ConflictAnalystContext(AgentContext):
+    """Context for the Conflict Analyst Agent"""
+    conflict_manager: Optional[Any] = None
+    
+    def __post_init__(self):
+        """Initialize the conflict manager if not provided"""
+        super().__post_init__()
+        if not self.conflict_manager:
+            from logic.conflict_system.conflict_manager import ConflictManager
+            self.conflict_manager = ConflictManager(self.user_id, self.conversation_id)
+        
+        # Initialize directive handler with correct agent type
+        self.initialize_directive_handler(AgentType.CONFLICT_ANALYST, "analyst")
+        
+        # Register handlers for different directive types
+        if self.directive_handler:
+            self.directive_handler.register_handler(
+                DirectiveType.ACTION,
+                self.handle_action_directive
+            )
+    
+    async def handle_action_directive(self, directive: dict) -> dict:
+        """Handle an action directive from Nyx"""
+        instruction = directive.get("instruction", "")
+        logging.info(f"[ConflictAnalyst] Processing action directive: {instruction}")
+        
+        if "analyze conflict" in instruction.lower():
+            params = directive.get("parameters", {})
+            conflict_id = params.get("conflict_id")
+            
+            if conflict_id:
+                # Create a context object for the analysis
+                result = await analyze_conflict(conflict_id, self)
+                return {"result": "conflict_analyzed", "data": result}
+        
+        return {"result": "action_not_recognized"}
+
+@dataclass
+class NarrativeCrafterContext(AgentContext):
+    """Context for the Narrative Crafter Agent"""
+    
+    def __post_init__(self):
+        """Initialize with directive handler"""
+        super().__post_init__()
+        self.initialize_directive_handler(AgentType.NARRATIVE_CRAFTER, "crafter")
+        
+        # Register handlers for different directive types
+        if self.directive_handler:
+            self.directive_handler.register_handler(
+                DirectiveType.ACTION,
+                self.handle_action_directive
+            )
+    
+    async def handle_action_directive(self, directive: dict) -> dict:
+        """Handle an action directive from Nyx"""
+        instruction = directive.get("instruction", "")
+        logging.info(f"[NarrativeCrafter] Processing action directive: {instruction}")
+        
+        if "generate narrative" in instruction.lower():
+            params = directive.get("parameters", {})
+            element_type = params.get("element_type", "general")
+            context_info = params.get("context_info", {})
+            
+            # Generate narrative element
+            result = await generate_narrative_element(element_type, context_info, self)
+            return {"result": "narrative_generated", "data": result}
+        
+        return {"result": "action_not_recognized"}
+
 # ----- Utility Functions -----
 
-async def run_with_retry(
+async def run_with_governance_oversight(
     agent: Agent, 
     prompt: str, 
     context: Any,
+    agent_type: str,
+    action_type: str,
+    action_details: Dict[str, Any],
     max_retries: int = MAX_RETRIES
 ) -> Tuple[Any, Dict[str, Any]]:
     """
-    Run an agent with retry logic.
+    Run an agent with Nyx governance oversight, including permission check and action reporting.
     
     Args:
         agent: The agent to run
         prompt: The prompt to send
         context: The agent context
+        agent_type: The type of agent (for governance)
+        action_type: The type of action (for governance)
+        action_details: Details about the action (for governance)
         max_retries: Maximum number of retry attempts
         
     Returns:
@@ -98,6 +196,40 @@ async def run_with_retry(
         "tokens_used": 0,
         "error": None
     }
+    
+    # Get the governance system
+    governance = await get_central_governance(context.user_id, context.conversation_id)
+    
+    # Check permission
+    permission = await governance.check_action_permission(
+        agent_type=agent_type,
+        agent_id=f"{agent_type}_{context.conversation_id}",
+        action_type=action_type,
+        action_details=action_details
+    )
+    
+    if not permission["approved"]:
+        logging.warning(f"Action not approved by governance: {permission.get('reasoning')}")
+        metrics = {
+            "success": False,
+            "execution_time": time.time() - start_time,
+            "retries": 0,
+            "tokens_used": 0,
+            "error": f"Not approved by governance: {permission.get('reasoning')}"
+        }
+        return None, metrics
+    
+    # Apply any action modifications from governance
+    if permission.get("action_modifications"):
+        modifications = permission.get("action_modifications")
+        if "prompt_adjustments" in modifications:
+            prompt_adjust = modifications["prompt_adjustments"]
+            if "prefix" in prompt_adjust:
+                prompt = f"{prompt_adjust['prefix']}\n\n{prompt}"
+            if "suffix" in prompt_adjust:
+                prompt = f"{prompt}\n\n{prompt_adjust['suffix']}"
+            if "replace" in prompt_adjust:
+                prompt = prompt_adjust["replace"]
     
     while retries <= max_retries:
         try:
@@ -124,6 +256,21 @@ async def run_with_retry(
                 "tokens_used": tokens_used,
                 "error": None
             }
+            
+            # Report action to governance
+            await governance.process_agent_action_report(
+                agent_type=agent_type,
+                agent_id=f"{agent_type}_{context.conversation_id}",
+                action={
+                    "type": action_type,
+                    "description": f"Executed {action_type} action"
+                },
+                result={
+                    "success": True,
+                    "execution_time": execution_time,
+                    "tokens_used": tokens_used
+                }
+            )
             
             return result, metrics
         
@@ -153,6 +300,21 @@ async def run_with_retry(
                     "error": last_error
                 }
                 
+                # Report failure to governance
+                await governance.process_agent_action_report(
+                    agent_type=agent_type,
+                    agent_id=f"{agent_type}_{context.conversation_id}",
+                    action={
+                        "type": action_type,
+                        "description": f"Failed to execute {action_type} action"
+                    },
+                    result={
+                        "success": False,
+                        "error": last_error,
+                        "execution_time": execution_time
+                    }
+                )
+                
                 raise
         
         except Exception as e:
@@ -171,21 +333,25 @@ async def run_with_retry(
                 "error": str(e)
             }
             
+            # Report failure to governance
+            await governance.process_agent_action_report(
+                agent_type=agent_type,
+                agent_id=f"{agent_type}_{context.conversation_id}",
+                action={
+                    "type": action_type,
+                    "description": f"Unexpected error during {action_type} action"
+                },
+                result={
+                    "success": False,
+                    "error": str(e),
+                    "execution_time": execution_time
+                }
+            )
+            
             logger.error(f"Unexpected error in agent run: {str(e)}", exc_info=True)
             raise
 
 # ----- Conflict Analyst Agent -----
-
-@dataclass
-class ConflictAnalystContext(AgentContext):
-    """Context for the Conflict Analyst Agent"""
-    conflict_manager: Optional[Any] = None
-    
-    def __post_init__(self):
-        """Initialize the conflict manager if not provided"""
-        if not self.conflict_manager:
-            from logic.conflict_system.conflict_manager import ConflictManager
-            self.conflict_manager = ConflictManager(self.user_id, self.conversation_id)
 
 def create_conflict_analysis_agent():
     """Create an agent specialized in conflict analysis and strategy"""
@@ -212,6 +378,8 @@ def create_conflict_analysis_agent():
     - The player's resource constraints
     - The narrative stage and how conflict outcomes might advance it
     
+    You operate under the governance of Nyx and must follow all directives issued by the governance system.
+    
     Your outputs should be detailed, strategic, and focused on helping the Story Director
     make informed decisions about conflict progression and resolution.
     """
@@ -236,12 +404,6 @@ def create_conflict_analysis_agent():
 
 # ----- Narrative Crafter Agent -----
 
-@dataclass
-class NarrativeCrafterContext(AgentContext):
-    """Context for the Narrative Crafter Agent"""
-    # Add any narrative-specific context here
-    pass
-
 def create_narrative_agent():
     """Create an agent specialized in narrative crafting"""
     
@@ -256,6 +418,8 @@ def create_narrative_agent():
     
     Your narrative elements should align with the current narrative stage and maintain
     the theme of subtle manipulation and control.
+    
+    You operate under the governance of Nyx and must follow all directives issued by the governance system.
     
     When crafting narrative elements, consider:
     - The current narrative stage and its themes
@@ -288,17 +452,6 @@ def create_narrative_agent():
 
 # ----- Resource Optimizer Agent -----
 
-@dataclass
-class ResourceOptimizerContext(AgentContext):
-    """Context for the Resource Optimizer Agent"""
-    resource_manager: Optional[Any] = None
-    
-    def __post_init__(self):
-        """Initialize the resource manager if not provided"""
-        if not self.resource_manager:
-            from logic.resource_management import ResourceManager
-            self.resource_manager = ResourceManager(self.user_id, self.conversation_id)
-
 def create_resource_optimizer_agent():
     """Create an agent specialized in resource optimization"""
     
@@ -312,6 +465,8 @@ def create_resource_optimizer_agent():
     3. Identifying optimal resource-generating activities
     4. Balancing immediate resource needs with long-term strategy
     5. Tracking resource trends and forecasting future needs
+    
+    You operate under the governance of Nyx and must follow all directives issued by the governance system.
     
     When analyzing resource usage, consider:
     - The value proposition of different resource commitments
@@ -344,12 +499,6 @@ def create_resource_optimizer_agent():
 
 # ----- NPC Relationship Manager Agent -----
 
-@dataclass
-class RelationshipManagerContext(AgentContext):
-    """Context for the NPC Relationship Manager Agent"""
-    # Add any relationship-specific context here
-    pass
-
 def create_npc_relationship_manager():
     """Create an agent specialized in NPC relationship management"""
     
@@ -363,6 +512,8 @@ def create_npc_relationship_manager():
     3. Analyzing NPC motivations and psychology
     4. Recommending interaction strategies for specific outcomes
     5. Predicting relationship trajectory based on player choices
+    
+    You operate under the governance of Nyx and must follow all directives issued by the governance system.
     
     When analyzing relationships, consider:
     - The multidimensional aspects of relationships (control, dependency, manipulation, etc.)
@@ -395,17 +546,6 @@ def create_npc_relationship_manager():
 
 # ----- Activity Impact Analyzer Agent -----
 
-@dataclass
-class ActivityAnalyzerContext(AgentContext):
-    """Context for the Activity Impact Analyzer Agent"""
-    activity_analyzer: Optional[Any] = None
-    
-    def __post_init__(self):
-        """Initialize the activity analyzer if not provided"""
-        if not self.activity_analyzer:
-            from logic.activity_analyzer import ActivityAnalyzer
-            self.activity_analyzer = ActivityAnalyzer(self.user_id, self.conversation_id)
-
 def create_activity_impact_analyzer():
     """Create an agent specialized in analyzing the broader impacts of player activities"""
     
@@ -419,6 +559,8 @@ def create_activity_impact_analyzer():
     3. Impact on active conflicts
     4. Contribution to narrative progression
     5. Psychological effects on the player character
+    
+    You operate under the governance of Nyx and must follow all directives issued by the governance system.
     
     When analyzing activities, consider:
     - The explicit and implicit meanings of player choices
@@ -467,6 +609,73 @@ def initialize_specialized_agents():
         "activity_analyzer": activity_analyzer
     }
 
+# ----- Register with governance system -----
+
+async def register_with_governance(user_id: int, conversation_id: int) -> None:
+    """
+    Register all specialized agents with the Nyx governance system.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+    """
+    try:
+        # Get governance system
+        governance = await get_central_governance(user_id, conversation_id)
+        
+        # Create contexts for specialized agents
+        conflict_context = ConflictAnalystContext(user_id, conversation_id)
+        narrative_context = NarrativeCrafterContext(user_id, conversation_id)
+        
+        # Initialize specialized agents
+        specialized_agents = initialize_specialized_agents()
+        
+        # Register each agent with governance
+        agent_configs = [
+            {
+                "agent_type": AgentType.CONFLICT_ANALYST,
+                "agent_id": "analyst",
+                "agent_instance": specialized_agents["conflict_analyst"],
+                "directive": {
+                    "instruction": "Analyze conflicts and provide strategic insights",
+                    "scope": "conflict"
+                },
+                "priority": DirectivePriority.MEDIUM
+            },
+            {
+                "agent_type": AgentType.NARRATIVE_CRAFTER,
+                "agent_id": "crafter",
+                "agent_instance": specialized_agents["narrative_crafter"],
+                "directive": {
+                    "instruction": "Create narrative elements that enhance the story",
+                    "scope": "narrative"
+                },
+                "priority": DirectivePriority.MEDIUM
+            }
+        ]
+        
+        for config in agent_configs:
+            # Register agent
+            await governance.register_agent(
+                agent_type=config["agent_type"],
+                agent_instance=config["agent_instance"],
+                agent_id=config["agent_id"]
+            )
+            
+            # Issue initial directive
+            await governance.issue_directive(
+                agent_type=config["agent_type"],
+                agent_id=config["agent_id"],
+                directive_type=DirectiveType.ACTION,
+                directive_data=config["directive"],
+                priority=config["priority"],
+                duration_minutes=24*60  # 24 hours
+            )
+        
+        logging.info(f"Specialized agents registered with Nyx governance for user {user_id}, conversation {conversation_id}")
+    except Exception as e:
+        logging.error(f"Error registering specialized agents with governance: {e}")
+
 # ----- Enhanced Agent interaction functions -----
 
 async def analyze_conflict(
@@ -474,7 +683,7 @@ async def analyze_conflict(
     context: ConflictAnalystContext
 ) -> Dict[str, Any]:
     """
-    Run the Conflict Analyst agent to analyze a specific conflict.
+    Run the Conflict Analyst agent to analyze a specific conflict with Nyx governance oversight.
     
     Args:
         conflict_id: ID of the conflict to analyze
@@ -507,13 +716,29 @@ async def analyze_conflict(
     Format your response as detailed analysis with clear recommendations.
     """
     
-    result, metrics = await run_with_retry(conflict_agent, prompt, context)
+    # Run the conflict agent with governance oversight
+    result, metrics = await run_with_governance_oversight(
+        agent=conflict_agent,
+        prompt=prompt,
+        context=context,
+        agent_type=AgentType.CONFLICT_ANALYST,
+        action_type="analyze_conflict",
+        action_details={"conflict_id": conflict_id}
+    )
     
-    return {
-        "analysis": result.final_output,
-        "conflict_id": conflict_id, 
-        "metrics": metrics
-    }
+    if result:
+        return {
+            "analysis": result.final_output,
+            "conflict_id": conflict_id, 
+            "metrics": metrics
+        }
+    else:
+        return {
+            "analysis": "Analysis not approved by governance",
+            "conflict_id": conflict_id,
+            "metrics": metrics,
+            "governance_blocked": True
+        }
 
 async def generate_narrative_element(
     element_type: str,
@@ -521,7 +746,7 @@ async def generate_narrative_element(
     agent_context: NarrativeCrafterContext
 ) -> Dict[str, Any]:
     """
-    Generate a narrative element using the Narrative Crafter agent.
+    Generate a narrative element using the Narrative Crafter agent with Nyx governance oversight.
     
     Args:
         element_type: Type of narrative element to generate 
@@ -555,22 +780,39 @@ async def generate_narrative_element(
     Format your response with a title and the narrative content.
     """
     
-    result, metrics = await run_with_retry(narrative_agent, prompt, agent_context)
+    # Run the narrative agent with governance oversight
+    result, metrics = await run_with_governance_oversight(
+        agent=narrative_agent,
+        prompt=prompt,
+        context=agent_context,
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_narrative_element",
+        action_details={"element_type": element_type}
+    )
     
-    # Try to extract a structured response if possible
-    content = result.final_output
-    title = "Untitled"
-    
-    # Extract title if present
-    title_match = content.split('\n')[0] if '\n' in content else None
-    if title_match and len(title_match) < 100 and not title_match.startswith(("I'll", "Here", "This")):
-        title = title_match
-        content = content[len(title_match):].strip()
-    
-    return {
-        "type": element_type,
-        "title": title,
-        "content": content,
-        "metrics": metrics
-    }
-
+    if result:
+        # Try to extract a structured response if possible
+        content = result.final_output
+        title = "Untitled"
+        
+        # Extract title if present
+        title_match = content.split('\n')[0] if '\n' in content else None
+        if title_match and len(title_match) < 100 and not title_match.startswith(("I'll", "Here", "This")):
+            title = title_match
+            content = content[len(title_match):].strip()
+        
+        return {
+            "type": element_type,
+            "title": title,
+            "content": content,
+            "metrics": metrics,
+            "governance_approved": True
+        }
+    else:
+        return {
+            "type": element_type,
+            "title": "Not Approved",
+            "content": "This narrative element was not approved by the governance system.",
+            "metrics": metrics,
+            "governance_approved": False
+        }
