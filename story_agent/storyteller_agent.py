@@ -495,15 +495,6 @@ class StorytellerAgent:
         
         npc_responses = result.final_output
         
-        # Run the NPC handler
-        result = await Runner.run(
-            self.npc_handler,
-            prompt,
-            context=ctx.context
-        )
-        
-        npc_responses = result.final_output
-        
         # Report the action
         await self.report_action_to_governance(
             ctx,
