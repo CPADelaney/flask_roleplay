@@ -1,4 +1,4 @@
-# time_cycle.py
+# logic/time_cycle.py
 """
 Unified Time Cycle & Conflict System Module in an Agentic Framework
 
