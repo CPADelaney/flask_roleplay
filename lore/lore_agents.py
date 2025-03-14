@@ -147,3 +147,8 @@ async def register_with_governance(user_id: int, conversation_id: int):
     from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
     
     governor = await get_central_governance(user_id, conversation_id)
+    await governor.register_agent(
+        agent_type=AgentType.NARRATIVE_CRAFTER,  # Or create a LORE_AGENT type
+        agent_instance=foundation_lore_agent,
+        agent_id="foundation_lore"
+    )    
