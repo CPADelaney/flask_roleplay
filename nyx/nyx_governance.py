@@ -924,6 +924,46 @@ class NyxUnifiedGovernor:
         # No intervention needed
         return None
 
+    async def _check_narrative_crafter_intervention(self, agent_id, action, result):
+        """Check if intervention is needed for narrative crafter actions."""
+        action_type = action.get("type", "unknown")
+        
+        # Check for lore inconsistencies
+        if action_type == "generate_lore" and result.get("inconsistencies", []):
+            return {
+                "reason": "Inconsistencies detected in generated lore",
+                "override_action": {
+                    "type": "fix_inconsistencies",
+                    "description": "Resolve detected lore inconsistencies",
+                    "parameters": {"inconsistencies": result.get("inconsistencies", [])}
+                }
+            }
+        
+        # Check for unreasonable lore complexity
+        if action_type == "generate_lore" and result.get("complexity_score", 0) > 8:
+            return {
+                "reason": "Generated lore is too complex for current context",
+                "override_action": {
+                    "type": "simplify_lore",
+                    "description": "Simplify lore to more manageable complexity",
+                    "parameters": {"max_complexity": 7}
+                }
+            }
+        
+        # Prevent overwhelming NPC knowledge
+        if action_type == "integrate_lore_with_npcs" and result.get("average_knowledge_per_npc", 0) > 12:
+            return {
+                "reason": "Too much knowledge being assigned to NPCs",
+                "override_action": {
+                    "type": "limit_npc_knowledge",
+                    "description": "Limit the amount of lore knowledge given to NPCs",
+                    "parameters": {"max_knowledge_per_npc": 10}
+                }
+            }
+        
+        return None
+
+    
     # ---------------------------------------------------------------------
     # GENERAL-AGENT INTERVENTION LOGIC (from ultimate_governor)
     # ---------------------------------------------------------------------
