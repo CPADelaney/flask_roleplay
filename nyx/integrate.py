@@ -1005,6 +1005,7 @@ class NyxCentralGovernance:
         self.story_integration = None
         self.new_game_integration = None
         self.memory_integration = None
+        self.lore_integration = None
         
         # Used to track registered agents
         self.registered_agents = {}
@@ -1036,6 +1037,11 @@ class NyxCentralGovernance:
         # Initialize specialized components
         self.story_integration = StoryIntegration(self.user_id, self.conversation_id, self.governor)
         self.new_game_integration = NewGameIntegration(self.user_id, self.conversation_id, self.governor)
+        self.lore_integration = LoreIntegration(self.user_id, self.conversation_id, self.governor)
+        await self.lore_integration.initialize()
+    
+        # Update system status
+        self.system_status["components"]["lore_integration"] = True      
         
         # Initialize memory integration
         self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id, self.governor)
@@ -1072,6 +1078,54 @@ class NyxCentralGovernance:
         )
         
         logger.info(f"NyxCentralGovernance initialized for user {self.user_id}, conversation {self.conversation_id}")
+
+    async def generate_lore(self, environment_desc: str) -> Dict[str, Any]:
+        """
+        Generate comprehensive lore with governance oversight.
+        
+        Args:
+            environment_desc: Description of the environment
+            
+        Returns:
+            Generated lore
+        """
+        return await self.lore_integration.generate_complete_lore(environment_desc)
+    
+    async def integrate_lore_with_npcs(self, npc_ids: List[int]) -> Dict[str, Any]:
+        """
+        Integrate lore with NPCs with governance oversight.
+        
+        Args:
+            npc_ids: List of NPC IDs to integrate lore with
+            
+        Returns:
+            Integration results
+        """
+        return await self.lore_integration.integrate_with_npcs(npc_ids)
+    
+    async def enhance_context_with_lore(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Enhance context with relevant lore.
+        
+        Args:
+            context: Current context dictionary
+            
+        Returns:
+            Enhanced context with lore
+        """
+        return await self.lore_integration.enhance_context_with_lore(context)
+    
+    async def generate_scene_with_lore(self, location: str) -> Dict[str, Any]:
+        """
+        Generate a scene description enhanced with lore.
+        
+        Args:
+            location: Location name
+            
+        Returns:
+            Enhanced scene description
+        """
+        return await self.lore_integration.generate_scene_description_with_lore(location)
     
     async def _register_core_agents(self):
         """Register core system agents with the governor."""
