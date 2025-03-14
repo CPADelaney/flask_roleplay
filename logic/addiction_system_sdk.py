@@ -1,12 +1,13 @@
-# logic/addiction_system_sdk.py
+# logic/addiction_system_nyx.py
 """
-Comprehensive Addiction System using OpenAI's Agents SDK with Nyx Governance integration.
+Refactored Addiction System with full Nyx Governance integration.
 
 Features:
-1) An addiction manager that handles DB logic
-2) Function tools for addiction operations
-3) Addiction agents for different aspects of addiction management
-4) Integration with Nyx central governance
+1) Complete integration with Nyx central governance
+2) Permission checking before all operations
+3) Action reporting for monitoring and tracing
+4) Directive handling for system control
+5) Registration with proper agent types and constants
 """
 
 import logging
@@ -35,13 +36,18 @@ from db.connection import get_db_connection
 import asyncpg
 
 # Nyx governance integration
+from nyx.integrate import get_central_governance
 from nyx.nyx_governance import (
-    NyxUnifiedGovernor,
     AgentType,
     DirectiveType,
     DirectivePriority
 )
-from nyx.integrate import get_central_governance
+from nyx.governance_helpers import (
+    with_governance_permission,
+    with_action_reporting,
+    with_governance
+)
+from nyx.directive_handler import DirectiveHandler
 
 # -------------------------------------------------------------------------------
 # Pydantic Models for Structured Outputs
@@ -75,7 +81,7 @@ class AddictionSafety(BaseModel):
     suggested_adjustment: Optional[str] = Field(None, description="Suggested adjustment if inappropriate")
 
 # -------------------------------------------------------------------------------
-# Agent Context
+# Agent Context and Directive Handler
 # -------------------------------------------------------------------------------
 
 class AddictionContext:
@@ -85,10 +91,26 @@ class AddictionContext:
         self.conversation_id = conversation_id
         self.governor = None
         self.thematic_messages = {}
+        self.directive_handler = None
         
     async def initialize(self):
         """Initialize context with governance integration"""
         self.governor = await get_central_governance(self.user_id, self.conversation_id)
+        
+        # Initialize directive handler
+        self.directive_handler = DirectiveHandler(
+            self.user_id, 
+            self.conversation_id, 
+            AgentType.UNIVERSAL_UPDATER,
+            "addiction_system"
+        )
+        
+        # Register handlers for different directive types
+        self.directive_handler.register_handler(DirectiveType.ACTION, self._handle_action_directive)
+        self.directive_handler.register_handler(DirectiveType.PROHIBITION, self._handle_prohibition_directive)
+        
+        # Start background processing of directives
+        self.directive_task = await self.directive_handler.start_background_processing(interval=60.0)
         
         # Load thematic messages
         try:
@@ -97,6 +119,42 @@ class AddictionContext:
         except Exception as e:
             logging.warning(f"Could not load external thematic messages; using defaults.")
             self.thematic_messages = DEFAULT_THEMATIC_MESSAGES
+            
+    async def _handle_action_directive(self, directive):
+        """Handle action directives from Nyx"""
+        instruction = directive.get("instruction", "")
+        
+        if "monitor addictions" in instruction.lower():
+            # Trigger a monitoring scan
+            return await check_addiction_status(
+                self.user_id,
+                self.conversation_id,
+                directive.get("player_name", "player")
+            )
+        elif "apply addiction effect" in instruction.lower():
+            # Apply a specific addiction effect
+            addiction_type = directive.get("addiction_type")
+            if addiction_type:
+                return await update_addiction_level(
+                    RunContextWrapper(self),
+                    directive.get("player_name", "player"),
+                    addiction_type,
+                    progression_multiplier=directive.get("multiplier", 1.0),
+                    target_npc_id=directive.get("target_npc_id")
+                )
+        
+        return {"status": "unknown_directive", "instruction": instruction}
+    
+    async def _handle_prohibition_directive(self, directive):
+        """Handle prohibition directives from Nyx"""
+        # Mark certain addiction types as prohibited
+        prohibited = directive.get("prohibited_actions", [])
+        
+        # Store these in context for later checking
+        self.prohibited_addictions = prohibited
+        
+        return {"status": "prohibition_registered", "prohibited": prohibited}
+
 # -------------------------------------------------------------------------------
 # Global Constants & Thematic Messages
 # -------------------------------------------------------------------------------
@@ -115,7 +173,7 @@ DEFAULT_THEMATIC_MESSAGES = {
         "1": "You occasionally steal glances at sumptuous stockings.",
         "2": "A subtle craving for the delicate feel of silk emerges within you.",
         "3": "The allure of sensuous socks overwhelms your thoughts.",
-        "4": "Under your Mistress’s commanding presence, your obsession with exquisite socks leaves you trembling in servile adoration."
+        "4": "Under your Mistress's commanding presence, your obsession with exquisite socks leaves you trembling in servile adoration."
     },
     "feet": {
         "1": "Your eyes frequently wander to the graceful arch of bare feet.",
@@ -163,35 +221,28 @@ except Exception as e:
     THEMATIC_MESSAGES = DEFAULT_THEMATIC_MESSAGES
 
 # -------------------------------------------------------------------------------
-# Function Tools
+# Function Tools with Governance Integration
 # -------------------------------------------------------------------------------
 
 @function_tool
+@with_governance(
+    agent_type=AgentType.UNIVERSAL_UPDATER,
+    action_type="view_addictions",
+    action_description="Checking addiction levels for {player_name}",
+    id_from_context=lambda ctx: "addiction_system"
+)
 async def check_addiction_levels(
     ctx: RunContextWrapper[AddictionContext],
     player_name: str
 ) -> Dict[str, Any]:
     """
-    Checks the player's addiction levels.
-    Returns a dict with 'addiction_levels' and 'npc_specific_addictions'.
+    Checks the player's addiction levels with Nyx governance oversight.
     
     Args:
         player_name: Name of the player
     """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
-    
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="addiction_system",
-        action_type="view_addictions",
-        action_details={"player_name": player_name}
-    )
-    
-    if not permission["approved"]:
-        return {"error": permission["reasoning"], "has_addictions": False}
     
     # Connect to database
     try:
@@ -249,14 +300,6 @@ async def check_addiction_levels(
             "has_addictions": has_addictions
         }
         
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="addiction_system",
-            action={"type": "view_addictions", "player_name": player_name},
-            result={"addiction_count": len(addiction_data) + len(npc_specific)}
-        )
-        
         return result
         
     except Exception as e:
@@ -266,6 +309,12 @@ async def check_addiction_levels(
         await conn.close()
 
 @function_tool
+@with_governance(
+    agent_type=AgentType.UNIVERSAL_UPDATER,
+    action_type="update_addiction",
+    action_description="Updating addiction level for {player_name}: {addiction_type}",
+    id_from_context=lambda ctx: "addiction_system"
+)
 async def update_addiction_level(
     ctx: RunContextWrapper[AddictionContext],
     player_name: str,
@@ -276,7 +325,7 @@ async def update_addiction_level(
     target_npc_id: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    Update or create an addiction entry for a player.
+    Update or create an addiction entry for a player with Nyx governance oversight.
     
     Args:
         player_name: Name of the player
@@ -288,22 +337,14 @@ async def update_addiction_level(
     """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
     
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="addiction_system",
-        action_type="update_addiction",
-        action_details={
-            "player_name": player_name,
+    # Check if this addiction type is prohibited by governance
+    if hasattr(ctx.context, 'prohibited_addictions') and addiction_type in ctx.context.prohibited_addictions:
+        return {
+            "error": f"Addiction type '{addiction_type}' is prohibited by governance directive",
             "addiction_type": addiction_type,
-            "target_npc_id": target_npc_id
+            "prohibited": True
         }
-    )
-    
-    if not permission["approved"]:
-        return {"error": permission["reasoning"]}
     
     # Connect to database
     try:
@@ -387,18 +428,6 @@ async def update_addiction_level(
             "target_npc_id": target_npc_id
         }
         
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="addiction_system",
-            action={
-                "type": "update_addiction", 
-                "addiction_type": addiction_type,
-                "target_npc_id": target_npc_id
-            },
-            result=result
-        )
-        
         return result
         
     except Exception as e:
@@ -408,13 +437,19 @@ async def update_addiction_level(
         await conn.close()
 
 @function_tool
+@with_governance(
+    agent_type=AgentType.UNIVERSAL_UPDATER,
+    action_type="generate_effects",
+    action_description="Generating narrative effects for {player_name}'s addictions",
+    id_from_context=lambda ctx: "addiction_system"
+)
 async def generate_addiction_effects(
     ctx: RunContextWrapper[AddictionContext],
     player_name: str,
     addiction_status: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    Generate narrative effects for a player's addictions.
+    Generate narrative effects for a player's addictions with Nyx governance oversight.
     
     Args:
         player_name: Name of the player
@@ -422,21 +457,7 @@ async def generate_addiction_effects(
     """
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
     thematic_messages = ctx.context.thematic_messages
-    
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="addiction_system",
-        action_type="generate_effects",
-        action_details={
-            "player_name": player_name
-        }
-    )
-    
-    if not permission["approved"]:
-        return {"effects": [], "has_effects": False, "error": permission["reasoning"]}
     
     effects = []
     
@@ -510,14 +531,6 @@ async def generate_addiction_effects(
         "has_effects": bool(effects)
     }
     
-    # Report action to governance
-    await governor.process_agent_action_report(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="addiction_system",
-        action={"type": "generate_effects", "player_name": player_name},
-        result={"effect_count": len(effects)}
-    )
-    
     return result
 
 # -------------------------------------------------------------------------------
@@ -577,6 +590,8 @@ addiction_progression_agent = Agent[AddictionContext](
     4. What special thresholds might be reached
     
     Focus on gradual, realistic progression that aligns with player choices and experiences.
+    
+    Always respect directives from the Nyx governance system.
     """,
     tools=[update_addiction_level],
     output_type=AddictionUpdate
@@ -595,6 +610,8 @@ addiction_narrative_agent = Agent[AddictionContext](
     5. Show how the addiction affects the player's mind and perceptions
     
     Create effects that enhance the roleplaying experience without being too intrusive.
+    
+    Always respect directives from the Nyx governance system.
     """,
     tools=[generate_addiction_effects],
     output_type=AddictionEffects
@@ -621,6 +638,9 @@ addiction_system_agent = Agent[AddictionContext](
     - Level 4: Extreme
     
     Use specialized sub-agents for specific tasks as needed.
+    
+    Always respect directives from the Nyx governance system and check permissions
+    before performing any actions.
     """,
     handoffs=[
         handoff(addiction_progression_agent, tool_name_override="manage_addiction_progression"),
@@ -651,7 +671,7 @@ async def process_addiction_update(
     target_npc_id: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    Process an addiction update with governance oversight.
+    Process an addiction update with Nyx governance oversight.
     
     Args:
         user_id: User ID
@@ -718,7 +738,7 @@ async def check_addiction_status(
     player_name: str
 ) -> Dict[str, Any]:
     """
-    Check a player's addiction status with governance oversight.
+    Check a player's addiction status with Nyx governance oversight.
     
     Args:
         user_id: User ID
@@ -791,3 +811,34 @@ async def register_with_governance(user_id: int, conversation_id: int):
     )
     
     logging.info("Addiction system registered with Nyx governance")
+
+# Handle directives from Nyx
+async def process_addiction_directive(directive_data: Dict[str, Any], user_id: int, conversation_id: int) -> Dict[str, Any]:
+    """
+    Process a directive from Nyx governance system.
+    
+    Args:
+        directive_data: The directive data
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Result of processing the directive
+    """
+    # Create addiction context
+    addiction_context = AddictionContext(user_id, conversation_id)
+    await addiction_context.initialize()
+    
+    # Initialize directive handler if needed
+    if not addiction_context.directive_handler:
+        addiction_context.directive_handler = DirectiveHandler(
+            user_id, 
+            conversation_id, 
+            AgentType.UNIVERSAL_UPDATER,
+            "addiction_system"
+        )
+        
+    # Process the directive
+    result = await addiction_context.directive_handler._handle_action_directive(directive_data)
+    
+    return result
