@@ -18,6 +18,12 @@ from logic.npc_creation import spawn_multiple_npcs_enhanced, init_chase_schedule
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 
+# Import Nyx governance integration
+from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
+from nyx.directive_handler import DirectiveHandler
+from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
+from nyx.integrate import get_central_governance, register_with_governance
+
 # Configuration
 DB_DSN = os.getenv("DB_DSN")
 
@@ -48,7 +54,7 @@ class GameContext(BaseModel):
     db_dsn: str = DB_DSN
 
 class NewGameAgent:
-    """Agent for handling new game creation process"""
+    """Agent for handling new game creation process with Nyx governance integration"""
     
     def __init__(self):
         self.environment_agent = Agent(
@@ -108,7 +114,9 @@ class NewGameAgent:
         self.agent = Agent(
             name="NewGameDirector",
             instructions="""
-            You are directing the creation of a new game world with subtle layers of femdom and intrigue.
+            You are directing the creation of a new game world with subtle layers of femdom and intrigue,
+            under the governance of Nyx.
+            
             Coordinate the creation of the environment, NPCs, and opening narrative.
             
             The game world should have:
@@ -118,6 +126,8 @@ class NewGameAgent:
             4. An immersive opening narrative
             
             Maintain a balance between mundane daily life and subtle power dynamics.
+            
+            All actions must be approved by Nyx's governance system.
             """,
             tools=[
                 function_tool(self.generate_environment),
@@ -126,7 +136,64 @@ class NewGameAgent:
                 function_tool(self.finalize_game_setup)
             ]
         )
+        
+        # Directive handler for processing Nyx directives
+        self.directive_handler = None
     
+    async def initialize_directive_handler(self, user_id: int, conversation_id: int):
+        """Initialize the directive handler for this agent"""
+        self.directive_handler = DirectiveHandler(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="new_game"
+        )
+        
+        # Register handlers for different directive types
+        self.directive_handler.register_handler(
+            DirectiveType.ACTION, 
+            self.handle_action_directive
+        )
+        self.directive_handler.register_handler(
+            DirectiveType.OVERRIDE,
+            self.handle_override_directive
+        )
+        
+        # Start background processing of directives
+        await self.directive_handler.start_background_processing()
+    
+    async def handle_action_directive(self, directive: dict) -> dict:
+        """Handle an action directive from Nyx"""
+        instruction = directive.get("instruction", "")
+        logging.info(f"[NewGameAgent] Processing action directive: {instruction}")
+        
+        # Handle different instructions
+        if "create new environment" in instruction.lower():
+            # Extract parameters if provided
+            params = directive.get("parameters", {})
+            mega_name = params.get("mega_name", "New Setting")
+            mega_desc = params.get("mega_desc", "A cozy town with hidden layers")
+            
+            # Simulate context
+            ctx = type('obj', (object,), {'context': {'user_id': self.directive_handler.user_id, 'conversation_id': self.directive_handler.conversation_id}})
+            
+            # Generate environment
+            result = await self.generate_environment(ctx, mega_name, mega_desc)
+            return {"result": "environment_generated", "data": result.dict()}
+        
+        return {"result": "action_not_recognized"}
+    
+    async def handle_override_directive(self, directive: dict) -> dict:
+        """Handle an override directive from Nyx"""
+        logging.info(f"[NewGameAgent] Processing override directive")
+        
+        # Extract override details
+        override_action = directive.get("override_action", {})
+        
+        # Apply the override for future operations
+        return {"result": "override_applied"}
+    
+    @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "create_calendar")
     async def create_calendar(self, ctx, environment_desc):
         """
         Create an immersive calendar system for the game world.
@@ -143,6 +210,11 @@ class NewGameAgent:
         calendar_data = await update_calendar_names(user_id, conversation_id, environment_desc)
         return calendar_data
     
+    @with_governance(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        action_type="generate_environment",
+        action_description="Generated game environment for new game"
+    )
     async def generate_environment(self, ctx, mega_name, mega_desc, env_components=None, enhanced_features=None, stat_modifiers=None):
         """
         Generate the game environment data.
@@ -284,6 +356,7 @@ class NewGameAgent:
         
         return result.final_output
     
+    @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "spawn_npcs")
     async def spawn_npcs(self, ctx, environment_desc, day_names, count=5):
         """
         Spawn multiple NPCs for the game world.
@@ -310,6 +383,7 @@ class NewGameAgent:
         
         return npc_ids
     
+    @with_governance_permission(AgentType.UNIVERSAL_UPDATER, "create_chase_schedule")
     async def create_chase_schedule(self, ctx, environment_desc, day_names):
         """
         Create a schedule for the player "Chase".
@@ -334,6 +408,11 @@ class NewGameAgent:
         
         return chase_schedule
     
+    @with_governance(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        action_type="create_npcs_and_schedules",
+        action_description="Created NPCs and schedules for new game"
+    )
     async def create_npcs_and_schedules(self, ctx, environment_data):
         """
         Create NPCs and schedules for the game world.
@@ -385,6 +464,11 @@ class NewGameAgent:
             "chase_schedule": chase_schedule
         }
     
+    @with_governance(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        action_type="create_opening_narrative",
+        action_description="Created opening narrative for new game"
+    )
     async def create_opening_narrative(self, ctx, environment_data, npc_schedule_data):
         """
         Create the opening narrative for the game.
@@ -460,6 +544,11 @@ class NewGameAgent:
         
         return opening_narrative
     
+    @with_governance(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        action_type="finalize_game_setup",
+        action_description="Finalized game setup including conflict, currency and image"
+    )
     async def finalize_game_setup(self, ctx, opening_narrative):
         """
         Finalize game setup including conflict generation and image generation.
@@ -570,6 +659,11 @@ class NewGameAgent:
         finally:
             await conn.close()
     
+    @with_governance(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        action_type="process_new_game",
+        action_description="Processed complete new game creation workflow"
+    )
     async def process_new_game(self, user_id, conversation_data):
         """
         Orchestrate the complete new game creation process.
@@ -613,6 +707,20 @@ class NewGameAgent:
                 )
         finally:
             await conn.close()
+        
+        # Initialize directive handler for this session
+        await self.initialize_directive_handler(user_id, conversation_id)
+        
+        # Register with the governance system
+        governance = await get_central_governance(user_id, conversation_id)
+        await governance.register_agent(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_instance=self,
+            agent_id="new_game"
+        )
+        
+        # Process directives (to pick up any pending directives for this game)
+        await self.directive_handler.process_directives(force_check=True)
         
         # Gather environment components
         from routes.settings_routes import generate_mega_setting_logic
@@ -665,3 +773,43 @@ class NewGameAgent:
             "conversation_id": conversation_id,
             "welcome_image_url": result.final_output.get('welcome_image_url', None)
         }
+
+# Register with governance system
+async def register_with_governance(user_id: int, conversation_id: int) -> None:
+    """
+    Register the NewGameAgent with the Nyx governance system.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+    """
+    try:
+        # Get the governance system
+        governance = await get_central_governance(user_id, conversation_id)
+        
+        # Create the agent
+        agent = NewGameAgent()
+        
+        # Register with governance
+        await governance.register_agent(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_instance=agent,
+            agent_id="new_game"
+        )
+        
+        # Issue directive to be ready to create new games
+        await governance.issue_directive(
+            agent_type=AgentType.UNIVERSAL_UPDATER,
+            agent_id="new_game", 
+            directive_type=DirectiveType.ACTION,
+            directive_data={
+                "instruction": "Initialize and stand ready to create new game environments",
+                "scope": "initialization"
+            },
+            priority=DirectivePriority.MEDIUM,
+            duration_minutes=24*60  # 24 hours
+        )
+        
+        logging.info(f"NewGameAgent registered with Nyx governance system for user {user_id}, conversation {conversation_id}")
+    except Exception as e:
+        logging.error(f"Error registering NewGameAgent with governance: {e}")
