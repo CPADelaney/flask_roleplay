@@ -2,15 +2,22 @@
 
 import logging
 from flask import Blueprint, request, jsonify, session
-from lore.dynamic_lore_generator import DynamicLoreGenerator
-from lore.lore_integration import LoreIntegrationSystem
-from lore.lore_manager import LoreManager
+
+# Import Nyx governance integration functions
+from nyx.integrate import (
+    get_central_governance,
+    generate_lore_with_governance,
+    integrate_lore_with_npcs,
+    enhance_context_with_lore,
+    generate_scene_with_lore,
+    process_universal_update_with_governance
+)
 
 lore_bp = Blueprint('lore_bp', __name__)
 
 @lore_bp.route('/generate', methods=['POST'])
 async def generate_lore():
-    """Generate complete lore for a game."""
+    """Generate complete lore for a game with Nyx governance oversight."""
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -23,15 +30,22 @@ async def generate_lore():
         if not conversation_id or not environment_desc:
             return jsonify({"error": "Missing required parameters"}), 400
         
-        # Initialize lore system
-        lore_system = LoreIntegrationSystem(user_id, int(conversation_id))
+        # Use Nyx governance integration
+        result = await generate_lore_with_governance(
+            user_id, 
+            int(conversation_id), 
+            environment_desc
+        )
         
-        # Generate complete lore
-        lore = await lore_system.initialize_game_lore(environment_desc)
+        if "error" in result:
+            return jsonify(result), 400
+        
+        lore = result.get("lore", {})
         
         return jsonify({
             "status": "success",
-            "message": "Lore generated successfully",
+            "message": "Lore generated successfully with Nyx governance oversight",
+            "governance_approved": result.get("governance_approved", False),
             "lore_overview": {
                 "world_lore_count": len(lore.get("world_lore", {})),
                 "factions_count": len(lore.get("factions", [])),
@@ -48,7 +62,7 @@ async def generate_lore():
 
 @lore_bp.route('/integrate_npcs', methods=['POST'])
 async def integrate_npcs():
-    """Integrate lore with NPCs by giving them knowledge."""
+    """Integrate lore with NPCs by giving them knowledge with Nyx governance oversight."""
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -61,16 +75,21 @@ async def integrate_npcs():
         if not conversation_id or not npc_ids:
             return jsonify({"error": "Missing required parameters"}), 400
         
-        # Initialize lore system
-        lore_system = LoreIntegrationSystem(user_id, int(conversation_id))
+        # Use Nyx governance integration
+        result = await integrate_lore_with_npcs(
+            user_id, 
+            int(conversation_id), 
+            npc_ids
+        )
         
-        # Integrate lore with NPCs
-        results = await lore_system.integrate_lore_with_npcs(npc_ids)
-        
+        if "error" in result:
+            return jsonify(result), 400
+            
         return jsonify({
             "status": "success",
-            "message": f"Lore integrated with {len(results)} NPCs",
-            "results": results
+            "message": f"Lore integrated with {len(result.get('results', {}))} NPCs",
+            "governance_approved": result.get("governance_approved", False),
+            "results": result.get("results", {})
         })
         
     except Exception as e:
@@ -79,7 +98,7 @@ async def integrate_npcs():
 
 @lore_bp.route('/npc_response', methods=['POST'])
 async def npc_lore_response():
-    """Get a lore-based response from an NPC."""
+    """Get a lore-based response from an NPC with Nyx governance oversight."""
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -93,11 +112,43 @@ async def npc_lore_response():
         if not all([conversation_id, npc_id, player_input]):
             return jsonify({"error": "Missing required parameters"}), 400
         
-        # Initialize lore system
-        lore_system = LoreIntegrationSystem(user_id, int(conversation_id))
+        # Get governance
+        governance = await get_central_governance(user_id, int(conversation_id))
         
-        # Get NPC response
+        # Check permission with governance system
+        permission = await governance.check_action_permission(
+            agent_type="npc",
+            agent_id=npc_id,
+            action_type="generate_lore_response",
+            action_details={
+                "player_input": player_input
+            }
+        )
+        
+        if not permission["approved"]:
+            return jsonify({
+                "error": permission.get("reasoning", "Not approved by governance"),
+                "approved": False
+            }), 403
+            
+        # Use the LoreIntegrationSystem but with governance oversight
+        from lore.lore_integration import LoreIntegrationSystem
+        lore_system = LoreIntegrationSystem(user_id, int(conversation_id))
         response = await lore_system.generate_npc_lore_response(int(npc_id), player_input)
+        
+        # Report the action
+        await governance.process_agent_action_report(
+            agent_type="npc",
+            agent_id=npc_id,
+            action={
+                "type": "generate_lore_response",
+                "description": f"Generated lore response to: {player_input[:50]}..."
+            },
+            result={
+                "lore_shared": response.get("lore_shared", False),
+                "knowledge_level": response.get("knowledge_level", 0)
+            }
+        )
         
         return jsonify(response)
         
@@ -107,7 +158,7 @@ async def npc_lore_response():
 
 @lore_bp.route('/enhance_scene', methods=['POST'])
 async def enhance_scene():
-    """Enhance a scene description with lore."""
+    """Enhance a scene description with lore using Nyx governance."""
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -120,11 +171,12 @@ async def enhance_scene():
         if not conversation_id or not location:
             return jsonify({"error": "Missing required parameters"}), 400
         
-        # Initialize lore system
-        lore_system = LoreIntegrationSystem(user_id, int(conversation_id))
-        
-        # Generate enhanced scene description
-        scene = await lore_system.generate_scene_description_with_lore(location)
+        # Use Nyx governance integration
+        scene = await generate_scene_with_lore(
+            user_id, 
+            int(conversation_id), 
+            location
+        )
         
         return jsonify(scene)
         
@@ -134,7 +186,7 @@ async def enhance_scene():
 
 @lore_bp.route('/update_lore', methods=['POST'])
 async def update_lore():
-    """Update lore after a significant narrative event."""
+    """Update lore after a significant narrative event with Nyx governance oversight."""
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -147,16 +199,54 @@ async def update_lore():
         if not conversation_id or not event_description:
             return jsonify({"error": "Missing required parameters"}), 400
         
-        # Initialize lore system
+        # Use Nyx governance integration for universal updates
+        updates = await process_universal_update_with_governance(
+            user_id,
+            int(conversation_id),
+            f"Lore update triggered by: {event_description}",
+            {"event_description": event_description, "type": "lore_update"}
+        )
+        
+        # Get governance
+        governance = await get_central_governance(user_id, int(conversation_id))
+        
+        # Use the LoreIntegrationSystem with governance oversight
+        from lore.lore_integration import LoreIntegrationSystem
         lore_system = LoreIntegrationSystem(user_id, int(conversation_id))
         
+        # Check permission
+        permission = await governance.check_action_permission(
+            agent_type="narrative_crafter",
+            agent_id="lore_integration",
+            action_type="update_lore_after_narrative_event",
+            action_details={"event_description": event_description}
+        )
+        
+        if not permission["approved"]:
+            return jsonify({
+                "error": permission.get("reasoning", "Not approved by governance"),
+                "approved": False
+            }), 403
+        
         # Update lore
-        updates = await lore_system.update_lore_after_narrative_event(event_description)
+        lore_updates = await lore_system.update_lore_after_narrative_event(event_description)
+        
+        # Report the action
+        await governance.process_agent_action_report(
+            agent_type="narrative_crafter",
+            agent_id="lore_integration",
+            action={
+                "type": "update_lore_after_narrative_event",
+                "description": f"Updated lore after event: {event_description[:50]}..."
+            },
+            result=lore_updates
+        )
         
         return jsonify({
             "status": "success",
-            "message": "Lore updated successfully",
-            "updates": updates
+            "message": "Lore updated successfully with Nyx governance oversight",
+            "updates": lore_updates,
+            "universal_updates": updates
         })
         
     except Exception as e:
@@ -165,7 +255,7 @@ async def update_lore():
 
 @lore_bp.route('/quest_context/<int:quest_id>', methods=['GET'])
 async def quest_context(quest_id):
-    """Get lore context for a specific quest."""
+    """Get lore context for a specific quest with Nyx governance oversight."""
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -176,11 +266,41 @@ async def quest_context(quest_id):
         if not conversation_id:
             return jsonify({"error": "Missing conversation_id parameter"}), 400
         
-        # Initialize lore system
-        lore_system = LoreIntegrationSystem(user_id, int(conversation_id))
+        # Get governance
+        governance = await get_central_governance(user_id, int(conversation_id))
         
-        # Get quest context
+        # Check permission
+        permission = await governance.check_action_permission(
+            agent_type="narrative_crafter",
+            agent_id="lore_integration",
+            action_type="get_quest_lore_context",
+            action_details={"quest_id": quest_id}
+        )
+        
+        if not permission["approved"]:
+            return jsonify({
+                "error": permission.get("reasoning", "Not approved by governance"),
+                "approved": False
+            }), 403
+            
+        # Use LoreIntegrationSystem with governance oversight
+        from lore.lore_integration import LoreIntegrationSystem
+        lore_system = LoreIntegrationSystem(user_id, int(conversation_id))
         context = await lore_system.get_quest_lore_context(quest_id)
+        
+        # Report the action
+        await governance.process_agent_action_report(
+            agent_type="narrative_crafter",
+            agent_id="lore_integration",
+            action={
+                "type": "get_quest_lore_context",
+                "description": f"Retrieved lore context for quest {quest_id}"
+            },
+            result={
+                "quest_id": quest_id,
+                "lore_elements": len(context.get("relevant_lore", []))
+            }
+        )
         
         return jsonify(context)
         
@@ -190,7 +310,7 @@ async def quest_context(quest_id):
 
 @lore_bp.route('/search', methods=['GET'])
 async def search_lore():
-    """Search for lore by keyword."""
+    """Search for lore by keyword with Nyx governance oversight."""
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -202,8 +322,29 @@ async def search_lore():
         if not query or not conversation_id:
             return jsonify({"error": "Missing required parameters"}), 400
         
-        # Initialize lore manager
+        # Get governance
+        governance = await get_central_governance(user_id, int(conversation_id))
+        
+        # Check permission
+        permission = await governance.check_action_permission(
+            agent_type="narrative_crafter",
+            agent_id="lore_manager",
+            action_type="search_lore",
+            action_details={"query": query}
+        )
+        
+        if not permission["approved"]:
+            return jsonify({
+                "error": permission.get("reasoning", "Not approved by governance"),
+                "approved": False
+            }), 403
+            
+        # Use LoreManager with governance oversight
+        from lore.lore_manager import LoreManager
         lore_manager = LoreManager(user_id, int(conversation_id))
+        
+        # Initialize governance for the manager
+        await lore_manager.initialize_governance()
         
         # Search for lore
         results = await lore_manager.get_relevant_lore(
@@ -212,9 +353,23 @@ async def search_lore():
             limit=20
         )
         
+        # Report the action
+        await governance.process_agent_action_report(
+            agent_type="narrative_crafter",
+            agent_id="lore_manager",
+            action={
+                "type": "search_lore",
+                "description": f"Searched lore with query: {query}"
+            },
+            result={
+                "result_count": len(results)
+            }
+        )
+        
         return jsonify({
             "query": query,
-            "results": results
+            "results": results,
+            "result_count": len(results)
         })
         
     except Exception as e:
