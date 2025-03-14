@@ -55,6 +55,82 @@ from utils.caching import CACHE_TTL, NPC_DIRECTIVE_CACHE, AGENT_DIRECTIVE_CACHE
 
 logger = logging.getLogger(__name__)
 
+async def generate_lore_with_governance(
+    user_id: int,
+    conversation_id: int,
+    environment_desc: str
+) -> Dict[str, Any]:
+    """
+    Generate comprehensive lore with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        environment_desc: Description of the environment
+        
+    Returns:
+        Generated lore
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    return await governance.generate_lore(environment_desc)
+
+async def integrate_lore_with_npcs(
+    user_id: int,
+    conversation_id: int,
+    npc_ids: List[int]
+) -> Dict[str, Any]:
+    """
+    Integrate lore with NPCs with governance oversight.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        npc_ids: List of NPC IDs to integrate lore with
+        
+    Returns:
+        Integration results
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    return await governance.integrate_lore_with_npcs(npc_ids)
+
+async def enhance_context_with_lore(
+    user_id: int,
+    conversation_id: int,
+    context: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Enhance context with relevant lore.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        context: Current context dictionary
+        
+    Returns:
+        Enhanced context with lore
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    return await governance.enhance_context_with_lore(context)
+
+async def generate_scene_with_lore(
+    user_id: int,
+    conversation_id: int,
+    location: str
+) -> Dict[str, Any]:
+    """
+    Generate a scene description enhanced with lore.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        location: Location name
+        
+    Returns:
+        Enhanced scene description
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    return await governance.generate_scene_with_lore(location)
+
 
 class JointMemoryGraph:
     """
