@@ -1843,3 +1843,240 @@ async def process_message_with_governance(
     
     # Process the message
     return await governance.process_user_message(user_message, context_data)
+
+# Add this class to nyx/integrate.py
+
+class LoreIntegration:
+    """
+    Integration for Lore System with governance oversight.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int, governor: NyxUnifiedGovernor):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.governor = governor
+        self.lore_generator = None
+        self.lore_manager = None
+        self.npc_lore_integration = None
+    
+    async def initialize(self):
+        """Initialize the lore integration."""
+        from lore.dynamic_lore_generator import DynamicLoreGenerator
+        from lore.lore_manager import LoreManager
+        from lore.npc_lore_integration import NPCLoreIntegration
+        
+        self.lore_generator = DynamicLoreGenerator(self.user_id, self.conversation_id)
+        self.lore_manager = LoreManager(self.user_id, self.conversation_id)
+        self.npc_lore_integration = NPCLoreIntegration(self.user_id, self.conversation_id)
+        
+        return self
+    
+    async def generate_complete_lore(self, environment_desc: str) -> Dict[str, Any]:
+        """
+        Generate comprehensive lore with governance oversight.
+        
+        Args:
+            environment_desc: Description of the environment
+            
+        Returns:
+            Generated lore
+        """
+        # Check permission with governance system
+        permission = await self.governor.check_action_permission(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="lore_generator",
+            action_type="generate_lore",
+            action_details={"environment_desc": environment_desc}
+        )
+        
+        if not permission["approved"]:
+            logger.warning(f"Lore generation not approved: {permission['reasoning']}")
+            return {
+                "error": f"Lore generation not approved: {permission['reasoning']}",
+                "approved": False
+            }
+        
+        # Generate complete lore
+        lore = await self.lore_generator.generate_complete_lore(environment_desc)
+        
+        # Report the action
+        await self.governor.process_agent_action_report(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="lore_generator",
+            action={
+                "type": "generate_lore",
+                "description": f"Generated complete lore for environment: {environment_desc[:50]}"
+            },
+            result={
+                "world_lore_count": len(lore.get("world_lore", {})),
+                "factions_count": len(lore.get("factions", [])),
+                "cultural_elements_count": len(lore.get("cultural_elements", [])),
+                "historical_events_count": len(lore.get("historical_events", [])),
+                "locations_count": len(lore.get("locations", [])),
+                "quests_count": len(lore.get("quests", []))
+            }
+        )
+        
+        # Integrate with memory system
+        await self._integrate_with_memory_system(lore)
+        
+        return {
+            "lore": lore,
+            "governance_approved": True
+        }
+    
+    async def integrate_with_npcs(self, npc_ids: List[int]) -> Dict[str, Any]:
+        """
+        Integrate lore with NPCs with governance oversight.
+        
+        Args:
+            npc_ids: List of NPC IDs to integrate lore with
+            
+        Returns:
+            Integration results
+        """
+        # Check permission
+        permission = await self.governor.check_action_permission(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="npc_integration",
+            action_type="integrate_lore_with_npcs",
+            action_details={"npc_ids": npc_ids}
+        )
+        
+        if not permission["approved"]:
+            logger.warning(f"NPC lore integration not approved: {permission['reasoning']}")
+            return {
+                "error": f"NPC lore integration not approved: {permission['reasoning']}",
+                "approved": False
+            }
+        
+        # Use the LoreIntegrationSystem to handle the integration
+        from lore.lore_integration import LoreIntegrationSystem
+        integration_system = LoreIntegrationSystem(self.user_id, self.conversation_id)
+        
+        results = await integration_system.integrate_lore_with_npcs(npc_ids)
+        
+        # Report the action
+        await self.governor.process_agent_action_report(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="npc_integration",
+            action={
+                "type": "integrate_lore_with_npcs",
+                "description": f"Integrated lore with {len(npc_ids)} NPCs"
+            },
+            result={
+                "npcs_integrated": len(results)
+            }
+        )
+        
+        return {
+            "results": results,
+            "governance_approved": True
+        }
+    
+    async def enhance_context_with_lore(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Enhance context with relevant lore.
+        
+        Args:
+            context: Current context dictionary
+            
+        Returns:
+            Enhanced context with lore
+        """
+        from lore.lore_integration import LoreIntegrationSystem
+        integration_system = LoreIntegrationSystem(self.user_id, self.conversation_id)
+        
+        enhanced_context = await integration_system.enhance_gpt_context_with_lore(context)
+        
+        return enhanced_context
+    
+    async def generate_scene_description_with_lore(self, location: str) -> Dict[str, Any]:
+        """
+        Generate a scene description enhanced with lore.
+        
+        Args:
+            location: Location name
+            
+        Returns:
+            Enhanced scene description
+        """
+        from lore.lore_integration import LoreIntegrationSystem
+        integration_system = LoreIntegrationSystem(self.user_id, self.conversation_id)
+        
+        scene = await integration_system.generate_scene_description_with_lore(location)
+        
+        return scene
+    
+    async def _integrate_with_memory_system(self, lore: Dict[str, Any]) -> None:
+        """
+        Integrate generated lore with Nyx's memory system.
+        
+        Args:
+            lore: The generated lore
+        """
+        memory_system = await self.governor.get_memory_system()
+        
+        # Store foundation lore in memory
+        if "world_lore" in lore:
+            for key, value in lore["world_lore"].items():
+                if isinstance(value, str):
+                    await memory_system.add_memory(
+                        memory_text=f"World lore - {key}: {value[:100]}...",
+                        memory_type="lore",
+                        memory_scope="game",
+                        significance=7,
+                        tags=["lore", "world", key]
+                    )
+        
+        # Store factions in memory
+        if "factions" in lore:
+            for faction in lore["factions"]:
+                name = faction.get('name', 'Unknown faction')
+                desc = faction.get('description', '')[:100] + '...'
+                await memory_system.add_memory(
+                    memory_text=f"Faction: {name} - {desc}",
+                    memory_type="lore",
+                    memory_scope="game",
+                    significance=6,
+                    tags=["lore", "faction", name]
+                )
+        
+        # Store cultural elements in memory
+        if "cultural_elements" in lore:
+            for element in lore["cultural_elements"]:
+                name = element.get('name', 'Unknown culture')
+                desc = element.get('description', '')[:100] + '...'
+                await memory_system.add_memory(
+                    memory_text=f"Cultural element: {name} - {desc}",
+                    memory_type="lore",
+                    memory_scope="game",
+                    significance=6,
+                    tags=["lore", "culture", name]
+                )
+        
+        # Store historical events in memory
+        if "historical_events" in lore:
+            for event in lore["historical_events"]:
+                name = event.get('name', 'Unknown event')
+                desc = event.get('description', '')[:100] + '...'
+                await memory_system.add_memory(
+                    memory_text=f"Historical event: {name} - {desc}",
+                    memory_type="lore",
+                    memory_scope="game",
+                    significance=6,
+                    tags=["lore", "history", name]
+                )
+        
+        # Store locations in memory
+        if "locations" in lore:
+            for location in lore["locations"]:
+                name = location.get('name', 'Unknown location')
+                desc = location.get('description', '')[:100] + '...'
+                await memory_system.add_memory(
+                    memory_text=f"Location: {name} - {desc}",
+                    memory_type="lore",
+                    memory_scope="game",
+                    significance=6,
+                    tags=["lore", "location", name]
+                )
