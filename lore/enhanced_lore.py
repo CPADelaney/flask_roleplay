@@ -46,15 +46,6 @@ import re
 class LoreCache:
     """Unified cache system for all lore types with namespace support"""
     
-    _instance = None  # Singleton instance
-    
-    @classmethod
-    def get_instance(cls):
-        """Get singleton instance of cache"""
-        if cls._instance is None:
-            cls._instance = LoreCache()
-        return cls._instance
-    
     def __init__(self, max_size=1000, ttl=7200):
         """
         Initialize the cache.
@@ -182,19 +173,8 @@ class LoreCache:
             del self.access_times[full_key]
 
 # Global cache instance
-GLOBAL_LORE_CACHE = LoreCache.get_instance()
+GLOBAL_LORE_CACHE = LoreCache()
 
-import logging
-import json
-import asyncio
-from typing import Dict, List, Any, Optional, Tuple, Set, Union
-
-from nyx.integrate import get_central_governance
-from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
-from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
-
-from db.connection import get_db_connection
-from embedding.vector_store import generate_embedding, vector_similarity
 
 class BaseLoreManager:
     """
@@ -377,6 +357,108 @@ class BaseLoreManager:
                         await conn.execute(create_statement)
                         logging.info(f"{table_name} table created")
     
+    # New standardized CRUD methods
+    
+    async def get_by_id(self, table_name: str, id_value: Any, id_field: str = "id") -> Optional[Dict[str, Any]]:
+        """
+        Get a record by ID.
+        
+        Args:
+            table_name: Table name
+            id_value: ID value
+            id_field: ID field name (default: "id")
+            
+        Returns:
+            Record as dict or None if not found
+        """
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                record = await conn.fetchrow(f"""
+                    SELECT * FROM {table_name}
+                    WHERE {id_field} = $1
+                """, id_value)
+                
+                return dict(record) if record else None
+    
+    async def insert_record(self, table_name: str, data: Dict[str, Any], return_field: str = "id") -> Any:
+        """
+        Insert a record.
+        
+        Args:
+            table_name: Table name
+            data: Record data
+            return_field: Field to return (default: "id")
+            
+        Returns:
+            Value of the return field
+        """
+        columns = list(data.keys())
+        values = list(data.values())
+        placeholders = [f"${i+1}" for i in range(len(values))]
+        
+        query = f"""
+            INSERT INTO {table_name} 
+            ({', '.join(columns)})
+            VALUES ({', '.join(placeholders)})
+            RETURNING {return_field}
+        """
+        
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                return await conn.fetchval(query, *values)
+    
+    async def update_record(self, table_name: str, id_value: Any, data: Dict[str, Any], id_field: str = "id") -> bool:
+        """
+        Update a record.
+        
+        Args:
+            table_name: Table name
+            id_value: ID value
+            data: Record data
+            id_field: ID field name (default: "id")
+            
+        Returns:
+            True if updated, False if not found
+        """
+        if not data:
+            return False
+            
+        columns = list(data.keys())
+        values = list(data.values())
+        set_clause = ", ".join([f"{col} = ${i+1}" for i, col in enumerate(columns)])
+        
+        query = f"""
+            UPDATE {table_name}
+            SET {set_clause}
+            WHERE {id_field} = ${len(values) + 1}
+        """
+        
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                result = await conn.execute(query, *values, id_value)
+                return result != "UPDATE 0"
+    
+    async def delete_record(self, table_name: str, id_value: Any, id_field: str = "id") -> bool:
+        """
+        Delete a record.
+        
+        Args:
+            table_name: Table name
+            id_value: ID value
+            id_field: ID field name (default: "id")
+            
+        Returns:
+            True if deleted, False if not found
+        """
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                result = await conn.execute(f"""
+                    DELETE FROM {table_name}
+                    WHERE {id_field} = $1
+                """, id_value)
+                
+                return result != "DELETE 0"
+    
     async def generate_and_store_embedding(
         self, 
         text: str, 
@@ -451,6 +533,72 @@ class BaseLoreManager:
     def clear_cache(self) -> None:
         """Clear all cache entries for this manager"""
         GLOBAL_LORE_CACHE.clear_namespace(self.cache_namespace)
+        
+    def create_run_context(self, ctx):
+        """Create a run context from context"""
+        if hasattr(ctx, 'context'):
+            return ctx
+        return RunContextWrapper(context=ctx)
+
+class ManagerRegistry:
+    """
+    Registry for all manager classes with lazy loading.
+    """
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self._managers = {}
+    
+    def get_manager(self, manager_class):
+        """
+        Get a manager instance, creating it if not already created.
+        
+        Args:
+            manager_class: Class of the manager to get
+            
+        Returns:
+            Instance of the manager
+        """
+        class_name = manager_class.__name__
+        if class_name not in self._managers:
+            self._managers[class_name] = manager_class(self.user_id, self.conversation_id)
+        return self._managers[class_name]
+    
+    def get_lore_dynamics(self):
+        """Get the LoreDynamicsSystem instance"""
+        from lore.lore_tools import LoreDynamicsSystem
+        return self.get_manager(LoreDynamicsSystem)
+    
+    def get_geopolitical_manager(self):
+        """Get the GeopoliticalSystemManager instance"""
+        from lore.lore_tools import GeopoliticalSystemManager
+        return self.get_manager(GeopoliticalSystemManager)
+    
+    def get_local_lore_manager(self):
+        """Get the LocalLoreManager instance"""
+        from lore.lore_tools import LocalLoreManager
+        return self.get_manager(LocalLoreManager)
+    
+    def get_religion_manager(self):
+        """Get the ReligionManager instance"""
+        from lore.lore_tools import ReligionManager
+        return self.get_manager(ReligionManager)
+    
+    def get_world_politics_manager(self):
+        """Get the WorldPoliticsManager instance"""
+        from lore.lore_tools import WorldPoliticsManager
+        return self.get_manager(WorldPoliticsManager)
+    
+    def get_regional_culture_system(self):
+        """Get the RegionalCultureSystem instance"""
+        from lore.lore_tools import RegionalCultureSystem
+        return self.get_manager(RegionalCultureSystem)
+    
+    def get_educational_system_manager(self):
+        """Get the EducationalSystemManager instance"""
+        from lore.lore_tools import EducationalSystemManager
+        return self.get_manager(EducationalSystemManager)
 
 class MatriarchalPowerStructureFramework(BaseLoreManager):
     """
@@ -7552,7 +7700,6 @@ class ReligionManager(BaseLoreManager):
 # -------------------------------------------------
 # INTEGRATED MATRIARCHAL LORE SYSTEM
 # -------------------------------------------------
-
 class MatriarchalLoreSystem(BaseLoreManager):
     """
     Consolidated master class that integrates all lore systems with a matriarchal theme focus.
@@ -7562,17 +7709,17 @@ class MatriarchalLoreSystem(BaseLoreManager):
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
         
-        # Initialize core subsystems - load others on demand to reduce memory footprint
-        self.lore_dynamics = LoreDynamicsSystem(user_id, conversation_id)
-        self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
+        # Use manager registry for lazy loading subsystems
+        self.managers = ManagerRegistry(user_id, conversation_id)
         self.cache_namespace = "matriarchal_lore"
     
     async def ensure_initialized(self):
         """Ensure system is initialized"""
         if not self.initialized:
             await super().ensure_initialized()
-            await self.lore_dynamics.ensure_initialized()
-            await self.geopolitical_manager.ensure_initialized()
+            # Only initialize core subsystems - others will be loaded on demand
+            await self.managers.get_lore_dynamics().ensure_initialized()
+            await self.managers.get_geopolitical_manager().ensure_initialized()
             self.initialized = True
     
     @with_governance(
@@ -7606,16 +7753,17 @@ class MatriarchalLoreSystem(BaseLoreManager):
         themed_event = MatriarchalThemingUtils.apply_matriarchal_theme("event", event_description, emphasis_level=1)
         
         # Use LoreDynamicsSystem to evolve general lore
-        lore_updates = await self.lore_dynamics.evolve_lore_with_event(themed_event)
+        lore_dynamics = self.managers.get_lore_dynamics()
+        lore_updates = await lore_dynamics.evolve_lore_with_event(themed_event)
         
         # If a specific location is affected, update local lore as well
         local_updates = None
         if affected_location_id:
             # Load the local lore system only when needed
-            local_lore_system = LocalLoreManager(self.user_id, self.conversation_id)
-            await local_lore_system.ensure_initialized()
+            local_lore_manager = self.managers.get_local_lore_manager()
+            await local_lore_manager.ensure_initialized()
             
-            local_updates = await local_lore_system.evolve_location_lore(
+            local_updates = await local_lore_manager.evolve_location_lore(
                 run_ctx, affected_location_id, themed_event
             )
         
@@ -7625,12 +7773,12 @@ class MatriarchalLoreSystem(BaseLoreManager):
         # If significant impact, evolve conflicts
         conflict_results = None
         if event_impact > 6:
-            # Load the conflict system only when needed
-            conflict_system = NationalConflictSystem(self.user_id, self.conversation_id)
-            await conflict_system.ensure_initialized()
+            # Load the world politics manager only when needed
+            world_politics = self.managers.get_world_politics_manager()
+            await world_politics.ensure_initialized()
             
             # Evolve conflicts based on the event
-            conflict_results = await conflict_system.evolve_all_conflicts(run_ctx, days_passed=7)
+            conflict_results = await world_politics.evolve_all_conflicts(run_ctx, days_passed=7)
         
         return {
             "event": themed_event,
@@ -7640,41 +7788,6 @@ class MatriarchalLoreSystem(BaseLoreManager):
             "conflict_results": conflict_results,
             "local_lore_updates": local_updates
         }
-    
-    async def _calculate_event_impact(self, event_text: str) -> int:
-        """
-        Calculate the impact level of an event
-        
-        Args:
-            event_text: The event description
-            
-        Returns:
-            Impact level (1-10)
-        """
-        # Define impact keywords for different levels
-        high_impact_words = [
-            "catastrophe", "revolution", "assassination", "coronation", 
-            "invasion", "war", "defeat", "victory", "disaster", "miracle"
-        ]
-        
-        medium_impact_words = [
-            "conflict", "dispute", "change", "election", "discovery", 
-            "alliance", "treaty", "ceremony", "unveiling", "ritual"
-        ]
-        
-        # Count keyword occurrences
-        high_count = sum(1 for word in high_impact_words if word.lower() in event_text.lower())
-        medium_count = sum(1 for word in medium_impact_words if word.lower() in event_text.lower())
-        
-        # Determine base impact
-        if high_count > 0:
-            base_impact = 7 + min(high_count, 3)  # Max 10
-        elif medium_count > 0:
-            base_impact = 4 + min(medium_count, 3)  # Max 7
-        else:
-            base_impact = 3  # Default moderate impact
-            
-        return min(10, base_impact)
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -7723,20 +7836,22 @@ class MatriarchalLoreSystem(BaseLoreManager):
         quests_data = await dynamic_lore.generate_quest_hooks(factions_data, locations_data)
         
         # 7. Generate world nations
-        nations = await self.geopolitical_manager.generate_world_nations(run_ctx)
+        geopolitical_manager = self.managers.get_geopolitical_manager()
+        await geopolitical_manager.ensure_initialized()
+        nations = await geopolitical_manager.generate_world_nations(run_ctx)
         
         # 8. Generate religion (load on demand)
-        religion_system = ReligionManager(self.user_id, self.conversation_id)
-        await religion_system.ensure_initialized()
-        religious_data = await religion_system.generate_complete_faith_system(run_ctx)
+        religion_manager = self.managers.get_religion_manager()
+        await religion_manager.ensure_initialized()
+        religious_data = await religion_manager.generate_complete_faith_system(run_ctx)
         
         # 9. Generate international conflicts (load on demand)
-        conflict_system = NationalConflictSystem(self.user_id, self.conversation_id)
-        await conflict_system.ensure_initialized()
-        conflicts = await conflict_system.generate_initial_conflicts(run_ctx, count=3)
+        world_politics = self.managers.get_world_politics_manager()
+        await world_politics.ensure_initialized()
+        conflicts = await world_politics.generate_initial_conflicts(run_ctx, count=3)
         
         # 10. Generate regional cultures (load on demand)
-        culture_system = RegionalCultureSystem(self.user_id, self.conversation_id)
+        culture_system = self.managers.get_regional_culture_system()
         await culture_system.ensure_initialized()
         languages = await culture_system.generate_languages(run_ctx, count=3)
         
@@ -7776,9 +7891,108 @@ class MatriarchalLoreSystem(BaseLoreManager):
         run_ctx = self.create_run_context(ctx)
         
         # Use the lore dynamics system to evolve the world
-        evolution_results = await self.lore_dynamics.evolve_world_over_time(ctx, days_passed)
+        lore_dynamics = self.managers.get_lore_dynamics()
+        evolution_results = await lore_dynamics.evolve_world_over_time(ctx, days_passed)
         
         return evolution_results
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="handle_world_event",
+        action_description="Processing world event impact",
+        id_from_context=lambda ctx: "matriarchal_lore_system"
+    )
+    async def handle_world_event(
+        self, 
+        ctx,
+        event_description: str,
+        affected_location_ids: List[int] = None,
+        affected_nation_ids: List[int] = None,
+        event_type: str = "general",
+        severity: int = 5
+    ) -> Dict[str, Any]:
+        """
+        Universal method to handle any type of world event and its impacts.
+        
+        Args:
+            event_description: Description of the event
+            affected_location_ids: Optional list of specifically affected locations
+            affected_nation_ids: Optional list of specifically affected nations
+            event_type: Type of event (general, political, natural, etc.)
+            severity: Severity of the event (1-10)
+            
+        Returns:
+            Dictionary with all updates applied
+        """
+        # Create run context
+        run_ctx = self.create_run_context(ctx)
+        
+        # First apply matriarchal theming to the event description
+        themed_event = MatriarchalThemingUtils.apply_matriarchal_theme("event", event_description, emphasis_level=2)
+        
+        # Use LoreDynamicsSystem to evolve general lore
+        lore_dynamics = self.managers.get_lore_dynamics()
+        lore_updates = await lore_dynamics.evolve_lore_with_event(themed_event)
+        
+        # Track all updates
+        all_updates = {
+            "event": themed_event,
+            "original_event": event_description,
+            "event_type": event_type,
+            "severity": severity,
+            "lore_updates": lore_updates,
+            "location_updates": {},
+            "nation_updates": {},
+            "religion_updates": {},
+            "culture_updates": {}
+        }
+        
+        # If specific locations are affected, update local lore
+        if affected_location_ids:
+            local_lore_manager = self.managers.get_local_lore_manager()
+            await local_lore_manager.ensure_initialized()
+            
+            for location_id in affected_location_ids:
+                local_updates = await local_lore_manager.evolve_location_lore(
+                    run_ctx, location_id, themed_event
+                )
+                all_updates["location_updates"][location_id] = local_updates
+        
+        # If specific nations are affected, update national politics
+        if affected_nation_ids:
+            world_politics = self.managers.get_world_politics_manager()
+            await world_politics.ensure_initialized()
+            
+            for nation_id in affected_nation_ids:
+                # Need to implement this method in WorldPoliticsManager
+                nation_updates = await world_politics.evolve_nation_politics(
+                    run_ctx, nation_id, themed_event, severity
+                )
+                all_updates["nation_updates"][nation_id] = nation_updates
+        
+        # If event is severe enough, update religious context
+        if severity >= 7:
+            religion_manager = self.managers.get_religion_manager()
+            await religion_manager.ensure_initialized()
+            
+            # Need to implement this method in ReligionManager
+            religion_updates = await religion_manager.respond_to_world_event(
+                run_ctx, themed_event, affected_nation_ids, severity
+            )
+            all_updates["religion_updates"] = religion_updates
+        
+        # If this is a cultural event, update cultural norms
+        if event_type in ["cultural", "social"] or severity >= 8:
+            culture_system = self.managers.get_regional_culture_system()
+            await culture_system.ensure_initialized()
+            
+            # Need to implement this method in RegionalCultureSystem
+            culture_updates = await culture_system.evolve_cultural_norms_from_event(
+                run_ctx, themed_event, affected_nation_ids, severity
+            )
+            all_updates["culture_updates"] = culture_updates
+        
+        return all_updates
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -7806,22 +8020,27 @@ class MatriarchalLoreSystem(BaseLoreManager):
         run_ctx = self.create_run_context(ctx)
         parameters = parameters or {}
         
-        # Generate different types of content based on the request
+        # Delegate to appropriate subsystem based on content type
         if content_type == "faction":
-            return await self.lore_dynamics.generate_additional_faction(run_ctx, **parameters)
+            lore_dynamics = self.managers.get_lore_dynamics()
+            return await lore_dynamics.generate_additional_faction(run_ctx, **parameters)
         
         elif content_type == "location":
-            return await self.lore_dynamics.generate_additional_locations(run_ctx, **parameters)
+            lore_dynamics = self.managers.get_lore_dynamics()
+            return await lore_dynamics.generate_additional_locations(run_ctx, **parameters)
         
         elif content_type == "cultural_element":
-            return await self.lore_dynamics.generate_additional_cultural_elements(run_ctx, **parameters)
+            lore_dynamics = self.managers.get_lore_dynamics()
+            return await lore_dynamics.generate_additional_cultural_elements(run_ctx, **parameters)
             
         elif content_type == "nation":
-            return await self.lore_dynamics.generate_additional_nation(run_ctx, **parameters)
+            geopolitical_manager = self.managers.get_geopolitical_manager()
+            await geopolitical_manager.ensure_initialized()
+            return await geopolitical_manager.generate_additional_nation(run_ctx, **parameters)
             
         elif content_type == "religion":
-            religion_system = ReligionManager(self.user_id, self.conversation_id)
-            await religion_system.ensure_initialized()
+            religion_manager = self.managers.get_religion_manager()
+            await religion_manager.ensure_initialized()
             
             if "pantheon_id" in parameters:
                 # Generate components for existing pantheon
@@ -7830,22 +8049,22 @@ class MatriarchalLoreSystem(BaseLoreManager):
                     pantheon_id = parameters["pantheon_id"]
                     
                     if component_type == "religious_practices":
-                        return await religion_system.generate_religious_practices(run_ctx, pantheon_id)
+                        return await religion_manager.generate_religious_practices(run_ctx, pantheon_id)
                     elif component_type == "holy_sites":
-                        return await religion_system.generate_holy_sites(run_ctx, pantheon_id)
+                        return await religion_manager.generate_holy_sites(run_ctx, pantheon_id)
                     else:
                         return {"error": f"Unknown religion component type: {component_type}"}
             else:
                 # Generate new pantheon
-                return await religion_system.generate_pantheon(run_ctx)
+                return await religion_manager.generate_pantheon(run_ctx)
                 
         elif content_type == "conflict":
-            conflict_system = NationalConflictSystem(self.user_id, self.conversation_id)
-            await conflict_system.ensure_initialized()
-            return await conflict_system.generate_initial_conflicts(run_ctx, count=parameters.get("count", 1))
+            world_politics = self.managers.get_world_politics_manager()
+            await world_politics.ensure_initialized()
+            return await world_politics.generate_initial_conflicts(run_ctx, count=parameters.get("count", 1))
             
         elif content_type == "language":
-            culture_system = RegionalCultureSystem(self.user_id, self.conversation_id)
+            culture_system = self.managers.get_regional_culture_system()
             await culture_system.ensure_initialized()
             return await culture_system.generate_languages(run_ctx, count=parameters.get("count", 1))
             
@@ -7853,14 +8072,49 @@ class MatriarchalLoreSystem(BaseLoreManager):
             if "location_id" not in parameters:
                 return {"error": "location_id parameter required for local_lore generation"}
                 
-            local_lore_system = LocalLoreManager(self.user_id, self.conversation_id)
-            await local_lore_system.ensure_initialized()
+            local_lore_manager = self.managers.get_local_lore_manager()
+            await local_lore_manager.ensure_initialized()
             
             location_id = parameters["location_id"]
-            return await local_lore_system.generate_location_lore(run_ctx, {"id": location_id})
+            return await local_lore_manager.generate_location_lore(run_ctx, {"id": location_id})
             
         else:
             return {"error": f"Unknown content type: {content_type}"}
+    
+    async def _calculate_event_impact(self, event_text: str) -> int:
+        """
+        Calculate the impact level of an event
+        
+        Args:
+            event_text: The event description
+            
+        Returns:
+            Impact level (1-10)
+        """
+        # Define impact keywords for different levels
+        high_impact_words = [
+            "catastrophe", "revolution", "assassination", "coronation", 
+            "invasion", "war", "defeat", "victory", "disaster", "miracle"
+        ]
+        
+        medium_impact_words = [
+            "conflict", "dispute", "change", "election", "discovery", 
+            "alliance", "treaty", "ceremony", "unveiling", "ritual"
+        ]
+        
+        # Count keyword occurrences
+        high_count = sum(1 for word in high_impact_words if word.lower() in event_text.lower())
+        medium_count = sum(1 for word in medium_impact_words if word.lower() in event_text.lower())
+        
+        # Determine base impact
+        if high_count > 0:
+            base_impact = 7 + min(high_count, 3)  # Max 10
+        elif medium_count > 0:
+            base_impact = 4 + min(medium_count, 3)  # Max 7
+        else:
+            base_impact = 3  # Default moderate impact
+            
+        return min(10, base_impact)
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -7908,12 +8162,13 @@ class MatriarchalLoreSystem(BaseLoreManager):
                         world_data['power_hierarchy'] = {}
         
         # Get nations
-        nations = await self.geopolitical_manager.get_all_nations(run_ctx)
+        geopolitical_manager = self.managers.get_geopolitical_manager()
+        nations = await geopolitical_manager.get_all_nations(run_ctx)
         
         # Get active conflicts
-        conflict_system = NationalConflictSystem(self.user_id, self.conversation_id)
-        await conflict_system.ensure_initialized()
-        conflicts = await conflict_system.get_active_conflicts(run_ctx)
+        world_politics = self.managers.get_world_politics_manager()
+        await world_politics.ensure_initialized()
+        conflicts = await world_politics.get_active_conflicts(run_ctx)
         
         # Get a sample of locations
         async with self.get_connection_pool() as pool:
@@ -7965,120 +8220,6 @@ class MatriarchalLoreSystem(BaseLoreManager):
         )
         
         logging.info(f"MatriarchalLoreSystem registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
-        
-        # Define subsystems to register
-        subsystems = [
-            (self.lore_dynamics, "lore_dynamics", "Evolve, expand, and develop world lore through emergent events and natural maturation."),
-            (self.geopolitical_manager, "geopolitical_manager", "Manage nations, relationships, and geopolitical landscapes."),
-            (LocalLoreManager(self.user_id, self.conversation_id), "local_lore_manager", "Create and manage local lore, myths, and histories with matriarchal influences."),
-            (ReligionManager(self.user_id, self.conversation_id), "religion_manager", "Create and manage faith systems that emphasize feminine divine superiority."),
-            (WorldPoliticsManager(self.user_id, self.conversation_id), "world_politics_manager", "Manage nations, international relations, and conflicts in a matriarchal world."),
-            (RegionalCultureSystem(self.user_id, self.conversation_id), "regional_culture_system", "Manage culturally specific norms, customs, and languages.")
-        ]
-        
-        # Register each subsystem
-        for subsystem, agent_id, directive_text in subsystems:
-            await subsystem.register_with_governance(
-                agent_type=AgentType.NARRATIVE_CRAFTER,
-                agent_id=agent_id,
-                directive_text=directive_text,
-                scope="world_building",
-                priority=DirectivePriority.MEDIUM
-            )
-    # Add this to MatriarchalLoreSystem
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="handle_world_event",
-        action_description="Processing world event impact",
-        id_from_context=lambda ctx: "matriarchal_lore_system"
-    )
-    async def handle_world_event(
-        self, 
-        ctx,
-        event_description: str,
-        affected_location_ids: List[int] = None,
-        affected_nation_ids: List[int] = None,
-        event_type: str = "general",
-        severity: int = 5
-    ) -> Dict[str, Any]:
-        """
-        Universal method to handle any type of world event and its impacts.
-        
-        Args:
-            event_description: Description of the event
-            affected_location_ids: Optional list of specifically affected locations
-            affected_nation_ids: Optional list of specifically affected nations
-            event_type: Type of event (general, political, natural, etc.)
-            severity: Severity of the event (1-10)
-            
-        Returns:
-            Dictionary with all updates applied
-        """
-        # Create run context
-        run_ctx = self.create_run_context(ctx)
-        
-        # First apply matriarchal theming to the event description
-        themed_event = MatriarchalThemingUtils.apply_matriarchal_theme("event", event_description, emphasis_level=2)
-        
-        # Use LoreDynamicsSystem to evolve general lore
-        lore_updates = await self.lore_dynamics.evolve_lore_with_event(themed_event)
-        
-        # Track all updates
-        all_updates = {
-            "event": themed_event,
-            "original_event": event_description,
-            "event_type": event_type,
-            "severity": severity,
-            "lore_updates": lore_updates,
-            "location_updates": {},
-            "nation_updates": {},
-            "religion_updates": {},
-            "culture_updates": {}
-        }
-        
-        # If specific locations are affected, update local lore
-        if affected_location_ids:
-            local_lore_system = LocalLoreManager(self.user_id, self.conversation_id)
-            await local_lore_system.ensure_initialized()
-            
-            for location_id in affected_location_ids:
-                local_updates = await local_lore_system.evolve_location_lore(
-                    run_ctx, location_id, themed_event
-                )
-                all_updates["location_updates"][location_id] = local_updates
-        
-        # If specific nations are affected, update national politics
-        if affected_nation_ids:
-            world_politics = WorldPoliticsManager(self.user_id, self.conversation_id)
-            await world_politics.ensure_initialized()
-            
-            for nation_id in affected_nation_ids:
-                nation_updates = await world_politics.evolve_nation_politics(
-                    run_ctx, nation_id, themed_event, severity
-                )
-                all_updates["nation_updates"][nation_id] = nation_updates
-        
-        # If event is severe enough, update religious context
-        if severity >= 7:
-            religion_manager = ReligionManager(self.user_id, self.conversation_id)
-            await religion_manager.ensure_initialized()
-            
-            religion_updates = await religion_manager.respond_to_world_event(
-                run_ctx, themed_event, affected_nation_ids, severity
-            )
-            all_updates["religion_updates"] = religion_updates
-        
-        # If this is a cultural event, update cultural norms
-        if event_type in ["cultural", "social"] or severity >= 8:
-            culture_system = RegionalCultureSystem(self.user_id, self.conversation_id)
-            await culture_system.ensure_initialized()
-            
-            culture_updates = await culture_system.evolve_cultural_norms_from_event(
-                run_ctx, themed_event, affected_nation_ids, severity
-            )
-            all_updates["culture_updates"] = culture_updates
-        
-        return all_updates
 
 # -------------------------------------------------
 # MATRIARCHAL THEMING UTILITIES
