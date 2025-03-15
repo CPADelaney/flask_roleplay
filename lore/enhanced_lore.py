@@ -41,16 +41,32 @@ from lore.lore_tools import (
     generate_quest_hooks
 )
 
-class UnifiedLoreCache:
-    """Centralized cache system for all lore types with namespace support"""
+class LoreCache:
+    """Unified cache system for all lore types with namespace support"""
     
-    def __init__(self):
+    def __init__(self, max_size=1000, ttl=7200):
+        """
+        Initialize the cache.
+        
+        Args:
+            max_size: Maximum number of items in cache
+            ttl: Default time-to-live in seconds
+        """
         self.cache = {}
-        self.default_max_size = 1000
-        self.default_ttl = 7200  # 2 hour TTL
+        self.max_size = max_size
+        self.default_ttl = ttl
         
     def get(self, namespace, key):
-        """Get an item from the specified namespace"""
+        """
+        Get an item from the specified namespace.
+        
+        Args:
+            namespace: Namespace for the key
+            key: Cache key
+            
+        Returns:
+            Cached value or None if not found/expired
+        """
         full_key = f"{namespace}:{key}"
         if full_key in self.cache:
             value, expiry = self.cache[full_key]
@@ -61,39 +77,70 @@ class UnifiedLoreCache:
         return None
     
     def set(self, namespace, key, value, ttl=None):
-        """Set an item in the specified namespace"""
+        """
+        Set an item in the specified namespace.
+        
+        Args:
+            namespace: Namespace for the key
+            key: Cache key
+            value: Value to cache
+            ttl: Time-to-live in seconds (optional)
+        """
         full_key = f"{namespace}:{key}"
         expiry = datetime.datetime.now().timestamp() + (ttl or self.default_ttl)
         
-        # Manage cache size
-        if len(self.cache) >= self.default_max_size:
-            # Remove oldest item (simplistic implementation)
-            oldest_key = next(iter(self.cache))
+        # Manage cache size - use LRU strategy
+        if len(self.cache) >= self.max_size:
+            # Find oldest item
+            oldest_key = min(self.cache.items(), key=lambda x: x[1][1])[0]
             del self.cache[oldest_key]
             
         self.cache[full_key] = (value, expiry)
     
     def invalidate(self, namespace, key):
-        """Invalidate a specific key in a namespace"""
+        """
+        Invalidate a specific key in a namespace.
+        
+        Args:
+            namespace: Namespace for the key
+            key: Cache key to invalidate
+        """
         full_key = f"{namespace}:{key}"
         if full_key in self.cache:
             del self.cache[full_key]
     
     def invalidate_pattern(self, namespace, pattern):
-        """Invalidate keys matching a pattern in a namespace"""
-        pattern = f"{namespace}:{pattern}"
-        keys_to_remove = [k for k in self.cache.keys() if re.search(pattern, k)]
+        """
+        Invalidate keys matching a pattern in a namespace.
+        
+        Args:
+            namespace: Namespace for the keys
+            pattern: Regex pattern to match keys
+        """
+        namespace_pattern = f"{namespace}:"
+        keys_to_remove = []
+        
+        for key in self.cache.keys():
+            if key.startswith(namespace_pattern):
+                # Extract the key part after the namespace
+                key_part = key[len(namespace_pattern):]
+                if re.search(pattern, key_part):
+                    keys_to_remove.append(key)
+                    
         for key in keys_to_remove:
             del self.cache[key]
     
     def clear_namespace(self, namespace):
-        """Clear all keys in a namespace"""
-        keys_to_remove = [k for k in self.cache.keys() if k.startswith(f"{namespace}:")]
+        """
+        Clear all keys in a namespace.
+        
+        Args:
+            namespace: Namespace to clear
+        """
+        namespace_prefix = f"{namespace}:"
+        keys_to_remove = [k for k in self.cache.keys() if k.startswith(namespace_prefix)]
         for key in keys_to_remove:
             del self.cache[key]
-
-# Create a global instance
-LORE_CACHE = UnifiedLoreCache()
 
 class BaseLoreManager:
     """
@@ -112,12 +159,21 @@ class BaseLoreManager:
         """
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.lore_manager = LoreManager(user_id, conversation_id)
         self.governor = None
         self.initialized = False
         self.cache_namespace = self.__class__.__name__.lower()
     
-    async def initialize_governance(self):
+    async def ensure_initialized(self):
+        """
+        Ensure governance is initialized and any necessary tables exist.
+        Should be overridden by derived classes to include table initialization.
+        """
+        if not self.initialized:
+            await self._initialize_governance()
+            await self._initialize_tables()
+            self.initialized = True
+    
+    async def _initialize_governance(self):
         """
         Initialize Nyx governance connection.
         
@@ -128,15 +184,12 @@ class BaseLoreManager:
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
         return self.governor
     
-    async def ensure_initialized(self):
+    async def _initialize_tables(self):
         """
-        Ensure governance is initialized and any necessary tables exist.
-        Should be overridden by derived classes to include table initialization.
+        Initialize database tables.
+        Should be overridden by derived classes.
         """
-        if not self.initialized:
-            await self.initialize_governance()
-            await self.initialize_tables()
-            self.initialized = True
+        pass
     
     async def register_with_governance(
         self, 
@@ -201,14 +254,12 @@ class BaseLoreManager:
         """
         await self.ensure_initialized()
         
-        permission = await self.governor.check_action_permission(
+        return await self.governor.check_action_permission(
             agent_type=agent_type,
             agent_id=agent_id,
             action_type=action_type,
             action_details=action_details
         )
-        
-        return permission
     
     async def report_action(
         self, 
@@ -242,7 +293,7 @@ class BaseLoreManager:
         Returns:
             Database connection pool
         """
-        return await self.lore_manager.get_connection_pool()
+        return await get_db_connection(self.user_id, self.conversation_id)
     
     def create_run_context(self, ctx=None):
         """
@@ -262,21 +313,14 @@ class BaseLoreManager:
                 "conversation_id": self.conversation_id
             })
     
-    async def initialize_tables(self):
-        """
-        Initialize database tables.
-        Should be overridden by derived classes.
-        """
-        pass
-    
-    async def initialize_tables_for_class(self, table_definitions: Dict[str, str]):
+    async def initialize_tables_from_definitions(self, table_definitions: Dict[str, str]):
         """
         Initialize tables using a dictionary of table definitions.
         
         Args:
             table_definitions: Dictionary mapping table names to CREATE TABLE statements
         """
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 for table_name, create_statement in table_definitions.items():
                     # Check if table exists
@@ -320,6 +364,8 @@ class BaseLoreManager:
             WHERE {id_field} = $2
         """, embedding, id_value)
     
+    # Cache methods
+    
     def get_cache(self, key):
         """
         Get an item from the cache.
@@ -331,7 +377,7 @@ class BaseLoreManager:
             Cached item or None
         """
         cache_key = f"{key}_{self.user_id}_{self.conversation_id}"
-        return LORE_CACHE.get(self.cache_namespace, cache_key)
+        return GLOBAL_LORE_CACHE.get(self.cache_namespace, cache_key)
     
     def set_cache(self, key, value, ttl=None):
         """
@@ -343,7 +389,7 @@ class BaseLoreManager:
             ttl: Optional time-to-live in seconds
         """
         cache_key = f"{key}_{self.user_id}_{self.conversation_id}"
-        LORE_CACHE.set(self.cache_namespace, cache_key, value, ttl)
+        GLOBAL_LORE_CACHE.set(self.cache_namespace, cache_key, value, ttl)
     
     def invalidate_cache(self, key):
         """
@@ -353,7 +399,7 @@ class BaseLoreManager:
             key: Cache key to invalidate
         """
         cache_key = f"{key}_{self.user_id}_{self.conversation_id}"
-        LORE_CACHE.invalidate(self.cache_namespace, cache_key)
+        GLOBAL_LORE_CACHE.invalidate(self.cache_namespace, cache_key)
     
     def invalidate_cache_pattern(self, pattern):
         """
@@ -362,11 +408,11 @@ class BaseLoreManager:
         Args:
             pattern: Pattern to match
         """
-        LORE_CACHE.invalidate_pattern(self.cache_namespace, pattern)
+        GLOBAL_LORE_CACHE.invalidate_pattern(self.cache_namespace, pattern)
     
     def clear_cache(self):
         """Clear all cache entries for this manager"""
-        LORE_CACHE.clear_namespace(self.cache_namespace)
+        GLOBAL_LORE_CACHE.clear_namespace(self.cache_namespace)
 
 class MatriarchalPowerStructureFramework(BaseLoreManager):
     """
@@ -4292,24 +4338,21 @@ class EducationalSystemManager(BaseLoreManager):
             logging.error(f"Failed to parse LLM response for knowledge traditions: {response_text}")
             return []
 
-class GeopoliticalSystemManager(BaseLoreManager):
+class WorldPoliticsManager(BaseLoreManager):
     """
-    Manages the geopolitical landscape of the world, including countries,
-    regions, foreign relations, and international power dynamics.
+    Consolidated manager for geopolitical landscape and conflicts.
+    Handles nations, international relations, and both international and
+    domestic conflicts.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
+        self.cache_namespace = "world_politics"
     
-    async def ensure_initialized(self):
-        """Ensure system is initialized"""
-        if not self.initialized:
-            await super().ensure_initialized()
-            await self.initialize_tables()
-        
-    async def initialize_tables(self):
-        """Ensure geopolitical system tables exist"""
-        table_definitions = {
+    async def _initialize_tables(self):
+        """Initialize all required tables for geopolitics and conflicts"""
+        # Nation and international relation tables
+        geo_tables = {
             "Nations": """
                 CREATE TABLE Nations (
                     id SERIAL PRIMARY KEY,
@@ -4350,13 +4393,111 @@ class GeopoliticalSystemManager(BaseLoreManager):
             """
         }
         
-        await self.initialize_tables_for_class(table_definitions)
+        # Conflict tables
+        conflict_tables = {
+            "NationalConflicts": """
+                CREATE TABLE NationalConflicts (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    conflict_type TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    severity INTEGER CHECK (severity BETWEEN 1 AND 10),
+                    status TEXT NOT NULL,
+                    start_date TEXT NOT NULL,
+                    end_date TEXT,
+                    involved_nations INTEGER[],
+                    primary_aggressor INTEGER,
+                    primary_defender INTEGER,
+                    current_casualties TEXT,
+                    economic_impact TEXT,
+                    diplomatic_consequences TEXT,
+                    public_opinion JSONB,
+                    recent_developments TEXT[],
+                    potential_resolution TEXT,
+                    embedding VECTOR(1536)
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_nationalconflicts_embedding 
+                ON NationalConflicts USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "ConflictNews": """
+                CREATE TABLE ConflictNews (
+                    id SERIAL PRIMARY KEY,
+                    conflict_id INTEGER NOT NULL,
+                    headline TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    publication_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    source_nation INTEGER,
+                    bias TEXT,
+                    embedding VECTOR(1536),
+                    FOREIGN KEY (conflict_id) REFERENCES NationalConflicts(id) ON DELETE CASCADE
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_conflictnews_embedding 
+                ON ConflictNews USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "DomesticIssues": """
+                CREATE TABLE DomesticIssues (
+                    id SERIAL PRIMARY KEY,
+                    nation_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    issue_type TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    severity INTEGER CHECK (severity BETWEEN 1 AND 10),
+                    status TEXT NOT NULL,
+                    start_date TEXT NOT NULL,
+                    end_date TEXT,
+                    supporting_factions TEXT[],
+                    opposing_factions TEXT[],
+                    neutral_factions TEXT[],
+                    affected_demographics TEXT[],
+                    public_opinion JSONB,
+                    government_response TEXT,
+                    recent_developments TEXT[],
+                    political_impact TEXT,
+                    social_impact TEXT,
+                    economic_impact TEXT,
+                    potential_resolution TEXT,
+                    embedding VECTOR(1536),
+                    FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_domesticissues_embedding 
+                ON DomesticIssues USING ivfflat (embedding vector_cosine_ops);
+                
+                CREATE INDEX IF NOT EXISTS idx_domesticissues_nation
+                ON DomesticIssues(nation_id);
+            """,
+            
+            "DomesticNews": """
+                CREATE TABLE DomesticNews (
+                    id SERIAL PRIMARY KEY,
+                    issue_id INTEGER NOT NULL,
+                    headline TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    publication_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    source_faction TEXT,
+                    bias TEXT,
+                    embedding VECTOR(1536),
+                    FOREIGN KEY (issue_id) REFERENCES DomesticIssues(id) ON DELETE CASCADE
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_domesticnews_embedding 
+                ON DomesticNews USING ivfflat (embedding vector_cosine_ops);
+            """
+        }
+        
+        # Initialize all tables
+        all_tables = {**geo_tables, **conflict_tables}
+        await self.initialize_tables_from_definitions(all_tables)
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_nation",
         action_description="Adding nation: {name}",
-        id_from_context=lambda ctx: "geopolitical_system_manager"
+        id_from_context=lambda ctx: "world_politics_manager"
     )
     async def add_nation(
         self, 
@@ -4393,7 +4534,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
             ID of the created nation
         """
         # Ensure tables exist
-        await self.initialize_tables()
+        await self.ensure_initialized()
         
         # Set defaults
         major_resources = major_resources or []
@@ -4402,7 +4543,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
         neighboring_nations = neighboring_nations or []
         
         # Store in database
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 nation_id = await conn.fetchval("""
                     INSERT INTO Nations (
@@ -4428,7 +4569,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_international_relation",
         action_description="Adding relation between nations",
-        id_from_context=lambda ctx: "geopolitical_system_manager"
+        id_from_context=lambda ctx: "world_politics_manager"
     )
     async def add_international_relation(
         self, 
@@ -4461,14 +4602,14 @@ class GeopoliticalSystemManager(BaseLoreManager):
             ID of the created relation
         """
         # Ensure tables exist
-        await self.initialize_tables()
+        await self.ensure_initialized()
         
         # Set defaults
         notable_conflicts = notable_conflicts or []
         notable_alliances = notable_alliances or []
         
         # Store in database
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 relation_id = await conn.fetchval("""
                     INSERT INTO InternationalRelations (
@@ -4496,7 +4637,7 @@ class GeopoliticalSystemManager(BaseLoreManager):
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="get_all_nations",
         action_description="Getting all nations in the world",
-        id_from_context=lambda ctx: "geopolitical_system_manager"
+        id_from_context=lambda ctx: "world_politics_manager"
     )
     async def get_all_nations(self, ctx) -> List[Dict[str, Any]]:
         """
@@ -4505,10 +4646,16 @@ class GeopoliticalSystemManager(BaseLoreManager):
         Returns:
             List of all nations
         """
+        # Check cache first
+        cache_key = f"all_nations_{self.user_id}_{self.conversation_id}"
+        cached = self.get_cache(cache_key)
+        if cached:
+            return cached
+            
         # Ensure tables exist
-        await self.initialize_tables()
+        await self.ensure_initialized()
         
-        async with self.get_connection_pool() as pool:
+        async with await self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 nations = await conn.fetch("""
                     SELECT id, name, government_type, description, relative_power,
@@ -4519,394 +4666,932 @@ class GeopoliticalSystemManager(BaseLoreManager):
                     ORDER BY relative_power DESC
                 """)
                 
-                return [dict(nation) for nation in nations]
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="get_nation_relations",
-        action_description="Getting relations for nation: {nation_name}",
-        id_from_context=lambda ctx: "geopolitical_system_manager"
-    )
-    async def get_nation_relations(self, ctx, nation_id: int, nation_name: str) -> List[Dict[str, Any]]:
-        """
-        Get all international relations for a specific nation
-        
-        Args:
-            nation_id: ID of the nation
-            nation_name: Name of the nation (for logs)
-            
-        Returns:
-            List of international relations
-        """
-        # Ensure tables exist
-        await self.initialize_tables()
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get relations where this nation is either nation1 or nation2
-                relations = await conn.fetch("""
-                    SELECT r.id, r.relationship_type, r.relationship_quality, 
-                           r.description, r.notable_conflicts, r.notable_alliances,
-                           r.trade_relations, r.cultural_exchanges,
-                           CASE
-                               WHEN r.nation1_id = $1 THEN r.nation2_id
-                               ELSE r.nation1_id
-                           END AS other_nation_id
-                    FROM InternationalRelations r
-                    WHERE r.nation1_id = $1 OR r.nation2_id = $1
-                """, nation_id)
+                result = [dict(nation) for nation in nations]
                 
-                # Get names for the related nations
-                result = []
-                for relation in relations:
-                    other_id = relation['other_nation_id']
-                    other_nation = await conn.fetchrow("""
-                        SELECT name, government_type
-                        FROM Nations
-                        WHERE id = $1
-                    """, other_id)
-                    
-                    if other_nation:
-                        relation_dict = dict(relation)
-                        relation_dict['other_nation_name'] = other_nation['name']
-                        relation_dict['other_nation_government'] = other_nation['government_type']
-                        del relation_dict['other_nation_id']
-                        result.append(relation_dict)
+                # Cache the result
+                self.set_cache(cache_key, result, ttl=3600)  # 1 hour TTL
                 
                 return result
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_world_nations",
-        action_description="Generating nations for the world",
-        id_from_context=lambda ctx: "geopolitical_system_manager"
+        action_type="generate_initial_conflicts",
+        action_description="Generating initial national conflicts",
+        id_from_context=lambda ctx: "world_politics_manager"
     )
-    async def generate_world_nations(self, ctx) -> List[Dict[str, Any]]:
+    async def generate_initial_conflicts(self, ctx, count: int = 3) -> List[Dict[str, Any]]:
         """
-        Generate a set of nations for the world, ensuring a mix of matriarchal levels
+        Generate initial conflicts between nations with governance oversight.
         
+        Args:
+            count: Number of conflicts to generate
+            
         Returns:
-            List of generated nations
+            List of generated conflicts
         """
         # Create the run context
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id
-        })
+        run_ctx = self.create_run_context(ctx)
         
-        # Get world lore for context
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Try to get world history for context
-                world_history = await conn.fetchval("""
-                    SELECT description FROM WorldLore
-                    WHERE category = 'world_history'
-                    LIMIT 1
-                """)
-                
-                social_structure = await conn.fetchval("""
-                    SELECT description FROM WorldLore
-                    WHERE category = 'social_structure'
-                    LIMIT 1
-                """)
-                
-                context = f"World History: {world_history[:300] if world_history else 'Not available'}\n\n"
-                context += f"Social Structure: {social_structure[:300] if social_structure else 'Not available'}"
-        
-        # Create a prompt for the LLM
-        prompt = f"""
-        Generate 5-7 nations for a fantasy world with varying levels of matriarchal governance.
-        
-        WORLD CONTEXT:
-        {context}
-        
-        Create a politically diverse world with nations that:
-        1. Include at least one strongly matriarchal society (player's home nation)
-        2. Include nations with varying degrees of matriarchal governance
-        3. Show realistic geopolitical dynamics including alliances and rivalries
-        4. Have distinct cultural identities and government structures
-        5. Vary in size, power, and resources
-        
-        Format your response as a JSON array where each object has:
-        - "name": The name of the nation
-        - "government_type": Type of government (oligarchy, monarchy, etc.)
-        - "description": A detailed description
-        - "relative_power": Power level (1-10)
-        - "matriarchy_level": How matriarchal (1-10, with 10 being totally female dominated)
-        - "population_scale": Scale of population (small, medium, large, vast)
-        - "major_resources": Array of key resources
-        - "major_cities": Array of key cities/settlements
-        - "cultural_traits": Array of defining cultural traits
-        - "notable_features": Other notable features
-        - "neighboring_nations": Array of nations that border this one (use the same names you create)
-        
-        NOTE: Make sure the player's home nation has a matriarchy_level of at least 8.
-        """
-        
-        # Create an agent for nation generation
-        nation_agent = Agent(
-            name="GeopoliticalAgent",
-            instructions="You create nations and geopolitical systems for fantasy worlds.",
-            model="o3-mini"
-        )
-        
-        # Get the response
-        result = await Runner.run(nation_agent, prompt, context=run_ctx.context)
-        response_text = result.final_output
-        
-        try:
-            # Parse the JSON response
-            nations = json.loads(response_text)
-            
-            # Ensure we got a list
-            if not isinstance(nations, list):
-                if isinstance(nations, dict):
-                    nations = [nations]
-                else:
-                    nations = []
-            
-            # Ensure player home nation is highly matriarchal
-            home_nation_exists = False
-            for nation in nations:
-                if nation.get('matriarchy_level', 0) >= 8:
-                    home_nation_exists = True
-                    break
-                    
-            if not home_nation_exists and nations:
-                # Make the first nation highly matriarchal
-                nations[0]['matriarchy_level'] = 9
-                nations[0]['description'] = f"The player's home nation. {nations[0].get('description', '')}"
-            
-            # Store each nation
-            saved_nations = []
-            nation_name_to_id = {}
-            
-            for nation in nations:
-                # Extract nation details
-                name = nation.get('name')
-                government_type = nation.get('government_type', 'unknown')
-                description = nation.get('description')
-                relative_power = nation.get('relative_power', 5)
-                matriarchy_level = nation.get('matriarchy_level', 5)
-                population_scale = nation.get('population_scale')
-                major_resources = nation.get('major_resources', [])
-                major_cities = nation.get('major_cities', [])
-                cultural_traits = nation.get('cultural_traits', [])
-                notable_features = nation.get('notable_features')
-                neighboring_nations = nation.get('neighboring_nations', [])
-                
-                if not name or not description:
-                    continue
-                
-                # Save the nation
-                try:
-                    nation_id = await self.add_nation(
-                        run_ctx,
-                        name=name,
-                        government_type=government_type,
-                        description=description,
-                        relative_power=relative_power,
-                        matriarchy_level=matriarchy_level,
-                        population_scale=population_scale,
-                        major_resources=major_resources,
-                        major_cities=major_cities,
-                        cultural_traits=cultural_traits,
-                        notable_features=notable_features,
-                        neighboring_nations=neighboring_nations
-                    )
-                    
-                    # Add to results
-                    nation['id'] = nation_id
-                    saved_nations.append(nation)
-                    nation_name_to_id[name] = nation_id
-                except Exception as e:
-                    logging.error(f"Error saving nation '{name}': {e}")
-            
-            # Now generate international relations
-            for nation in saved_nations:
-                nation_id = nation['id']
-                name = nation['name']
-                
-                for neighbor_name in nation.get('neighboring_nations', []):
-                    if neighbor_name in nation_name_to_id:
-                        neighbor_id = nation_name_to_id[neighbor_name]
-                        
-                        # Only generate relation if neighbor_id > nation_id to avoid duplicates
-                        if neighbor_id > nation_id:
-                            # Determine relationship based on matriarchy levels
-                            matriarchy_diff = abs(nation.get('matriarchy_level', 5) - 
-                                                 next((n.get('matriarchy_level', 5) for n in saved_nations if n['name'] == neighbor_name), 5))
-                            
-                            # Greater difference means more tension
-                            relationship_quality = max(1, 10 - matriarchy_diff)
-                            
-                            if relationship_quality >= 7:
-                                relationship_type = "ally"
-                                description = f"{name} and {neighbor_name} maintain friendly diplomatic relations."
-                            elif relationship_quality >= 4:
-                                relationship_type = "neutral"
-                                description = f"{name} and {neighbor_name} maintain cautious but functional diplomatic relations."
-                            else:
-                                relationship_type = "rival"
-                                description = f"{name} and {neighbor_name} have tense and occasionally hostile relations."
-                            
-                            # Create the relation
-                            try:
-                                await self.add_international_relation(
-                                    run_ctx,
-                                    nation1_id=nation_id,
-                                    nation2_id=neighbor_id,
-                                    relationship_type=relationship_type,
-                                    relationship_quality=relationship_quality,
-                                    description=description
-                                )
-                            except Exception as e:
-                                logging.error(f"Error saving relation between {name} and {neighbor_name}: {e}")
-            
-            return saved_nations
-        except json.JSONDecodeError:
-            logging.error(f"Failed to parse LLM response for nations: {response_text}")
-            return []
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_international_relations",
-        action_description="Generating detailed international relations",
-        id_from_context=lambda ctx: "geopolitical_system_manager"
-    )
-    async def generate_international_relations(self, ctx) -> List[Dict[str, Any]]:
-        """
-        Generate detailed international relations between existing nations
-        
-        Returns:
-            List of generated international relations
-        """
-        # Create the run context
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id
-        })
-        
-        # Get existing nations
+        # Get nations for context
         nations = await self.get_all_nations(run_ctx)
         
         if len(nations) < 2:
             return []
         
-        # Create nation pairs to generate relations for
-        nation_pairs = []
-        for i, nation1 in enumerate(nations):
-            for nation2 in nations[i+1:]:
-                # Check if they're neighbors
-                is_neighbor = (nation2['name'] in nation1.get('neighboring_nations', []) or
-                              nation1['name'] in nation2.get('neighboring_nations', []))
-                
-                # Add the pair
-                nation_pairs.append({
-                    "nation1_id": nation1['id'],
-                    "nation1_name": nation1['name'],
-                    "nation1_govt": nation1['government_type'],
-                    "nation1_power": nation1['relative_power'],
-                    "nation1_matriarchy": nation1['matriarchy_level'],
-                    "nation2_id": nation2['id'],
-                    "nation2_name": nation2['name'],
-                    "nation2_govt": nation2['government_type'],
-                    "nation2_power": nation2['relative_power'],
-                    "nation2_matriarchy": nation2['matriarchy_level'],
-                    "is_neighbor": is_neighbor
-                })
+        conflicts = []
         
-        # Create a prompt for the LLM
-        prompt = f"""
-        Generate detailed international relations between these {len(nation_pairs)} pairs of nations:
-        
-        {json.dumps(nation_pairs, indent=2)}
-        
-        For each pair, create a realistic international relationship that:
-        1. Considers their relative matriarchy levels (more different = more tension)
-        2. Considers their relative power levels (power imbalance = different dynamics)
-        3. Creates specific historical events (conflicts/alliances) between them
-        4. Describes trade and cultural exchange patterns
-        
-        Format your response as a JSON array where each object has:
-        - "nation1_id": First nation's ID (use the provided values exactly)
-        - "nation2_id": Second nation's ID (use the provided values exactly)
-        - "relationship_type": Type of relationship (ally, rival, neutral, vassal, etc.)
-        - "relationship_quality": Quality level (1-10, with 10 being extremely positive)
-        - "description": Detailed description of relationship dynamics
-        - "notable_conflicts": Array of 0-2 notable conflicts (if any)
-        - "notable_alliances": Array of 0-2 notable alliances or treaties (if any)
-        - "trade_relations": Description of trade patterns
-        - "cultural_exchanges": Description of cultural influences
-        """
-        
-        # Create an agent for relation generation
-        relation_agent = Agent(
-            name="GeopoliticalRelationsAgent",
-            instructions="You create detailed international relations for fictional worlds.",
+        # Create agent for conflict generation
+        conflict_agent = Agent(
+            name="NationalConflictAgent",
+            instructions="You create realistic international conflicts for a fantasy world with matriarchal power structures.",
             model="o3-mini"
         )
         
-        # Get the response
-        result = await Runner.run(relation_agent, prompt, context=run_ctx.context)
-        response_text = result.final_output
-        
-        try:
-            # Parse the JSON response
-            relations = json.loads(response_text)
+        for i in range(count):
+            # Select random nations that aren't already in major conflicts
+            available_nations = [n for n in nations if not any(
+                n["id"] in c.get("involved_nations", []) for c in conflicts
+            )]
             
-            # Ensure we got a list
-            if not isinstance(relations, list):
-                if isinstance(relations, dict):
-                    relations = [relations]
-                else:
-                    relations = []
+            if len(available_nations) < 2:
+                available_nations = nations  # Fallback if needed
             
-            # Store each relation
-            saved_relations = []
-            for relation in relations:
-                # Extract relation details
-                nation1_id = relation.get('nation1_id')
-                nation2_id = relation.get('nation2_id')
-                relationship_type = relation.get('relationship_type', 'neutral')
-                relationship_quality = relation.get('relationship_quality', 5)
-                description = relation.get('description', 'Relations between these nations.')
-                notable_conflicts = relation.get('notable_conflicts', [])
-                notable_alliances = relation.get('notable_alliances', [])
-                trade_relations = relation.get('trade_relations')
-                cultural_exchanges = relation.get('cultural_exchanges')
+            # Choose two random nations
+            nation_pair = random.sample(available_nations, 2)
+            
+            # Determine conflict type based on nations' characteristics
+            matriarchy_diff = abs(
+                nation_pair[0].get("matriarchy_level", 5) - 
+                nation_pair[1].get("matriarchy_level", 5)
+            )
+            
+            # Higher difference makes ideological conflicts more likely
+            if matriarchy_diff > 4:
+                conflict_types = ["ideological_dispute", "cultural_tension", "religious_conflict", "proxy_war"]
+            elif matriarchy_diff > 2:
+                conflict_types = ["diplomatic_tension", "border_dispute", "trade_dispute", "resource_conflict"]
+            else:
+                conflict_types = ["territorial_dispute", "trade_war", "succession_crisis", "alliance_dispute"]
                 
-                if not nation1_id or not nation2_id or not description:
+            # Randomly select conflict type
+            conflict_type = random.choice(conflict_types)
+            
+            # Create prompt for the agent
+            prompt = f"""
+            Generate a detailed international conflict between these two nations:
+            
+            NATION 1:
+            {json.dumps(nation_pair[0], indent=2)}
+            
+            NATION 2:
+            {json.dumps(nation_pair[1], indent=2)}
+            
+            Create a {conflict_type} that:
+            1. Makes sense given the nations' characteristics
+            2. Has appropriate severity and clear causes
+            3. Includes realistic consequences and casualties
+            4. Considers the matriarchal nature of the world
+            5. Reflects how the differing matriarchy levels ({matriarchy_diff} point difference) might cause tension
+            
+            Return a JSON object with:
+            - name: Name of the conflict
+            - conflict_type: "{conflict_type}"
+            - description: Detailed description
+            - severity: Severity level (1-10)
+            - status: Current status (active, escalating, etc.)
+            - start_date: When it started (narrative date)
+            - involved_nations: IDs of involved nations
+            - primary_aggressor: ID of the primary aggressor
+            - primary_defender: ID of the primary defender
+            - current_casualties: Description of casualties so far
+            - economic_impact: Description of economic impact
+            - diplomatic_consequences: Description of diplomatic fallout
+            - public_opinion: Object with nation IDs as keys and opinion descriptions as values
+            - recent_developments: Array of recent events in the conflict
+            - potential_resolution: Potential ways it might end
+            """
+            
+            # Get response from agent
+            result = await Runner.run(conflict_agent, prompt, context=run_ctx.context)
+            
+            try:
+                # Parse response
+                conflict_data = json.loads(result.final_output)
+                
+                # Ensure required fields exist
+                if not all(k in conflict_data for k in ["name", "description", "conflict_type", "severity", "status"]):
                     continue
                 
-                # Save the relation
-                try:
-                    relation_id = await self.add_international_relation(
-                        run_ctx,
-                        nation1_id=nation1_id,
-                        nation2_id=nation2_id,
-                        relationship_type=relationship_type,
-                        relationship_quality=relationship_quality,
-                        description=description,
-                        notable_conflicts=notable_conflicts,
-                        notable_alliances=notable_alliances,
-                        trade_relations=trade_relations,
-                        cultural_exchanges=cultural_exchanges
+                # Generate embedding
+                embedding_text = f"{conflict_data['name']} {conflict_data['description']} {conflict_data['conflict_type']}"
+                embedding = await generate_embedding(embedding_text)
+                
+                # Store in database
+                async with await self.get_connection_pool() as pool:
+                    async with pool.acquire() as conn:
+                        conflict_id = await conn.fetchval("""
+                            INSERT INTO NationalConflicts (
+                                name, conflict_type, description, severity, status,
+                                start_date, involved_nations, primary_aggressor, primary_defender,
+                                current_casualties, economic_impact, diplomatic_consequences,
+                                public_opinion, recent_developments, potential_resolution, embedding
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                            RETURNING id
+                        """, 
+                        conflict_data.get("name"), 
+                        conflict_data.get("conflict_type"),
+                        conflict_data.get("description"),
+                        conflict_data.get("severity", 5),
+                        conflict_data.get("status", "active"),
+                        conflict_data.get("start_date", "Recently"),
+                        conflict_data.get("involved_nations", [nation_pair[0]["id"], nation_pair[1]["id"]]),
+                        conflict_data.get("primary_aggressor", nation_pair[0]["id"]),
+                        conflict_data.get("primary_defender", nation_pair[1]["id"]),
+                        conflict_data.get("current_casualties", "Unknown"),
+                        conflict_data.get("economic_impact", "Unknown"),
+                        conflict_data.get("diplomatic_consequences", "Unknown"),
+                        json.dumps(conflict_data.get("public_opinion", {})),
+                        conflict_data.get("recent_developments", []),
+                        conflict_data.get("potential_resolution", "Unknown"),
+                        embedding)
+                        
+                        # Generate initial news about this conflict
+                        await self._generate_conflict_news(run_ctx, conflict_id, conflict_data, nation_pair)
+                        
+                        # Add to result
+                        conflict_data["id"] = conflict_id
+                        conflicts.append(conflict_data)
+                        
+            except Exception as e:
+                logging.error(f"Error generating conflict: {e}")
+        
+        return conflicts
+    
+    async def _generate_conflict_news(
+        self, 
+        ctx, 
+        conflict_id: int, 
+        conflict_data: Dict[str, Any],
+        nations: List[Dict[str, Any]]
+    ) -> None:
+        """Generate initial news articles about a conflict"""
+        # Create agent for news generation
+        news_agent = Agent(
+            name="ConflictNewsAgent",
+            instructions="You create realistic news articles about international conflicts in a matriarchal world.",
+            model="o3-mini"
+        )
+        
+        # Generate one news article from each nation's perspective
+        for i, nation in enumerate(nations[:2]):
+            bias = "pro_defender" if nation["id"] == conflict_data.get("primary_defender") else "pro_aggressor"
+            
+            # Create prompt for the agent
+            prompt = f"""
+            Generate a news article about this conflict from the perspective of {nation["name"]}:
+            
+            CONFLICT:
+            {json.dumps(conflict_data, indent=2)}
+            
+            REPORTING NATION:
+            {json.dumps(nation, indent=2)}
+            
+            Create a news article that:
+            1. Has a clear {bias} bias
+            2. Includes quotes from officials (primarily women in positions of power)
+            3. Covers the key facts but with the nation's spin
+            4. Has a catchy headline
+            5. Reflects matriarchal power structures in its language and reporting style
+            
+            Return a JSON object with:
+            - headline: The article headline
+            - content: The full article content (300-500 words)
+            """
+            
+            # Get response from agent
+            result = await Runner.run(news_agent, prompt, context=ctx.context)
+            
+            try:
+                # Parse response
+                news_data = json.loads(result.final_output)
+                
+                # Ensure required fields exist
+                if not all(k in news_data for k in ["headline", "content"]):
+                    continue
+                
+                # Apply matriarchal theming to content
+                news_data["content"] = MatriarchalThemingUtils._replace_gendered_words(news_data["content"])
+                
+                # Generate embedding
+                embedding_text = f"{news_data['headline']} {news_data['content'][:200]}"
+                embedding = await generate_embedding(embedding_text)
+                
+                # Store in database
+                async with await self.get_connection_pool() as pool:
+                    async with pool.acquire() as conn:
+                        await conn.execute("""
+                            INSERT INTO ConflictNews (
+                                conflict_id, headline, content, source_nation, bias, embedding
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                        """, 
+                        conflict_id,
+                        news_data.get("headline"), 
+                        news_data.get("content"),
+                        nation["id"],
+                        bias,
+                        embedding)
+                        
+            except Exception as e:
+                logging.error(f"Error generating conflict news: {e}")
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_domestic_issues",
+        action_description="Generating domestic issues for nation {nation_id}",
+        id_from_context=lambda ctx: "world_politics_manager"
+    )
+    async def generate_domestic_issues(self, ctx, nation_id: int, count: int = 2) -> List[Dict[str, Any]]:
+        """
+        Generate domestic issues for a specific nation with governance oversight.
+        
+        Args:
+            nation_id: ID of the nation
+            count: Number of issues to generate
+            
+        Returns:
+            List of generated domestic issues
+        """
+        # Create the run context
+        run_ctx = self.create_run_context(ctx)
+        
+        # Get nation details
+        async with await self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                nation = await conn.fetchrow("""
+                    SELECT id, name, government_type, matriarchy_level, cultural_traits
+                    FROM Nations
+                    WHERE id = $1
+                """, nation_id)
+                
+                if not nation:
+                    return []
+                
+                nation_data = dict(nation)
+                
+                # Get factions in this nation
+                factions = await conn.fetch("""
+                    SELECT id, name, type, description, values
+                    FROM Factions
+                    WHERE $1 = ANY(territory)
+                """, nation_data.get("name"))
+                
+                faction_data = [dict(faction) for faction in factions]
+        
+        # Create agent for domestic issue generation
+        issue_agent = Agent(
+            name="DomesticIssueAgent",
+            instructions="You create realistic domestic political and social issues for fantasy nations with matriarchal power structures.",
+            model="o3-mini"
+        )
+        
+        # Determine issue types based on nation characteristics
+        issue_types = []
+        
+        # Higher matriarchy has different issues than lower
+        matriarchy_level = nation_data.get("matriarchy_level", 5)
+        
+        if matriarchy_level >= 8:
+            # High matriarchy issues
+            issue_types.extend([
+                "male_rights_movement", "traditionalist_opposition", "matriarchy_reform", 
+                "male_separatism", "gender_hierarchy_legislation"
+            ])
+        elif matriarchy_level <= 3:
+            # Low matriarchy issues
+            issue_types.extend([
+                "feminist_movement", "equality_legislation", "patriarchal_opposition",
+                "female_leadership_controversy", "gender_role_debates"
+            ])
+        else:
+            # Balanced matriarchy issues
+            issue_types.extend([
+                "gender_balance_debate", "power_sharing_reform", "traditionalist_vs_progressive"
+            ])
+        
+        # Universal issue types
+        universal_issues = [
+            "economic_crisis", "environmental_disaster", "disease_outbreak",
+            "succession_dispute", "religious_controversy", "tax_reform",
+            "military_service_debate", "trade_regulation", "education_policy",
+            "infrastructure_development", "foreign_policy_shift", "corruption_scandal",
+            "resource_scarcity", "technological_change", "constitutional_crisis",
+            "land_rights_dispute", "criminal_justice_reform", "public_safety_concerns",
+            "media_censorship", "social_services_funding"
+        ]
+        
+        issue_types.extend(universal_issues)
+        
+        # Generate issues
+        issues = []
+        selected_types = random.sample(issue_types, min(count, len(issue_types)))
+        
+        for issue_type in selected_types:
+            # Create prompt for the agent
+            prompt = f"""
+            Generate a domestic political or social issue for this nation:
+            
+            NATION:
+            {json.dumps(nation_data, indent=2)}
+            
+            FACTIONS:
+            {json.dumps(faction_data, indent=2)}
+            
+            Create a {issue_type} issue that:
+            1. Makes sense given the nation's characteristics
+            2. Creates realistic societal tension and debate
+            3. Involves multiple factions or groups
+            4. Considers the matriarchal level of the society ({matriarchy_level}/10)
+                        
+                        Return a JSON object with:
+                        - name: Name of the issue/controversy
+                        - issue_type: "{issue_type}"
+                        - description: Detailed description
+                        - severity: Severity level (1-10)
+                        - status: Current status (emerging, active, waning, resolved)
+                        - start_date: When it started (narrative date)
+                        - supporting_factions: Groups supporting one side
+                        - opposing_factions: Groups opposing
+                        - neutral_factions: Groups remaining neutral
+                        - affected_demographics: Demographics most affected
+                        - public_opinion: Object describing opinion distribution
+                        - government_response: How the government is responding
+                        - recent_developments: Array of recent events in this issue
+                        - political_impact: Impact on political landscape
+                        - social_impact: Impact on society
+                        - economic_impact: Economic consequences
+                        - potential_resolution: Potential ways it might resolve
+                        """
+                        
+                        # Get response from agent
+                        result = await Runner.run(issue_agent, prompt, context=run_ctx.context)
+                        
+                        try:
+                            # Parse response
+                            issue_data = json.loads(result.final_output)
+                            
+                            # Ensure required fields exist
+                            if not all(k in issue_data for k in ["name", "description", "issue_type"]):
+                                continue
+                            
+                            # Add nation_id
+                            issue_data["nation_id"] = nation_id
+                            
+                            # Generate embedding
+                            embedding_text = f"{issue_data['name']} {issue_data['description']} {issue_data['issue_type']}"
+                            embedding = await generate_embedding(embedding_text)
+                            
+                            # Store in database
+                            async with await self.get_connection_pool() as pool:
+                                async with pool.acquire() as conn:
+                                    issue_id = await conn.fetchval("""
+                                        INSERT INTO DomesticIssues (
+                                            nation_id, name, issue_type, description, severity,
+                                            status, start_date, supporting_factions, opposing_factions,
+                                            neutral_factions, affected_demographics, public_opinion,
+                                            government_response, recent_developments, political_impact,
+                                            social_impact, economic_impact, potential_resolution, embedding
+                                        )
+                                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                                        RETURNING id
+                                    """, 
+                                    nation_id,
+                                    issue_data.get("name"), 
+                                    issue_data.get("issue_type"),
+                                    issue_data.get("description"),
+                                    issue_data.get("severity", 5),
+                                    issue_data.get("status", "active"),
+                                    issue_data.get("start_date", "Recently"),
+                                    issue_data.get("supporting_factions", []),
+                                    issue_data.get("opposing_factions", []),
+                                    issue_data.get("neutral_factions", []),
+                                    issue_data.get("affected_demographics", []),
+                                    json.dumps(issue_data.get("public_opinion", {})),
+                                    issue_data.get("government_response", ""),
+                                    issue_data.get("recent_developments", []),
+                                    issue_data.get("political_impact", ""),
+                                    issue_data.get("social_impact", ""),
+                                    issue_data.get("economic_impact", ""),
+                                    issue_data.get("potential_resolution", ""),
+                                    embedding)
+                                    
+                                    # Generate initial news about this issue
+                                    await self._generate_domestic_news(run_ctx, issue_id, issue_data, nation_data)
+                                    
+                                    # Add to result
+                                    issue_data["id"] = issue_id
+                                    issues.append(issue_data)
+                                    
+                        except Exception as e:
+                            logging.error(f"Error generating domestic issue: {e}")
+                    
+                    return issues
+                    
+                async def _generate_domestic_news(
+                    self, 
+                    ctx, 
+                    issue_id: int, 
+                    issue_data: Dict[str, Any],
+                    nation_data: Dict[str, Any]
+                ) -> None:
+                    """Generate initial news articles about a domestic issue"""
+                    # Create agent for news generation
+                    news_agent = Agent(
+                        name="DomesticNewsAgent",
+                        instructions="You create realistic news articles about domestic political issues in a matriarchal society.",
+                        model="o3-mini"
                     )
                     
-                    # Add to results
-                    relation['id'] = relation_id
-                    saved_relations.append(relation)
-                except Exception as e:
-                    logging.error(f"Error saving international relation: {e}")
-            
-            return saved_relations
-        except json.JSONDecodeError:
-            logging.error(f"Failed to parse LLM response for international relations: {response_text}")
-            return []
-
-# Initialize cache for faiths
-FAITH_CACHE = LoreCache(max_size=200, ttl=7200)  # 2 hour TTL
+                    # Generate news articles from different perspectives
+                    biases = ["supporting", "opposing", "neutral"]
+                    
+                    for bias in biases:
+                        # Create prompt for the agent
+                        prompt = f"""
+                        Generate a news article about this domestic issue from a {bias} perspective:
+                        
+                        ISSUE:
+                        {json.dumps(issue_data, indent=2)}
+                        
+                        NATION:
+                        {json.dumps(nation_data, indent=2)}
+                        
+                        Create a news article that:
+                        1. Has a clear {bias} bias toward the issue
+                        2. Includes quotes from relevant figures
+                        3. Covers the key facts but with the appropriate spin
+                        4. Has a catchy headline
+                        5. Reflects the matriarchal power structures of society
+                        
+                        Return a JSON object with:
+                        - headline: The article headline
+                        - content: The full article content (300-500 words)
+                        - source_faction: The faction or institution publishing this
+                        """
+                        
+                        # Get response from agent
+                        result = await Runner.run(news_agent, prompt, context=ctx.context)
+                        
+                        try:
+                            # Parse response
+                            news_data = json.loads(result.final_output)
+                            
+                            # Ensure required fields exist
+                            if not all(k in news_data for k in ["headline", "content"]):
+                                continue
+                            
+                            # Apply matriarchal theming
+                            news_data["content"] = MatriarchalThemingUtils.apply_matriarchal_theme("news", news_data["content"], 1)
+                            
+                            # Store in database
+                            async with await self.get_connection_pool() as pool:
+                                async with pool.acquire() as conn:
+                                    news_id = await conn.fetchval("""
+                                        INSERT INTO DomesticNews (
+                                            issue_id, headline, content, source_faction, bias
+                                        )
+                                        VALUES ($1, $2, $3, $4, $5)
+                                        RETURNING id
+                                    """, 
+                                    issue_id,
+                                    news_data.get("headline"), 
+                                    news_data.get("content"),
+                                    news_data.get("source_faction", "Unknown Source"),
+                                    bias)
+                                    
+                                    # Generate and store embedding
+                                    embedding_text = f"{news_data['headline']} {news_data['content'][:200]}"
+                                    await self.generate_and_store_embedding(embedding_text, conn, "DomesticNews", "id", news_id)
+                                    
+                        except Exception as e:
+                            logging.error(f"Error generating domestic news: {e}")
+                
+                @with_governance(
+                    agent_type=AgentType.NARRATIVE_CRAFTER,
+                    action_type="get_active_conflicts",
+                    action_description="Getting active national conflicts",
+                    id_from_context=lambda ctx: "world_politics_manager"
+                )
+                async def get_active_conflicts(self, ctx) -> List[Dict[str, Any]]:
+                    """
+                    Get all active conflicts with governance oversight.
+                    
+                    Returns:
+                        List of active conflicts
+                    """
+                    # Check cache first
+                    cache_key = "active_conflicts"
+                    cached = self.get_cache(cache_key)
+                    if cached:
+                        return cached
+                    
+                    # Query database for active conflicts
+                    async with await self.get_connection_pool() as pool:
+                        async with pool.acquire() as conn:
+                            conflicts = await conn.fetch("""
+                                SELECT * FROM NationalConflicts
+                                WHERE status != 'resolved'
+                                ORDER BY severity DESC
+                            """)
+                            
+                            # Convert to list of dicts
+                            result = [dict(conflict) for conflict in conflicts]
+                            
+                            # Parse JSON fields
+                            for conflict in result:
+                                if "public_opinion" in conflict and conflict["public_opinion"]:
+                                    try:
+                                        conflict["public_opinion"] = json.loads(conflict["public_opinion"])
+                                    except:
+                                        pass
+                            
+                            # Cache result
+                            self.set_cache(cache_key, result, ttl=3600)  # 1 hour TTL
+                            
+                            return result
+                            
+                @with_governance(
+                    agent_type=AgentType.NARRATIVE_CRAFTER,
+                    action_type="get_nation_politics",
+                    action_description="Getting complete political information for nation {nation_id}",
+                    id_from_context=lambda ctx: "world_politics_manager"
+                )
+                async def get_nation_politics(self, ctx, nation_id: int) -> Dict[str, Any]:
+                    """
+                    Get comprehensive political information about a nation.
+                    
+                    Args:
+                        nation_id: ID of the nation
+                        
+                    Returns:
+                        Dictionary with complete political information
+                    """
+                    # Check cache first
+                    cache_key = f"nation_politics_{nation_id}"
+                    cached = self.get_cache(cache_key)
+                    if cached:
+                        return cached
+                        
+                    # Ensure tables exist
+                    await self.ensure_initialized()
+                    
+                    # Query for all needed information
+                    async with await self.get_connection_pool() as pool:
+                        async with pool.acquire() as conn:
+                            # 1. Get nation details
+                            nation = await conn.fetchrow("""
+                                SELECT * FROM Nations WHERE id = $1
+                            """, nation_id)
+                            
+                            if not nation:
+                                return {"error": "Nation not found"}
+                            
+                            # 2. Get international relations
+                            relations = await conn.fetch("""
+                                SELECT r.*, 
+                                       CASE WHEN r.nation1_id = $1 THEN r.nation2_id ELSE r.nation1_id END AS other_nation_id,
+                                       n.name AS other_nation_name, n.government_type AS other_government_type
+                                FROM InternationalRelations r
+                                JOIN Nations n ON (
+                                    CASE WHEN r.nation1_id = $1 THEN r.nation2_id ELSE r.nation1_id END = n.id
+                                )
+                                WHERE r.nation1_id = $1 OR r.nation2_id = $1
+                            """, nation_id)
+                            
+                            # 3. Get conflicts involving this nation
+                            conflicts = await conn.fetch("""
+                                SELECT c.*
+                                FROM NationalConflicts c
+                                WHERE $1 = ANY(c.involved_nations)
+                                ORDER BY c.severity DESC
+                            """, nation_id)
+                            
+                            # 4. Get domestic issues
+                            issues = await conn.fetch("""
+                                SELECT * FROM DomesticIssues
+                                WHERE nation_id = $1
+                                ORDER BY severity DESC
+                            """, nation_id)
+                            
+                            # 5. Get related news (conflict + domestic)
+                            conflict_news = await conn.fetch("""
+                                SELECT n.*
+                                FROM ConflictNews n
+                                JOIN NationalConflicts c ON n.conflict_id = c.id
+                                WHERE $1 = ANY(c.involved_nations)
+                                AND n.source_nation = $1
+                                ORDER BY n.publication_date DESC
+                                LIMIT 5
+                            """, nation_id)
+                            
+                            domestic_news = await conn.fetch("""
+                                SELECT n.*
+                                FROM DomesticNews n
+                                JOIN DomesticIssues i ON n.issue_id = i.id
+                                WHERE i.nation_id = $1
+                                ORDER BY n.publication_date DESC
+                                LIMIT 5
+                            """, nation_id)
+                            
+                            # Process the results
+                            result = {
+                                "nation": dict(nation),
+                                "international_relations": [dict(rel) for rel in relations],
+                                "conflicts": [dict(conflict) for conflict in conflicts],
+                                "domestic_issues": [dict(issue) for issue in issues],
+                                "news": {
+                                    "international": [dict(news) for news in conflict_news],
+                                    "domestic": [dict(news) for news in domestic_news]
+                                }
+                            }
+                            
+                            # Parse JSON fields
+                            for item in result["domestic_issues"]:
+                                if "public_opinion" in item and item["public_opinion"]:
+                                    try:
+                                        item["public_opinion"] = json.loads(item["public_opinion"])
+                                    except:
+                                        pass
+                            
+                            for item in result["conflicts"]:
+                                if "public_opinion" in item and item["public_opinion"]:
+                                    try:
+                                        item["public_opinion"] = json.loads(item["public_opinion"])
+                                    except:
+                                        pass
+                            
+                            # Cache the result
+                            self.set_cache(cache_key, result, ttl=3600)  # 1 hour TTL
+                            
+                            return result
+                
+                @with_governance(
+                    agent_type=AgentType.NARRATIVE_CRAFTER,
+                    action_type="evolve_all_conflicts",
+                    action_description="Evolving all conflicts by time passage",
+                    id_from_context=lambda ctx: "world_politics_manager"
+                )
+                async def evolve_all_conflicts(self, ctx, days_passed: int = 30) -> Dict[str, Any]:
+                    """
+                    Evolve all active conflicts based on time passing.
+                    
+                    Args:
+                        days_passed: Number of days to simulate
+                        
+                    Returns:
+                        Dictionary with evolution results
+                    """
+                    # Create run context
+                    run_ctx = self.create_run_context(ctx)
+                    
+                    # Get active conflicts
+                    active_conflicts = await self.get_active_conflicts(run_ctx)
+                    
+                    # Get nations for context
+                    all_nations = await self.get_all_nations(run_ctx)
+                    nations_by_id = {n["id"]: n for n in all_nations}
+                    
+                    # Create agent for conflict evolution
+                    evolution_agent = Agent(
+                        name="ConflictEvolutionAgent",
+                        instructions="You evolve international conflicts over time in a matriarchal fantasy world.",
+                        model="o3-mini"
+                    )
+                    
+                    # Track evolution results
+                    evolution_results = {
+                        "days_passed": days_passed,
+                        "evolved_conflicts": [],
+                        "resolved_conflicts": [],
+                        "new_developments": [],
+                        "status_changes": []
+                    }
+                    
+                    # Process each active conflict
+                    for conflict in active_conflicts:
+                        conflict_id = conflict["id"]
+                        
+                        # Get involved nations
+                        involved_nation_ids = conflict.get("involved_nations", [])
+                        involved_nations = [nations_by_id.get(nid, {"id": nid, "name": "Unknown Nation"}) 
+                                           for nid in involved_nation_ids if nid in nations_by_id]
+                        
+                        # Create prompt for evolution
+                        prompt = f"""
+                        Evolve this conflict over a period of {days_passed} days:
+                        
+                        CONFLICT:
+                        {json.dumps(conflict, indent=2)}
+                        
+                        INVOLVED NATIONS:
+                        {json.dumps(involved_nations, indent=2)}
+                        
+                        Consider how this conflict would evolve over {days_passed} days, factoring in:
+                        1. The current status ({conflict.get('status', 'active')})
+                        2. The severity level ({conflict.get('severity', 5)}/10)
+                        3. Realistic conflict progression and diplomacy
+                        4. The matriarchal power dynamics of this world
+                        
+                        Return a JSON object with:
+                        - conflict_id: {conflict_id}
+                        - new_status: Updated status (active, escalating, de-escalating, resolved, etc.)
+                        - severity_change: Change in severity (-3 to +3)
+                        - new_developments: Array of new events that occurred
+                        - casualties_update: Updated casualty information
+                        - economic_impact_update: Updated economic impact
+                        - diplomatic_consequences_update: Updated diplomatic consequences
+                        - resolution_details: Details on resolution (if resolved)
+                        """
+                        
+                        # Get response from agent
+                        result = await Runner.run(evolution_agent, prompt, context=run_ctx.context)
+                        
+                        try:
+                            # Parse response
+                            evolution_data = json.loads(result.final_output)
+                            
+                            # Calculate new severity
+                            old_severity = conflict.get("severity", 5)
+                            severity_change = evolution_data.get("severity_change", 0)
+                            new_severity = max(1, min(10, old_severity + severity_change))
+                            
+                            # Track status change
+                            old_status = conflict.get("status", "active")
+                            new_status = evolution_data.get("new_status", old_status)
+                            
+                            if old_status != new_status:
+                                evolution_results["status_changes"].append({
+                                    "conflict_id": conflict_id,
+                                    "conflict_name": conflict.get("name", "Unnamed Conflict"),
+                                    "old_status": old_status,
+                                    "new_status": new_status
+                                })
+                            
+                            # Track if resolved
+                            was_resolved = new_status.lower() == "resolved"
+                            
+                            # New developments
+                            new_developments = evolution_data.get("new_developments", [])
+                            if new_developments:
+                                evolution_results["new_developments"].append({
+                                    "conflict_id": conflict_id,
+                                    "conflict_name": conflict.get("name", "Unnamed Conflict"),
+                                    "developments": new_developments
+                                })
+                            
+                            # Update the conflict in the database
+                            async with await self.get_connection_pool() as pool:
+                                async with pool.acquire() as conn:
+                                    await conn.execute("""
+                                        UPDATE NationalConflicts
+                                        SET status = $1,
+                                            severity = $2,
+                                            current_casualties = $3,
+                                            economic_impact = $4,
+                                            diplomatic_consequences = $5,
+                                            recent_developments = recent_developments || $6,
+                                            end_date = $7
+                                        WHERE id = $8
+                                    """,
+                                    new_status,
+                                    new_severity,
+                                    evolution_data.get("casualties_update", conflict.get("current_casualties")),
+                                    evolution_data.get("economic_impact_update", conflict.get("economic_impact")),
+                                    evolution_data.get("diplomatic_consequences_update", conflict.get("diplomatic_consequences")),
+                                    new_developments,
+                                    "Recently" if was_resolved else None,  # End date if resolved
+                                    conflict_id)
+                                    
+                                    # Add conflict news for significant developments
+                                    if new_developments and involved_nations:
+                                        # Generate news from perspective of one involved nation
+                                        nation = involved_nations[0]
+                                        await self._generate_conflict_update_news(run_ctx, conflict_id, 
+                                                                               conflict, evolution_data, nation)
+                            
+                            # Add to evolution results
+                            updated_conflict = {**conflict, 
+                                               "status": new_status,
+                                               "severity": new_severity,
+                                               "new_developments": new_developments}
+                                               
+                            if was_resolved:
+                                evolution_results["resolved_conflicts"].append({
+                                    "conflict_id": conflict_id,
+                                    "conflict_name": conflict.get("name", "Unnamed Conflict"),
+                                    "resolution_details": evolution_data.get("resolution_details", "The conflict has concluded.")
+                                })
+                            else:
+                                evolution_results["evolved_conflicts"].append(updated_conflict)
+                            
+                        except Exception as e:
+                            logging.error(f"Error evolving conflict {conflict_id}: {e}")
+                    
+                    # Invalidate relevant caches
+                    self.invalidate_cache("active_conflicts")
+                    
+                    return evolution_results
+                
+                async def _generate_conflict_update_news(
+                    self,
+                    ctx,
+                    conflict_id: int,
+                    conflict: Dict[str, Any],
+                    evolution_data: Dict[str, Any],
+                    nation: Dict[str, Any]
+                ) -> None:
+                    """Generate news about conflict developments"""
+                    # Create agent for news generation
+                    news_agent = Agent(
+                        name="ConflictNewsUpdateAgent",
+                        instructions="You create news updates about evolving international conflicts in a matriarchal world.",
+                        model="o3-mini"
+                    )
+                    
+                    # Build news prompt
+                    developments_text = "\n".join([f"- {dev}" for dev in evolution_data.get("new_developments", [])])
+                    
+                    prompt = f"""
+                    Generate a news article about these new developments in an ongoing conflict:
+                    
+                    CONFLICT:
+                    {json.dumps(conflict, indent=2)}
+                    
+                    NEW DEVELOPMENTS:
+                    {developments_text}
+                    
+                    REPORTING NATION:
+                    {json.dumps(nation, indent=2)}
+                    
+                    Create a news article that:
+                    1. Reports on the latest developments in the conflict
+                    2. Has a perspective aligned with {nation["name"]}'s interests
+                    3. Includes quotes from officials (primarily women in positions of power)
+                    4. Has a catchy headline
+                    5. Reflects matriarchal power structures in its language and reporting style
+                    
+                    Return a JSON object with:
+                    - headline: The article headline
+                    - content: The full article content (300-500 words)
+                    """
+                    
+                    # Get response from agent
+                    result = await Runner.run(news_agent, prompt, context=ctx.context)
+                    
+                    try:
+                        # Parse response
+                        news_data = json.loads(result.final_output)
+                        
+                        # Ensure required fields exist
+                        if not all(k in news_data for k in ["headline", "content"]):
+                            return
+                        
+                        # Apply matriarchal theming to content
+                        news_data["content"] = MatriarchalThemingUtils.apply_matriarchal_theme("news", news_data["content"], 1)
+                        
+                        # Generate embedding
+                        embedding_text = f"{news_data['headline']} {news_data['content'][:200]}"
+                        embedding = await generate_embedding(embedding_text)
+                        
+                        # Store in database
+                        async with await self.get_connection_pool() as pool:
+                            async with pool.acquire() as conn:
+                                await conn.execute("""
+                                    INSERT INTO ConflictNews (
+                                        conflict_id, headline, content, source_nation, bias, embedding
+                                    )
+                                    VALUES ($1, $2, $3, $4, $5, $6)
+                                """, 
+                                conflict_id,
+                                news_data.get("headline"), 
+                                news_data.get("content"),
+                                nation["id"],
+                                "pro_aggressor" if nation["id"] == conflict.get("primary_aggressor") else "pro_defender",
+                                embedding)
+                                
+                    except Exception as e:
+                        logging.error(f"Error generating conflict update news: {e}")
+                
+                async def register_with_governance(self):
+                    """Register with Nyx governance system."""
+                    await super().register_with_governance(
+                        agent_type=AgentType.NARRATIVE_CRAFTER,
+                        agent_id="world_politics_manager",
+                        directive_text="Manage nations, international relations, and conflicts in a matriarchal world.",
+                        scope="world_building",
+                        priority=DirectivePriority.MEDIUM
+                    )
 
 class ReligionManager(BaseLoreManager):
     """
@@ -5204,7 +5889,7 @@ class ReligionManager(BaseLoreManager):
                 await self.generate_and_store_embedding(embedding_text, conn, "Deities", "id", deity_id)
                 
                 # Clear relevant cache
-                FAITH_CACHE.invalidate_pattern("deity")
+                GLOBAL_LORE_CACHE.invalidate_pattern("deity")
                 
                 return deity_id
     
@@ -5281,7 +5966,7 @@ class ReligionManager(BaseLoreManager):
                      primary_worshippers, taboos, embedding)
                 
                 # Clear relevant cache
-                FAITH_CACHE.invalidate_pattern("pantheon")
+                GLOBAL_LORE_CACHE.invalidate_pattern("pantheon")
                 
                 return pantheon_id
     
@@ -5350,7 +6035,7 @@ class ReligionManager(BaseLoreManager):
                      restricted_to, deity_id, pantheon_id, embedding)
                 
                 # Clear relevant cache
-                FAITH_CACHE.invalidate_pattern("practice")
+                GLOBAL_LORE_CACHE.invalidate_pattern("practice")
                 
                 return practice_id
     
@@ -5429,7 +6114,7 @@ class ReligionManager(BaseLoreManager):
                      embedding)
                 
                 # Clear relevant cache
-                FAITH_CACHE.invalidate_pattern("site")
+                GLOBAL_LORE_CACHE.invalidate_pattern("site")
                 
                 return site_id
     
@@ -5499,7 +6184,7 @@ class ReligionManager(BaseLoreManager):
                      embedding)
                 
                 # Clear relevant cache
-                FAITH_CACHE.invalidate_pattern("text")
+                GLOBAL_LORE_CACHE.invalidate_pattern("text")
                 
                 return text_id
     
@@ -5578,7 +6263,7 @@ class ReligionManager(BaseLoreManager):
                      special_abilities, notable_members, embedding)
                 
                 # Clear relevant cache
-                FAITH_CACHE.invalidate_pattern("order")
+                GLOBAL_LORE_CACHE.invalidate_pattern("order")
                 
                 return order_id
     
@@ -5642,7 +6327,7 @@ class ReligionManager(BaseLoreManager):
                      status, casualties, historical_impact, embedding)
                 
                 # Clear relevant cache
-                FAITH_CACHE.invalidate_pattern("conflict")
+                GLOBAL_LORE_CACHE.invalidate_pattern("conflict")
                 
                 return conflict_id
     
@@ -6731,7 +7416,7 @@ class ReligionManager(BaseLoreManager):
         """
         # Check cache first
         cache_key = f"nation_religion_{nation_id}_{self.user_id}_{self.conversation_id}"
-        cached = FAITH_CACHE.get(cache_key)
+        cached = GLOBAL_LORE_CACHE.get(cache_key)
         if cached:
             return cached
         
@@ -6810,7 +7495,7 @@ class ReligionManager(BaseLoreManager):
                         pass
                 
                 # Cache the result
-                FAITH_CACHE.set(cache_key, result)
+                GLOBAL_LORE_CACHE.set(cache_key, result)
                 
                 return result
 
@@ -7376,11 +8061,12 @@ def _emphasize_feminine_power(text: str, emphasis_level: int = _DEFAULT_EMPHASIS
 
 class MatriarchalThemingUtils:
     """
-    Consolidated utility class for applying matriarchal theming to different types of lore content.
+    Utility class for applying matriarchal theming to different types of lore content.
+    Uses a data-driven approach to apply theming based on content type.
     """
     
     # Dictionary of regex patterns to replacement strings for basic feminization
-    _FEMDOM_WORD_MAP = {
+    _WORD_REPLACEMENTS = {
         r"\bgod\b": "Goddess",
         r"\bgods\b": "Goddesses",
         r"\bgodhood\b": "Goddesshood",
@@ -7400,8 +8086,8 @@ class MatriarchalThemingUtils:
         r"\bmen\b": "women",
     }
     
-    # Random synonyms for a supreme feminine figure
-    _GODDESS_SYNONYMS = [
+    # Supreme feminine figure titles
+    _DIVINE_TITLES = [
         "Supreme Goddess",
         "High Empress",
         "Great Matriarch",
@@ -7409,20 +8095,20 @@ class MatriarchalThemingUtils:
         "Infinite Mistress of Creation",
     ]
     
-    # Theme-specific content insertions for different lore types
-    _THEME_CONTENT = {
+    # Theme-specific content by lore type
+    _THEMED_CONTENT = {
         "cosmology": "At the heart of all creation is the Feminine Principle, the source of all life and power. "
                     "The cosmos itself is understood as fundamentally feminine in nature, "
                     "with any masculine elements serving and supporting the greater feminine whole.",
                     
         "magic_system": "The flow and expression of magical energies reflect the natural order of feminine dominance. "
-                        "Women typically possess greater innate magical potential and exclusive rights to the highest mysteries. "
-                        "Men specializing in arcane arts often excel in supportive, protective, or enhancing magics, "
-                        "operating in service to more powerful feminine traditions.",
+                       "Women typically possess greater innate magical potential and exclusive rights to the highest mysteries. "
+                       "Men specializing in arcane arts often excel in supportive, protective, or enhancing magics, "
+                       "operating in service to more powerful feminine traditions.",
                         
         "social_structure": "Society is organized along feminine lines of authority, with women occupying the most "
-                           "important leadership positions. Men serve supportive roles, with status often determined "
-                           "by their usefulness and loyalty to female superiors.",
+                          "important leadership positions. Men serve supportive roles, with status often determined "
+                          "by their usefulness and loyalty to female superiors.",
                         
         "world_history": "Throughout recorded chronicles, women have held the reins of power. "
                         "Great Empresses, Matriarchs, and female rulers have guided civilizations toward prosperity. "
@@ -7434,8 +8120,8 @@ class MatriarchalThemingUtils:
                           "the cyclical power of womanhood, reflecting its role in birth, renewal, and creation.",
                           
         "landmark": "The architecture and design embody feminine principles of power and authority. "
-                  "Female figures dominate the iconography, with male representations shown in supportive or "
-                  "subservient positions.",
+                   "Female figures dominate the iconography, with male representations shown in supportive or "
+                   "subservient positions.",
                   
         "myth": "The mythology emphasizes the primacy of female deities and heroines, with male figures "
                "playing important but secondary roles. Stories reinforce the natural order of feminine "
@@ -7451,11 +8137,24 @@ class MatriarchalThemingUtils:
                  
         "event": "The event unfolded according to the established gender hierarchy, with women directing "
                "the course of action and men executing their will. Any violations of this order were "
-               "swiftly addressed."
+               "swiftly addressed.",
+               
+        # Default content for any type not specifically defined
+        "default": "Power dynamics follow the natural order of feminine dominance, with masculine elements "
+                 "existing primarily to support and serve the greater feminine whole."
     }
     
-    @staticmethod
-    def apply_matriarchal_theme(lore_type: str, content: str, emphasis_level: int = 2) -> str:
+    # Emphasis level messages by level
+    _EMPHASIS_MESSAGES = {
+        2: "\n\nThroughout every realm, the ascendancy of womanhood underpins all aspects of life, "
+           "unquestioned and unassailable.",
+           
+        3: "\n\nNo force—mortal or divine—can transcend the supremacy of the feminine essence, "
+           "the primal wellspring of creation itself."
+    }
+    
+    @classmethod
+    def apply_matriarchal_theme(cls, lore_type: str, content: str, emphasis_level: int = 2) -> str:
         """
         Apply appropriate matriarchal theming based on lore type.
         
@@ -7468,25 +8167,25 @@ class MatriarchalThemingUtils:
             Modified content with matriarchal theming
         """
         # 1. Apply basic word replacements
-        result = MatriarchalThemingUtils._apply_basic_replacements(content)
+        result = cls._replace_gendered_words(content)
         
-        # 2. Inject theme-specific content if available
-        result = MatriarchalThemingUtils._inject_themed_content(result, lore_type)
+        # 2. Inject theme-specific content
+        result = cls._add_themed_content(result, lore_type.lower())
         
-        # 3. Ensure goddess reference for cosmology and religious content
-        if lore_type in ["cosmology", "magic_system", "religion", "pantheon", "deity"]:
-            result = MatriarchalThemingUtils._ensure_goddess_reference(result)
+        # 3. Ensure goddess reference for religious/cosmological content
+        if lore_type.lower() in ["cosmology", "magic_system", "religion", "pantheon", "deity"]:
+            result = cls._ensure_divine_reference(result)
         
-        # 4. Add emphasis based on the requested level
+        # 4. Add emphasis based on requested level
         if emphasis_level >= 2:
-            result = MatriarchalThemingUtils._emphasize_feminine_power(result, emphasis_level)
+            result = cls._add_emphasis(result, emphasis_level)
         
         return result
     
-    @staticmethod
-    def _apply_basic_replacements(text: str) -> str:
+    @classmethod
+    def _replace_gendered_words(cls, text: str) -> str:
         """
-        Apply regex-based replacements to feminize words/phrases, respecting case.
+        Replace gendered words with feminine alternatives while preserving case.
         
         Args:
             text: Original text
@@ -7496,12 +8195,12 @@ class MatriarchalThemingUtils:
         """
         result = text
 
-        for pattern_str, replacement_str in MatriarchalThemingUtils._FEMDOM_WORD_MAP.items():
+        for pattern_str, replacement_str in cls._WORD_REPLACEMENTS.items():
             pattern = re.compile(pattern_str, re.IGNORECASE)
 
             def _replacement_func(match):
                 original = match.group(0)
-                # If the original word starts with uppercase, we uppercase the replacement's first letter
+                # Preserve case of original word
                 if original and original[0].isupper():
                     return replacement_str.capitalize()
                 return replacement_str
@@ -7510,78 +8209,78 @@ class MatriarchalThemingUtils:
 
         return result
     
-    @staticmethod
-    def _inject_themed_content(text: str, lore_type: str) -> str:
+    @classmethod
+    def _add_themed_content(cls, text: str, lore_type: str) -> str:
         """
-        Insert appropriate themed content based on lore type.
+        Add type-specific themed content to the text.
         
         Args:
             text: Original text
             lore_type: Type of lore
             
         Returns:
-            Text with injected themed content
+            Text with added themed content
         """
-        if lore_type in MatriarchalThemingUtils._THEME_CONTENT:
-            themed_content = MatriarchalThemingUtils._THEME_CONTENT[lore_type]
-            
-            # Try to find an appropriate section heading or paragraph break
-            if "\n\n" in text:
-                paragraphs = text.split("\n\n")
-                # Insert after the first paragraph
-                paragraphs.insert(1, themed_content)
-                return "\n\n".join(paragraphs)
-            else:
-                # Append at the end if no appropriate place found
-                return text.strip() + "\n\n" + themed_content
+        # Get themed content for this type (or use default)
+        themed_content = cls._THEMED_CONTENT.get(
+            lore_type, 
+            cls._THEMED_CONTENT["default"]
+        )
         
-        return text
+        # Find a good place to insert the content
+        if "\n\n" in text:
+            # Insert after the first paragraph for readability
+            paragraphs = text.split("\n\n")
+            paragraphs.insert(1, themed_content)
+            return "\n\n".join(paragraphs)
+        else:
+            # Append at the end if no paragraph breaks found
+            return text.strip() + "\n\n" + themed_content
     
-    @staticmethod
-    def _ensure_goddess_reference(text: str) -> str:
+    @classmethod
+    def _ensure_divine_reference(cls, text: str) -> str:
         """
-        Ensure reference to a supreme feminine divine entity if none exists.
+        Ensure text includes reference to supreme feminine divine entity.
         
         Args:
             text: Original text
             
         Returns:
-            Text with goddess reference if needed
+            Text with divine reference if needed
         """
-        if not re.search(r"(goddess|divine mother|matriarch|empress of creation)", text, re.IGNORECASE):
-            chosen_title = random.choice(MatriarchalThemingUtils._GODDESS_SYNONYMS)
-            insertion = (
-                f"\n\nAt the cosmic center stands {chosen_title}, "
-                "the eternal wellspring of existence. Her dominion weaves reality itself."
-            )
-            text += insertion
-
-        return text
+        # Skip if already has feminine divine reference
+        if re.search(r"(goddess|divine mother|matriarch|empress of creation)", text, re.IGNORECASE):
+            return text
+            
+        # Add divine reference
+        title = random.choice(cls._DIVINE_TITLES)
+        insertion = (
+            f"\n\nAt the cosmic center stands {title}, "
+            "the eternal wellspring of existence. Her dominion weaves reality itself."
+        )
+        
+        return text.strip() + insertion
     
-    @staticmethod
-    def _emphasize_feminine_power(text: str, emphasis_level: int) -> str:
+    @classmethod
+    def _add_emphasis(cls, text: str, emphasis_level: int) -> str:
         """
-        Add appropriate emphasis on feminine power based on the emphasis level.
+        Add appropriate emphasis statements based on emphasis level.
         
         Args:
             text: Original text
             emphasis_level: Level of emphasis (1-3)
             
         Returns:
-            Text with feminine power emphasis
+            Text with added emphasis
         """
-        if emphasis_level >= 2:
-            text += (
-                "\n\nThroughout every realm, the ascendancy of womanhood underpins all aspects of life, "
-                "unquestioned and unassailable."
-            )
-        if emphasis_level >= 3:
-            text += (
-                "\n\nNo force—mortal or divine—can transcend the supremacy of the feminine essence, "
-                "the primal wellspring of creation itself."
-            )
-        return text
-
+        result = text
+        
+        # Add level-appropriate emphasis messages
+        for level in range(2, emphasis_level + 1):
+            if level in cls._EMPHASIS_MESSAGES:
+                result += cls._EMPHASIS_MESSAGES[level]
+                
+        return result
 
 # -------------------------------------------------
 # REGIONAL CULTURE SYSTEM
@@ -8088,7 +8787,7 @@ class RegionalCultureSystem(BaseLoreManager):
         """
         # Check cache first
         cache_key = f"nation_culture_{nation_id}_{self.user_id}_{self.conversation_id}"
-        cached = CULTURE_CACHE.get(cache_key)
+        cached = GLOBAL_LORE_CACHE.get(cache_key)
         if cached:
             return cached
         
@@ -8139,712 +8838,6 @@ class RegionalCultureSystem(BaseLoreManager):
                 }
                 
                 # Cache the result
-                CULTURE_CACHE.set(cache_key, result)
+                GLOBAL_LORE_CACHE.set(cache_key, result)
                 
                 return result
-
-
-# -------------------------------------------------
-# NATIONAL CONFLICT SYSTEM
-# -------------------------------------------------
-
-class NationalConflictSystem(BaseLoreManager):
-    """
-    System for managing, generating, and evolving national and international
-    conflicts that serve as background elements in the world.
-    """
-    
-    def __init__(self, user_id: int, conversation_id: int):
-        super().__init__(user_id, conversation_id)
-        self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
-    
-    async def ensure_initialized(self):
-        """Ensure system is initialized"""
-        if not self.initialized:
-            await super().ensure_initialized()
-            await self.initialize_tables()
-        
-    async def initialize_tables(self):
-        """Ensure conflict system tables exist"""
-        table_definitions = {
-            "NationalConflicts": """
-                CREATE TABLE NationalConflicts (
-                    id SERIAL PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    conflict_type TEXT NOT NULL, -- war, trade_dispute, diplomatic_tension, etc.
-                    description TEXT NOT NULL,
-                    severity INTEGER CHECK (severity BETWEEN 1 AND 10),
-                    status TEXT NOT NULL, -- active, resolved, escalating, de-escalating
-                    start_date TEXT NOT NULL,
-                    end_date TEXT, -- NULL if ongoing
-                    involved_nations INTEGER[], -- IDs of nations involved
-                    primary_aggressor INTEGER, -- Nation ID of aggressor
-                    primary_defender INTEGER, -- Nation ID of defender
-                    current_casualties TEXT, -- Description of casualties so far
-                    economic_impact TEXT, -- Description of economic impact
-                    diplomatic_consequences TEXT, -- Description of diplomatic fallout
-                    public_opinion JSONB, -- Public opinion in different nations
-                    recent_developments TEXT[], -- Recent events in the conflict
-                    potential_resolution TEXT, -- Potential ways it might end
-                    embedding VECTOR(1536)
-                );
-                
-                CREATE INDEX IF NOT EXISTS idx_nationalconflicts_embedding 
-                ON NationalConflicts USING ivfflat (embedding vector_cosine_ops);
-            """,
-            
-            "ConflictNews": """
-                CREATE TABLE ConflictNews (
-                    id SERIAL PRIMARY KEY,
-                    conflict_id INTEGER NOT NULL,
-                    headline TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    publication_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    source_nation INTEGER, -- Nation ID where this news originated
-                    bias TEXT, -- pro_aggressor, pro_defender, neutral
-                    embedding VECTOR(1536),
-                    FOREIGN KEY (conflict_id) REFERENCES NationalConflicts(id) ON DELETE CASCADE
-                );
-                
-                CREATE INDEX IF NOT EXISTS idx_conflictnews_embedding 
-                ON ConflictNews USING ivfflat (embedding vector_cosine_ops);
-            """,
-            
-            "DomesticIssues": """
-                CREATE TABLE DomesticIssues (
-                    id SERIAL PRIMARY KEY,
-                    nation_id INTEGER NOT NULL,
-                    name TEXT NOT NULL,
-                    issue_type TEXT NOT NULL, -- civil_rights, political_controversy, economic_crisis, etc.
-                    description TEXT NOT NULL,
-                    severity INTEGER CHECK (severity BETWEEN 1 AND 10),
-                    status TEXT NOT NULL, -- emerging, active, waning, resolved
-                    start_date TEXT NOT NULL,
-                    end_date TEXT, -- NULL if ongoing
-                    supporting_factions TEXT[], -- Groups supporting one side
-                    opposing_factions TEXT[], -- Groups opposing
-                    neutral_factions TEXT[], -- Groups remaining neutral
-                    affected_demographics TEXT[], -- Demographics most affected
-                    public_opinion JSONB, -- Opinion distribution
-                    government_response TEXT, -- How the government is responding
-                    recent_developments TEXT[], -- Recent events in this issue
-                    political_impact TEXT, -- Impact on political landscape
-                    social_impact TEXT, -- Impact on society
-                    economic_impact TEXT, -- Economic consequences
-                    potential_resolution TEXT, -- Potential ways it might resolve
-                    embedding VECTOR(1536),
-                    FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE
-                );
-                
-                CREATE INDEX IF NOT EXISTS idx_domesticissues_embedding 
-                ON DomesticIssues USING ivfflat (embedding vector_cosine_ops);
-                
-                CREATE INDEX IF NOT EXISTS idx_domesticissues_nation
-                ON DomesticIssues(nation_id);
-            """,
-            
-            "DomesticNews": """
-                CREATE TABLE DomesticNews (
-                    id SERIAL PRIMARY KEY,
-                    issue_id INTEGER NOT NULL,
-                    headline TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    publication_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    source_faction TEXT, -- Faction perspective
-                    bias TEXT, -- supporting, opposing, neutral
-                    embedding VECTOR(1536),
-                    FOREIGN KEY (issue_id) REFERENCES DomesticIssues(id) ON DELETE CASCADE
-                );
-                
-                CREATE INDEX IF NOT EXISTS idx_domesticnews_embedding 
-                ON DomesticNews USING ivfflat (embedding vector_cosine_ops);
-            """
-        }
-        
-        await self.initialize_tables_for_class(table_definitions)
-
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_domestic_issues",
-        action_description="Generating domestic issues for nation {nation_id}",
-        id_from_context=lambda ctx: "national_conflict_system"
-    )
-    async def generate_domestic_issues(self, ctx, nation_id: int, count: int = 2) -> List[Dict[str, Any]]:
-        """
-        Generate domestic issues for a specific nation with governance oversight.
-        
-        Args:
-            nation_id: ID of the nation
-            count: Number of issues to generate
-            
-        Returns:
-            List of generated domestic issues
-        """
-        # Create the run context
-        run_ctx = RunContextWrapper(context=ctx.context)
-        
-        # Get nation details
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                nation = await conn.fetchrow("""
-                    SELECT id, name, government_type, matriarchy_level, cultural_traits
-                    FROM Nations
-                    WHERE id = $1
-                """, nation_id)
-                
-                if not nation:
-                    return []
-                
-                nation_data = dict(nation)
-                
-                # Get factions in this nation
-                factions = await conn.fetch("""
-                    SELECT id, name, type, description, values
-                    FROM Factions
-                    WHERE $1 = ANY(territory)
-                """, nation_data.get("name"))
-                
-                faction_data = [dict(faction) for faction in factions]
-        
-        # Create agent for domestic issue generation
-        issue_agent = Agent(
-            name="DomesticIssueAgent",
-            instructions="You create realistic domestic political and social issues for fantasy nations with matriarchal power structures.",
-            model="o3-mini"
-        )
-        
-        # Determine issue types based on nation characteristics
-        issue_types = []
-        
-        # Higher matriarchy has different issues than lower
-        matriarchy_level = nation_data.get("matriarchy_level", 5)
-        
-        if matriarchy_level >= 8:
-            # High matriarchy issues
-            issue_types.extend([
-                "male_rights_movement", "traditionalist_opposition", "matriarchy_reform", 
-                "male_separatism", "gender_hierarchy_legislation"
-            ])
-        elif matriarchy_level <= 3:
-            # Low matriarchy issues
-            issue_types.extend([
-                "feminist_movement", "equality_legislation", "patriarchal_opposition",
-                "female_leadership_controversy", "gender_role_debates"
-            ])
-        else:
-            # Balanced matriarchy issues
-            issue_types.extend([
-                "gender_balance_debate", "power_sharing_reform", "traditionalist_vs_progressive"
-            ])
-        
-        # Universal issue types
-        universal_issues = [
-            "economic_crisis", "environmental_disaster", "disease_outbreak",
-            "succession_dispute", "religious_controversy", "tax_reform",
-            "military_service_debate", "trade_regulation", "education_policy",
-            "infrastructure_development", "foreign_policy_shift", "corruption_scandal",
-            "resource_scarcity", "technological_change", "constitutional_crisis",
-            "land_rights_dispute", "criminal_justice_reform", "public_safety_concerns",
-            "media_censorship", "social_services_funding"
-        ]
-        
-        issue_types.extend(universal_issues)
-        
-        # Generate issues
-        issues = []
-        selected_types = random.sample(issue_types, min(count, len(issue_types)))
-        
-        for issue_type in selected_types:
-            # Create prompt for the agent
-            prompt = f"""
-            Generate a domestic political or social issue for this nation:
-            
-            NATION:
-            {json.dumps(nation_data, indent=2)}
-            
-            FACTIONS:
-            {json.dumps(faction_data, indent=2)}
-            
-            Create a {issue_type} issue that:
-            1. Makes sense given the nation's characteristics
-            2. Creates realistic societal tension and debate
-            3. Involves multiple factions or groups
-            4. Considers the matriarchal level of the society ({matriarchy_level}/10)
-            
-            Return a JSON object with:
-            - name: Name of the issue/controversy
-            - issue_type: "{issue_type}"
-            - description: Detailed description
-            - severity: Severity level (1-10)
-            - status: Current status (emerging, active, waning, resolved)
-            - start_date: When it started (narrative date)
-            - supporting_factions: Groups supporting one side
-            - opposing_factions: Groups opposing
-            - neutral_factions: Groups remaining neutral
-            - affected_demographics: Demographics most affected
-            - public_opinion: Object describing opinion distribution
-            - government_response: How the government is responding
-            - recent_developments: Array of recent events in this issue
-            - political_impact: Impact on political landscape
-            - social_impact: Impact on society
-            - economic_impact: Economic consequences
-            - potential_resolution: Potential ways it might resolve
-            """
-            
-            # Get response from agent
-            result = await Runner.run(issue_agent, prompt, context=run_ctx.context)
-            
-            try:
-                # Parse response
-                issue_data = json.loads(result.final_output)
-                
-                # Ensure required fields exist
-                if not all(k in issue_data for k in ["name", "description", "issue_type"]):
-                    continue
-                
-                # Add nation_id
-                issue_data["nation_id"] = nation_id
-                
-                # Generate embedding
-                embedding_text = f"{issue_data['name']} {issue_data['description']} {issue_data['issue_type']}"
-                embedding = await generate_embedding(embedding_text)
-                
-                # Store in database
-                async with self.get_connection_pool() as pool:
-                    async with pool.acquire() as conn:
-                        issue_id = await conn.fetchval("""
-                            INSERT INTO DomesticIssues (
-                                nation_id, name, issue_type, description, severity,
-                                status, start_date, supporting_factions, opposing_factions,
-                                neutral_factions, affected_demographics, public_opinion,
-                                government_response, recent_developments, political_impact,
-                                social_impact, economic_impact, potential_resolution, embedding
-                            )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-                            RETURNING id
-                        """, 
-                        nation_id,
-                        issue_data.get("name"), 
-                        issue_data.get("issue_type"),
-                        issue_data.get("description"),
-                        issue_data.get("severity", 5),
-                        issue_data.get("status", "active"),
-                        issue_data.get("start_date", "Recently"),
-                        issue_data.get("supporting_factions", []),
-                        issue_data.get("opposing_factions", []),
-                        issue_data.get("neutral_factions", []),
-                        issue_data.get("affected_demographics", []),
-                        json.dumps(issue_data.get("public_opinion", {})),
-                        issue_data.get("government_response", ""),
-                        issue_data.get("recent_developments", []),
-                        issue_data.get("political_impact", ""),
-                        issue_data.get("social_impact", ""),
-                        issue_data.get("economic_impact", ""),
-                        issue_data.get("potential_resolution", ""),
-                        embedding)
-                        
-                        # Generate initial news about this issue
-                        await self._generate_domestic_news(run_ctx, issue_id, issue_data, nation_data)
-                        
-                        # Add to result
-                        issue_data["id"] = issue_id
-                        issues.append(issue_data)
-                        
-            except Exception as e:
-                logging.error(f"Error generating domestic issue: {e}")
-        
-        return issues
-    
-    async def _generate_domestic_news(
-        self, 
-        ctx, 
-        issue_id: int, 
-        issue_data: Dict[str, Any],
-        nation_data: Dict[str, Any]
-    ) -> None:
-        """Generate initial news articles about a domestic issue"""
-        # Create agent for news generation
-        news_agent = Agent(
-            name="DomesticNewsAgent",
-            instructions="You create realistic news articles about domestic political issues in a matriarchal society.",
-            model="o3-mini"
-        )
-        
-        # Generate news articles from different perspectives
-        biases = ["supporting", "opposing", "neutral"]
-        
-        for bias in biases:
-            # Create prompt for the agent
-            prompt = f"""
-            Generate a news article about this domestic issue from a {bias} perspective:
-            
-            ISSUE:
-            {json.dumps(issue_data, indent=2)}
-            
-            NATION:
-            {json.dumps(nation_data, indent=2)}
-            
-            Create a news article that:
-            1. Has a clear {bias} bias toward the issue
-            2. Includes quotes from relevant figures
-            3. Covers the key facts but with the appropriate spin
-            4. Has a catchy headline
-            5. Reflects the matriarchal power structures of society
-            
-            Return a JSON object with:
-            - headline: The article headline
-            - content: The full article content (300-500 words)
-            - source_faction: The faction or institution publishing this
-            """
-            
-            # Get response from agent
-            result = await Runner.run(news_agent, prompt, context=ctx.context)
-            
-            try:
-                # Parse response
-                news_data = json.loads(result.final_output)
-                
-                # Ensure required fields exist
-                if not all(k in news_data for k in ["headline", "content"]):
-                    continue
-                
-                # Generate embedding
-                # Store in database
-                async with self.get_connection_pool() as pool:
-                    async with pool.acquire() as conn:
-                        news_id = await conn.fetchval("""
-                            INSERT INTO DomesticNews (
-                                issue_id, headline, content, source_faction, bias
-                            )
-                            VALUES ($1, $2, $3, $4, $5)
-                            RETURNING id
-                        """, 
-                        issue_id,
-                        news_data.get("headline"), 
-                        news_data.get("content"),
-                        news_data.get("source_faction", "Unknown Source"),
-                        bias)
-                        
-                        # Generate and store embedding
-                        embedding_text = f"{news_data['headline']} {news_data['content'][:200]}"
-                        await self.generate_and_store_embedding(embedding_text, conn, "DomesticNews", "id", news_id)
-                        
-            except Exception as e:
-                logging.error(f"Error generating domestic news: {e}")
-
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_initial_conflicts",
-        action_description="Generating initial national conflicts",
-        id_from_context=lambda ctx: "national_conflict_system"
-    )
-    async def generate_initial_conflicts(self, ctx, count: int = 3) -> List[Dict[str, Any]]:
-        """
-        Generate initial conflicts between nations with governance oversight.
-        
-        Args:
-            count: Number of conflicts to generate
-            
-        Returns:
-            List of generated conflicts
-        """
-        # Create the run context
-        run_ctx = RunContextWrapper(context=ctx.context)
-        
-        # Get nations for context
-        nations = await self.geopolitical_manager.get_all_nations(run_ctx)
-        
-        if len(nations) < 2:
-            return []
-        
-        conflicts = []
-        
-        # Create agent for conflict generation
-        conflict_agent = Agent(
-            name="NationalConflictAgent",
-            instructions="You create realistic international conflicts for a fantasy world with matriarchal power structures.",
-            model="o3-mini"
-        )
-        
-        for i in range(count):
-            # Select random nations that aren't already in major conflicts
-            available_nations = [n for n in nations if not any(
-                n["id"] in c.get("involved_nations", []) for c in conflicts
-            )]
-            
-            if len(available_nations) < 2:
-                available_nations = nations  # Fallback if needed
-            
-            # Choose two random nations
-            nation_pair = random.sample(available_nations, 2)
-            
-            # Determine conflict type based on nations' characteristics
-            matriarchy_diff = abs(
-                nation_pair[0].get("matriarchy_level", 5) - 
-                nation_pair[1].get("matriarchy_level", 5)
-            )
-            
-            # Higher difference makes ideological conflicts more likely
-            if matriarchy_diff > 4:
-                conflict_types = ["ideological_dispute", "cultural_tension", "religious_conflict", "proxy_war"]
-            elif matriarchy_diff > 2:
-                conflict_types = ["diplomatic_tension", "border_dispute", "trade_dispute", "resource_conflict"]
-            else:
-                conflict_types = ["territorial_dispute", "trade_war", "succession_crisis", "alliance_dispute"]
-                
-            # Randomly select conflict type
-            conflict_type = random.choice(conflict_types)
-            
-            # Create prompt for the agent
-            prompt = f"""
-            Generate a detailed international conflict between these two nations:
-            
-            NATION 1:
-            {json.dumps(nation_pair[0], indent=2)}
-            
-            NATION 2:
-            {json.dumps(nation_pair[1], indent=2)}
-            
-            Create a {conflict_type} that:
-            1. Makes sense given the nations' characteristics
-            2. Has appropriate severity and clear causes
-            3. Includes realistic consequences and casualties
-            4. Considers the matriarchal nature of the world
-            5. Reflects how the differing matriarchy levels ({matriarchy_diff} point difference) might cause tension
-            
-            Return a JSON object with:
-            - name: Name of the conflict
-            - conflict_type: "{conflict_type}"
-            - description: Detailed description
-            - severity: Severity level (1-10)
-            - status: Current status (active, escalating, etc.)
-            - start_date: When it started (narrative date)
-            - involved_nations: IDs of involved nations
-            - primary_aggressor: ID of the primary aggressor
-            - primary_defender: ID of the primary defender
-            - current_casualties: Description of casualties so far
-            - economic_impact: Description of economic impact
-            - diplomatic_consequences: Description of diplomatic fallout
-            - public_opinion: Object with nation IDs as keys and opinion descriptions as values
-            - recent_developments: Array of recent events in the conflict
-            - potential_resolution: Potential ways it might end
-            """
-            
-            # Get response from agent
-            result = await Runner.run(conflict_agent, prompt, context=run_ctx.context)
-            
-            try:
-                # Parse response
-                conflict_data = json.loads(result.final_output)
-                
-                # Ensure required fields exist
-                if not all(k in conflict_data for k in ["name", "description", "conflict_type", "severity", "status"]):
-                    continue
-                
-                # Generate embedding
-                embedding_text = f"{conflict_data['name']} {conflict_data['description']} {conflict_data['conflict_type']}"
-                embedding = await generate_embedding(embedding_text)
-                
-                # Store in database
-                async with self.get_connection_pool() as pool:
-                    async with pool.acquire() as conn:
-                        conflict_id = await conn.fetchval("""
-                            INSERT INTO NationalConflicts (
-                                name, conflict_type, description, severity, status,
-                                start_date, involved_nations, primary_aggressor, primary_defender,
-                                current_casualties, economic_impact, diplomatic_consequences,
-                                public_opinion, recent_developments, potential_resolution, embedding
-                            )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-                            RETURNING id
-                        """, 
-                        conflict_data.get("name"), 
-                        conflict_data.get("conflict_type"),
-                        conflict_data.get("description"),
-                        conflict_data.get("severity", 5),
-                        conflict_data.get("status", "active"),
-                        conflict_data.get("start_date", "Recently"),
-                        conflict_data.get("involved_nations", [nation_pair[0]["id"], nation_pair[1]["id"]]),
-                        conflict_data.get("primary_aggressor", nation_pair[0]["id"]),
-                        conflict_data.get("primary_defender", nation_pair[1]["id"]),
-                        conflict_data.get("current_casualties", "Unknown"),
-                        conflict_data.get("economic_impact", "Unknown"),
-                        conflict_data.get("diplomatic_consequences", "Unknown"),
-                        json.dumps(conflict_data.get("public_opinion", {})),
-                        conflict_data.get("recent_developments", []),
-                        conflict_data.get("potential_resolution", "Unknown"),
-                        embedding)
-                        
-                        # Generate initial news about this conflict
-                        await self._generate_conflict_news(run_ctx, conflict_id, conflict_data, nation_pair)
-                        
-                        # Add to result
-                        conflict_data["id"] = conflict_id
-                        conflicts.append(conflict_data)
-                        
-            except Exception as e:
-                logging.error(f"Error generating conflict: {e}")
-        
-        return conflicts
-    
-    async def _generate_conflict_news(
-        self, 
-        ctx, 
-        conflict_id: int, 
-        conflict_data: Dict[str, Any],
-        nations: List[Dict[str, Any]]
-    ) -> None:
-        """Generate initial news articles about a conflict"""
-        # Create agent for news generation
-        news_agent = Agent(
-            name="ConflictNewsAgent",
-            instructions="You create realistic news articles about international conflicts in a matriarchal world.",
-            model="o3-mini"
-        )
-        
-        # Generate one news article from each nation's perspective
-        for i, nation in enumerate(nations[:2]):
-            bias = "pro_defender" if nation["id"] == conflict_data.get("primary_defender") else "pro_aggressor"
-            
-            # Create prompt for the agent
-            prompt = f"""
-            Generate a news article about this conflict from the perspective of {nation["name"]}:
-            
-            CONFLICT:
-            {json.dumps(conflict_data, indent=2)}
-            
-            REPORTING NATION:
-            {json.dumps(nation, indent=2)}
-            
-            Create a news article that:
-            1. Has a clear {bias} bias
-            2. Includes quotes from officials (primarily women in positions of power)
-            3. Covers the key facts but with the nation's spin
-            4. Has a catchy headline
-            5. Reflects matriarchal power structures in its language and reporting style
-            
-            Return a JSON object with:
-            - headline: The article headline
-            - content: The full article content (300-500 words)
-            """
-            
-            # Get response from agent
-            result = await Runner.run(news_agent, prompt, context=ctx.context)
-            
-            try:
-                # Parse response
-                news_data = json.loads(result.final_output)
-                
-                # Ensure required fields exist
-                if not all(k in news_data for k in ["headline", "content"]):
-                    continue
-                
-                # Apply matriarchal theming to content
-                news_data["content"] = _apply_basic_replacements(news_data["content"])
-                
-                # Generate embedding
-                embedding_text = f"{news_data['headline']} {news_data['content'][:200]}"
-                embedding = await generate_embedding(embedding_text)
-                
-                # Store in database
-                async with self.get_connection_pool() as pool:
-                    async with pool.acquire() as conn:
-                        await conn.execute("""
-                            INSERT INTO ConflictNews (
-                                conflict_id, headline, content, source_nation, bias, embedding
-                            )
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                        """, 
-                        conflict_id,
-                        news_data.get("headline"), 
-                        news_data.get("content"),
-                        nation["id"],
-                        bias,
-                        embedding)
-                        
-            except Exception as e:
-                logging.error(f"Error generating conflict news: {e}")
-
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="get_active_conflicts",
-        action_description="Getting active national conflicts",
-        id_from_context=lambda ctx: "national_conflict_system"
-    )
-    async def get_active_conflicts(self, ctx) -> List[Dict[str, Any]]:
-        """
-        Get all active conflicts with governance oversight.
-        
-        Returns:
-            List of active conflicts
-        """
-        # Check cache first
-        cache_key = f"active_conflicts_{self.user_id}_{self.conversation_id}"
-        cached = CONFLICT_CACHE.get(cache_key)
-        if cached:
-            return cached
-        
-        # Query database for active conflicts
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                conflicts = await conn.fetch("""
-                    SELECT * FROM NationalConflicts
-                    WHERE status != 'resolved'
-                    ORDER BY severity DESC
-                """)
-                
-                # Convert to list of dicts
-                result = [dict(conflict) for conflict in conflicts]
-                
-                # Cache result
-                CONFLICT_CACHE.set(cache_key, result)
-                
-                return result
-
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="get_nation_issues",
-        action_description="Getting domestic issues for nation {nation_id}",
-        id_from_context=lambda ctx: "national_conflict_system"
-    )
-    async def get_nation_issues(self, ctx, nation_id: int) -> List[Dict[str, Any]]:
-        """
-        Get all domestic issues for a nation with governance oversight.
-        
-        Args:
-            nation_id: ID of the nation
-            
-        Returns:
-            List of domestic issues
-        """
-        # Check cache first
-        cache_key = f"nation_domestic_issues_{nation_id}_{self.user_id}_{self.conversation_id}"
-        cached = CONFLICT_CACHE.get(cache_key)
-        if cached:
-            return cached
-        
-        # Query database for domestic issues
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                issues = await conn.fetch("""
-                    SELECT * FROM DomesticIssues
-                    WHERE nation_id = $1
-                    ORDER BY severity DESC
-                """, nation_id)
-                
-                # Convert to list of dicts
-                result = [dict(issue) for issue in issues]
-                
-                # Parse JSON fields
-                for issue in result:
-                    if "public_opinion" in issue and issue["public_opinion"]:
-                        try:
-                            issue["public_opinion"] = json.loads(issue["public_opinion"])
-                        except:
-                            pass
-                
-                # Cache result
-                CONFLICT_CACHE.set(cache_key, result)
-                
-                return result
-
