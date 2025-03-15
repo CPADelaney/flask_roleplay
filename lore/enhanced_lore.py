@@ -41,16 +41,44 @@ from lore.lore_tools import (
     generate_quest_hooks
 )
 
-# Initialize cache for lore items
-LORE_CACHE = LoreCache(max_size=1000, ttl=7200)  # 2 hour TTL, larger cache
+class LoreCache:
+    """Unified cache system for all lore types"""
+    
+    def __init__(self):
+        self.caches = {}
+        self.default_max_size = 1000
+        self.default_ttl = 7200  # 2 hour TTL
+    
+    def get_cache(self, cache_type):
+        """Get or create a cache for the specified type"""
+        if cache_type not in self.caches:
+            from utils.caching import LoreCache as BaseLoreCache
+            self.caches[cache_type] = BaseLoreCache(max_size=self.default_max_size, ttl=self.default_ttl)
+        return self.caches[cache_type]
+    
+    def get(self, cache_type, key):
+        """Get an item from the specified cache"""
+        cache = self.get_cache(cache_type)
+        return cache.get(key)
+    
+    def set(self, cache_type, key, value):
+        """Set an item in the specified cache"""
+        cache = self.get_cache(cache_type)
+        cache.set(key, value)
+    
+    def invalidate_pattern(self, cache_type, pattern):
+        """Invalidate keys matching a pattern in the specified cache"""
+        cache = self.get_cache(cache_type)
+        cache.invalidate_pattern(pattern)
 
-# Add this at the top of your file, after the imports but before any other classes
+# Create a single cache manager instance
+CACHE_MANAGER = LoreCache()
 
 class BaseLoreManager:
     """
-    Base class for all lore management systems.
+    Enhanced base class for all lore management systems.
     Provides common functionality for governance registration,
-    database access, and authorization.
+    database access, authorization, and table initialization.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
@@ -66,7 +94,8 @@ class BaseLoreManager:
         self.lore_manager = LoreManager(user_id, conversation_id)
         self.governor = None
         self.initialized = False
-        
+        self.cache_prefix = self.__class__.__name__.lower()
+    
     async def initialize_governance(self):
         """
         Initialize Nyx governance connection.
@@ -84,7 +113,8 @@ class BaseLoreManager:
         Should be overridden by derived classes to include table initialization.
         """
         if not self.initialized:
-            await self.ensure_initialized()
+            await self.initialize_governance()
+            await self.initialize_tables()
             self.initialized = True
     
     async def register_with_governance(
@@ -217,6 +247,90 @@ class BaseLoreManager:
         Should be overridden by derived classes.
         """
         pass
+    
+    async def initialize_tables_for_class(self, table_definitions: Dict[str, str]):
+        """
+        Initialize tables using a dictionary of table definitions.
+        
+        Args:
+            table_definitions: Dictionary mapping table names to CREATE TABLE statements
+        """
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                for table_name, create_statement in table_definitions.items():
+                    # Check if table exists
+                    table_exists = await conn.fetchval(f"""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_name = '{table_name.lower()}'
+                        );
+                    """)
+                    
+                    if not table_exists:
+                        # Create the table
+                        await conn.execute(create_statement)
+                        logging.info(f"{table_name} table created")
+    
+    async def generate_and_store_embedding(
+        self, 
+        text: str, 
+        conn, 
+        table_name: str, 
+        id_field: str, 
+        id_value: Any
+    ):
+        """
+        Generate an embedding for text and store it in the database.
+        
+        Args:
+            text: Text to generate embedding for
+            conn: Database connection
+            table_name: Name of the table
+            id_field: Name of the ID field
+            id_value: Value of the ID
+        """
+        # Generate embedding
+        embedding = await generate_embedding(text)
+        
+        # Update the table
+        await conn.execute(f"""
+            UPDATE {table_name}
+            SET embedding = $1
+            WHERE {id_field} = $2
+        """, embedding, id_value)
+    
+    def get_cache(self, key):
+        """
+        Get an item from the cache.
+        
+        Args:
+            key: Cache key
+            
+        Returns:
+            Cached item or None
+        """
+        cache_key = f"{self.cache_prefix}_{key}_{self.user_id}_{self.conversation_id}"
+        return CACHE_MANAGER.get(self.cache_prefix, cache_key)
+    
+    def set_cache(self, key, value):
+        """
+        Set an item in the cache.
+        
+        Args:
+            key: Cache key
+            value: Value to cache
+        """
+        cache_key = f"{self.cache_prefix}_{key}_{self.user_id}_{self.conversation_id}"
+        CACHE_MANAGER.set(self.cache_prefix, cache_key, value)
+    
+    def invalidate_cache_pattern(self, pattern):
+        """
+        Invalidate cache keys matching a pattern.
+        
+        Args:
+            pattern: Pattern to match
+        """
+        CACHE_MANAGER.invalidate_pattern(self.cache_prefix, pattern)
 
 class MatriarchalPowerStructureFramework(BaseLoreManager):
     """
@@ -4776,14 +4890,15 @@ class LoreDynamicsSystem(BaseLoreManager):
         
         return changes
         
-class UrbanMythManager(BaseLoreManager):
+class LocalLoreManager(BaseLoreManager):
     """
-    Manager for urban myths, local stories, and folk tales that develop organically
-    across different regions and communities.
+    Consolidated manager for local lore elements including urban myths, local histories,
+    landmarks, and other location-specific narratives.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
+        self.cache_prefix = "locallore"
     
     async def ensure_initialized(self):
         """Ensure system is initialized"""
@@ -4792,48 +4907,80 @@ class UrbanMythManager(BaseLoreManager):
             await self.initialize_tables()
         
     async def initialize_tables(self):
-        """Ensure urban myth tables exist"""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Check if UrbanMyths table exists
-                table_exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'urbanmyths'
-                    );
-                """)
+        """Ensure all local lore tables exist"""
+        table_definitions = {
+            "UrbanMyths": """
+                CREATE TABLE UrbanMyths (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    origin_location TEXT,
+                    origin_event TEXT,
+                    believability INTEGER CHECK (believability BETWEEN 1 AND 10),
+                    spread_rate INTEGER CHECK (spread_rate BETWEEN 1 AND 10),
+                    regions_known TEXT[],
+                    variations TEXT[],
+                    creation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    embedding VECTOR(1536)
+                );
                 
-                if not table_exists:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE UrbanMyths (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            description TEXT NOT NULL,
-                            origin_location TEXT,
-                            origin_event TEXT,
-                            believability INTEGER CHECK (believability BETWEEN 1 AND 10),
-                            spread_rate INTEGER CHECK (spread_rate BETWEEN 1 AND 10),
-                            regions_known TEXT[],
-                            variations TEXT[],
-                            creation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            embedding VECTOR(1536)
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_urbanmyths_embedding 
-                        ON UrbanMyths USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("UrbanMyths table created")
+                CREATE INDEX IF NOT EXISTS idx_urbanmyths_embedding 
+                ON UrbanMyths USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "LocalHistories": """
+                CREATE TABLE LocalHistories (
+                    id SERIAL PRIMARY KEY,
+                    location_id INTEGER NOT NULL,
+                    event_name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    date_description TEXT,
+                    significance INTEGER CHECK (significance BETWEEN 1 AND 10),
+                    impact_type TEXT,
+                    notable_figures TEXT[],
+                    current_relevance TEXT,
+                    commemoration TEXT,
+                    embedding VECTOR(1536),
+                    FOREIGN KEY (location_id) REFERENCES Locations(id) ON DELETE CASCADE
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_localhistories_embedding 
+                ON LocalHistories USING ivfflat (embedding vector_cosine_ops);
+                
+                CREATE INDEX IF NOT EXISTS idx_localhistories_location
+                ON LocalHistories(location_id);
+            """,
+            
+            "Landmarks": """
+                CREATE TABLE Landmarks (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    location_id INTEGER NOT NULL,
+                    landmark_type TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    historical_significance TEXT,
+                    current_use TEXT,
+                    controlled_by TEXT,
+                    legends TEXT[],
+                    embedding VECTOR(1536),
+                    FOREIGN KEY (location_id) REFERENCES Locations(id) ON DELETE CASCADE
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_landmarks_embedding 
+                ON Landmarks USING ivfflat (embedding vector_cosine_ops);
+                
+                CREATE INDEX IF NOT EXISTS idx_landmarks_location
+                ON Landmarks(location_id);
+            """
+        }
+        
+        await self.initialize_tables_for_class(table_definitions)
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="add_urban_myth",
         action_description="Adding urban myth: {name}",
-        id_from_context=lambda ctx: "urban_myth_manager"
+        id_from_context=lambda ctx: "local_lore_manager"
     )
     async def add_urban_myth(
         self, 
@@ -4862,7 +5009,7 @@ class UrbanMythManager(BaseLoreManager):
             ID of the created urban myth
         """
         # Ensure tables exist
-        await self.initialize_tables()
+        await self.ensure_initialized()
         
         # Generate embedding for the myth
         embedding_text = f"{name} {description}"
@@ -4890,7 +5037,7 @@ class UrbanMythManager(BaseLoreManager):
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="get_myths_for_location",
         action_description="Getting myths for location: {location}",
-        id_from_context=lambda ctx: "urban_myth_manager"
+        id_from_context=lambda ctx: "local_lore_manager"
     )
     async def get_myths_for_location(self, ctx, location: str) -> List[Dict[str, Any]]:
         """
@@ -4902,8 +5049,14 @@ class UrbanMythManager(BaseLoreManager):
         Returns:
             List of urban myths known in this location
         """
+        # Check cache first
+        cache_key = f"myths_for_{location}"
+        cached = self.get_cache(cache_key)
+        if cached:
+            return cached
+        
         # Ensure tables exist
-        await self.initialize_tables()
+        await self.ensure_initialized()
         
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
@@ -4937,13 +5090,257 @@ class UrbanMythManager(BaseLoreManager):
                         myth_dict["origin"] = False
                         myths.append(myth_dict)
                 
+                # Cache the result
+                self.set_cache(cache_key, myths)
+                
                 return myths
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_local_history",
+        action_description="Adding local history event: {event_name}",
+        id_from_context=lambda ctx: "local_lore_manager"
+    )
+    async def add_local_history(
+        self, 
+        ctx,
+        location_id: int,
+        event_name: str,
+        description: str,
+        date_description: str = "Some time ago",
+        significance: int = 5,
+        impact_type: str = "cultural",
+        notable_figures: List[str] = None,
+        current_relevance: str = None,
+        commemoration: str = None
+    ) -> int:
+        """
+        Add a local historical event to the database
+        
+        Args:
+            location_id: ID of the associated location
+            event_name: Name of the historical event
+            description: Description of the event
+            date_description: When it occurred
+            significance: Importance from 1-10
+            impact_type: Type of impact (political, cultural, etc.)
+            notable_figures: People involved
+            current_relevance: How it affects the present
+            commemoration: How it's remembered/celebrated
+            
+        Returns:
+            ID of the created local history event
+        """
+        # Ensure tables exist
+        await self.ensure_initialized()
+        
+        # Set defaults
+        notable_figures = notable_figures or []
+        
+        # Generate embedding
+        embedding_text = f"{event_name} {description} {date_description}"
+        embedding = await generate_embedding(embedding_text)
+        
+        # Store in database
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                event_id = await conn.fetchval("""
+                    INSERT INTO LocalHistories (
+                        location_id, event_name, description, date_description,
+                        significance, impact_type, notable_figures,
+                        current_relevance, commemoration, embedding
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    RETURNING id
+                """, location_id, event_name, description, date_description,
+                     significance, impact_type, notable_figures,
+                     current_relevance, commemoration, embedding)
+                
+                # Invalidate relevant cache
+                self.invalidate_cache_pattern(f"local_history_{location_id}")
+                
+                return event_id
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="add_landmark",
+        action_description="Adding landmark: {name}",
+        id_from_context=lambda ctx: "local_lore_manager"
+    )
+    async def add_landmark(
+        self, 
+        ctx,
+        name: str,
+        location_id: int,
+        landmark_type: str,
+        description: str,
+        historical_significance: str = None,
+        current_use: str = None,
+        controlled_by: str = None,
+        legends: List[str] = None
+    ) -> int:
+        """
+        Add a landmark to the database
+        
+        Args:
+            name: Name of the landmark
+            location_id: ID of the associated location
+            landmark_type: Type of landmark (monument, building, natural feature, etc.)
+            description: Description of the landmark
+            historical_significance: Historical importance
+            current_use: How it's used today
+            controlled_by: Who controls/owns it
+            legends: Associated legends or stories
+            
+        Returns:
+            ID of the created landmark
+        """
+        # Ensure tables exist
+        await self.ensure_initialized()
+        
+        # Set defaults
+        legends = legends or []
+        
+        # Generate embedding
+        embedding_text = f"{name} {landmark_type} {description}"
+        embedding = await generate_embedding(embedding_text)
+        
+        # Store in database
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                landmark_id = await conn.fetchval("""
+                    INSERT INTO Landmarks (
+                        name, location_id, landmark_type, description,
+                        historical_significance, current_use, controlled_by,
+                        legends, embedding
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    RETURNING id
+                """, name, location_id, landmark_type, description,
+                     historical_significance, current_use, controlled_by,
+                     legends, embedding)
+                
+                # Invalidate relevant cache
+                self.invalidate_cache_pattern(f"landmarks_{location_id}")
+                
+                return landmark_id
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="get_location_lore",
+        action_description="Getting all lore for location: {location_id}",
+        id_from_context=lambda ctx: "local_lore_manager"
+    )
+    async def get_location_lore(self, ctx, location_id: int) -> Dict[str, Any]:
+        """
+        Get all lore associated with a location (myths, history, landmarks)
+        
+        Args:
+            location_id: ID of the location
+            
+        Returns:
+            Dictionary with all lore for the location
+        """
+        # Check cache first
+        cache_key = f"location_lore_{location_id}"
+        cached = self.get_cache(cache_key)
+        if cached:
+            return cached
+        
+        # Get location details
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get location name
+                location = await conn.fetchrow("""
+                    SELECT id, location_name
+                    FROM Locations
+                    WHERE id = $1
+                """, location_id)
+                
+                if not location:
+                    return {"error": "Location not found"}
+                
+                location_name = location["location_name"]
+                
+                # Get all local histories
+                histories = await conn.fetch("""
+                    SELECT id, event_name, description, date_description,
+                           significance, impact_type, notable_figures,
+                           current_relevance, commemoration
+                    FROM LocalHistories
+                    WHERE location_id = $1
+                    ORDER BY significance DESC
+                """, location_id)
+                
+                # Get all landmarks
+                landmarks = await conn.fetch("""
+                    SELECT id, name, landmark_type, description,
+                           historical_significance, current_use,
+                           controlled_by, legends
+                    FROM Landmarks
+                    WHERE location_id = $1
+                """, location_id)
+                
+                # Get all myths
+                myths = await conn.fetch("""
+                    SELECT id, name, description, believability, spread_rate
+                    FROM UrbanMyths
+                    WHERE origin_location = $1 OR $1 = ANY(regions_known)
+                """, location_name)
+                
+                # Compile result
+                result = {
+                    "location": dict(location),
+                    "histories": [dict(hist) for hist in histories],
+                    "landmarks": [dict(landmark) for landmark in landmarks],
+                    "myths": [dict(myth) for myth in myths]
+                }
+                
+                # Cache result
+                self.set_cache(cache_key, result)
+                
+                return result
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_location_lore",
+        action_description="Generating lore for location: {location_data['name']}",
+        id_from_context=lambda ctx: "local_lore_manager"
+    )
+    async def generate_location_lore(self, ctx, location_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate comprehensive lore for a location
+        
+        Args:
+            location_data: Dictionary with location details
+            
+        Returns:
+            Dictionary with generated lore
+        """
+        # Create run context
+        run_ctx = self.create_run_context(ctx)
+        
+        # Generate myths
+        myths = await self.generate_myths_for_location(run_ctx, location_data)
+        
+        # Generate local histories
+        histories = await self.generate_local_history(run_ctx, location_data)
+        
+        # Generate landmarks
+        landmarks = await self.generate_landmarks(run_ctx, location_data)
+        
+        return {
+            "location": location_data,
+            "generated_myths": myths,
+            "generated_histories": histories,
+            "generated_landmarks": landmarks
+        }
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_myths_for_location",
         action_description="Generating myths for location: {location_data['name']}",
-        id_from_context=lambda ctx: "urban_myth_manager"
+        id_from_context=lambda ctx: "local_lore_manager"
     )
     async def generate_myths_for_location(self, ctx, location_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -4956,14 +5353,11 @@ class UrbanMythManager(BaseLoreManager):
             List of generated urban myths
         """
         # Create the run context
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id
-        })
+        run_ctx = self.create_run_context(ctx)
         
         # Extract relevant details
         location_name = location_data.get('name', 'Unknown Location')
-        location_type = location_data.get('type', 'place')
+        location_type = location_data.get('location_type', 'place')
         description = location_data.get('description', '')
         
         # Create a prompt for the LLM
@@ -5008,6 +5402,13 @@ class UrbanMythManager(BaseLoreManager):
                 else:
                     myths = []
             
+            # Apply matriarchal theming to each myth
+            for myth in myths:
+                if 'description' in myth:
+                    myth['description'] = MatriarchalThemingUtils.apply_matriarchal_theme(
+                        'myth', myth['description'], emphasis_level=1
+                    )
+            
             # Store each myth
             saved_myths = []
             for myth in myths:
@@ -5042,293 +5443,12 @@ class UrbanMythManager(BaseLoreManager):
         except json.JSONDecodeError:
             logging.error(f"Failed to parse LLM response for urban myths: {response_text}")
             return []
-
-class LocalHistoryManager(BaseLoreManager):
-    """
-    Manager for local histories, events, and landmarks that are specific
-    to particular locations rather than the broader world history.
-    """
-    
-    def __init__(self, user_id: int, conversation_id: int):
-        super().__init__(user_id, conversation_id)
-    
-    async def ensure_initialized(self):
-        """Ensure system is initialized"""
-        if not self.initialized:
-            await super().ensure_initialized()
-            await self.initialize_tables()
-        
-    async def initialize_tables(self):
-        """Ensure local history tables exist"""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Check if LocalHistories table exists
-                local_history_exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'localhistories'
-                    );
-                """)
-                
-                if not local_history_exists:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE LocalHistories (
-                            id SERIAL PRIMARY KEY,
-                            location_id INTEGER NOT NULL,
-                            event_name TEXT NOT NULL,
-                            description TEXT NOT NULL,
-                            date_description TEXT,
-                            significance INTEGER CHECK (significance BETWEEN 1 AND 10),
-                            impact_type TEXT,
-                            notable_figures TEXT[],
-                            current_relevance TEXT,
-                            commemoration TEXT,
-                            embedding VECTOR(1536),
-                            FOREIGN KEY (location_id) REFERENCES Locations(id) ON DELETE CASCADE
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_localhistories_embedding 
-                        ON LocalHistories USING ivfflat (embedding vector_cosine_ops);
-                        
-                        CREATE INDEX IF NOT EXISTS idx_localhistories_location
-                        ON LocalHistories(location_id);
-                    """)
-                    
-                    logging.info("LocalHistories table created")
-                
-                # Check if Landmarks table exists
-                landmarks_exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'landmarks'
-                    );
-                """)
-                
-                if not landmarks_exists:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE Landmarks (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            location_id INTEGER NOT NULL,
-                            landmark_type TEXT NOT NULL,
-                            description TEXT NOT NULL,
-                            historical_significance TEXT,
-                            current_use TEXT,
-                            controlled_by TEXT,
-                            legends TEXT[],
-                            embedding VECTOR(1536),
-                            FOREIGN KEY (location_id) REFERENCES Locations(id) ON DELETE CASCADE
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_landmarks_embedding 
-                        ON Landmarks USING ivfflat (embedding vector_cosine_ops);
-                        
-                        CREATE INDEX IF NOT EXISTS idx_landmarks_location
-                        ON Landmarks(location_id);
-                    """)
-                    
-                    logging.info("Landmarks table created")
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_local_history",
-        action_description="Adding local history event: {event_name}",
-        id_from_context=lambda ctx: "local_history_manager"
-    )
-    async def add_local_history(
-        self, 
-        ctx,
-        location_id: int,
-        event_name: str,
-        description: str,
-        date_description: str = "Some time ago",
-        significance: int = 5,
-        impact_type: str = "cultural",
-        notable_figures: List[str] = None,
-        current_relevance: str = None,
-        commemoration: str = None
-    ) -> int:
-        """
-        Add a local historical event to the database
-        
-        Args:
-            location_id: ID of the associated location
-            event_name: Name of the historical event
-            description: Description of the event
-            date_description: When it occurred
-            significance: Importance from 1-10
-            impact_type: Type of impact (political, cultural, etc.)
-            notable_figures: People involved
-            current_relevance: How it affects the present
-            commemoration: How it's remembered/celebrated
-            
-        Returns:
-            ID of the created local history event
-        """
-        # Ensure tables exist
-        await self.initialize_tables()
-        
-        # Set defaults
-        notable_figures = notable_figures or []
-        
-        # Generate embedding
-        embedding_text = f"{event_name} {description} {date_description}"
-        embedding = await generate_embedding(embedding_text)
-        
-        # Store in database
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                event_id = await conn.fetchval("""
-                    INSERT INTO LocalHistories (
-                        location_id, event_name, description, date_description,
-                        significance, impact_type, notable_figures,
-                        current_relevance, commemoration, embedding
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                    RETURNING id
-                """, location_id, event_name, description, date_description,
-                     significance, impact_type, notable_figures,
-                     current_relevance, commemoration, embedding)
-                
-                return event_id
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_landmark",
-        action_description="Adding landmark: {name}",
-        id_from_context=lambda ctx: "local_history_manager"
-    )
-    async def add_landmark(
-        self, 
-        ctx,
-        name: str,
-        location_id: int,
-        landmark_type: str,
-        description: str,
-        historical_significance: str = None,
-        current_use: str = None,
-        controlled_by: str = None,
-        legends: List[str] = None
-    ) -> int:
-        """
-        Add a landmark to the database
-        
-        Args:
-            name: Name of the landmark
-            location_id: ID of the associated location
-            landmark_type: Type of landmark (monument, building, natural feature, etc.)
-            description: Description of the landmark
-            historical_significance: Historical importance
-            current_use: How it's used today
-            controlled_by: Who controls/owns it
-            legends: Associated legends or stories
-            
-        Returns:
-            ID of the created landmark
-        """
-        # Ensure tables exist
-        await self.initialize_tables()
-        
-        # Set defaults
-        legends = legends or []
-        
-        # Generate embedding
-        embedding_text = f"{name} {landmark_type} {description}"
-        embedding = await generate_embedding(embedding_text)
-        
-        # Store in database
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                landmark_id = await conn.fetchval("""
-                    INSERT INTO Landmarks (
-                        name, location_id, landmark_type, description,
-                        historical_significance, current_use, controlled_by,
-                        legends, embedding
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                    RETURNING id
-                """, name, location_id, landmark_type, description,
-                     historical_significance, current_use, controlled_by,
-                     legends, embedding)
-                
-                return landmark_id
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="get_local_history",
-        action_description="Getting local history for location: {location_name}",
-        id_from_context=lambda ctx: "local_history_manager"
-    )
-    async def get_local_history(self, ctx, location_id: int, location_name: str) -> List[Dict[str, Any]]:
-        """
-        Get local historical events for a specific location
-        
-        Args:
-            location_id: The location ID
-            location_name: The name of the location (for logs)
-            
-        Returns:
-            List of local historical events
-        """
-        # Ensure tables exist
-        await self.initialize_tables()
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                events = await conn.fetch("""
-                    SELECT id, event_name, description, date_description, significance,
-                           impact_type, notable_figures, current_relevance, commemoration
-                    FROM LocalHistories
-                    WHERE location_id = $1
-                    ORDER BY significance DESC
-                """, location_id)
-                
-                return [dict(event) for event in events]
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="get_landmarks",
-        action_description="Getting landmarks for location: {location_name}",
-        id_from_context=lambda ctx: "local_history_manager"
-    )
-    async def get_landmarks(self, ctx, location_id: int, location_name: str) -> List[Dict[str, Any]]:
-        """
-        Get landmarks for a specific location
-        
-        Args:
-            location_id: The location ID
-            location_name: The name of the location (for logs)
-            
-        Returns:
-            List of landmarks
-        """
-        # Ensure tables exist
-        await self.initialize_tables()
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                landmarks = await conn.fetch("""
-                    SELECT id, name, landmark_type, description, historical_significance,
-                           current_use, controlled_by, legends
-                    FROM Landmarks
-                    WHERE location_id = $1
-                """, location_id)
-                
-                return [dict(landmark) for landmark in landmarks]
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_local_history",
         action_description="Generating local history for: {location_data['name']}",
-        id_from_context=lambda ctx: "local_history_manager"
+        id_from_context=lambda ctx: "local_lore_manager"
     )
     async def generate_local_history(self, ctx, location_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -5341,10 +5461,7 @@ class LocalHistoryManager(BaseLoreManager):
             List of generated local historical events
         """
         # Create the run context
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id
-        })
+        run_ctx = self.create_run_context(ctx)
         
         # Extract relevant details
         location_id = location_data.get('id')
@@ -5353,7 +5470,17 @@ class LocalHistoryManager(BaseLoreManager):
         description = location_data.get('description', '')
         
         # Get world lore for context
-        world_history = await self._get_world_history_context()
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Try to get world history for context
+                world_history = await conn.fetchval("""
+                    SELECT description FROM WorldLore
+                    WHERE category = 'world_history'
+                    LIMIT 1
+                """)
+                
+                if not world_history:
+                    world_history = "The world has a rich history of matriarchal societies and feminine power."
         
         # Create a prompt for the LLM
         prompt = f"""
@@ -5363,7 +5490,7 @@ class LocalHistoryManager(BaseLoreManager):
         DESCRIPTION: {description}
         
         WORLD HISTORY CONTEXT:
-        {world_history}
+        {world_history[:500]}
         
         Create local historical events that feel authentic to this location. Each event should:
         1. Be specific to this location rather than world-changing
@@ -5403,6 +5530,13 @@ class LocalHistoryManager(BaseLoreManager):
                     events = [events]
                 else:
                     events = []
+            
+            # Apply matriarchal theming to each event
+            for event in events:
+                if 'description' in event:
+                    event['description'] = MatriarchalThemingUtils.apply_matriarchal_theme(
+                        'history', event['description'], emphasis_level=1
+                    )
             
             # Store each event
             saved_events = []
@@ -5450,7 +5584,7 @@ class LocalHistoryManager(BaseLoreManager):
         agent_type=AgentType.NARRATIVE_CRAFTER,
         action_type="generate_landmarks",
         action_description="Generating landmarks for: {location_data['name']}",
-        id_from_context=lambda ctx: "local_history_manager"
+        id_from_context=lambda ctx: "local_lore_manager"
     )
     async def generate_landmarks(self, ctx, location_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -5463,10 +5597,7 @@ class LocalHistoryManager(BaseLoreManager):
             List of generated landmarks
         """
         # Create the run context
-        run_ctx = RunContextWrapper(context={
-            "user_id": self.user_id,
-            "conversation_id": self.conversation_id
-        })
+        run_ctx = self.create_run_context(ctx)
         
         # Extract relevant details
         location_id = location_data.get('id')
@@ -5475,11 +5606,31 @@ class LocalHistoryManager(BaseLoreManager):
         description = location_data.get('description', '')
         
         # Get local history for context
-        local_history = await self.get_local_history(run_ctx, location_id, location_name)
-        history_context = "\n".join([f"- {e['event_name']}: {e['description'][:100]}..." for e in local_history[:2]])
+        local_history = await self.get_location_lore(ctx, location_id)
+        history_context = "\n".join([f"- {e['event_name']}: {e['description'][:100]}..." 
+                                    for e in local_history.get('histories', [])[:2]])
         
-        # Get factions that control this area
-        controlling_factions = await self._get_controlling_factions(location_id)
+        # Get controlling factions
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Try to find factions that control this location
+                controlling_factions = []
+                try:
+                    factions = await conn.fetch("""
+                        SELECT f.id, f.name, f.type
+                        FROM Factions f
+                        JOIN LoreConnections lc ON f.id = lc.source_id
+                        WHERE lc.target_type = 'LocationLore'
+                        AND lc.target_id = $1
+                        AND lc.source_type = 'Factions'
+                        AND lc.connection_type = 'influences'
+                    """, location_id)
+                    
+                    controlling_factions = [dict(faction) for faction in factions]
+                except:
+                    # Just use empty list if table doesn't exist or query fails
+                    pass
+        
         faction_context = ", ".join([f['name'] for f in controlling_factions]) if controlling_factions else "Various groups"
         
         # Create a prompt for the LLM
@@ -5531,6 +5682,13 @@ class LocalHistoryManager(BaseLoreManager):
                 else:
                     landmarks = []
             
+            # Apply matriarchal theming to each landmark
+            for landmark in landmarks:
+                if 'description' in landmark:
+                    landmark['description'] = MatriarchalThemingUtils.apply_matriarchal_theme(
+                        'landmark', landmark['description'], emphasis_level=1
+                    )
+            
             # Store each landmark
             saved_landmarks = []
             for landmark in landmarks:
@@ -5571,83 +5729,275 @@ class LocalHistoryManager(BaseLoreManager):
             logging.error(f"Failed to parse LLM response for landmarks: {response_text}")
             return []
     
-    async def _get_world_history_context(self) -> str:
-        """Get relevant world history for context when generating local history"""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Try to get world history from WorldLore
-                world_history = await conn.fetchval("""
-                    SELECT description FROM WorldLore
-                    WHERE category = 'world_history'
-                    LIMIT 1
-                """)
-                
-                if world_history:
-                    return world_history
-                
-                # Fall back to historical events
-                events = await conn.fetch("""
-                    SELECT name, description FROM HistoricalEvents
-                    ORDER BY significance DESC
-                    LIMIT 3
-                """)
-                
-                if events:
-                    return "\n".join([f"{e['name']}: {e['description'][:150]}..." for e in events])
-                
-                # Default context if nothing found
-                return "The world has a rich history of matriarchal societies and female-dominated power structures."
-    
-    async def _get_controlling_factions(self, location_id: int) -> List[Dict[str, Any]]:
-        """Get factions that control a specific location"""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get location details first
-                location = await conn.fetchrow("""
-                    SELECT id, name FROM Locations
-                    WHERE id = $1
-                """, location_id)
-                
-                if not location:
-                    return []
-                    
-                # Check for direct connections to factions
-                factions = await conn.fetch("""
-                    SELECT f.id, f.name, f.type, lc.strength, lc.description
-                    FROM Factions f
-                    JOIN LoreConnections lc ON f.id = lc.source_id
-                    WHERE lc.target_type = 'LocationLore'
-                    AND lc.target_id = $1
-                    AND lc.source_type = 'Factions'
-                    AND lc.connection_type = 'influences'
-                """, location_id)
-                
-                if factions:
-                    return [dict(faction) for faction in factions]
-                    
-                # If no direct connections, check location lore for faction mentions
-                location_lore = await conn.fetchrow("""
-                    SELECT associated_factions FROM LocationLore
-                    WHERE location_id = $1
-                """, location_id)
-                
-                if location_lore and location_lore['associated_factions']:
-                    faction_names = location_lore['associated_factions']
-                    factions = []
-                    
-                    for name in faction_names:
-                        faction = await conn.fetchrow("""
-                            SELECT id, name, type FROM Factions
-                            WHERE name = $1
-                        """, name)
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="evolve_location_lore",
+        action_description="Evolving lore for location: {location_id}",
+        id_from_context=lambda ctx: "local_lore_manager"
+    )
+    async def evolve_location_lore(self, ctx, location_id: int, event_description: str) -> Dict[str, Any]:
+        """
+        Evolve the lore of a location based on an event
+        
+        Args:
+            location_id: ID of the location
+            event_description: Description of the event affecting the location
+            
+        Returns:
+            Dictionary with evolution results
+        """
+        # Create run context
+        run_ctx = self.create_run_context(ctx)
+        
+        # Get current location lore
+        location_lore = await self.get_location_lore(ctx, location_id)
+        
+        if "error" in location_lore:
+            return location_lore
+        
+        # Theming the event
+        themed_event = MatriarchalThemingUtils.apply_matriarchal_theme(
+            'event', event_description, emphasis_level=1
+        )
+        
+        # Get location name
+        location_name = location_lore.get('location', {}).get('location_name', 'Unknown Location')
+        
+        # Create an agent for lore evolution
+        evolution_agent = Agent(
+            name="LoreEvolutionAgent",
+            instructions="You evolve location lore based on events that affect the location.",
+            model="o3-mini"
+        )
+        
+        # 1. Evolve myths first
+        myths_prompt = f"""
+        Based on this event that occurred at {location_name}, determine how it affects the local myths:
+        
+        EVENT:
+        {themed_event}
+        
+        CURRENT MYTHS:
+        {json.dumps(location_lore.get('myths', []), indent=2)}
+        
+        Create 1-2 reasonable evolutions for these myths based on the event.
+        You can either modify an existing myth or create a new one.
+        
+        Format your response as a JSON object with:
+        - "modified_myths": Array of objects with "id" (if updating existing) and "new_description"
+        - "new_myths": Array of objects with "name", "description", "believability", "spread_rate"
+        """
+        
+        # 2. Evolve history
+        history_prompt = f"""
+        Based on this event that occurred at {location_name}, create a new historical entry:
+        
+        EVENT:
+        {themed_event}
+        
+        EXISTING HISTORY:
+        {json.dumps(location_lore.get('histories', []), indent=2)}
+        
+        Create a new historical entry for this event.
+        
+        Format your response as a JSON object with:
+        "new_history": {{
+            "event_name": "Name for this historical event",
+            "description": "Detailed description of what happened",
+            "date_description": "Recently",
+            "significance": Number from 1-10 indicating historical importance,
+            "impact_type": Type of impact (political, cultural, etc.),
+            "notable_figures": Array of people involved,
+            "current_relevance": How it affects the location now
+        }}
+        """
+        
+        # 3. Evolve landmarks
+        landmarks_prompt = f"""
+        Based on this event that occurred at {location_name}, determine how it affects the landmarks:
+        
+        EVENT:
+        {themed_event}
+        
+        CURRENT LANDMARKS:
+        {json.dumps(location_lore.get('landmarks', []), indent=2)}
+        
+        Determine if this event would affect any existing landmarks or create new ones.
+        
+        Format your response as a JSON object with:
+        - "modified_landmarks": Array of objects with "id" (of existing landmark) and "new_description"
+        - "new_landmarks": Array of objects with landmark details for any new landmarks created
+        """
+        
+        # Execute all three prompts
+        myth_result = await Runner.run(evolution_agent, myths_prompt, context=run_ctx.context)
+        history_result = await Runner.run(evolution_agent, history_prompt, context=run_ctx.context)
+        landmark_result = await Runner.run(evolution_agent, landmarks_prompt, context=run_ctx.context)
+        
+        # Process the results
+        try:
+            myth_changes = json.loads(myth_result.final_output)
+            history_changes = json.loads(history_result.final_output)
+            landmark_changes = json.loads(landmark_result.final_output)
+            
+            # Apply myth changes
+            myth_updates = []
+            if "modified_myths" in myth_changes:
+                for update in myth_changes["modified_myths"]:
+                    if "id" in update and "new_description" in update:
+                        # Update the myth
+                        async with self.get_connection_pool() as pool:
+                            async with pool.acquire() as conn:
+                                await conn.execute("""
+                                    UPDATE UrbanMyths
+                                    SET description = $1
+                                    WHERE id = $2
+                                """, update["new_description"], update["id"])
+                                
+                                # Get updated myth
+                                updated_myth = await conn.fetchrow("""
+                                    SELECT id, name, description, believability, spread_rate
+                                    FROM UrbanMyths
+                                    WHERE id = $1
+                                """, update["id"])
+                                
+                                if updated_myth:
+                                    myth_updates.append(dict(updated_myth))
+            
+            # Add new myths
+            new_myths = []
+            if "new_myths" in myth_changes:
+                for new_myth in myth_changes["new_myths"]:
+                    # Apply theming
+                    if 'description' in new_myth:
+                        new_myth['description'] = MatriarchalThemingUtils.apply_matriarchal_theme(
+                            'myth', new_myth['description'], emphasis_level=1
+                        )
                         
-                        if faction:
-                            factions.append(dict(faction))
-                    
-                    return factions
+                    # Add the myth
+                    try:
+                        myth_id = await self.add_urban_myth(
+                            run_ctx,
+                            name=new_myth.get("name", "Unnamed Myth"),
+                            description=new_myth.get("description", ""),
+                            origin_location=location_name,
+                            origin_event=themed_event,
+                            believability=new_myth.get("believability", 6),
+                            spread_rate=new_myth.get("spread_rate", 5),
+                            regions_known=[location_name]
+                        )
+                        
+                        new_myth["id"] = myth_id
+                        new_myths.append(new_myth)
+                    except Exception as e:
+                        logging.error(f"Error adding new myth: {e}")
+            
+            # Add new history
+            new_history = None
+            if "new_history" in history_changes:
+                history_entry = history_changes["new_history"]
                 
-                # If still nothing, return empty list
-                return []
+                # Apply theming
+                if 'description' in history_entry:
+                    history_entry['description'] = MatriarchalThemingUtils.apply_matriarchal_theme(
+                        'history', history_entry['description'], emphasis_level=1
+                    )
+                
+                # Add the history entry
+                try:
+                    history_id = await self.add_local_history(
+                        run_ctx,
+                        location_id=location_id,
+                        event_name=history_entry.get("event_name", "Recent Event"),
+                        description=history_entry.get("description", ""),
+                        date_description=history_entry.get("date_description", "Recently"),
+                        significance=history_entry.get("significance", 5),
+                        impact_type=history_entry.get("impact_type", "event"),
+                        notable_figures=history_entry.get("notable_figures", []),
+                        current_relevance=history_entry.get("current_relevance")
+                    )
+                    
+                    history_entry["id"] = history_id
+                    new_history = history_entry
+                except Exception as e:
+                    logging.error(f"Error adding new history entry: {e}")
+            
+            # Apply landmark changes
+            landmark_updates = []
+            if "modified_landmarks" in landmark_changes:
+                for update in landmark_changes["modified_landmarks"]:
+                    if "id" in update and "new_description" in update:
+                        # Apply theming
+                        update["new_description"] = MatriarchalThemingUtils.apply_matriarchal_theme(
+                            'landmark', update["new_description"], emphasis_level=1
+                        )
+                        
+                        # Update the landmark
+                        async with self.get_connection_pool() as pool:
+                            async with pool.acquire() as conn:
+                                await conn.execute("""
+                                    UPDATE Landmarks
+                                    SET description = $1
+                                    WHERE id = $2
+                                """, update["new_description"], update["id"])
+                                
+                                # Get updated landmark
+                                updated_landmark = await conn.fetchrow("""
+                                    SELECT id, name, landmark_type, description
+                                    FROM Landmarks
+                                    WHERE id = $1
+                                """, update["id"])
+                                
+                                if updated_landmark:
+                                    landmark_updates.append(dict(updated_landmark))
+            
+            # Add new landmarks
+            new_landmarks = []
+            if "new_landmarks" in landmark_changes:
+                for new_landmark in landmark_changes["new_landmarks"]:
+                    # Apply theming
+                    if 'description' in new_landmark:
+                        new_landmark['description'] = MatriarchalThemingUtils.apply_matriarchal_theme(
+                            'landmark', new_landmark['description'], emphasis_level=1
+                        )
+                        
+                    # Add the landmark
+                    try:
+                        landmark_id = await self.add_landmark(
+                            run_ctx,
+                            name=new_landmark.get("name", "Unnamed Landmark"),
+                            location_id=location_id,
+                            landmark_type=new_landmark.get("landmark_type", "structure"),
+                            description=new_landmark.get("description", ""),
+                            historical_significance=new_landmark.get("historical_significance"),
+                            current_use=new_landmark.get("current_use"),
+                            controlled_by=new_landmark.get("controlled_by"),
+                            legends=new_landmark.get("legends", [])
+                        )
+                        
+                        new_landmark["id"] = landmark_id
+                        new_landmarks.append(new_landmark)
+                    except Exception as e:
+                        logging.error(f"Error adding new landmark: {e}")
+            
+            # Invalidate cache for this location
+            self.invalidate_cache_pattern(f"location_lore_{location_id}")
+            
+            # Return results
+            return {
+                "event": themed_event,
+                "location_id": location_id,
+                "location_name": location_name,
+                "myth_updates": myth_updates,
+                "new_myths": new_myths,
+                "new_history": new_history,
+                "landmark_updates": landmark_updates,
+                "new_landmarks": new_landmarks
+            }
+            
+        except Exception as e:
+            logging.error(f"Error processing location lore evolution: {e}")
+            return {"error": f"Failed to evolve location lore: {str(e)}"}
 
 class EducationalSystemManager(BaseLoreManager):
     """
@@ -8625,21 +8975,23 @@ class ReligionManager(BaseLoreManager):
 # INTEGRATED MATRIARCHAL LORE SYSTEM
 # -------------------------------------------------
 
-class MatriarchalLoreSystem(BaseLoreManager):
+class MatriarchalLoreSystem(LoreDynamicsSystem):
     """
     Master class that integrates all lore systems with a matriarchal theme focus.
     Acts as the primary interface for all lore generation and updates.
+    Inherits from LoreDynamicsSystem for lore evolution capabilities.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
         
-        # Initialize sub-systems
+        # Initialize specialized sub-systems
         self.culture_system = RegionalCultureSystem(user_id, conversation_id)
         self.conflict_system = NationalConflictSystem(user_id, conversation_id)
-        self.religion_system = ReligiousDistributionSystem(user_id, conversation_id)
-        self.update_system = LoreUpdateSystem(user_id, conversation_id)
-        self.geopolitical_manager = GeopoliticalSystemManager(user_id, conversation_id)
+        self.religion_system = ReligionManager(user_id, conversation_id)
+        self.local_lore_system = LocalLoreManager(user_id, conversation_id)
+        # Note: geopolitical_manager is already initialized in the parent class
+        self.cache_prefix = "matriarchal_lore"
     
     async def ensure_initialized(self):
         """Ensure system is initialized"""
@@ -8650,17 +9002,35 @@ class MatriarchalLoreSystem(BaseLoreManager):
     
     async def initialize_all_systems(self):
         """Initialize all subsystems and their tables"""
-        await self.ensure_initialized()
-        
-        # Initialize all sub-systems
-        await self.culture_system.initialize_tables()
-        await self.conflict_system.initialize_tables()
-        await self.religion_system.initialize_tables()
+        await self.culture_system.ensure_initialized()
+        await self.conflict_system.ensure_initialized()
+        await self.religion_system.ensure_initialized()
+        await self.local_lore_system.ensure_initialized()
         
         # Register systems with governance
-        await self.culture_system.register_with_governance()
-        await self.conflict_system.register_with_governance()
-        await self.religion_system.register_with_governance()
+        await self.culture_system.register_with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="culture_system",
+            directive_text="Create and manage cultural norms, languages, and customs with matriarchal themes."
+        )
+        
+        await self.conflict_system.register_with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="conflict_system",
+            directive_text="Create and manage national conflicts that reflect matriarchal power dynamics."
+        )
+        
+        await self.religion_system.register_with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="religion_system",
+            directive_text="Create and manage faith systems that emphasize feminine divine superiority."
+        )
+        
+        await self.local_lore_system.register_with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="local_lore_system",
+            directive_text="Create and manage local lore, myths, and histories with matriarchal influences."
+        )
         
         logging.info(f"All matriarchal lore systems initialized for user {self.user_id}, conversation {self.conversation_id}")
     
@@ -8681,7 +9051,7 @@ class MatriarchalLoreSystem(BaseLoreManager):
             Dictionary containing the complete world lore
         """
         # Create run context
-        run_ctx = RunContextWrapper(context=ctx.context)
+        run_ctx = self.create_run_context(ctx)
         
         # 1. First generate base lore through DynamicLoreGenerator
         dynamic_lore = DynamicLoreGenerator(self.user_id, self.conversation_id)
@@ -8713,21 +9083,20 @@ class MatriarchalLoreSystem(BaseLoreManager):
         # 6. Generate quest hooks
         quests_data = await dynamic_lore.generate_quest_hooks(factions_data, locations_data)
         
-        # 7. Generate languages through our regional culture system
+        # 7. Generate world nations
+        nations = await self.geopolitical_manager.generate_world_nations(run_ctx)
+        
+        # 8. Generate languages through our regional culture system
         languages = await self.culture_system.generate_languages(run_ctx, count=5)
         
-        # 8. Generate religious pantheons and distribute them
-        await self.religion_system.initialize_tables()
-        religious_data = await self.religion_system.distribute_religions(run_ctx)
+        # 9. Generate and distribute religions
+        religious_data = await self.religion_system.generate_complete_faith_system(run_ctx)
         
-        # 9. Generate conflicts and domestic issues
-        await self.conflict_system.initialize_tables()
+        # 10. Generate conflicts
         conflicts = await self.conflict_system.generate_initial_conflicts(run_ctx, count=3)
         
-        # 10. For each nation, generate cultural norms and etiquette
-        nations = await self.geopolitical_manager.get_all_nations(run_ctx)
-        nation_cultures = []
-        
+        # 11. For each nation, generate cultural norms and domestic issues
+        nation_details = []
         for nation in nations:
             # Generate cultural norms
             norms = await self.culture_system.generate_cultural_norms(run_ctx, nation["id"])
@@ -8738,13 +9107,20 @@ class MatriarchalLoreSystem(BaseLoreManager):
             # Generate domestic issues
             issues = await self.conflict_system.generate_domestic_issues(run_ctx, nation["id"])
             
-            nation_cultures.append({
+            nation_details.append({
                 "nation_id": nation["id"],
                 "name": nation["name"],
                 "cultural_norms": norms,
                 "etiquette": etiquette,
                 "domestic_issues": issues
             })
+        
+        # 12. Generate local lore for each location
+        local_lore = []
+        for location in locations_data.get("locations", [])[:5]:  # Limit to first 5 to avoid too much generation
+            if "id" in location:
+                lore = await self.local_lore_system.generate_location_lore(run_ctx, location)
+                local_lore.append(lore)
         
         # Combine all results
         complete_lore = {
@@ -8754,10 +9130,12 @@ class MatriarchalLoreSystem(BaseLoreManager):
             "historical_events": historical_data,
             "locations": locations_data,
             "quests": quests_data,
+            "nations": nations,
             "languages": languages,
             "religions": religious_data,
             "conflicts": conflicts,
-            "nation_cultures": nation_cultures
+            "nation_details": nation_details,
+            "local_lore": local_lore
         }
         
         return complete_lore
@@ -8787,167 +9165,289 @@ class MatriarchalLoreSystem(BaseLoreManager):
             Dictionary with all updates applied
         """
         # Create run context
-        run_ctx = RunContextWrapper(context=ctx.context)
+        run_ctx = self.create_run_context(ctx)
         
-        # If no specific lore IDs provided, determine affected elements automatically
-        if not affected_lore_ids:
-            affected_lore_ids = await self._determine_affected_elements(event_description)
+        # First apply matriarchal theming to the event description
+        themed_event = MatriarchalThemingUtils.apply_matriarchal_theme("event", event_description, emphasis_level=1)
         
-        # Fetch the lore elements
-        affected_elements = await self._fetch_elements_by_ids(affected_lore_ids)
+        # Use the LoreDynamicsSystem's evolve_lore_with_event method
+        lore_updates = await self.evolve_lore_with_event(themed_event)
         
-        # Generate updates for these elements
-        updates = await self.update_system.generate_lore_updates(
-            run_ctx,
-            affected_elements=affected_elements,
-            event_description=event_description,
-            player_character=player_data
-        )
-        
-        # Apply the updates to the database
-        await self._apply_lore_updates(updates)
+        # Process other impacts
         
         # Check if the event should affect conflicts or domestic issues
-        event_impact = await self._calculate_event_impact(event_description)
+        event_impact = await self._calculate_event_impact(themed_event)
         
         # If significant impact, evolve conflicts and issues
+        conflict_results = None
         if event_impact > 6:
             # Evolve conflicts and domestic issues
-            evolution_results = await self.conflict_system.evolve_all_conflicts(run_ctx, days_passed=7)
-            
-            # Add these results to the updates
-            updates.append({
-                "type": "conflict_evolution",
-                "results": evolution_results
-            })
+            conflict_results = await self.conflict_system.evolve_all_conflicts(run_ctx, days_passed=7)
+        
+        # Update local lore if the event is location-specific
+        local_updates = []
+        if "location" in themed_event.lower() or "place" in themed_event.lower():
+            try:
+                # Try to extract location references
+                locations = await self._extract_location_references(themed_event)
+                
+                # Update each referenced location
+                for location_id in locations:
+                    local_update = await self.local_lore_system.evolve_location_lore(
+                        run_ctx, location_id, themed_event
+                    )
+                    local_updates.append(local_update)
+            except Exception as e:
+                logging.error(f"Error updating local lore: {e}")
         
         return {
-            "event": event_description,
-            "updates": updates,
-            "update_count": len(updates),
-            "event_impact": event_impact
+            "event": themed_event,
+            "original_event": event_description,
+            "lore_updates": lore_updates,
+            "event_impact": event_impact,
+            "conflict_results": conflict_results,
+            "local_lore_updates": local_updates
         }
     
-    async def _determine_affected_elements(self, event_description: str) -> List[str]:
-        """Determine which elements would be affected by this event"""
-        # This would use NLP or keyword matching to find relevant elements
-        # For now, we'll use a placeholder implementation
+    async def _extract_location_references(self, event_text: str) -> List[int]:
+        """
+        Extract location references from event text
+        
+        Args:
+            event_text: Event description
+            
+        Returns:
+            List of location IDs
+        """
+        # Get all location names
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                # Simple keyword based search
-                words = re.findall(r'\b\w+\b', event_description.lower())
-                significant_words = [w for w in words if len(w) > 3]
+                locations = await conn.fetch("""
+                    SELECT id, location_name
+                    FROM Locations
+                """)
                 
-                if not significant_words:
-                    # Fallback to get some random important elements
-                    elements = await conn.fetch("""
-                        SELECT lore_id FROM LoreElements
-                        WHERE importance > 7
-                        LIMIT 3
-                    """)
-                    return [e['lore_id'] for e in elements]
+                # Check for location names in event text
+                referenced_ids = []
+                for location in locations:
+                    if location["location_name"].lower() in event_text.lower():
+                        referenced_ids.append(location["id"])
                 
-                # Search for elements matching keywords
-                placeholders = ', '.join(f'${i+1}' for i in range(len(significant_words)))
-                query = f"""
-                    SELECT DISTINCT lore_id FROM LoreElements
-                    WHERE (name ILIKE ANY(ARRAY[{placeholders}]) 
-                        OR description ILIKE ANY(ARRAY[{placeholders}]))
+                return referenced_ids
+    
+    async def get_comprehensive_world_state(self, ctx) -> Dict[str, Any]:
+        """
+        Get a comprehensive view of the current world state
+        
+        Returns:
+            Dictionary with current world state
+        """
+        # Check cache first
+        cache_key = "comprehensive_world_state"
+        cached = self.get_cache(cache_key)
+        if cached:
+            return cached
+        
+        run_ctx = self.create_run_context(ctx)
+        
+        # Get basic world state
+        world_state = await self._fetch_world_state()
+        
+        # Get nations
+        nations = await self.geopolitical_manager.get_all_nations(run_ctx)
+        
+        # Get active conflicts
+        conflicts = await self.conflict_system.get_active_conflicts(run_ctx)
+        
+        # Get religions
+        religions = await self.religion_system.get_pantheons(run_ctx)
+        
+        # Get a sample of locations
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                locations = await conn.fetch("""
+                    SELECT id, location_name, location_type, description
+                    FROM Locations
+                    LIMIT 10
+                """)
+                
+                location_data = [dict(loc) for loc in locations]
+        
+        # Compile result
+        result = {
+            "world_state": world_state,
+            "nations": nations,
+            "conflicts": conflicts,
+            "religions": religions,
+            "locations": location_data,
+            "last_updated": datetime.datetime.now().isoformat()
+        }
+        
+        # Cache result
+        self.set_cache(cache_key, result)
+        
+        return result
+    
+    async def generate_additional_faction(self, ctx, faction_type: str = None) -> Dict[str, Any]:
+        """
+        Generate an additional faction with governance oversight.
+        
+        Args:
+            faction_type: Optional type of faction to generate
+            
+        Returns:
+            New faction details
+        """
+        # Create the run context
+        run_ctx = self.create_run_context(ctx)
+        
+        # Get existing factions for context
+        async with self.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get existing factions
+                existing_factions = await conn.fetch("""
+                    SELECT name, type, description, values, goals
+                    FROM Factions
+                    LIMIT 10
+                """)
+                
+                # Get nations for context
+                nations = await conn.fetch("""
+                    SELECT name, government_type, matriarchy_level
+                    FROM Nations
                     LIMIT 5
-                """
+                """)
                 
-                search_terms = [f'%{word}%' for word in significant_words] * 2
-                elements = await conn.fetch(query, *search_terms)
+                # Get some cultural elements for context
+                cultural_elements = await conn.fetch("""
+                    SELECT name, type, description
+                    FROM CulturalElements
+                    ORDER BY RANDOM()
+                    LIMIT 5
+                """)
                 
-                return [e['lore_id'] for e in elements]
-    
-    async def _fetch_elements_by_ids(self, element_ids: List[str]) -> List[Dict[str, Any]]:
-        """Fetch lore elements by their IDs"""
-        if not element_ids:
-            return []
+                # Convert to lists
+                faction_data = [dict(faction) for faction in existing_factions]
+                nation_data = [dict(nation) for nation in nations]
+                cultural_data = [dict(element) for element in cultural_elements]
+        
+        # If faction_type not specified, select one that's underrepresented
+        if not faction_type:
+            faction_types = ["political", "religious", "criminal", "mercantile", "academic", "military", "social"]
+            existing_types = [f.get("type", "").lower() for f in faction_data]
             
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                elements = await conn.fetch("""
-                    SELECT lore_id, name, lore_type, description
-                    FROM LoreElements
-                    WHERE lore_id = ANY($1)
-                """, element_ids)
-                
-                return [dict(elem) for elem in elements]
-    
-    async def _apply_lore_updates(self, updates: List[Dict[str, Any]]) -> None:
-        """Apply updates to the lore database"""
-        if not updates:
-            return
+            # Count each type
+            type_counts = {}
+            for t in faction_types:
+                type_counts[t] = sum(1 for et in existing_types if t in et)
             
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                async with conn.transaction():
-                    for update in updates:
-                        if 'is_cascade_update' in update or 'lore_id' not in update:
-                            continue  # Skip cascade updates or invalid updates
-                            
-                        # Update the element description
-                        await conn.execute("""
-                            UPDATE LoreElements 
-                            SET description = $1
-                            WHERE lore_id = $2
-                        """, update['new_description'], update['lore_id'])
-                        
-                        # Add update record
-                        await conn.execute("""
-                            INSERT INTO LoreUpdates (
-                                lore_id, old_description, new_description, 
-                                update_reason, impact_level, timestamp
-                            ) VALUES ($1, $2, $3, $4, $5, $6)
-                        """, 
-                        update['lore_id'],
-                        update['old_description'],
-                        update['new_description'],
-                        update['update_reason'],
-                        update['impact_level'],
-                        update['timestamp'])
-                        
-                        # Update any type-specific tables
-                        if update['lore_type'] == 'character':
-                            # Example of character-specific updates
-                            char_dev = update.get('character_development', {})
-                            if char_dev:
-                                await conn.execute("""
-                                    UPDATE Characters
-                                    SET confidence = $1, resolve = $2, ambition = $3
-                                    WHERE character_id = $4
-                                """,
-                                char_dev.get('confidence', 5),
-                                char_dev.get('resolve', 5),
-                                char_dev.get('ambition', 5),
-                                update['lore_id'])
-    
-    async def _calculate_event_impact(self, event_description: str) -> int:
-        """Calculate the general impact level of an event"""
-        # This is a simple keyword-based analysis
-        # In a full implementation, this would use NLP
+            # Find underrepresented types
+            min_count = min(type_counts.values()) if type_counts else 0
+            underrepresented = [t for t, c in type_counts.items() if c == min_count]
+            
+            # Choose one randomly from underrepresented
+            faction_type = random.choice(underrepresented if underrepresented else faction_types)
         
-        high_impact = ['war', 'death', 'revolution', 'disaster', 'coronation', 'marriage', 'birth', 'conquest']
-        medium_impact = ['conflict', 'dispute', 'challenge', 'treaty', 'alliance', 'ceremony', 'festival']
-        low_impact = ['meeting', 'conversation', 'journey', 'meal', 'performance', 'minor']
+        # Create a prompt for the LLM
+        prompt = f"""
+        Generate a new {faction_type} faction for a matriarchal fantasy world:
         
-        words = set(event_description.lower().split())
+        EXISTING FACTIONS:
+        {json.dumps(faction_data, indent=2)}
         
-        high_count = sum(1 for word in high_impact if word in words)
-        medium_count = sum(1 for word in medium_impact if word in words)
-        low_count = sum(1 for word in low_impact if word in words)
+        NATIONS:
+        {json.dumps(nation_data, indent=2)}
         
-        # Calculate base impact
-        if high_count > 0:
-            return 8 + min(high_count, 2)  # Max 10
-        elif medium_count > 0:
-            return 5 + min(medium_count, 2)  # Max 7
-        elif low_count > 0:
-            return 2 + min(low_count, 2)  # Max 4
-        else:
-            return 5  # Default medium impact
+        CULTURAL CONTEXT:
+        {json.dumps(cultural_data, indent=2)}
+        
+        Create a {faction_type} faction that:
+        1. Is distinct from existing factions
+        2. Has a clear role and purpose in the world
+        3. Has interesting values and goals
+        4. Reflects matriarchal power dynamics
+        5. Has potential for interesting stories and conflicts
+        
+        Return a JSON object with:
+        - name: Name of the faction
+        - type: Type of faction (should include "{faction_type}")
+        - description: Detailed description
+        - values: Array of core values
+        - goals: Array of primary goals
+        - headquarters: Main location or headquarters
+        - founding_story: How the faction was founded
+        - rivals: Array of rival factions or groups
+        - allies: Array of allied factions or groups
+        - territory: Areas where they operate
+        - resources: Key resources they control
+        - hierarchy_type: Structure of leadership
+        - secret_knowledge: Any secret knowledge they possess
+        - public_reputation: How they're viewed publicly
+        - color_scheme: Colors associated with them
+        - symbol_description: Their emblem or symbol
+        """
+        
+        # Create an agent for faction generation
+        faction_agent = Agent(
+            name="FactionGenerationAgent",
+            instructions="You create factions for fantasy worlds.",
+            model="o3-mini"
+        )
+        
+        # Get the response
+        result = await Runner.run(faction_agent, prompt, context=run_ctx.context)
+        response_text = result.final_output
+        
+        try:
+            # Parse the JSON response
+            faction_data = json.loads(response_text)
+            
+            # Apply matriarchal theming
+            if "description" in faction_data:
+                faction_data["description"] = MatriarchalThemingUtils.apply_matriarchal_theme(
+                    "faction", faction_data["description"], emphasis_level=2
+                )
+            
+            # Add faction to database
+            faction_id = await self.lore_manager.add_faction(
+                name=faction_data.get("name", f"Unnamed {faction_type.capitalize()} Faction"),
+                faction_type=faction_data.get("type", faction_type),
+                description=faction_data.get("description", ""),
+                values=faction_data.get("values", []),
+                goals=faction_data.get("goals", []),
+                headquarters=faction_data.get("headquarters"),
+                founding_story=faction_data.get("founding_story"),
+                rivals=faction_data.get("rivals", []),
+                allies=faction_data.get("allies", []),
+                territory=faction_data.get("territory"),
+                resources=faction_data.get("resources", []),
+                hierarchy_type=faction_data.get("hierarchy_type"),
+                secret_knowledge=faction_data.get("secret_knowledge"),
+                public_reputation=faction_data.get("public_reputation"),
+                color_scheme=faction_data.get("color_scheme"),
+                symbol_description=faction_data.get("symbol_description")
+            )
+            
+            # Update with the ID
+            faction_data["id"] = faction_id
+            
+            return faction_data
+            
+        except Exception as e:
+            logging.error(f"Error generating additional faction: {e}")
+            return {"error": str(e)}
+            
+    async def register_with_governance(self):
+        """Register with Nyx governance system."""
+        await super().register_with_governance(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id="matriarchal_lore_system",
+            directive_text="Create and maintain a cohesive world with matriarchal themes and power dynamics.",
+            scope="world_building",
+            priority=DirectivePriority.HIGH
+        )
+        
+        logging.info(f"MatriarchalLoreSystem registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
 
 
 # -------------------------------------------------
@@ -9071,139 +9571,176 @@ def _emphasize_feminine_power(text: str, emphasis_level: int = _DEFAULT_EMPHASIS
         )
     return text
 
-
 class MatriarchalThemingUtils:
     """
-    Utility class for applying matriarchal theming to different types of lore content.
+    Streamlined utility class for applying matriarchal theming to different types of lore content.
     """
-
+    
+    # A dictionary of regex patterns to replacement strings for basic feminization
+    _FEMDOM_WORD_MAP = {
+        r"\bgod\b": "Goddess",
+        r"\bgods\b": "Goddesses",
+        r"\bgodhood\b": "Goddesshood",
+        r"\bking\b": "Queen",
+        r"\bkings\b": "Queens",
+        r"\bkingdom\b": "Queendom",
+        r"\bprince\b": "princess",
+        r"\bprinces\b": "princesses",
+        r"\bfather\b": "mother",
+        r"\bfathers\b": "mothers",
+        r"\bhim\b": "her",
+        r"\bhis\b": "her",
+        r"\bhe\b": "she",
+        r"\blord\b": "lady",
+        r"\blords\b": "ladies",
+        r"\bman\b": "woman",
+        r"\bmen\b": "women",
+    }
+    
+    # Random synonyms for a supreme feminine figure
+    _GODDESS_SYNONYMS = [
+        "Supreme Goddess",
+        "High Empress",
+        "Great Matriarch",
+        "Divine Mother",
+        "Infinite Mistress of Creation",
+    ]
+    
+    # Theme-specific content insertions
+    _THEME_CONTENT = {
+        "cosmology": "At the heart of all creation is the Feminine Principle, the source of all life and power. "
+                    "The cosmos itself is understood as fundamentally feminine in nature, "
+                    "with any masculine elements serving and supporting the greater feminine whole.",
+                    
+        "magic_system": "The flow and expression of magical energies reflect the natural order of feminine dominance. "
+                        "Women typically possess greater innate magical potential and exclusive rights to the highest mysteries. "
+                        "Men specializing in arcane arts often excel in supportive, protective, or enhancing magics, "
+                        "operating in service to more powerful feminine traditions. "
+                        "Only when guided by a woman's touch do the most potent rituals fully manifest.",
+                        
+        "world_history": "Throughout recorded chronicles, women have held the reins of power. "
+                        "Great Empresses, Matriarchs, and female rulers have guided civilizations toward prosperity. "
+                        "Though conflicts and rebellions against this natural order have arisen, "
+                        "the unshakable principle of feminine dominance remains the bedrock of history.",
+                        
+        "calendar_system": "The calendar marks vital dates in feminine history, aligning festivals and holy days "
+                          "with lunar cycles and the reigns of legendary Empresses. Major celebrations honor "
+                          "the cyclical power of womanhood, reflecting its role in birth, renewal, and creation."
+    }
+    
     @staticmethod
-    def feminize_cosmology(cosmology: str) -> str:
+    def _apply_basic_replacements(text: str) -> str:
         """
-        Create a comprehensive, feminized version of the cosmology, ensuring references
-        to gods, powers, and origins are dominated by feminine authority.
+        Runs a set of regex-based replacements to feminize words/phrases.
+        Respects case; if the original word is capitalized, keep it capitalized.
         """
-        # 1) Basic replacements (god->Goddess, king->Queen, etc.)
-        result = _apply_basic_replacements(cosmology)
+        result = text
 
-        # 2) Ensure we have at least one reference to a goddess or matriarchal figure
-        result = _ensure_goddess_reference(result)
+        for pattern_str, replacement_str in MatriarchalThemingUtils._FEMDOM_WORD_MAP.items():
+            pattern = re.compile(pattern_str, re.IGNORECASE)
 
-        # 3) Insert text about the 'Feminine Principle' after a "COSMOLOGY" heading, if present
-        feminine_principle = (
-            "At the heart of all creation is the Feminine Principle, the source of all life and power. "
-            "The cosmos itself is understood as fundamentally feminine in nature, "
-            "with any masculine elements serving and supporting the greater feminine whole."
-        )
-        result = _inject_contextual_lore(result, feminine_principle, label="COSMOLOGY")
+            def _replacement_func(match):
+                original = match.group(0)
+                # If the original word starts with uppercase, we uppercase the replacement's first letter
+                if original and original[0].isupper():
+                    return replacement_str.capitalize()
+                return replacement_str
 
-        # 4) Optionally emphasize the matriarchal tone
-        result = _emphasize_feminine_power(result, _DEFAULT_EMPHASIS_LEVEL)
+            result = pattern.sub(_replacement_func, result)
 
         return result
-
+    
     @staticmethod
-    def gender_magic_system(magic_system: str) -> str:
+    def _ensure_goddess_reference(text: str) -> str:
         """
-        Apply gendered dynamics to the magic system, making feminine energies
-        paramount and male magic supportive or secondary.
+        If there's no mention of 'Goddess' or a similar figure, insert a default reference
+        to a supreme feminine force at the end of the text.
         """
-        # 1) Feminize references
-        result = _apply_basic_replacements(magic_system)
+        if not re.search(r"(goddess|divine mother|matriarch|empress of creation)", text, re.IGNORECASE):
+            chosen_title = random.choice(MatriarchalThemingUtils._GODDESS_SYNONYMS)
+            insertion = (
+                f"\n\nAt the cosmic center stands {chosen_title}, "
+                "the eternal wellspring of existence. Her dominion weaves reality itself."
+            )
+            text += insertion
 
-        # 2) Ensure mention of a goddess figure for continuity
-        result = _ensure_goddess_reference(result)
-
-        # 3) Insert advanced lore about women's superior magical authority
-        gendered_magic = (
-            "The flow and expression of magical energies reflect the natural order of feminine dominance. "
-            "Women typically possess greater innate magical potential and exclusive rights to the highest mysteries. "
-            "Men specializing in arcane arts often excel in supportive, protective, or enhancing magics, "
-            "operating in service to more powerful feminine traditions. "
-            "Only when guided by a woman's touch do the most potent rituals fully manifest."
-        )
-        result = _inject_contextual_lore(result, gendered_magic, label="MAGIC")
-
-        # 4) Emphasize
-        result = _emphasize_feminine_power(result, _DEFAULT_EMPHASIS_LEVEL)
-
-        return result
-
+        return text
+    
     @staticmethod
-    def matriarchalize_history(history: str) -> str:
+    def _inject_themed_content(text: str, lore_type: str) -> str:
         """
-        Overhaul historical accounts so that women have always held power,
-        shaping the course of civilization through matriarchal leadership.
+        Insert themed content based on lore type
+        
+        Args:
+            text: Original text
+            lore_type: Type of lore
+            
+        Returns:
+            Text with inserted themed content
         """
-        # 1) Feminize references
-        result = _apply_basic_replacements(history)
-
-        # 2) Ensure mention of goddess figure
-        result = _ensure_goddess_reference(result)
-
-        # 3) Insert matriarchal historical note
-        matriarchal_history = (
-            "Throughout recorded chronicles, women have held the reins of power. "
-            "Great Empresses, Matriarchs, and female rulers have guided civilizations toward prosperity. "
-            "Though conflicts and rebellions against this natural order have arisen, "
-            "the unshakable principle of feminine dominance remains the bedrock of history."
-        )
-        result = _inject_contextual_lore(result, matriarchal_history, label="HISTORY")
-
-        # 4) Emphasize
-        result = _emphasize_feminine_power(result, _DEFAULT_EMPHASIS_LEVEL)
-
-        return result
-
+        if lore_type in MatriarchalThemingUtils._THEME_CONTENT:
+            themed_content = MatriarchalThemingUtils._THEME_CONTENT[lore_type]
+            
+            # Try to find an appropriate section heading
+            pattern = re.compile(rf"({re.escape(lore_type)})", re.IGNORECASE)
+            match = pattern.search(text)
+            
+            if match:
+                # Insert after the matched label
+                idx = match.end()
+                return text[:idx] + "\n\n" + themed_content + text[idx:]
+            else:
+                # Append at the end if no appropriate place found
+                return text.strip() + "\n\n" + themed_content
+        
+        return text
+    
     @staticmethod
-    def feminize_calendar(calendar_system: str) -> str:
+    def _emphasize_feminine_power(text: str, emphasis_level: int = 2) -> str:
         """
-        Make the calendar reflect significant feminine milestones, lunar cycles,
-        and holidays honoring matriarchal power and achievements.
+        Add extra lines emphasizing matriarchal/feminine power, depending on emphasis_level.
+        1 = minimal emphasis
+        2 = moderate emphasis
+        3 = strong emphasis
         """
-        # 1) Feminize references
-        result = _apply_basic_replacements(calendar_system)
-
-        # 2) Ensure mention of a goddess figure
-        result = _ensure_goddess_reference(result)
-
-        # 3) Insert note about matriarchal calendar features
-        feminine_calendar = (
-            "The calendar marks vital dates in feminine history, aligning festivals and holy days "
-            "with lunar cycles and the reigns of legendary Empresses. Major celebrations honor "
-            "the cyclical power of womanhood, reflecting its role in birth, renewal, and creation."
-        )
-        result = _inject_contextual_lore(result, feminine_calendar, label="CALENDAR")
-
-        # 4) Emphasize
-        result = _emphasize_feminine_power(result, _DEFAULT_EMPHASIS_LEVEL)
-
-        return result
-
+        if emphasis_level >= 2:
+            text += (
+                "\n\nThroughout every realm, the ascendancy of womanhood underpins all aspects of life, "
+                "unquestioned and unassailable."
+            )
+        if emphasis_level >= 3:
+            text += (
+                "\n\nNo force—mortal or divine—can transcend the supremacy of the feminine essence, "
+                "the primal wellspring of creation itself."
+            )
+        return text
+    
     @staticmethod
-    def apply_matriarchal_theme(lore_type: str, content: str) -> str:
+    def apply_matriarchal_theme(lore_type: str, content: str, emphasis_level: int = 2) -> str:
         """
         Apply appropriate matriarchal theming based on lore type.
         
         Args:
             lore_type: Type of lore content ('cosmology', 'magic_system', 'history', etc.)
             content: Original content to modify
+            emphasis_level: Level of emphasis on matriarchal themes (1-3)
             
         Returns:
             Modified content with matriarchal theming
         """
-        if lore_type == 'cosmology':
-            return MatriarchalThemingUtils.feminize_cosmology(content)
-        elif lore_type == 'magic_system':
-            return MatriarchalThemingUtils.gender_magic_system(content)
-        elif lore_type == 'history' or lore_type == 'world_history':
-            return MatriarchalThemingUtils.matriarchalize_history(content)
-        elif lore_type == 'calendar':
-            return MatriarchalThemingUtils.feminize_calendar(content)
-        else:
-            # For other types, just do basic replacements and add some emphasis
-            result = _apply_basic_replacements(content)
-            return _emphasize_feminine_power(result, 1)  # Light emphasis for misc content
+        # 1. Apply basic word replacements
+        result = MatriarchalThemingUtils._apply_basic_replacements(content)
+        
+        # 2. Ensure goddess reference
+        result = MatriarchalThemingUtils._ensure_goddess_reference(result)
+        
+        # 3. Inject theme-specific content
+        result = MatriarchalThemingUtils._inject_themed_content(result, lore_type)
+        
+        # 4. Add emphasis
+        result = MatriarchalThemingUtils._emphasize_feminine_power(result, emphasis_level)
+        
+        return result
 
 
 # -------------------------------------------------
