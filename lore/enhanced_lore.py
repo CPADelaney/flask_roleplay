@@ -41,8 +41,19 @@ from lore.lore_tools import (
     generate_quest_hooks
 )
 
+import re
+
 class LoreCache:
     """Unified cache system for all lore types with namespace support"""
+    
+    _instance = None  # Singleton instance
+    
+    @classmethod
+    def get_instance(cls):
+        """Get singleton instance of cache"""
+        if cls._instance is None:
+            cls._instance = LoreCache()
+        return cls._instance
     
     def __init__(self, max_size=1000, ttl=7200):
         """
@@ -55,28 +66,34 @@ class LoreCache:
         self.cache = {}
         self.max_size = max_size
         self.default_ttl = ttl
+        self.access_times = {}  # For LRU implementation
         
-    def get(self, namespace, key):
+    def get(self, namespace, key, user_id=None, conversation_id=None):
         """
         Get an item from the specified namespace.
         
         Args:
             namespace: Namespace for the key
             key: Cache key
+            user_id: Optional user ID for scoping
+            conversation_id: Optional conversation ID for scoping
             
         Returns:
             Cached value or None if not found/expired
         """
-        full_key = f"{namespace}:{key}"
+        full_key = self._create_key(namespace, key, user_id, conversation_id)
+        
         if full_key in self.cache:
             value, expiry = self.cache[full_key]
             if expiry > datetime.datetime.now().timestamp():
+                # Update access time for LRU
+                self.access_times[full_key] = datetime.datetime.now().timestamp()
                 return value
             # Remove expired item
-            del self.cache[full_key]
+            self._remove_key(full_key)
         return None
     
-    def set(self, namespace, key, value, ttl=None):
+    def set(self, namespace, key, value, ttl=None, user_id=None, conversation_id=None):
         """
         Set an item in the specified namespace.
         
@@ -85,37 +102,43 @@ class LoreCache:
             key: Cache key
             value: Value to cache
             ttl: Time-to-live in seconds (optional)
+            user_id: Optional user ID for scoping
+            conversation_id: Optional conversation ID for scoping
         """
-        full_key = f"{namespace}:{key}"
+        full_key = self._create_key(namespace, key, user_id, conversation_id)
         expiry = datetime.datetime.now().timestamp() + (ttl or self.default_ttl)
         
         # Manage cache size - use LRU strategy
         if len(self.cache) >= self.max_size:
-            # Find oldest item
-            oldest_key = min(self.cache.items(), key=lambda x: x[1][1])[0]
-            del self.cache[oldest_key]
+            # Find oldest accessed item
+            oldest_key = min(self.access_times.items(), key=lambda x: x[1])[0]
+            self._remove_key(oldest_key)
             
         self.cache[full_key] = (value, expiry)
+        self.access_times[full_key] = datetime.datetime.now().timestamp()
     
-    def invalidate(self, namespace, key):
+    def invalidate(self, namespace, key, user_id=None, conversation_id=None):
         """
         Invalidate a specific key in a namespace.
         
         Args:
             namespace: Namespace for the key
             key: Cache key to invalidate
+            user_id: Optional user ID for scoping
+            conversation_id: Optional conversation ID for scoping
         """
-        full_key = f"{namespace}:{key}"
-        if full_key in self.cache:
-            del self.cache[full_key]
+        full_key = self._create_key(namespace, key, user_id, conversation_id)
+        self._remove_key(full_key)
     
-    def invalidate_pattern(self, namespace, pattern):
+    def invalidate_pattern(self, namespace, pattern, user_id=None, conversation_id=None):
         """
         Invalidate keys matching a pattern in a namespace.
         
         Args:
             namespace: Namespace for the keys
             pattern: Regex pattern to match keys
+            user_id: Optional user ID for scoping
+            conversation_id: Optional conversation ID for scoping
         """
         namespace_pattern = f"{namespace}:"
         keys_to_remove = []
@@ -128,7 +151,7 @@ class LoreCache:
                     keys_to_remove.append(key)
                     
         for key in keys_to_remove:
-            del self.cache[key]
+            self._remove_key(key)
     
     def clear_namespace(self, namespace):
         """
@@ -140,7 +163,38 @@ class LoreCache:
         namespace_prefix = f"{namespace}:"
         keys_to_remove = [k for k in self.cache.keys() if k.startswith(namespace_prefix)]
         for key in keys_to_remove:
-            del self.cache[key]
+            self._remove_key(key)
+    
+    def _create_key(self, namespace, key, user_id=None, conversation_id=None):
+        """Create a full cache key with optional scoping"""
+        scoped_key = key
+        if user_id:
+            scoped_key = f"{scoped_key}_{user_id}"
+        if conversation_id:
+            scoped_key = f"{scoped_key}_{conversation_id}"
+        return f"{namespace}:{scoped_key}"
+    
+    def _remove_key(self, full_key):
+        """Remove a key from both cache and access times"""
+        if full_key in self.cache:
+            del self.cache[full_key]
+        if full_key in self.access_times:
+            del self.access_times[full_key]
+
+# Global cache instance
+GLOBAL_LORE_CACHE = LoreCache.get_instance()
+
+import logging
+import json
+import asyncio
+from typing import Dict, List, Any, Optional, Tuple, Set, Union
+
+from nyx.integrate import get_central_governance
+from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
+from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
+
+from db.connection import get_db_connection
+from embedding.vector_store import generate_embedding, vector_similarity
 
 class BaseLoreManager:
     """
@@ -193,9 +247,9 @@ class BaseLoreManager:
     
     async def register_with_governance(
         self, 
-        agent_type: AgentType, 
-        agent_id: str, 
-        directive_text: str, 
+        agent_type: AgentType = None, 
+        agent_id: str = None, 
+        directive_text: str = None, 
         scope: str = "world_building",
         priority: DirectivePriority = DirectivePriority.MEDIUM
     ):
@@ -210,6 +264,11 @@ class BaseLoreManager:
             priority: Priority level for the directive
         """
         await self.ensure_initialized()
+        
+        # Default values if not provided
+        agent_type = agent_type or AgentType.NARRATIVE_CRAFTER
+        agent_id = agent_id or self.__class__.__name__
+        directive_text = directive_text or f"Manage {self.__class__.__name__} for the world setting."
         
         # Register this system with governance
         await self.governor.register_agent(
@@ -295,24 +354,6 @@ class BaseLoreManager:
         """
         return await get_db_connection(self.user_id, self.conversation_id)
     
-    def create_run_context(self, ctx=None):
-        """
-        Create a run context for agents.
-        
-        Args:
-            ctx: Optional existing context
-            
-        Returns:
-            RunContextWrapper instance
-        """
-        if ctx:
-            return RunContextWrapper(context=ctx.context)
-        else:
-            return RunContextWrapper(context={
-                "user_id": self.user_id,
-                "conversation_id": self.conversation_id
-            })
-    
     async def initialize_tables_from_definitions(self, table_definitions: Dict[str, str]):
         """
         Initialize tables using a dictionary of table definitions.
@@ -366,7 +407,7 @@ class BaseLoreManager:
     
     # Cache methods
     
-    def get_cache(self, key):
+    def get_cache(self, key: str) -> Any:
         """
         Get an item from the cache.
         
@@ -376,10 +417,9 @@ class BaseLoreManager:
         Returns:
             Cached item or None
         """
-        cache_key = f"{key}_{self.user_id}_{self.conversation_id}"
-        return GLOBAL_LORE_CACHE.get(self.cache_namespace, cache_key)
+        return GLOBAL_LORE_CACHE.get(self.cache_namespace, key, self.user_id, self.conversation_id)
     
-    def set_cache(self, key, value, ttl=None):
+    def set_cache(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
         """
         Set an item in the cache.
         
@@ -388,29 +428,27 @@ class BaseLoreManager:
             value: Value to cache
             ttl: Optional time-to-live in seconds
         """
-        cache_key = f"{key}_{self.user_id}_{self.conversation_id}"
-        GLOBAL_LORE_CACHE.set(self.cache_namespace, cache_key, value, ttl)
+        GLOBAL_LORE_CACHE.set(self.cache_namespace, key, value, ttl, self.user_id, self.conversation_id)
     
-    def invalidate_cache(self, key):
+    def invalidate_cache(self, key: str) -> None:
         """
         Invalidate a specific cache key.
         
         Args:
             key: Cache key to invalidate
         """
-        cache_key = f"{key}_{self.user_id}_{self.conversation_id}"
-        GLOBAL_LORE_CACHE.invalidate(self.cache_namespace, cache_key)
+        GLOBAL_LORE_CACHE.invalidate(self.cache_namespace, key, self.user_id, self.conversation_id)
     
-    def invalidate_cache_pattern(self, pattern):
+    def invalidate_cache_pattern(self, pattern: str) -> None:
         """
         Invalidate cache keys matching a pattern.
         
         Args:
             pattern: Pattern to match
         """
-        GLOBAL_LORE_CACHE.invalidate_pattern(self.cache_namespace, pattern)
+        GLOBAL_LORE_CACHE.invalidate_pattern(self.cache_namespace, pattern, self.user_id, self.conversation_id)
     
-    def clear_cache(self):
+    def clear_cache(self) -> None:
         """Clear all cache entries for this manager"""
         GLOBAL_LORE_CACHE.clear_namespace(self.cache_namespace)
 
@@ -7916,7 +7954,8 @@ class MatriarchalLoreSystem(BaseLoreManager):
         return result
     
     async def register_with_governance(self):
-        """Register with Nyx governance system."""
+        """Register all lore subsystems with Nyx governance system."""
+        # Register the main system
         await super().register_with_governance(
             agent_type=AgentType.NARRATIVE_CRAFTER,
             agent_id="matriarchal_lore_system",
@@ -7927,16 +7966,119 @@ class MatriarchalLoreSystem(BaseLoreManager):
         
         logging.info(f"MatriarchalLoreSystem registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
         
-        # Register subsystems
-        await self.lore_dynamics.register_with_governance()
-        await self.geopolitical_manager.register_with_governance(
-            agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="geopolitical_manager",
-            directive_text="Manage nations, relationships, and geopolitical landscapes.",
-            scope="world_building",
-            priority=DirectivePriority.MEDIUM
-        )
-
+        # Define subsystems to register
+        subsystems = [
+            (self.lore_dynamics, "lore_dynamics", "Evolve, expand, and develop world lore through emergent events and natural maturation."),
+            (self.geopolitical_manager, "geopolitical_manager", "Manage nations, relationships, and geopolitical landscapes."),
+            (LocalLoreManager(self.user_id, self.conversation_id), "local_lore_manager", "Create and manage local lore, myths, and histories with matriarchal influences."),
+            (ReligionManager(self.user_id, self.conversation_id), "religion_manager", "Create and manage faith systems that emphasize feminine divine superiority."),
+            (WorldPoliticsManager(self.user_id, self.conversation_id), "world_politics_manager", "Manage nations, international relations, and conflicts in a matriarchal world."),
+            (RegionalCultureSystem(self.user_id, self.conversation_id), "regional_culture_system", "Manage culturally specific norms, customs, and languages.")
+        ]
+        
+        # Register each subsystem
+        for subsystem, agent_id, directive_text in subsystems:
+            await subsystem.register_with_governance(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id=agent_id,
+                directive_text=directive_text,
+                scope="world_building",
+                priority=DirectivePriority.MEDIUM
+            )
+    # Add this to MatriarchalLoreSystem
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="handle_world_event",
+        action_description="Processing world event impact",
+        id_from_context=lambda ctx: "matriarchal_lore_system"
+    )
+    async def handle_world_event(
+        self, 
+        ctx,
+        event_description: str,
+        affected_location_ids: List[int] = None,
+        affected_nation_ids: List[int] = None,
+        event_type: str = "general",
+        severity: int = 5
+    ) -> Dict[str, Any]:
+        """
+        Universal method to handle any type of world event and its impacts.
+        
+        Args:
+            event_description: Description of the event
+            affected_location_ids: Optional list of specifically affected locations
+            affected_nation_ids: Optional list of specifically affected nations
+            event_type: Type of event (general, political, natural, etc.)
+            severity: Severity of the event (1-10)
+            
+        Returns:
+            Dictionary with all updates applied
+        """
+        # Create run context
+        run_ctx = self.create_run_context(ctx)
+        
+        # First apply matriarchal theming to the event description
+        themed_event = MatriarchalThemingUtils.apply_matriarchal_theme("event", event_description, emphasis_level=2)
+        
+        # Use LoreDynamicsSystem to evolve general lore
+        lore_updates = await self.lore_dynamics.evolve_lore_with_event(themed_event)
+        
+        # Track all updates
+        all_updates = {
+            "event": themed_event,
+            "original_event": event_description,
+            "event_type": event_type,
+            "severity": severity,
+            "lore_updates": lore_updates,
+            "location_updates": {},
+            "nation_updates": {},
+            "religion_updates": {},
+            "culture_updates": {}
+        }
+        
+        # If specific locations are affected, update local lore
+        if affected_location_ids:
+            local_lore_system = LocalLoreManager(self.user_id, self.conversation_id)
+            await local_lore_system.ensure_initialized()
+            
+            for location_id in affected_location_ids:
+                local_updates = await local_lore_system.evolve_location_lore(
+                    run_ctx, location_id, themed_event
+                )
+                all_updates["location_updates"][location_id] = local_updates
+        
+        # If specific nations are affected, update national politics
+        if affected_nation_ids:
+            world_politics = WorldPoliticsManager(self.user_id, self.conversation_id)
+            await world_politics.ensure_initialized()
+            
+            for nation_id in affected_nation_ids:
+                nation_updates = await world_politics.evolve_nation_politics(
+                    run_ctx, nation_id, themed_event, severity
+                )
+                all_updates["nation_updates"][nation_id] = nation_updates
+        
+        # If event is severe enough, update religious context
+        if severity >= 7:
+            religion_manager = ReligionManager(self.user_id, self.conversation_id)
+            await religion_manager.ensure_initialized()
+            
+            religion_updates = await religion_manager.respond_to_world_event(
+                run_ctx, themed_event, affected_nation_ids, severity
+            )
+            all_updates["religion_updates"] = religion_updates
+        
+        # If this is a cultural event, update cultural norms
+        if event_type in ["cultural", "social"] or severity >= 8:
+            culture_system = RegionalCultureSystem(self.user_id, self.conversation_id)
+            await culture_system.ensure_initialized()
+            
+            culture_updates = await culture_system.evolve_cultural_norms_from_event(
+                run_ctx, themed_event, affected_nation_ids, severity
+            )
+            all_updates["culture_updates"] = culture_updates
+        
+        return all_updates
 
 # -------------------------------------------------
 # MATRIARCHAL THEMING UTILITIES
@@ -8066,7 +8208,7 @@ class MatriarchalThemingUtils:
     """
     
     # Dictionary of regex patterns to replacement strings for basic feminization
-    _WORD_REPLACEMENTS = {
+    WORD_REPLACEMENTS = {
         r"\bgod\b": "Goddess",
         r"\bgods\b": "Goddesses",
         r"\bgodhood\b": "Goddesshood",
@@ -8084,19 +8226,41 @@ class MatriarchalThemingUtils:
         r"\blords\b": "ladies",
         r"\bman\b": "woman",
         r"\bmen\b": "women",
+        r"\bbrotherhood\b": "sisterhood",
+        r"\bfraternal\b": "sororal",
+        r"\bpatriarch\b": "matriarch",
+        r"\bpatriarchy\b": "matriarchy",
+        r"\bpatriarchal\b": "matriarchal",
+        r"\bemperor\b": "empress",
+        r"\bemperors\b": "empresses",
+        r"\bduke\b": "duchess",
+        r"\bdukes\b": "duchesses",
+        r"\bcount\b": "countess",
+        r"\bcounts\b": "countesses",
+        r"\bbaron\b": "baroness",
+        r"\bbarons\b": "baronesses",
+        r"\blordship\b": "ladyship",
+        r"\blordships\b": "ladyships",
+        r"\bkingship\b": "queenship",
+        r"\bkingly\b": "queenly",
     }
     
     # Supreme feminine figure titles
-    _DIVINE_TITLES = [
+    DIVINE_TITLES = [
         "Supreme Goddess",
         "High Empress",
         "Great Matriarch",
         "Divine Mother",
         "Infinite Mistress of Creation",
+        "Eternal Goddess",
+        "All-Mother",
+        "Sovereign Matriarch",
+        "Celestial Queen",
+        "Grand Mistress of Existence",
     ]
     
     # Theme-specific content by lore type
-    _THEMED_CONTENT = {
+    THEMED_CONTENT = {
         "cosmology": "At the heart of all creation is the Feminine Principle, the source of all life and power. "
                     "The cosmos itself is understood as fundamentally feminine in nature, "
                     "with any masculine elements serving and supporting the greater feminine whole.",
@@ -8139,13 +8303,29 @@ class MatriarchalThemingUtils:
                "the course of action and men executing their will. Any violations of this order were "
                "swiftly addressed.",
                
+        "character": "Personal relationships and social standing reflect the feminine-dominant order. "
+                   "Interactions between genders follow established protocols that reinforce the natural "
+                   "supremacy of women.",
+                 
+        "religion": "The spiritual order mirrors the earthly one, with goddesses and feminine divine forces "
+                  "representing the most important cosmic principles. Male deities, if they exist, serve "
+                  "specific supporting functions within a feminine-dominated pantheon.",
+                  
+        "culture": "Cultural expressions, from art to literature to music, celebrate feminine power, beauty, "
+                 "and wisdom. The feminine principle is seen as the creative force behind all worthwhile "
+                 "cultural achievements.",
+                 
+        "news": "Public discourse naturally centers feminine perspectives and priorities. "
+              "Information is filtered through a lens that reinforces the established gender hierarchy "
+              "and celebrates influential women.",
+        
         # Default content for any type not specifically defined
         "default": "Power dynamics follow the natural order of feminine dominance, with masculine elements "
                  "existing primarily to support and serve the greater feminine whole."
     }
     
     # Emphasis level messages by level
-    _EMPHASIS_MESSAGES = {
+    EMPHASIS_MESSAGES = {
         2: "\n\nThroughout every realm, the ascendancy of womanhood underpins all aspects of life, "
            "unquestioned and unassailable.",
            
@@ -8169,8 +8349,9 @@ class MatriarchalThemingUtils:
         # 1. Apply basic word replacements
         result = cls._replace_gendered_words(content)
         
-        # 2. Inject theme-specific content
-        result = cls._add_themed_content(result, lore_type.lower())
+        # 2. Inject theme-specific content if content doesn't already have strong matriarchal elements
+        if not cls._has_matriarchal_content(result):
+            result = cls._add_themed_content(result, lore_type.lower())
         
         # 3. Ensure goddess reference for religious/cosmological content
         if lore_type.lower() in ["cosmology", "magic_system", "religion", "pantheon", "deity"]:
@@ -8181,6 +8362,22 @@ class MatriarchalThemingUtils:
             result = cls._add_emphasis(result, emphasis_level)
         
         return result
+    
+    @classmethod
+    def _has_matriarchal_content(cls, text: str) -> bool:
+        """Check if text already has strong matriarchal themes"""
+        matriarchal_indicators = [
+            r"matriarch", r"matriarchal", r"matriarchy",
+            r"female dominance", r"feminine power", r"goddess",
+            r"women rule", r"feminine authority", r"female supremacy"
+        ]
+        
+        count = 0
+        for indicator in matriarchal_indicators:
+            count += len(re.findall(indicator, text, re.IGNORECASE))
+            
+        # If we find more than 2 matriarchal indicators, consider it already themed
+        return count > 2
     
     @classmethod
     def _replace_gendered_words(cls, text: str) -> str:
@@ -8195,7 +8392,7 @@ class MatriarchalThemingUtils:
         """
         result = text
 
-        for pattern_str, replacement_str in cls._WORD_REPLACEMENTS.items():
+        for pattern_str, replacement_str in cls.WORD_REPLACEMENTS.items():
             pattern = re.compile(pattern_str, re.IGNORECASE)
 
             def _replacement_func(match):
@@ -8222,9 +8419,9 @@ class MatriarchalThemingUtils:
             Text with added themed content
         """
         # Get themed content for this type (or use default)
-        themed_content = cls._THEMED_CONTENT.get(
+        themed_content = cls.THEMED_CONTENT.get(
             lore_type, 
-            cls._THEMED_CONTENT["default"]
+            cls.THEMED_CONTENT["default"]
         )
         
         # Find a good place to insert the content
@@ -8253,7 +8450,7 @@ class MatriarchalThemingUtils:
             return text
             
         # Add divine reference
-        title = random.choice(cls._DIVINE_TITLES)
+        title = random.choice(cls.DIVINE_TITLES)
         insertion = (
             f"\n\nAt the cosmic center stands {title}, "
             "the eternal wellspring of existence. Her dominion weaves reality itself."
@@ -8277,8 +8474,8 @@ class MatriarchalThemingUtils:
         
         # Add level-appropriate emphasis messages
         for level in range(2, emphasis_level + 1):
-            if level in cls._EMPHASIS_MESSAGES:
-                result += cls._EMPHASIS_MESSAGES[level]
+            if level in cls.EMPHASIS_MESSAGES:
+                result += cls.EMPHASIS_MESSAGES[level]
                 
         return result
 
