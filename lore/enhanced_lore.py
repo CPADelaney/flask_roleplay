@@ -786,22 +786,23 @@ class LoreDynamicsSystem(BaseLoreManager):
                     new_description = update['new_description']
                     
                     # Generate new embedding for the updated content
-                    item_name = update.get('name', 'Unknown')
-                    embedding_text = f"{item_name} {new_description}"
-                    new_embedding = await generate_embedding(embedding_text)
-                    
                     # Determine ID field name
                     id_field = 'id'
                     if lore_type == 'LocationLore':
                         id_field = 'location_id'
                     
                     try:
-                        # Update the database
+                        # Update the description first
                         await conn.execute(f"""
                             UPDATE {lore_type}
-                            SET description = $1, embedding = $2
-                            WHERE {id_field} = $3
-                        """, new_description, new_embedding, lore_id)
+                            SET description = $1
+                            WHERE {id_field} = $2
+                        """, new_description, lore_id)
+                        
+                        # Generate and store new embedding
+                        item_name = update.get('name', 'Unknown')
+                        embedding_text = f"{item_name} {new_description}"
+                        await self.generate_and_store_embedding(embedding_text, conn, lore_type, id_field, lore_id)
                         
                         # Record the update in a history table if it exists
                         history_table_exists = await conn.fetchval(f"""
@@ -5665,74 +5666,46 @@ class EducationalSystemManager(BaseLoreManager):
         
     async def initialize_tables(self):
         """Ensure educational system tables exist"""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Check if EducationalSystems table exists
-                table_exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'educationalsystems'
-                    );
-                """)
+        table_definitions = {
+            "EducationalSystems": """
+                CREATE TABLE EducationalSystems (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    system_type TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    target_demographics TEXT[],
+                    controlled_by TEXT,
+                    core_teachings TEXT[],
+                    teaching_methods TEXT[],
+                    coming_of_age_rituals TEXT,
+                    knowledge_restrictions TEXT,
+                    embedding VECTOR(1536)
+                );
                 
-                if not table_exists:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE EducationalSystems (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            system_type TEXT NOT NULL,
-                            description TEXT NOT NULL,
-                            target_demographics TEXT[],
-                            controlled_by TEXT,
-                            core_teachings TEXT[],
-                            teaching_methods TEXT[],
-                            coming_of_age_rituals TEXT,
-                            knowledge_restrictions TEXT,
-                            embedding VECTOR(1536)
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_educationalsystems_embedding 
-                        ON EducationalSystems USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("EducationalSystems table created")
+                CREATE INDEX IF NOT EXISTS idx_educationalsystems_embedding 
+                ON EducationalSystems USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "KnowledgeTraditions": """
+                CREATE TABLE KnowledgeTraditions (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    tradition_type TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    knowledge_domain TEXT NOT NULL,
+                    preservation_method TEXT,
+                    access_requirements TEXT,
+                    associated_group TEXT,
+                    examples TEXT[],
+                    embedding VECTOR(1536)
+                );
                 
-                # Check if KnowledgeTraditions table exists
-                traditions_exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'knowledgetraditions'
-                    );
-                """)
-                
-                if not traditions_exists:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE KnowledgeTraditions (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            tradition_type TEXT NOT NULL,
-                            description TEXT NOT NULL,
-                            knowledge_domain TEXT NOT NULL,
-                            preservation_method TEXT,
-                            access_requirements TEXT,
-                            associated_group TEXT,
-                            examples TEXT[],
-                            embedding VECTOR(1536)
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_knowledgetraditions_embedding 
-                        ON KnowledgeTraditions USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("KnowledgeTraditions table created")
+                CREATE INDEX IF NOT EXISTS idx_knowledgetraditions_embedding 
+                ON KnowledgeTraditions USING ivfflat (embedding vector_cosine_ops);
+            """
+        }
+        
+        await self.initialize_tables_for_class(table_definitions)
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -6131,73 +6104,48 @@ class GeopoliticalSystemManager(BaseLoreManager):
         
     async def initialize_tables(self):
         """Ensure geopolitical system tables exist"""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Check if Nations table exists
-                nations_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'nations'
-                    );
-                """)
+        table_definitions = {
+            "Nations": """
+                CREATE TABLE Nations (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    government_type TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    relative_power INTEGER CHECK (relative_power BETWEEN 1 AND 10),
+                    matriarchy_level INTEGER CHECK (matriarchy_level BETWEEN 1 AND 10),
+                    population_scale TEXT,
+                    major_resources TEXT[],
+                    major_cities TEXT[],
+                    cultural_traits TEXT[],
+                    notable_features TEXT,
+                    neighboring_nations TEXT[],
+                    embedding VECTOR(1536)
+                );
                 
-                if not nations_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE Nations (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            government_type TEXT NOT NULL,
-                            description TEXT NOT NULL,
-                            relative_power INTEGER CHECK (relative_power BETWEEN 1 AND 10),
-                            matriarchy_level INTEGER CHECK (matriarchy_level BETWEEN 1 AND 10),
-                            population_scale TEXT,
-                            major_resources TEXT[],
-                            major_cities TEXT[],
-                            cultural_traits TEXT[],
-                            notable_features TEXT,
-                            neighboring_nations TEXT[],
-                            embedding VECTOR(1536)
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_nations_embedding 
-                        ON Nations USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("Nations table created")
-                
-                # Check if InternationalRelations table exists
-                relations_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'internationalrelations'
-                    );
-                """)
-                
-                if not relations_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE InternationalRelations (
-                            id SERIAL PRIMARY KEY,
-                            nation1_id INTEGER NOT NULL,
-                            nation2_id INTEGER NOT NULL,
-                            relationship_type TEXT NOT NULL,
-                            relationship_quality INTEGER CHECK (relationship_quality BETWEEN 1 AND 10),
-                            description TEXT NOT NULL,
-                            notable_conflicts TEXT[],
-                            notable_alliances TEXT[],
-                            trade_relations TEXT,
-                            cultural_exchanges TEXT,
-                            FOREIGN KEY (nation1_id) REFERENCES Nations(id) ON DELETE CASCADE,
-                            FOREIGN KEY (nation2_id) REFERENCES Nations(id) ON DELETE CASCADE,
-                            UNIQUE (nation1_id, nation2_id)
-                        );
-                    """)
-                    
-                    logging.info("InternationalRelations table created")
+                CREATE INDEX IF NOT EXISTS idx_nations_embedding 
+                ON Nations USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "InternationalRelations": """
+                CREATE TABLE InternationalRelations (
+                    id SERIAL PRIMARY KEY,
+                    nation1_id INTEGER NOT NULL,
+                    nation2_id INTEGER NOT NULL,
+                    relationship_type TEXT NOT NULL,
+                    relationship_quality INTEGER CHECK (relationship_quality BETWEEN 1 AND 10),
+                    description TEXT NOT NULL,
+                    notable_conflicts TEXT[],
+                    notable_alliances TEXT[],
+                    trade_relations TEXT,
+                    cultural_exchanges TEXT,
+                    FOREIGN KEY (nation1_id) REFERENCES Nations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (nation2_id) REFERENCES Nations(id) ON DELETE CASCADE,
+                    UNIQUE (nation1_id, nation2_id)
+                );
+            """
+        }
+        
+        await self.initialize_tables_for_class(table_definitions)
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -6248,10 +6196,6 @@ class GeopoliticalSystemManager(BaseLoreManager):
         cultural_traits = cultural_traits or []
         neighboring_nations = neighboring_nations or []
         
-        # Generate embedding
-        embedding_text = f"{name} {government_type} {description}"
-        embedding = await generate_embedding(embedding_text)
-        
         # Store in database
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
@@ -6260,14 +6204,18 @@ class GeopoliticalSystemManager(BaseLoreManager):
                         name, government_type, description, relative_power,
                         matriarchy_level, population_scale, major_resources,
                         major_cities, cultural_traits, notable_features,
-                        neighboring_nations, embedding
+                        neighboring_nations
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     RETURNING id
                 """, name, government_type, description, relative_power,
                      matriarchy_level, population_scale, major_resources,
                      major_cities, cultural_traits, notable_features,
-                     neighboring_nations, embedding)
+                     neighboring_nations)
+                
+                # Generate and store embedding
+                embedding_text = f"{name} {government_type} {description}"
+                await self.generate_and_store_embedding(embedding_text, conn, "Nations", "id", nation_id)
                 
                 return nation_id
     
@@ -6773,342 +6721,209 @@ class ReligionManager(BaseLoreManager):
         
     async def initialize_tables(self):
         """Ensure all religion-related tables exist"""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # --- Core Faith Tables ---
+        table_definitions = {
+            "Deities": """
+                CREATE TABLE Deities (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    gender TEXT NOT NULL, -- female, male, non-binary, etc.
+                    domain TEXT[] NOT NULL, -- love, war, knowledge, etc.
+                    description TEXT NOT NULL,
+                    iconography TEXT,
+                    holy_symbol TEXT,
+                    sacred_animals TEXT[],
+                    sacred_colors TEXT[],
+                    relationships JSONB, -- relationships with other deities
+                    rank INTEGER CHECK (rank BETWEEN 1 AND 10), -- importance in pantheon
+                    worshippers TEXT[], -- types of people who worship
+                    pantheon_id INTEGER,
+                    embedding VECTOR(1536)
+                );
                 
-                # Check if Deities table exists
-                deities_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'deities'
-                    );
-                """)
+                CREATE INDEX IF NOT EXISTS idx_deities_embedding 
+                ON Deities USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "Pantheons": """
+                CREATE TABLE Pantheons (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    origin_story TEXT NOT NULL,
+                    major_holy_days TEXT[],
+                    cosmic_structure TEXT, -- how the cosmos is organized
+                    afterlife_beliefs TEXT,
+                    creation_myth TEXT,
+                    geographical_spread TEXT[], -- regions where worshipped
+                    dominant_nations TEXT[], -- nations where dominant
+                    primary_worshippers TEXT[], -- demographics who worship
+                    matriarchal_elements TEXT NOT NULL, -- how it reinforces matriarchy
+                    taboos TEXT[],
+                    embedding VECTOR(1536)
+                );
                 
-                if not deities_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE Deities (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            gender TEXT NOT NULL, -- female, male, non-binary, etc.
-                            domain TEXT[] NOT NULL, -- love, war, knowledge, etc.
-                            description TEXT NOT NULL,
-                            iconography TEXT,
-                            holy_symbol TEXT,
-                            sacred_animals TEXT[],
-                            sacred_colors TEXT[],
-                            relationships JSONB, -- relationships with other deities
-                            rank INTEGER CHECK (rank BETWEEN 1 AND 10), -- importance in pantheon
-                            worshippers TEXT[], -- types of people who worship
-                            pantheon_id INTEGER,
-                            embedding VECTOR(1536)
-                        );
-                    """)
+                CREATE INDEX IF NOT EXISTS idx_pantheons_embedding 
+                ON Pantheons USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "ReligiousPractices": """
+                CREATE TABLE ReligiousPractices (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    practice_type TEXT NOT NULL, -- ritual, ceremony, prayer, etc.
+                    description TEXT NOT NULL,
+                    frequency TEXT, -- daily, weekly, yearly, etc.
+                    required_elements TEXT[], -- components needed
+                    performed_by TEXT[], -- priests, all worshippers, etc.
+                    purpose TEXT NOT NULL, -- blessing, protection, etc.
+                    restricted_to TEXT[], -- if limited to certain people
+                    deity_id INTEGER,
+                    pantheon_id INTEGER,
+                    embedding VECTOR(1536)
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_religiouspractices_embedding 
+                ON ReligiousPractices USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "HolySites": """
+                CREATE TABLE HolySites (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    site_type TEXT NOT NULL, -- temple, shrine, sacred grove, etc.
+                    description TEXT NOT NULL,
+                    location_id INTEGER, -- reference to Locations table
+                    location_description TEXT, -- if not linked to location
+                    deity_id INTEGER,
+                    pantheon_id INTEGER,
+                    clergy_type TEXT, -- priestesses, clerics, etc.
+                    clergy_hierarchy TEXT[], -- ranks in order
+                    pilgrimage_info TEXT,
+                    miracles_reported TEXT[],
+                    restrictions TEXT[], -- who can enter
+                    architectural_features TEXT,
+                    embedding VECTOR(1536)
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_holysites_embedding 
+                ON HolySites USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "ReligiousTexts": """
+                CREATE TABLE ReligiousTexts (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    text_type TEXT NOT NULL, -- scripture, hymnal, prayer book, etc.
+                    description TEXT NOT NULL,
+                    authorship TEXT, -- divine, prophetic, etc.
+                    key_teachings TEXT[] NOT NULL,
+                    restricted_to TEXT[], -- if access is limited
+                    deity_id INTEGER,
+                    pantheon_id INTEGER,
+                    notable_passages TEXT[],
+                    age_description TEXT, -- how old it is
+                    embedding VECTOR(1536)
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_religioustexts_embedding 
+                ON ReligiousTexts USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "ReligiousOrders": """
+                CREATE TABLE ReligiousOrders (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    order_type TEXT NOT NULL, -- monastic, military, scholarly, etc.
+                    description TEXT NOT NULL,
+                    founding_story TEXT,
+                    headquarters TEXT,
+                    hierarchy_structure TEXT[],
+                    vows TEXT[],
+                    practices TEXT[],
+                    deity_id INTEGER,
+                    pantheon_id INTEGER,
+                    gender_composition TEXT, -- female-only, primarily female, mixed, etc.
+                    special_abilities TEXT[],
+                    notable_members TEXT[],
+                    embedding VECTOR(1536)
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_religiousorders_embedding 
+                ON ReligiousOrders USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "ReligiousConflicts": """
+                CREATE TABLE ReligiousConflicts (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    conflict_type TEXT NOT NULL, -- schism, holy war, theological debate, etc.
+                    description TEXT NOT NULL,
+                    beginning_date TEXT,
+                    resolution_date TEXT,
+                    status TEXT, -- ongoing, resolved, dormant, etc.
+                    parties_involved TEXT[] NOT NULL,
+                    core_disagreement TEXT NOT NULL,
+                    casualties TEXT,
+                    historical_impact TEXT,
+                    embedding VECTOR(1536)
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_religiousconflicts_embedding 
+                ON ReligiousConflicts USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "NationReligion": """
+                CREATE TABLE NationReligion (
+                    id SERIAL PRIMARY KEY,
+                    nation_id INTEGER NOT NULL,
+                    state_religion BOOLEAN DEFAULT FALSE,
+                    primary_pantheon_id INTEGER, -- Main pantheon if any
+                    pantheon_distribution JSONB, -- Distribution of pantheons by percentage
+                    religiosity_level INTEGER CHECK (religiosity_level BETWEEN 1 AND 10),
+                    religious_tolerance INTEGER CHECK (religious_tolerance BETWEEN 1 AND 10),
+                    religious_leadership TEXT, -- Who leads religion nationally
+                    religious_laws JSONB, -- Religious laws in effect
+                    religious_holidays TEXT[], -- Major religious holidays
+                    religious_conflicts TEXT[], -- Current religious tensions
+                    religious_minorities TEXT[], -- Description of minority faiths
+                    embedding VECTOR(1536),
+                    FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (primary_pantheon_id) REFERENCES Pantheons(id) ON DELETE SET NULL
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_nationreligion_embedding 
+                ON NationReligion USING ivfflat (embedding vector_cosine_ops);
+                
+                CREATE INDEX IF NOT EXISTS idx_nationreligion_nation
+                ON NationReligion(nation_id);
+            """,
+            
+            "RegionalReligiousPractice": """
+                CREATE TABLE RegionalReligiousPractice (
+                    id SERIAL PRIMARY KEY,
+                    nation_id INTEGER NOT NULL,
+                    practice_id INTEGER NOT NULL, -- Reference to ReligiousPractices
+                    regional_variation TEXT, -- How practice differs in this region
+                    importance INTEGER CHECK (importance BETWEEN 1 AND 10),
+                    frequency TEXT, -- How often practiced locally
+                    local_additions TEXT, -- Any local additions to the practice
+                    gender_differences TEXT, -- Any local gender differences
+                    embedding VECTOR(1536),
+                    FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE,
+                    FOREIGN KEY (practice_id) REFERENCES ReligiousPractices(id) ON DELETE CASCADE
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_regionalreligiouspractice_embedding 
+                ON RegionalReligiousPractice USING ivfflat (embedding vector_cosine_ops);
+                
+                CREATE INDEX IF NOT EXISTS idx_regionalreligiouspractice_nation
+                ON RegionalReligiousPractice(nation_id);
+            """
+        }
+        
+        await self.initialize_tables_for_class(table_definitions)
                     
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_deities_embedding 
-                        ON Deities USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("Deities table created")
-                
-                # Check if Pantheons table exists
-                pantheons_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'pantheons'
-                    );
-                """)
-                
-                if not pantheons_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE Pantheons (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            description TEXT NOT NULL,
-                            origin_story TEXT NOT NULL,
-                            major_holy_days TEXT[],
-                            cosmic_structure TEXT, -- how the cosmos is organized
-                            afterlife_beliefs TEXT,
-                            creation_myth TEXT,
-                            geographical_spread TEXT[], -- regions where worshipped
-                            dominant_nations TEXT[], -- nations where dominant
-                            primary_worshippers TEXT[], -- demographics who worship
-                            matriarchal_elements TEXT NOT NULL, -- how it reinforces matriarchy
-                            taboos TEXT[],
-                            embedding VECTOR(1536)
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_pantheons_embedding 
-                        ON Pantheons USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("Pantheons table created")
-                
-                # Check if ReligiousPractices table exists
-                practices_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'religiouspractices'
-                    );
-                """)
-                
-                if not practices_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE ReligiousPractices (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            practice_type TEXT NOT NULL, -- ritual, ceremony, prayer, etc.
-                            description TEXT NOT NULL,
-                            frequency TEXT, -- daily, weekly, yearly, etc.
-                            required_elements TEXT[], -- components needed
-                            performed_by TEXT[], -- priests, all worshippers, etc.
-                            purpose TEXT NOT NULL, -- blessing, protection, etc.
-                            restricted_to TEXT[], -- if limited to certain people
-                            deity_id INTEGER,
-                            pantheon_id INTEGER,
-                            embedding VECTOR(1536)
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_religiouspractices_embedding 
-                        ON ReligiousPractices USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("ReligiousPractices table created")
-                
-                # Check if HolySites table exists
-                sites_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'holysites'
-                    );
-                """)
-                
-                if not sites_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE HolySites (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            site_type TEXT NOT NULL, -- temple, shrine, sacred grove, etc.
-                            description TEXT NOT NULL,
-                            location_id INTEGER, -- reference to Locations table
-                            location_description TEXT, -- if not linked to location
-                            deity_id INTEGER,
-                            pantheon_id INTEGER,
-                            clergy_type TEXT, -- priestesses, clerics, etc.
-                            clergy_hierarchy TEXT[], -- ranks in order
-                            pilgrimage_info TEXT,
-                            miracles_reported TEXT[],
-                            restrictions TEXT[], -- who can enter
-                            architectural_features TEXT,
-                            embedding VECTOR(1536)
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_holysites_embedding 
-                        ON HolySites USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("HolySites table created")
-                
-                # Check if ReligiousTexts table exists
-                texts_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'religioustexts'
-                    );
-                """)
-                
-                if not texts_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE ReligiousTexts (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            text_type TEXT NOT NULL, -- scripture, hymnal, prayer book, etc.
-                            description TEXT NOT NULL,
-                            authorship TEXT, -- divine, prophetic, etc.
-                            key_teachings TEXT[] NOT NULL,
-                            restricted_to TEXT[], -- if access is limited
-                            deity_id INTEGER,
-                            pantheon_id INTEGER,
-                            notable_passages TEXT[],
-                            age_description TEXT, -- how old it is
-                            embedding VECTOR(1536)
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_religioustexts_embedding 
-                        ON ReligiousTexts USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("ReligiousTexts table created")
-                
-                # Check if ReligiousOrders table exists
-                orders_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'religiousorders'
-                    );
-                """)
-                
-                if not orders_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE ReligiousOrders (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            order_type TEXT NOT NULL, -- monastic, military, scholarly, etc.
-                            description TEXT NOT NULL,
-                            founding_story TEXT,
-                            headquarters TEXT,
-                            hierarchy_structure TEXT[],
-                            vows TEXT[],
-                            practices TEXT[],
-                            deity_id INTEGER,
-                            pantheon_id INTEGER,
-                            gender_composition TEXT, -- female-only, primarily female, mixed, etc.
-                            special_abilities TEXT[],
-                            notable_members TEXT[],
-                            embedding VECTOR(1536)
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_religiousorders_embedding 
-                        ON ReligiousOrders USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("ReligiousOrders table created")
-                
-                # Check if ReligiousConflicts table exists
-                conflicts_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'religiousconflicts'
-                    );
-                """)
-                
-                if not conflicts_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE ReligiousConflicts (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            conflict_type TEXT NOT NULL, -- schism, holy war, theological debate, etc.
-                            description TEXT NOT NULL,
-                            beginning_date TEXT,
-                            resolution_date TEXT,
-                            status TEXT, -- ongoing, resolved, dormant, etc.
-                            parties_involved TEXT[] NOT NULL,
-                            core_disagreement TEXT NOT NULL,
-                            casualties TEXT,
-                            historical_impact TEXT,
-                            embedding VECTOR(1536)
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_religiousconflicts_embedding 
-                        ON ReligiousConflicts USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("ReligiousConflicts table created")
-                
-                # --- Distribution Tables ---
-                
-                # Check if NationReligion table exists
-                nation_religion_exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'nationreligion'
-                    );
-                """)
-                
-                if not nation_religion_exists:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE NationReligion (
-                            id SERIAL PRIMARY KEY,
-                            nation_id INTEGER NOT NULL,
-                            state_religion BOOLEAN DEFAULT FALSE,
-                            primary_pantheon_id INTEGER, -- Main pantheon if any
-                            pantheon_distribution JSONB, -- Distribution of pantheons by percentage
-                            religiosity_level INTEGER CHECK (religiosity_level BETWEEN 1 AND 10),
-                            religious_tolerance INTEGER CHECK (religious_tolerance BETWEEN 1 AND 10),
-                            religious_leadership TEXT, -- Who leads religion nationally
-                            religious_laws JSONB, -- Religious laws in effect
-                            religious_holidays TEXT[], -- Major religious holidays
-                            religious_conflicts TEXT[], -- Current religious tensions
-                            religious_minorities TEXT[], -- Description of minority faiths
-                            embedding VECTOR(1536),
-                            FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE,
-                            FOREIGN KEY (primary_pantheon_id) REFERENCES Pantheons(id) ON DELETE SET NULL
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_nationreligion_embedding 
-                        ON NationReligion USING ivfflat (embedding vector_cosine_ops);
-                        
-                        CREATE INDEX IF NOT EXISTS idx_nationreligion_nation
-                        ON NationReligion(nation_id);
-                    """)
-                    
-                    logging.info("NationReligion table created")
-                
-                # Check if RegionalReligiousPractice table exists
-                regional_practices_exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'regionalreligiouspractice'
-                    );
-                """)
-                
-                if not regional_practices_exists:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE RegionalReligiousPractice (
-                            id SERIAL PRIMARY KEY,
-                            nation_id INTEGER NOT NULL,
-                            practice_id INTEGER NOT NULL, -- Reference to ReligiousPractices
-                            regional_variation TEXT, -- How practice differs in this region
-                            importance INTEGER CHECK (importance BETWEEN 1 AND 10),
-                            frequency TEXT, -- How often practiced locally
-                            local_additions TEXT, -- Any local additions to the practice
-                            gender_differences TEXT, -- Any local gender differences
-                            embedding VECTOR(1536),
-                            FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE,
-                            FOREIGN KEY (practice_id) REFERENCES ReligiousPractices(id) ON DELETE CASCADE
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_regionalreligiouspractice_embedding 
-                        ON RegionalReligiousPractice USING ivfflat (embedding vector_cosine_ops);
-                        
-                        CREATE INDEX IF NOT EXISTS idx_regionalreligiouspractice_nation
-                        ON RegionalReligiousPractice(nation_id);
-                    """)
+
                     
                     logging.info("RegionalReligiousPractice table created")
     
@@ -7165,23 +6980,23 @@ class ReligionManager(BaseLoreManager):
         relationships = relationships or {}
         worshippers = worshippers or []
         
-        # Generate embedding for semantic search
-        embedding_text = f"{name} {gender} {' '.join(domain)} {description}"
-        embedding = await generate_embedding(embedding_text)
-        
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
                 deity_id = await conn.fetchval("""
                     INSERT INTO Deities (
                         name, gender, domain, description, pantheon_id,
                         iconography, holy_symbol, sacred_animals, sacred_colors,
-                        relationships, rank, worshippers, embedding
+                        relationships, rank, worshippers
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                     RETURNING id
                 """, name, gender, domain, description, pantheon_id,
                      iconography, holy_symbol, sacred_animals, sacred_colors,
-                     json.dumps(relationships), rank, worshippers, embedding)
+                     json.dumps(relationships), rank, worshippers)
+                
+                # Generate and store embedding
+                embedding_text = f"{name} {gender} {' '.join(domain)} {description}"
+                await self.generate_and_store_embedding(embedding_text, conn, "Deities", "id", deity_id)
                 
                 # Clear relevant cache
                 FAITH_CACHE.invalidate_pattern("deity")
@@ -9413,124 +9228,81 @@ class RegionalCultureSystem(BaseLoreManager):
         
     async def initialize_tables(self):
         """Ensure regional culture tables exist"""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Check if Languages table exists
-                languages_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'languages'
-                    );
-                """)
+        table_definitions = {
+            "Languages": """
+                CREATE TABLE Languages (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    language_family TEXT,
+                    description TEXT NOT NULL,
+                    writing_system TEXT,
+                    primary_regions INTEGER[], -- Nation IDs where primarily spoken
+                    minority_regions INTEGER[], -- Nation IDs where spoken by minorities
+                    formality_levels TEXT[], -- Different levels of formality
+                    common_phrases JSONB, -- Basic phrases in this language
+                    difficulty INTEGER CHECK (difficulty BETWEEN 1 AND 10),
+                    relation_to_power TEXT, -- How language relates to power structures
+                    dialects JSONB, -- Regional variations
+                    embedding VECTOR(1536)
+                );
                 
-                if not languages_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE Languages (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            language_family TEXT,
-                            description TEXT NOT NULL,
-                            writing_system TEXT,
-                            primary_regions INTEGER[], -- Nation IDs where primarily spoken
-                            minority_regions INTEGER[], -- Nation IDs where spoken by minorities
-                            formality_levels TEXT[], -- Different levels of formality
-                            common_phrases JSONB, -- Basic phrases in this language
-                            difficulty INTEGER CHECK (difficulty BETWEEN 1 AND 10),
-                            relation_to_power TEXT, -- How language relates to power structures
-                            dialects JSONB, -- Regional variations
-                            embedding VECTOR(1536)
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_languages_embedding 
-                        ON Languages USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("Languages table created")
+                CREATE INDEX IF NOT EXISTS idx_languages_embedding 
+                ON Languages USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "CulturalNorms": """
+                CREATE TABLE CulturalNorms (
+                    id SERIAL PRIMARY KEY,
+                    nation_id INTEGER NOT NULL, -- Nation this applies to
+                    category TEXT NOT NULL, -- greeting, dining, authority, gift, etc.
+                    description TEXT NOT NULL, -- Detailed description
+                    formality_level TEXT, -- casual, formal, ceremonial
+                    gender_specific BOOLEAN DEFAULT FALSE, -- If norm differs by gender
+                    female_variation TEXT, -- Female-specific version if applicable
+                    male_variation TEXT, -- Male-specific version if applicable
+                    taboo_level INTEGER CHECK (taboo_level BETWEEN 0 AND 10), -- How taboo breaking this is
+                    consequence TEXT, -- Consequence of breaking norm
+                    regional_variations JSONB, -- Variations within the nation
+                    embedding VECTOR(1536),
+                    FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE
+                );
                 
-                # Check if CulturalNorms table exists
-                norms_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'culturalnorms'
-                    );
-                """)
+                CREATE INDEX IF NOT EXISTS idx_culturalnorms_embedding 
+                ON CulturalNorms USING ivfflat (embedding vector_cosine_ops);
                 
-                if not norms_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE CulturalNorms (
-                            id SERIAL PRIMARY KEY,
-                            nation_id INTEGER NOT NULL, -- Nation this applies to
-                            category TEXT NOT NULL, -- greeting, dining, authority, gift, etc.
-                            description TEXT NOT NULL, -- Detailed description
-                            formality_level TEXT, -- casual, formal, ceremonial
-                            gender_specific BOOLEAN DEFAULT FALSE, -- If norm differs by gender
-                            female_variation TEXT, -- Female-specific version if applicable
-                            male_variation TEXT, -- Male-specific version if applicable
-                            taboo_level INTEGER CHECK (taboo_level BETWEEN 0 AND 10), -- How taboo breaking this is
-                            consequence TEXT, -- Consequence of breaking norm
-                            regional_variations JSONB, -- Variations within the nation
-                            embedding VECTOR(1536),
-                            FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_culturalnorms_embedding 
-                        ON CulturalNorms USING ivfflat (embedding vector_cosine_ops);
-                        
-                        CREATE INDEX IF NOT EXISTS idx_culturalnorms_nation
-                        ON CulturalNorms(nation_id);
-                    """)
-                    
-                    logging.info("CulturalNorms table created")
+                CREATE INDEX IF NOT EXISTS idx_culturalnorms_nation
+                ON CulturalNorms(nation_id);
+            """,
+            
+            "Etiquette": """
+                CREATE TABLE Etiquette (
+                    id SERIAL PRIMARY KEY,
+                    nation_id INTEGER NOT NULL, -- Nation this applies to
+                    context TEXT NOT NULL, -- Context (court, public, private, etc.)
+                    title_system TEXT, -- How titles work
+                    greeting_ritual TEXT, -- How people greet each other
+                    body_language TEXT, -- Expected body language
+                    eye_contact TEXT, -- Eye contact norms
+                    distance_norms TEXT, -- Personal space norms
+                    gift_giving TEXT, -- Gift-giving norms
+                    dining_etiquette TEXT, -- Table manners
+                    power_display TEXT, -- How power is displayed
+                    respect_indicators TEXT, -- How respect is shown
+                    gender_distinctions TEXT, -- How gender impacts etiquette
+                    taboos TEXT[], -- Things never to do
+                    embedding VECTOR(1536),
+                    FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE
+                );
                 
-                # Check if Etiquette table exists
-                etiquette_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'etiquette'
-                    );
-                """)
+                CREATE INDEX IF NOT EXISTS idx_etiquette_embedding 
+                ON Etiquette USING ivfflat (embedding vector_cosine_ops);
                 
-                if not etiquette_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE Etiquette (
-                            id SERIAL PRIMARY KEY,
-                            nation_id INTEGER NOT NULL, -- Nation this applies to
-                            context TEXT NOT NULL, -- Context (court, public, private, etc.)
-                            title_system TEXT, -- How titles work
-                            greeting_ritual TEXT, -- How people greet each other
-                            body_language TEXT, -- Expected body language
-                            eye_contact TEXT, -- Eye contact norms
-                            distance_norms TEXT, -- Personal space norms
-                            gift_giving TEXT, -- Gift-giving norms
-                            dining_etiquette TEXT, -- Table manners
-                            power_display TEXT, -- How power is displayed
-                            respect_indicators TEXT, -- How respect is shown
-                            gender_distinctions TEXT, -- How gender impacts etiquette
-                            taboos TEXT[], -- Things never to do
-                            embedding VECTOR(1536),
-                            FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_etiquette_embedding 
-                        ON Etiquette USING ivfflat (embedding vector_cosine_ops);
-                        
-                        CREATE INDEX IF NOT EXISTS idx_etiquette_nation
-                        ON Etiquette(nation_id);
-                    """)
-                    
-                    logging.info("Etiquette table created")
+                CREATE INDEX IF NOT EXISTS idx_etiquette_nation
+                ON Etiquette(nation_id);
+            """
+        }
+        
+        await self.initialize_tables_for_class(table_definitions)
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -9638,15 +9410,16 @@ class RegionalCultureSystem(BaseLoreManager):
                 embedding = await generate_embedding(embedding_text)
                 
                 # Store in database
+                # Store in database
                 async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
                         language_id = await conn.fetchval("""
                             INSERT INTO Languages (
                                 name, language_family, description, writing_system,
                                 primary_regions, minority_regions, formality_levels,
-                                common_phrases, difficulty, relation_to_power, dialects, embedding
+                                common_phrases, difficulty, relation_to_power, dialects
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                             RETURNING id
                         """,
                         language_data.get("name"),
@@ -9659,8 +9432,11 @@ class RegionalCultureSystem(BaseLoreManager):
                         json.dumps(language_data.get("common_phrases", {})),
                         language_data.get("difficulty", 5),
                         language_data.get("relation_to_power"),
-                        json.dumps(language_data.get("dialects", {})),
-                        embedding)
+                        json.dumps(language_data.get("dialects", {})))
+                        
+                        # Generate and store embedding
+                        embedding_text = f"{language_data['name']} {language_data['description']}"
+                        await self.generate_and_store_embedding(embedding_text, conn, "Languages", "id", language_id)
                         
                         language_data["id"] = language_id
                         languages.append(language_data)
@@ -10013,160 +9789,102 @@ class NationalConflictSystem(BaseLoreManager):
         
     async def initialize_tables(self):
         """Ensure conflict system tables exist"""
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Check if Conflicts table exists
-                conflicts_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'nationalconflicts'
-                    );
-                """)
+        table_definitions = {
+            "NationalConflicts": """
+                CREATE TABLE NationalConflicts (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    conflict_type TEXT NOT NULL, -- war, trade_dispute, diplomatic_tension, etc.
+                    description TEXT NOT NULL,
+                    severity INTEGER CHECK (severity BETWEEN 1 AND 10),
+                    status TEXT NOT NULL, -- active, resolved, escalating, de-escalating
+                    start_date TEXT NOT NULL,
+                    end_date TEXT, -- NULL if ongoing
+                    involved_nations INTEGER[], -- IDs of nations involved
+                    primary_aggressor INTEGER, -- Nation ID of aggressor
+                    primary_defender INTEGER, -- Nation ID of defender
+                    current_casualties TEXT, -- Description of casualties so far
+                    economic_impact TEXT, -- Description of economic impact
+                    diplomatic_consequences TEXT, -- Description of diplomatic fallout
+                    public_opinion JSONB, -- Public opinion in different nations
+                    recent_developments TEXT[], -- Recent events in the conflict
+                    potential_resolution TEXT, -- Potential ways it might end
+                    embedding VECTOR(1536)
+                );
                 
-                if not conflicts_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE NationalConflicts (
-                            id SERIAL PRIMARY KEY,
-                            name TEXT NOT NULL,
-                            conflict_type TEXT NOT NULL, -- war, trade_dispute, diplomatic_tension, etc.
-                            description TEXT NOT NULL,
-                            severity INTEGER CHECK (severity BETWEEN 1 AND 10),
-                            status TEXT NOT NULL, -- active, resolved, escalating, de-escalating
-                            start_date TEXT NOT NULL,
-                            end_date TEXT, -- NULL if ongoing
-                            involved_nations INTEGER[], -- IDs of nations involved
-                            primary_aggressor INTEGER, -- Nation ID of aggressor
-                            primary_defender INTEGER, -- Nation ID of defender
-                            current_casualties TEXT, -- Description of casualties so far
-                            economic_impact TEXT, -- Description of economic impact
-                            diplomatic_consequences TEXT, -- Description of diplomatic fallout
-                            public_opinion JSONB, -- Public opinion in different nations
-                            recent_developments TEXT[], -- Recent events in the conflict
-                            potential_resolution TEXT, -- Potential ways it might end
-                            embedding VECTOR(1536)
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_nationalconflicts_embedding 
-                        ON NationalConflicts USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("NationalConflicts table created")
+                CREATE INDEX IF NOT EXISTS idx_nationalconflicts_embedding 
+                ON NationalConflicts USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "ConflictNews": """
+                CREATE TABLE ConflictNews (
+                    id SERIAL PRIMARY KEY,
+                    conflict_id INTEGER NOT NULL,
+                    headline TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    publication_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    source_nation INTEGER, -- Nation ID where this news originated
+                    bias TEXT, -- pro_aggressor, pro_defender, neutral
+                    embedding VECTOR(1536),
+                    FOREIGN KEY (conflict_id) REFERENCES NationalConflicts(id) ON DELETE CASCADE
+                );
                 
-                # Check if ConflictNews table exists
-                news_exist = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'conflictnews'
-                    );
-                """)
+                CREATE INDEX IF NOT EXISTS idx_conflictnews_embedding 
+                ON ConflictNews USING ivfflat (embedding vector_cosine_ops);
+            """,
+            
+            "DomesticIssues": """
+                CREATE TABLE DomesticIssues (
+                    id SERIAL PRIMARY KEY,
+                    nation_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    issue_type TEXT NOT NULL, -- civil_rights, political_controversy, economic_crisis, etc.
+                    description TEXT NOT NULL,
+                    severity INTEGER CHECK (severity BETWEEN 1 AND 10),
+                    status TEXT NOT NULL, -- emerging, active, waning, resolved
+                    start_date TEXT NOT NULL,
+                    end_date TEXT, -- NULL if ongoing
+                    supporting_factions TEXT[], -- Groups supporting one side
+                    opposing_factions TEXT[], -- Groups opposing
+                    neutral_factions TEXT[], -- Groups remaining neutral
+                    affected_demographics TEXT[], -- Demographics most affected
+                    public_opinion JSONB, -- Opinion distribution
+                    government_response TEXT, -- How the government is responding
+                    recent_developments TEXT[], -- Recent events in this issue
+                    political_impact TEXT, -- Impact on political landscape
+                    social_impact TEXT, -- Impact on society
+                    economic_impact TEXT, -- Economic consequences
+                    potential_resolution TEXT, -- Potential ways it might resolve
+                    embedding VECTOR(1536),
+                    FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE
+                );
                 
-                if not news_exist:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE ConflictNews (
-                            id SERIAL PRIMARY KEY,
-                            conflict_id INTEGER NOT NULL,
-                            headline TEXT NOT NULL,
-                            content TEXT NOT NULL,
-                            publication_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            source_nation INTEGER, -- Nation ID where this news originated
-                            bias TEXT, -- pro_aggressor, pro_defender, neutral
-                            embedding VECTOR(1536),
-                            FOREIGN KEY (conflict_id) REFERENCES NationalConflicts(id) ON DELETE CASCADE
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_conflictnews_embedding 
-                        ON ConflictNews USING ivfflat (embedding vector_cosine_ops);
-                    """)
-                    
-                    logging.info("ConflictNews table created")
-
-                # Check if DomesticIssues table exists
-                domestic_exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'domesticissues'
-                    );
-                """)
+                CREATE INDEX IF NOT EXISTS idx_domesticissues_embedding 
+                ON DomesticIssues USING ivfflat (embedding vector_cosine_ops);
                 
-                if not domestic_exists:
-                    # Create the table
-                    await conn.execute("""
-                        CREATE TABLE DomesticIssues (
-                            id SERIAL PRIMARY KEY,
-                            nation_id INTEGER NOT NULL,
-                            name TEXT NOT NULL,
-                            issue_type TEXT NOT NULL, -- civil_rights, political_controversy, economic_crisis, etc.
-                            description TEXT NOT NULL,
-                            severity INTEGER CHECK (severity BETWEEN 1 AND 10),
-                            status TEXT NOT NULL, -- emerging, active, waning, resolved
-                            start_date TEXT NOT NULL,
-                            end_date TEXT, -- NULL if ongoing
-                            supporting_factions TEXT[], -- Groups supporting one side
-                            opposing_factions TEXT[], -- Groups opposing
-                            neutral_factions TEXT[], -- Groups remaining neutral
-                            affected_demographics TEXT[], -- Demographics most affected
-                            public_opinion JSONB, -- Opinion distribution
-                            government_response TEXT, -- How the government is responding
-                            recent_developments TEXT[], -- Recent events in this issue
-                            political_impact TEXT, -- Impact on political landscape
-                            social_impact TEXT, -- Impact on society
-                            economic_impact TEXT, -- Economic consequences
-                            potential_resolution TEXT, -- Potential ways it might resolve
-                            embedding VECTOR(1536),
-                            FOREIGN KEY (nation_id) REFERENCES Nations(id) ON DELETE CASCADE
-                        );
-                    """)
-                    
-                    # Create index
-                    await conn.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_domesticissues_embedding 
-                        ON DomesticIssues USING ivfflat (embedding vector_cosine_ops);
-                        
-                        CREATE INDEX IF NOT EXISTS idx_domesticissues_nation
-                        ON DomesticIssues(nation_id);
-                    """)
-                    
-                    logging.info("DomesticIssues table created")
+                CREATE INDEX IF NOT EXISTS idx_domesticissues_nation
+                ON DomesticIssues(nation_id);
+            """,
+            
+            "DomesticNews": """
+                CREATE TABLE DomesticNews (
+                    id SERIAL PRIMARY KEY,
+                    issue_id INTEGER NOT NULL,
+                    headline TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    publication_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    source_faction TEXT, -- Faction perspective
+                    bias TEXT, -- supporting, opposing, neutral
+                    embedding VECTOR(1536),
+                    FOREIGN KEY (issue_id) REFERENCES DomesticIssues(id) ON DELETE CASCADE
+                );
                 
-                    # Check if DomesticNews table exists
-                    domestic_news_exist = await conn.fetchval("""
-                        SELECT EXISTS (
-                            SELECT FROM information_schema.tables 
-                            WHERE table_name = 'domesticnews'
-                        );
-                    """)
-                    
-                    if not domestic_news_exist:
-                        # Create the table
-                        await conn.execute("""
-                            CREATE TABLE DomesticNews (
-                                id SERIAL PRIMARY KEY,
-                                issue_id INTEGER NOT NULL,
-                                headline TEXT NOT NULL,
-                                content TEXT NOT NULL,
-                                publication_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                                source_faction TEXT, -- Faction perspective
-                                bias TEXT, -- supporting, opposing, neutral
-                                embedding VECTOR(1536),
-                                FOREIGN KEY (issue_id) REFERENCES DomesticIssues(id) ON DELETE CASCADE
-                            );
-                        """)
-                        
-                        # Create index
-                        await conn.execute("""
-                            CREATE INDEX IF NOT EXISTS idx_domesticnews_embedding 
-                            ON DomesticNews USING ivfflat (embedding vector_cosine_ops);
-                        """)
-                        
-                        logging.info("DomesticNews table created")
+                CREATE INDEX IF NOT EXISTS idx_domesticnews_embedding 
+                ON DomesticNews USING ivfflat (embedding vector_cosine_ops);
+            """
+        }
+        
+        await self.initialize_tables_for_class(table_definitions)
 
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -10414,24 +10132,25 @@ class NationalConflictSystem(BaseLoreManager):
                     continue
                 
                 # Generate embedding
-                embedding_text = f"{news_data['headline']} {news_data['content'][:200]}"
-                embedding = await generate_embedding(embedding_text)
-                
                 # Store in database
                 async with self.get_connection_pool() as pool:
                     async with pool.acquire() as conn:
-                        await conn.execute("""
+                        news_id = await conn.fetchval("""
                             INSERT INTO DomesticNews (
-                                issue_id, headline, content, source_faction, bias, embedding
+                                issue_id, headline, content, source_faction, bias
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6)
+                            VALUES ($1, $2, $3, $4, $5)
+                            RETURNING id
                         """, 
                         issue_id,
                         news_data.get("headline"), 
                         news_data.get("content"),
                         news_data.get("source_faction", "Unknown Source"),
-                        bias,
-                        embedding)
+                        bias)
+                        
+                        # Generate and store embedding
+                        embedding_text = f"{news_data['headline']} {news_data['content'][:200]}"
+                        await self.generate_and_store_embedding(embedding_text, conn, "DomesticNews", "id", news_id)
                         
             except Exception as e:
                 logging.error(f"Error generating domestic news: {e}")
