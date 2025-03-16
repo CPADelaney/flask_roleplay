@@ -3,25 +3,209 @@
 """
 Performance analytics and monitoring for the context optimization system.
 
-This module provides tools to track, analyze, and visualize the performance
-of the context system over time, helping to identify bottlenecks and
-optimization opportunities for long-running games.
+This module provides unified tools for tracking, analyzing, and visualizing 
+the performance of the context system, combining detailed analytics and 
+real-time monitoring capabilities.
 """
 
 import asyncio
 import logging
 import time
 import json
+import psutil
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Union, Tuple
+from typing import Dict, List, Any, Optional, Union, Tuple, Callable
 import hashlib
 import math
 import os
 import csv
+from collections import deque
+from functools import wraps
 
 from context.context_config import get_config
 
 logger = logging.getLogger(__name__)
+
+# -------------------------------------------------------------------------------
+# Performance Metrics Classes
+# -------------------------------------------------------------------------------
+
+class PerformanceMetrics:
+    """Container for performance metrics"""
+    
+    def __init__(self, max_history: int = 100):
+        """
+        Initialize with empty metrics.
+        
+        Args:
+            max_history: Maximum number of historical entries to keep
+        """
+        # Response time metrics
+        self.response_times = deque(maxlen=max_history)
+        self.response_time_avg = 0.0
+        
+        # Token usage metrics
+        self.token_usage = deque(maxlen=max_history)
+        self.token_usage_avg = 0
+        
+        # Cache metrics
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.cache_hit_rate = 0.0
+        
+        # Vector search metrics
+        self.vector_searches = 0
+        self.vector_search_times = deque(maxlen=max_history)
+        self.vector_search_time_avg = 0.0
+        
+        # Memory usage metrics
+        self.memory_usage = deque(maxlen=max_history)
+        self.memory_usage_avg = 0
+        
+        # Additional stats
+        self.total_requests = 0
+        self.errors = 0
+        
+        # Timestamp
+        self.last_updated = datetime.now()
+    
+    def add_response_time(self, response_time: float):
+        """
+        Add a response time measurement.
+        
+        Args:
+            response_time: Response time in seconds
+        """
+        self.response_times.append(response_time)
+        self.response_time_avg = sum(self.response_times) / len(self.response_times)
+        self.last_updated = datetime.now()
+    
+    def add_token_usage(self, tokens: int):
+        """
+        Add a token usage measurement.
+        
+        Args:
+            tokens: Number of tokens used
+        """
+        self.token_usage.append(tokens)
+        self.token_usage_avg = sum(self.token_usage) / len(self.token_usage)
+        self.last_updated = datetime.now()
+    
+    def record_cache_access(self, hit: bool):
+        """
+        Record a cache access.
+        
+        Args:
+            hit: Whether the access was a hit or miss
+        """
+        if hit:
+            self.cache_hits += 1
+        else:
+            self.cache_misses += 1
+        
+        self.total_requests += 1
+        
+        # Update hit rate
+        total_cache_accesses = self.cache_hits + self.cache_misses
+        if total_cache_accesses > 0:
+            self.cache_hit_rate = self.cache_hits / total_cache_accesses
+        
+        self.last_updated = datetime.now()
+    
+    def add_vector_search_time(self, search_time: float):
+        """
+        Add a vector search time measurement.
+        
+        Args:
+            search_time: Search time in seconds
+        """
+        self.vector_searches += 1
+        self.vector_search_times.append(search_time)
+        self.vector_search_time_avg = sum(self.vector_search_times) / len(self.vector_search_times)
+        self.last_updated = datetime.now()
+    
+    def add_memory_usage(self, usage: int):
+        """
+        Add a memory usage measurement.
+        
+        Args:
+            usage: Memory usage in bytes
+        """
+        self.memory_usage.append(usage)
+        self.memory_usage_avg = sum(self.memory_usage) / len(self.memory_usage)
+        self.last_updated = datetime.now()
+    
+    def record_error(self):
+        """Record an error"""
+        self.errors += 1
+        self.last_updated = datetime.now()
+    
+    def get_summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of the metrics.
+        
+        Returns:
+            Dictionary with metric summary
+        """
+        return {
+            "response_time": {
+                "avg": self.response_time_avg,
+                "min": min(self.response_times) if self.response_times else 0,
+                "max": max(self.response_times) if self.response_times else 0,
+                "p90": self._percentile(self.response_times, 90) if self.response_times else 0
+            },
+            "token_usage": {
+                "avg": self.token_usage_avg,
+                "min": min(self.token_usage) if self.token_usage else 0,
+                "max": max(self.token_usage) if self.token_usage else 0,
+                "p90": self._percentile(self.token_usage, 90) if self.token_usage else 0
+            },
+            "cache": {
+                "hits": self.cache_hits,
+                "misses": self.cache_misses,
+                "hit_rate": self.cache_hit_rate
+            },
+            "vector_search": {
+                "count": self.vector_searches,
+                "avg_time": self.vector_search_time_avg
+            },
+            "memory_usage": {
+                "avg": self.memory_usage_avg,
+                "last": self.memory_usage[-1] if self.memory_usage else 0
+            },
+            "requests": self.total_requests,
+            "errors": self.errors,
+            "last_updated": self.last_updated.isoformat()
+        }
+    
+    def reset(self):
+        """Reset all metrics"""
+        self.__init__(max_history=self.response_times.maxlen)
+    
+    def _percentile(self, data: List[float], percentile: int) -> float:
+        """
+        Calculate the given percentile from the data.
+        
+        Args:
+            data: Data points
+            percentile: Percentile to calculate (0-100)
+            
+        Returns:
+            Percentile value
+        """
+        if not data:
+            return 0
+        
+        sorted_data = sorted(data)
+        k = (len(sorted_data) - 1) * (percentile / 100)
+        f = int(k)
+        c = f + 1 if f < len(sorted_data) - 1 else f
+        
+        return sorted_data[f] + (sorted_data[c] - sorted_data[f]) * (k - f)
+
+# -------------------------------------------------------------------------------
+# Context Analytics Class
+# -------------------------------------------------------------------------------
 
 class ContextAnalytics:
     """
@@ -42,12 +226,127 @@ class ContextAnalytics:
         # Ensure storage directory exists
         self.storage_dir = self._get_storage_dir()
         os.makedirs(self.storage_dir, exist_ok=True)
+        
+        # Performance metrics
+        self.performance_metrics = PerformanceMetrics()
+        
+        # Thresholds
+        self.thresholds = {
+            "max_retrieval_time_ms": self.config.get("performance", "max_retrieval_time_ms", 1000),
+            "max_token_usage": self.config.get("performance", "max_token_usage", 6000),
+            "min_cache_hit_rate": self.config.get("performance", "min_cache_hit_rate", 0.3),
+            "max_memory_usage_mb": self.config.get("performance", "max_memory_usage_mb", 500)
+        }
+        
+        # Active timers for current operations
+        self.active_timers = {}
+        
+        # Alerts
+        self.alerts = []
+        self.max_alerts = 100
+        
+        # Logging configuration
+        self.logging_enabled = self.config.get("performance", "log_metrics", True)
+        self.log_interval = self.config.get("performance", "log_interval_seconds", 300)
+        self.last_log_time = time.time()
     
     def _get_storage_dir(self) -> str:
         """Get the directory to store analytics data"""
         base_dir = self.config.get("performance", "analytics_dir", "analytics")
         user_dir = f"{base_dir}/user_{self.user_id}/conversation_{self.conversation_id}"
         return user_dir
+    
+    def start_timer(self, operation: str) -> str:
+        """
+        Start a timer for an operation.
+        
+        Args:
+            operation: Operation name
+            
+        Returns:
+            Timer ID
+        """
+        timer_id = f"{operation}_{time.time()}"
+        self.active_timers[timer_id] = {
+            "operation": operation,
+            "start_time": time.time()
+        }
+        return timer_id
+    
+    def stop_timer(self, timer_id: str) -> float:
+        """
+        Stop a timer and record the elapsed time.
+        
+        Args:
+            timer_id: Timer ID from start_timer
+            
+        Returns:
+            Elapsed time in seconds
+        """
+        if timer_id not in self.active_timers:
+            return 0.0
+        
+        timer = self.active_timers.pop(timer_id)
+        elapsed = time.time() - timer["start_time"]
+        
+        # Record based on operation type
+        operation = timer["operation"]
+        
+        if operation == "get_context":
+            self.performance_metrics.add_response_time(elapsed)
+        elif operation == "vector_search":
+            self.performance_metrics.add_vector_search_time(elapsed)
+        
+        # Maybe log metrics
+        self._maybe_log_metrics()
+        
+        return elapsed
+    
+    def record_cache_access(self, hit: bool):
+        """
+        Record a cache access.
+        
+        Args:
+            hit: Whether the access was a hit or miss
+        """
+        self.performance_metrics.record_cache_access(hit)
+        self._maybe_log_metrics()
+    
+    def record_token_usage(self, tokens: int):
+        """
+        Record token usage.
+        
+        Args:
+            tokens: Number of tokens used
+        """
+        self.performance_metrics.add_token_usage(tokens)
+        self._maybe_log_metrics()
+    
+    def record_memory_usage(self):
+        """Record current memory usage"""
+        try:
+            # Get current process memory usage
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            
+            # Record in bytes
+            self.performance_metrics.add_memory_usage(memory_info.rss)
+        except ImportError:
+            logger.debug("psutil not available, skipping memory usage tracking")
+        except Exception as e:
+            logger.warning(f"Error recording memory usage: {e}")
+    
+    def record_error(self, error: Optional[Exception] = None):
+        """
+        Record an error.
+        
+        Args:
+            error: Optional exception
+        """
+        self.performance_metrics.record_error()
+        
+        if error and self.logging_enabled:
+            logger.error(f"Error in context optimization: {error}")
     
     def record_context_event(
         self,
@@ -125,6 +424,13 @@ class ContextAnalytics:
             "is_cached": is_cached,
             "used_vector": used_vector
         })
+        
+        # Check retrieval performance
+        self.check_retrieval_performance(
+            duration_ms=duration_ms,
+            token_usage=token_usage,
+            is_cached=is_cached
+        )
     
     def record_maintenance_event(
         self,
@@ -227,6 +533,58 @@ class ContextAnalytics:
             if len(type_metrics["durations"]) > max_samples:
                 type_metrics["durations"] = type_metrics["durations"][-max_samples:]
     
+    def check_retrieval_performance(
+        self,
+        duration_ms: int,
+        token_usage: Dict[str, int],
+        is_cached: bool
+    ) -> List[Dict[str, Any]]:
+        """
+        Check retrieval performance against thresholds
+        
+        Args:
+            duration_ms: Retrieval duration in milliseconds
+            token_usage: Token usage by component
+            is_cached: Whether the retrieval was cached
+            
+        Returns:
+            List of alerts generated
+        """
+        if not self.enabled:
+            return []
+            
+        new_alerts = []
+        
+        # Check retrieval time
+        if duration_ms > self.thresholds["max_retrieval_time_ms"]:
+            alert = {
+                "level": "warning",
+                "message": f"Slow context retrieval: {duration_ms}ms (threshold: {self.thresholds['max_retrieval_time_ms']}ms)",
+                "type": "performance",
+                "timestamp": datetime.now().isoformat()
+            }
+            new_alerts.append(alert)
+        
+        # Check token usage
+        total_tokens = sum(token_usage.values())
+        if total_tokens > self.thresholds["max_token_usage"]:
+            alert = {
+                "level": "warning",
+                "message": f"High token usage: {total_tokens} tokens (threshold: {self.thresholds['max_token_usage']})",
+                "type": "resource",
+                "timestamp": datetime.now().isoformat()
+            }
+            new_alerts.append(alert)
+        
+        # Add alerts to history
+        self.alerts.extend(new_alerts)
+        
+        # Limit alerts history
+        if len(self.alerts) > self.max_alerts:
+            self.alerts = self.alerts[-self.max_alerts:]
+        
+        return new_alerts
+    
     def get_analytics_summary(self) -> Dict[str, Any]:
         """
         Get a summary of analytics data
@@ -289,8 +647,11 @@ class ContextAnalytics:
                         "avg_duration_ms": sum(type_durations) / len(type_durations) if type_durations else 0
                     }
         
+        # Add performance metrics
+        summary["performance"] = self.performance_metrics.get_summary()
+        
         return summary
-    
+
     async def save_analytics(self) -> bool:
         """
         Save analytics data to files
@@ -390,78 +751,49 @@ class ContextAnalytics:
                         data.get("duration_ms", 0),
                         "results" in data and data["results"].get("success", False)
                     ])
-
-class ContextHealthMonitor:
-    """
-    Monitor for tracking context system health and detecting issues
-    """
     
-    def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.config = get_config()
-        self.analytics = ContextAnalytics(user_id, conversation_id)
-        self.thresholds = {
-            "max_retrieval_time_ms": self.config.get("performance", "max_retrieval_time_ms", 1000),
-            "max_token_usage": self.config.get("performance", "max_token_usage", 6000),
-            "min_cache_hit_rate": self.config.get("performance", "min_cache_hit_rate", 0.3),
-            "max_memory_usage_mb": self.config.get("performance", "max_memory_usage_mb", 500)
-        }
-        self.alerts = []
-        self.max_alerts = 100
-        self.enabled = self.config.get("performance", "health_monitoring_enabled", True)
+    def _maybe_log_metrics(self):
+        """Log metrics if enough time has passed"""
+        if not self.logging_enabled:
+            return
+        
+        current_time = time.time()
+        if current_time - self.last_log_time >= self.log_interval:
+            metrics = self.performance_metrics.get_summary()
+            
+            logger.info(
+                f"Context performance metrics for user {self.user_id}:"
+                f" response_time={metrics['response_time']['avg']:.4f}s,"
+                f" token_usage={metrics['token_usage']['avg']:.0f},"
+                f" cache_hit_rate={metrics['cache']['hit_rate']*100:.1f}%"
+            )
+            
+            # Schedule database recording
+            if self.config.get("performance", "record_to_db", False):
+                asyncio.create_task(self._record_metrics_to_db(metrics))
+            
+            self.last_log_time = current_time
     
-    def check_retrieval_performance(
-        self,
-        duration_ms: int,
-        token_usage: Dict[str, int],
-        is_cached: bool
-    ) -> List[Dict[str, Any]]:
-        """
-        Check retrieval performance against thresholds
-        
-        Args:
-            duration_ms: Retrieval duration in milliseconds
-            token_usage: Token usage by component
-            is_cached: Whether the retrieval was cached
+    async def _record_metrics_to_db(self, metrics: Dict[str, Any]) -> None:
+        """Record metrics to database"""
+        try:
+            from db.connection import get_db_connection
+            import asyncpg
             
-        Returns:
-            List of alerts generated
-        """
-        if not self.enabled:
-            return []
-            
-        new_alerts = []
-        
-        # Check retrieval time
-        if duration_ms > self.thresholds["max_retrieval_time_ms"]:
-            alert = {
-                "level": "warning",
-                "message": f"Slow context retrieval: {duration_ms}ms (threshold: {self.thresholds['max_retrieval_time_ms']}ms)",
-                "type": "performance",
-                "timestamp": datetime.now().isoformat()
-            }
-            new_alerts.append(alert)
-        
-        # Check token usage
-        total_tokens = sum(token_usage.values())
-        if total_tokens > self.thresholds["max_token_usage"]:
-            alert = {
-                "level": "warning",
-                "message": f"High token usage: {total_tokens} tokens (threshold: {self.thresholds['max_token_usage']})",
-                "type": "resource",
-                "timestamp": datetime.now().isoformat()
-            }
-            new_alerts.append(alert)
-        
-        # Add alerts to history
-        self.alerts.extend(new_alerts)
-        
-        # Limit alerts history
-        if len(self.alerts) > self.max_alerts:
-            self.alerts = self.alerts[-self.max_alerts:]
-        
-        return new_alerts
+            conn = await asyncpg.connect(dsn=get_db_connection())
+            try:
+                # Insert into database
+                await conn.execute("""
+                    INSERT INTO ContextPerformanceMetrics
+                    (user_id, conversation_id, metrics_data, recorded_at)
+                    VALUES ($1, $2, $3, NOW())
+                """, self.user_id, self.conversation_id, json.dumps(metrics))
+                
+                logger.debug(f"Recorded performance metrics to database for user {self.user_id}")
+            finally:
+                await conn.close()
+        except Exception as e:
+            logger.error(f"Error recording metrics to database: {e}")
     
     async def run_health_check(self) -> Dict[str, Any]:
         """
@@ -482,7 +814,7 @@ class ContextHealthMonitor:
         
         try:
             # 1. Check cache hit rate
-            analytics_summary = self.analytics.get_analytics_summary()
+            analytics_summary = self.get_analytics_summary()
             retrieval = analytics_summary.get("retrieval", {})
             
             if "cache_hit_percentage" in retrieval:
@@ -506,8 +838,6 @@ class ContextHealthMonitor:
             
             # 2. Check memory usage
             try:
-                import psutil
-                
                 process = psutil.Process()
                 memory_info = process.memory_info()
                 memory_mb = memory_info.rss / (1024 * 1024)
@@ -652,27 +982,101 @@ class ContextHealthMonitor:
         
         # Apply limit
         return sorted_alerts[:limit]
+    
+    def get_metrics(self) -> Dict[str, Any]:
+        """
+        Get current metrics.
+        
+        Returns:
+            Dictionary with metrics
+        """
+        # Update memory usage before returning
+        self.record_memory_usage()
+        
+        return self.performance_metrics.get_summary()
+    
+    def reset_metrics(self):
+        """Reset all metrics"""
+        self.performance_metrics.reset()
+        logger.info(f"Reset performance metrics for user {self.user_id}, conversation {self.conversation_id}")
+
+# -------------------------------------------------------------------------------
+# Performance Tracking Decorator
+# -------------------------------------------------------------------------------
+
+def track_performance(operation: str):
+    """
+    Decorator for tracking performance of a function.
+    
+    Args:
+        operation: Operation name
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(user_id, conversation_id, *args, **kwargs):
+            # Get monitor
+            monitor = get_performance_monitor(user_id, conversation_id)
+            
+            # Start timer
+            timer_id = monitor.start_timer(operation)
+            
+            try:
+                # Call function
+                result = await func(user_id, conversation_id, *args, **kwargs)
+                
+                # Record token usage if available
+                if isinstance(result, dict) and "token_usage" in result:
+                    token_usage = result["token_usage"]
+                    if isinstance(token_usage, dict) and "total" in token_usage:
+                        monitor.record_token_usage(token_usage["total"])
+                    elif isinstance(token_usage, int):
+                        monitor.record_token_usage(token_usage)
+                
+                # Record cache hit if available
+                if isinstance(result, dict) and "source" in result:
+                    source = result["source"]
+                    if source == "cache":
+                        monitor.record_cache_access(hit=True)
+                    else:
+                        monitor.record_cache_access(hit=False)
+                
+                return result
+            except Exception as e:
+                # Record error
+                monitor.record_error(e)
+                raise
+            finally:
+                # Stop timer
+                monitor.stop_timer(timer_id)
+        
+        return wrapper
+    
+    return decorator
+
+# -------------------------------------------------------------------------------
+# Global Registry and API Functions
+# -------------------------------------------------------------------------------
 
 # Global registry for monitors
-_health_monitors = {}
+_performance_monitors = {}
 
-def get_health_monitor(user_id: int, conversation_id: int) -> ContextHealthMonitor:
+def get_performance_monitor(user_id: int, conversation_id: int) -> ContextAnalytics:
     """
-    Get or create a health monitor for the specified user and conversation
+    Get or create a performance monitor for the specified user and conversation
     
     Args:
         user_id: User ID
         conversation_id: Conversation ID
         
     Returns:
-        ContextHealthMonitor instance
+        ContextAnalytics instance
     """
     key = f"{user_id}:{conversation_id}"
     
-    if key not in _health_monitors:
-        _health_monitors[key] = ContextHealthMonitor(user_id, conversation_id)
+    if key not in _performance_monitors:
+        _performance_monitors[key] = ContextAnalytics(user_id, conversation_id)
     
-    return _health_monitors[key]
+    return _performance_monitors[key]
 
 async def run_health_check(user_id: int, conversation_id: int) -> Dict[str, Any]:
     """
@@ -685,7 +1089,7 @@ async def run_health_check(user_id: int, conversation_id: int) -> Dict[str, Any]
     Returns:
         Health check results
     """
-    monitor = get_health_monitor(user_id, conversation_id)
+    monitor = get_performance_monitor(user_id, conversation_id)
     return await monitor.run_health_check()
 
 def record_context_retrieval(
@@ -715,11 +1119,11 @@ def record_context_retrieval(
         is_cached: Whether it was cached
         used_vector: Whether vector search was used
     """
-    # Get health monitor and record event
-    monitor = get_health_monitor(user_id, conversation_id)
+    # Get monitor and record event
+    monitor = get_performance_monitor(user_id, conversation_id)
     
     # Record in analytics
-    monitor.analytics.record_context_retrieval(
+    monitor.record_context_retrieval(
         input_text=input_text,
         location=location,
         context_size=context_size,
@@ -729,23 +1133,153 @@ def record_context_retrieval(
         is_cached=is_cached,
         used_vector=used_vector
     )
+
+def get_performance_metrics(user_id: int, conversation_id: int) -> Dict[str, Any]:
+    """
+    Get performance metrics for a user and conversation.
     
-    # Check performance
-    monitor.check_retrieval_performance(
-        duration_ms=duration_ms,
-        token_usage=token_usage,
-        is_cached=is_cached
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Dictionary with performance metrics
+    """
+    monitor = get_performance_monitor(user_id, conversation_id)
+    return monitor.get_metrics()
+
+async def get_historical_metrics(
+    user_id: int, 
+    conversation_id: int, 
+    hours: int = 24
+) -> List[Dict[str, Any]]:
+    """
+    Get historical performance metrics from the database.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        hours: Number of hours to look back
+        
+    Returns:
+        List of historical metrics
+    """
+    try:
+        from db.connection import get_db_connection
+        import asyncpg
+        
+        conn = await asyncpg.connect(dsn=get_db_connection())
+        try:
+            # Get historical metrics
+            rows = await conn.fetch("""
+                SELECT metrics_data, recorded_at
+                FROM ContextPerformanceMetrics
+                WHERE user_id = $1 AND conversation_id = $2
+                  AND recorded_at > NOW() - INTERVAL '$3 HOUR'
+                ORDER BY recorded_at DESC
+            """, user_id, conversation_id, hours)
+            
+            metrics = []
+            for row in rows:
+                data = json.loads(row[0])
+                data["recorded_at"] = row[1].isoformat()
+                metrics.append(data)
+            
+            return metrics
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error(f"Error getting historical metrics: {e}")
+        return []
+
+def reset_performance_metrics(user_id: int, conversation_id: int) -> bool:
+    """
+    Reset performance metrics for a user and conversation.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        monitor = get_performance_monitor(user_id, conversation_id)
+        monitor.reset_metrics()
+        return True
+    except Exception as e:
+        logger.error(f"Error resetting performance metrics: {e}")
+        return False
+
+# Enhanced context functions with performance tracking
+@track_performance("get_context")
+async def get_context_with_tracking(
+    user_id: int, 
+    conversation_id: int, 
+    input_text: str, 
+    location: Optional[str] = None,
+    context_budget: int = 4000
+) -> Dict[str, Any]:
+    """
+    Get optimized context with performance tracking.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        input_text: User input text
+        location: Optional current location
+        context_budget: Maximum token budget
+        
+    Returns:
+        Optimized context
+    """
+    from context.context_optimization import get_comprehensive_context
+    
+    return await get_comprehensive_context(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        input_text=input_text,
+        location=location,
+        context_budget=context_budget
+    )
+
+@track_performance("vector_search")
+async def get_vector_context_with_tracking(
+    user_id: int, 
+    conversation_id: int, 
+    query_text: str, 
+    current_location: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Get vector-enhanced context with performance tracking.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        query_text: Query text
+        current_location: Optional current location
+        
+    Returns:
+        Vector-enhanced context
+    """
+    from context.vector_service import get_vector_enhanced_context
+    
+    return await get_vector_enhanced_context(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        query_text=query_text,
+        current_location=current_location
     )
 
 async def cleanup_monitors():
-    """Close and clean up all health monitors"""
-    global _health_monitors
+    """Close and clean up all monitors"""
+    global _performance_monitors
     
     # Save analytics for each monitor
-    for key, monitor in _health_monitors.items():
+    for key, monitor in _performance_monitors.items():
         try:
-            await monitor.analytics.save_analytics()
+            await monitor.save_analytics()
         except Exception as e:
             logger.error(f"Error saving analytics for monitor {key}: {e}")
     
-    _health_monitors.clear()
+    _performance_monitors.clear()
