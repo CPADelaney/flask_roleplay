@@ -1,13 +1,16 @@
 # context/vector_service.py
 
 """
-Optimized Vector Service that integrates with the unified cache system
-and provides coordinated vector search capabilities.
+Unified Vector Service that integrates with the context system
+to provide seamless vector search capabilities with optimized performance,
+batch processing, and hybrid ranking.
 """
 
 import asyncio
 import logging
 import time
+import hashlib
+import math
 from typing import Dict, List, Any, Optional, Union, Tuple
 import numpy as np
 
@@ -17,15 +20,26 @@ from context.optimized_db import RPGEntityManager, create_vector_database
 
 logger = logging.getLogger(__name__)
 
-# Singleton instance pattern
-_vector_managers = {}
+# -------------------------------------------------------------------------------
+# Vector Service Implementation
+# -------------------------------------------------------------------------------
 
 class OptimizedVectorService:
     """
-    Vector service with caching, batching, and performance optimization
+    Vector service with caching, batching, and performance optimization.
+    
+    This service integrates with RPGEntityManager to provide efficient vector
+    search capabilities with intelligent caching and optimized batch processing.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
+        """
+        Initialize the vector service.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+        """
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.entity_manager = None
@@ -112,9 +126,16 @@ class OptimizedVectorService:
     async def get_embedding(self, text: str) -> List[float]:
         """
         Get embedding for text with caching
+        
+        Args:
+            text: Text to embed
+            
+        Returns:
+            Embedding vector
         """
         # Check if in local memory cache first (fastest)
-        cache_key = f"embed:{hash(text)}"
+        text_hash = hashlib.md5(text.encode()).hexdigest()
+        cache_key = f"embed:{text_hash}"
         if cache_key in self.embedding_cache:
             return self.embedding_cache[cache_key]
         
@@ -156,6 +177,12 @@ class OptimizedVectorService:
     async def get_batch_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
         Get embeddings for multiple texts with batching
+        
+        Args:
+            texts: List of texts to embed
+            
+        Returns:
+            List of embedding vectors
         """
         results = []
         futures = []
@@ -169,12 +196,21 @@ class OptimizedVectorService:
         results = await asyncio.gather(*futures)
         return results
     
-    async def add_to_batch_queue(self, operation: str, data: Dict[str, Any]) -> str:
+    async def add_to_batch_queue(self, operation: str, data: Dict[str, Any]) -> Tuple[str, asyncio.Future]:
         """
         Add an operation to the batch queue
+        
+        Args:
+            operation: Operation type (e.g., "search_entities", "add_entity")
+            data: Operation data
+            
+        Returns:
+            Tuple of request ID and future for result
         """
         if not self.enabled:
-            return "vector_search_disabled"
+            future = asyncio.Future()
+            future.set_result({"error": "vector_search_disabled"})
+            return "vector_search_disabled", future
             
         # Generate a unique ID for this request
         request_id = f"{operation}_{hash(str(data))}_{time.time()}"
@@ -193,9 +229,7 @@ class OptimizedVectorService:
         return request_id, future
     
     async def _process_batch_queue(self):
-        """
-        Process the batch queue in the background
-        """
+        """Process the batch queue in the background"""
         while True:
             try:
                 # Get the next batch (up to 10 items or wait max 100ms)
@@ -252,6 +286,9 @@ class OptimizedVectorService:
     async def _process_batch_search(self, items):
         """
         Process a batch of search operations
+        
+        Args:
+            items: Batch of search operation items
         """
         try:
             # Initialize entity manager if needed
@@ -308,6 +345,9 @@ class OptimizedVectorService:
     async def _process_batch_add(self, items):
         """
         Process a batch of add operations
+        
+        Args:
+            items: Batch of add operation items
         """
         try:
             # Initialize entity manager if needed
@@ -356,10 +396,58 @@ class OptimizedVectorService:
                 
                 elif entity_type == "npc":
                     # Handle NPCs
-                    # Similar pattern for other entity types...
                     for item in group_items:
-                        # Process individually for now
-                        result = await self._process_single_operation(item)
+                        data = item["data"]
+                        
+                        # Create a text description for this NPC
+                        npc_text = f"NPC: {data.get('npc_name', 'Unknown')}. "
+                        if "description" in data:
+                            npc_text += f"Description: {data['description']}. "
+                        if "personality" in data:
+                            npc_text += f"Personality: {data['personality']}. "
+                        
+                        # Get embedding
+                        embedding = await self.get_embedding(npc_text)
+                        
+                        # Add the NPC
+                        result = await self.entity_manager.add_npc(
+                            npc_id=data["npc_id"],
+                            npc_name=data.get("npc_name", "Unknown"),
+                            description=data.get("description", ""),
+                            personality=data.get("personality", ""),
+                            location=data.get("location"),
+                            tags=data.get("tags", []),
+                            embedding=embedding  # Use precomputed embedding
+                        )
+                        
+                        # Set result
+                        item["future"].set_result(result)
+                        self.batch_queue.task_done()
+                
+                elif entity_type == "location":
+                    # Handle locations
+                    for item in group_items:
+                        data = item["data"]
+                        
+                        # Create a text description for this location
+                        loc_text = f"Location: {data.get('location_name', 'Unknown')}. "
+                        if "description" in data:
+                            loc_text += f"Description: {data['description']}. "
+                        
+                        # Get embedding
+                        embedding = await self.get_embedding(loc_text)
+                        
+                        # Add the location
+                        result = await self.entity_manager.add_location(
+                            location_id=data["location_id"],
+                            location_name=data.get("location_name", "Unknown"),
+                            description=data.get("description", ""),
+                            connected_locations=data.get("connected_locations", []),
+                            tags=data.get("tags", []),
+                            embedding=embedding  # Use precomputed embedding
+                        )
+                        
+                        # Set result
                         item["future"].set_result(result)
                         self.batch_queue.task_done()
                 
@@ -379,6 +467,12 @@ class OptimizedVectorService:
     async def _process_single_operation(self, item):
         """
         Process a single operation
+        
+        Args:
+            item: Operation item
+            
+        Returns:
+            Operation result
         """
         # Initialize entity manager if needed
         await self.initialize()
@@ -394,17 +488,29 @@ class OptimizedVectorService:
             query_text = data.get("query_text", "")
             top_k = data.get("top_k", 5)
             entity_types = data.get("entity_types", ["npc", "location", "memory"])
+            temporal_boost = data.get("temporal_boost", True)
+            recency_weight = data.get("recency_weight", 0.3)
             
             # Get embedding for query
             query_embedding = await self.get_embedding(query_text)
             
             # Do the search
-            return await self.entity_manager.get_relevant_entities(
+            results = await self.entity_manager.get_relevant_entities(
                 query_text="",  # Not used when we provide embedding directly
                 top_k=top_k,
                 entity_types=entity_types,
                 query_embedding=query_embedding
             )
+            
+            # Apply hybrid ranking if requested
+            if temporal_boost:
+                results = self._apply_hybrid_ranking(
+                    results, 
+                    temporal_boost=temporal_boost, 
+                    recency_weight=recency_weight
+                )
+            
+            return results
         
         elif operation == "add_entity":
             entity_type = data.get("entity_type")
@@ -429,9 +535,30 @@ class OptimizedVectorService:
                     tags=tags,
                     embedding=embedding
                 )
+            
+            elif entity_type == "narrative":
+                # Add narrative element
+                content = data.get("content", "")
+                narrative_id = data.get("narrative_id", "")
+                narrative_type = data.get("narrative_type", "scene")
+                importance = data.get("importance", 0.5)
+                tags = data.get("tags", [])
+                
+                # Get embedding
+                embedding = await self.get_embedding(content)
+                
+                # Add to entity manager
+                return await self.entity_manager.add_narrative(
+                    narrative_id=narrative_id,
+                    content=content,
+                    narrative_type=narrative_type,
+                    importance=importance,
+                    tags=tags,
+                    embedding=embedding
+                )
+            
             else:
                 # Handle other entity types
-                # (implementation for other types would go here)
                 logger.warning(f"Unsupported entity type: {entity_type}")
                 return False
         
@@ -439,14 +566,88 @@ class OptimizedVectorService:
             logger.warning(f"Unknown operation: {operation}")
             return None
     
+    def _apply_hybrid_ranking(
+        self, 
+        results: List[Dict[str, Any]], 
+        temporal_boost: bool, 
+        recency_weight: float
+    ) -> List[Dict[str, Any]]:
+        """
+        Apply hybrid ranking to search results combining vector similarity with temporal relevance.
+        
+        Args:
+            results: Raw search results
+            temporal_boost: Whether to boost recency
+            recency_weight: Weight of recency in ranking
+            
+        Returns:
+            Reranked results
+        """
+        # If temporal boost is disabled, return results as is
+        if not temporal_boost:
+            return results
+        
+        from datetime import datetime
+        now = datetime.now()
+        
+        # Calculate hybrid scores
+        for result in results:
+            # Get base vector similarity score
+            base_score = result.get("score", 0.5)
+            
+            # Calculate temporal score if timestamp available
+            temporal_score = 0.5  # Default middle value
+            metadata = result.get("metadata", {})
+            
+            if "timestamp" in metadata:
+                try:
+                    # Parse timestamp
+                    timestamp_str = metadata["timestamp"]
+                    if isinstance(timestamp_str, str):
+                        timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                        
+                        # Calculate days difference
+                        days_diff = (now - timestamp).days
+                        
+                        # Newer items get higher scores
+                        # Using exponential decay: score = exp(-0.1 * days)
+                        temporal_score = math.exp(-0.1 * max(0, days_diff))
+                except:
+                    pass
+            
+            # Combine scores with weighting
+            # vector_weight + recency_weight should equal 1.0
+            vector_weight = 1.0 - recency_weight
+            hybrid_score = (vector_weight * base_score) + (recency_weight * temporal_score)
+            
+            # Update the result with the hybrid score
+            result["hybrid_score"] = hybrid_score
+        
+        # Sort by hybrid score
+        results.sort(key=lambda x: x.get("hybrid_score", 0), reverse=True)
+        
+        return results
+    
     async def search_entities(
         self,
         query_text: str,
         entity_types: Optional[List[str]] = None,
-        top_k: int = 5
+        top_k: int = 5,
+        temporal_boost: bool = True,
+        recency_weight: float = 0.3
     ) -> List[Dict[str, Any]]:
         """
         Search for entities by query text (API method)
+        
+        Args:
+            query_text: Query text
+            entity_types: Types of entities to search for
+            top_k: Number of top results to return
+            temporal_boost: Whether to boost recent results
+            recency_weight: Weight of recency in ranking
+            
+        Returns:
+            List of entity matches
         """
         if not self.enabled:
             return []
@@ -457,7 +658,9 @@ class OptimizedVectorService:
             {
                 "query_text": query_text,
                 "entity_types": entity_types or ["npc", "location", "memory"],
-                "top_k": top_k
+                "top_k": top_k,
+                "temporal_boost": temporal_boost,
+                "recency_weight": recency_weight
             }
         )
         
@@ -467,6 +670,35 @@ class OptimizedVectorService:
         except Exception as e:
             logger.error(f"Error in search_entities: {e}")
             return []
+    
+    async def search_with_hybrid_ranking(
+        self, 
+        query_text: str, 
+        entity_types: Optional[List[str]] = None,
+        limit: int = 10,
+        temporal_boost: bool = True,
+        recency_weight: float = 0.3
+    ) -> List[Dict[str, Any]]:
+        """
+        Search entities with hybrid ranking combining vector similarity and temporal relevance.
+        
+        Args:
+            query_text: Query text
+            entity_types: List of entity types to search for
+            limit: Maximum number of results to return
+            temporal_boost: Whether to boost recency
+            recency_weight: Weight of recency in ranking
+            
+        Returns:
+            List of ranked search results
+        """
+        return await self.search_entities(
+            query_text=query_text,
+            entity_types=entity_types,
+            top_k=limit, 
+            temporal_boost=temporal_boost,
+            recency_weight=recency_weight
+        )
     
     async def add_memory(
         self,
@@ -478,6 +710,16 @@ class OptimizedVectorService:
     ) -> bool:
         """
         Add a memory to the vector database (API method)
+        
+        Args:
+            memory_id: Memory ID
+            content: Memory content
+            memory_type: Type of memory
+            importance: Importance score
+            tags: Optional tags
+            
+        Returns:
+            Success indicator
         """
         if not self.enabled:
             return False
@@ -502,6 +744,97 @@ class OptimizedVectorService:
             logger.error(f"Error in add_memory: {e}")
             return False
     
+    async def add_npc(
+        self,
+        npc_id: int,
+        npc_name: str,
+        description: str = "",
+        personality: str = "",
+        location: Optional[str] = None,
+        tags: Optional[List[str]] = None
+    ) -> bool:
+        """
+        Add an NPC to the vector database
+        
+        Args:
+            npc_id: NPC ID
+            npc_name: NPC name
+            description: NPC description
+            personality: NPC personality traits
+            location: Current location
+            tags: Optional tags
+            
+        Returns:
+            Success indicator
+        """
+        if not self.enabled:
+            return False
+            
+        # Use the batch queue
+        request_id, future = await self.add_to_batch_queue(
+            "add_entity",
+            {
+                "entity_type": "npc",
+                "npc_id": npc_id,
+                "npc_name": npc_name,
+                "description": description,
+                "personality": personality,
+                "location": location,
+                "tags": tags or []
+            }
+        )
+        
+        # Wait for the result
+        try:
+            return await future
+        except Exception as e:
+            logger.error(f"Error in add_npc: {e}")
+            return False
+    
+    async def add_location(
+        self,
+        location_id: int,
+        location_name: str,
+        description: str = "",
+        connected_locations: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None
+    ) -> bool:
+        """
+        Add a location to the vector database
+        
+        Args:
+            location_id: Location ID
+            location_name: Location name
+            description: Location description
+            connected_locations: Connected location names
+            tags: Optional tags
+            
+        Returns:
+            Success indicator
+        """
+        if not self.enabled:
+            return False
+            
+        # Use the batch queue
+        request_id, future = await self.add_to_batch_queue(
+            "add_entity",
+            {
+                "entity_type": "location",
+                "location_id": location_id,
+                "location_name": location_name,
+                "description": description,
+                "connected_locations": connected_locations or [],
+                "tags": tags or []
+            }
+        )
+        
+        # Wait for the result
+        try:
+            return await future
+        except Exception as e:
+            logger.error(f"Error in add_location: {e}")
+            return False
+    
     async def get_context_for_input(
         self,
         input_text: str,
@@ -510,12 +843,20 @@ class OptimizedVectorService:
     ) -> Dict[str, Any]:
         """
         Get relevant context for input text with caching
+        
+        Args:
+            input_text: Input text
+            current_location: Current location
+            max_items: Maximum number of items to return
+            
+        Returns:
+            Context dictionary
         """
         if not self.enabled:
             return {}
             
         # Cache key based on input and location
-        cache_key = f"context:{self.user_id}:{self.conversation_id}:{input_text}:{current_location}"
+        cache_key = f"vector_context:{self.user_id}:{self.conversation_id}:{input_text}:{current_location}"
         
         async def fetch_context():
             # Initialize if needed
@@ -594,10 +935,23 @@ class OptimizedVectorService:
             ttl_override=30  # Short TTL for context
         )
 
-# Global function to get or create vector service
+# -------------------------------------------------------------------------------
+# Singleton Manager
+# -------------------------------------------------------------------------------
+
+# Global registry for managers
+_vector_managers = {}
+
 async def get_vector_service(user_id: int, conversation_id: int) -> OptimizedVectorService:
     """
-    Get or create a vector service instance
+    Get or create a vector service instance.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        OptimizedVectorService instance
     """
     global _vector_managers
     
@@ -611,7 +965,128 @@ async def get_vector_service(user_id: int, conversation_id: int) -> OptimizedVec
     
     return _vector_managers[key]
 
-# Cleanup function
+# -------------------------------------------------------------------------------
+# Main API Functions
+# -------------------------------------------------------------------------------
+
+async def get_vector_enhanced_context(
+    user_id: int, 
+    conversation_id: int, 
+    query_text: str, 
+    current_location: Optional[str] = None,
+    limit: int = 10
+) -> Dict[str, Any]:
+    """
+    Get enhanced context using vector search capabilities.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        query_text: Query text
+        current_location: Optional current location
+        limit: Maximum number of items per category
+        
+    Returns:
+        Vector-enhanced context
+    """
+    # Get vector service
+    service = await get_vector_service(user_id, conversation_id)
+    
+    # Skip if vector search is disabled
+    if not service.enabled:
+        return {
+            "vector_search_enabled": False, 
+            "npcs": [], 
+            "memories": [], 
+            "locations": []
+        }
+    
+    # Get context for input
+    context = await service.get_context_for_input(
+        input_text=query_text,
+        current_location=current_location,
+        max_items=limit
+    )
+    
+    return {
+        "vector_search_enabled": True,
+        **context,
+        "query_text": query_text,
+        "current_location": current_location
+    }
+
+async def store_memory_with_embedding(
+    user_id: int,
+    conversation_id: int,
+    memory_id: str,
+    content: str,
+    memory_type: str = "observation",
+    importance: float = 0.5,
+    tags: Optional[List[str]] = None
+) -> bool:
+    """
+    Store a memory in the vector database.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        memory_id: Memory ID
+        content: Memory content
+        memory_type: Type of memory
+        importance: Importance score (0-1)
+        tags: Optional list of tags
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    # Get vector service
+    service = await get_vector_service(user_id, conversation_id)
+    
+    # Add to vector database if enabled
+    if service.enabled:
+        return await service.add_memory(
+            memory_id=memory_id,
+            content=content,
+            memory_type=memory_type,
+            importance=importance,
+            tags=tags
+        )
+    
+    return False
+
+async def search_vector_database(
+    user_id: int,
+    conversation_id: int,
+    query_text: str,
+    entity_types: Optional[List[str]] = None,
+    limit: int = 10
+) -> List[Dict[str, Any]]:
+    """
+    Search the vector database for entities matching the query.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        query_text: Query text
+        entity_types: Types of entities to search for
+        limit: Maximum number of results
+        
+    Returns:
+        List of matching entities
+    """
+    # Get vector service
+    service = await get_vector_service(user_id, conversation_id)
+    
+    # Search if enabled
+    if service.enabled:
+        return await service.search_entities(
+            query_text=query_text,
+            entity_types=entity_types,
+            top_k=limit
+        )
+    
+    return []
+
 async def cleanup_vector_services():
     """Close all vector services"""
     global _vector_managers
