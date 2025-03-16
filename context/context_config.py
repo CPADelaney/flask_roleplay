@@ -2,9 +2,6 @@
 
 """
 Configuration settings for the context optimization system.
-
-This module provides a centralized place to configure the behavior
-of the context optimization system.
 """
 
 import os
@@ -14,76 +11,50 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Default configuration values
+# Default configuration values focused on essential settings
 DEFAULT_CONFIG = {
     # Cache settings
     "cache": {
         "enabled": True,
-        "l1_ttl_seconds": 60,       # 1 minute
-        "l2_ttl_seconds": 300,      # 5 minutes
-        "l3_ttl_seconds": 86400,    # 24 hours
-        "l1_max_size": 100,
-        "l2_max_size": 500,
-        "l3_max_size": 2000
+        "ttl_seconds": {
+            "l1": 60,   # 1 minute
+            "l2": 300,  # 5 minutes
+            "l3": 1800  # 30 minutes
+        },
+        "max_size": {
+            "l1": 100,
+            "l2": 500,
+            "l3": 2000
+        }
     },
     
     # Vector database settings
     "vector_db": {
         "enabled": True,
-        "db_type": "in_memory",     # Options: "in_memory", "qdrant", "pinecone", "milvus"
+        "db_type": "in_memory",  # Options: "in_memory", "qdrant"
         "url": "http://localhost:6333",
         "api_key": None,
-        "environment": None,
         "dimension": 384
     },
     
     # Token budget settings
     "token_budget": {
-        "default_budget": 4000,     # Default token budget
-        "npcs_percent": 30,         # Percentage of budget for NPCs
-        "memories_percent": 20,     # Percentage of budget for memories
-        "conflicts_percent": 15,    # Percentage of budget for conflicts
-        "quests_percent": 15,       # Percentage of budget for quests
-        "base_percent": 20          # Percentage of budget for base context
-    },
-    
-    # Memory consolidation settings
-    "memory_consolidation": {
-        "enabled": True,
-        "days_threshold": 7,        # Consolidate memories older than this many days
-        "min_memories_to_consolidate": 5,
-        "consolidation_interval_hours": 24
-    },
-    
-    # Predictive preloading settings
-    "preloading": {
-        "enabled": True,
-        "max_locations": 3,         # Maximum number of locations to preload
-        "prediction_threshold": 0.3 # Minimum prediction score to trigger preloading
-    },
-    
-    # Performance settings
-    "performance": {
-        "background_processing": True,
-        "retry_attempts": 3,
-        "retry_delay_seconds": 1,
-        "async_preloading": True
-    },
-    
-    # Integration settings
-    "integration": {
-        "patch_existing_functions": False,
-        "add_to_maintenance": True,
-        "maintenance_schedule": "daily"
+        "default": 4000,  # Default token budget
+        "allocation": {
+            "npcs": 30,         # Percentage for NPCs
+            "memories": 20,     # Percentage for memories
+            "location": 15,     # Percentage for location
+            "quests": 15,       # Percentage for quests
+            "base": 20          # Percentage for base context
+        }
     },
     
     # Feature flags
     "features": {
-        "use_incremental_context": True,
         "use_vector_search": True,
-        "use_temporal_decay": True,
-        "use_attention_tracking": True,
-        "track_access_patterns": True
+        "use_memory_system": True,
+        "use_delta_updates": True,
+        "track_performance": True
     }
 }
 
@@ -91,26 +62,21 @@ class ContextConfig:
     """
     Configuration manager for the context optimization system.
     
-    This class manages loading, accessing, and updating configuration
-    settings for the context optimization system.
+    Provides a simple interface for accessing configuration settings.
     """
     
     _instance = None
     
-    def __new__(cls):
-        """Implement as singleton"""
+    @classmethod
+    def get_instance(cls):
+        """Get the singleton instance"""
         if cls._instance is None:
-            cls._instance = super(ContextConfig, cls).__new__(cls)
-            cls._instance._initialized = False
+            cls._instance = cls()
         return cls._instance
     
     def __init__(self):
-        """Initialize with default config if not already initialized"""
-        if self._initialized:
-            return
-            
+        """Initialize with default configuration"""
         self.config = DEFAULT_CONFIG.copy()
-        self._initialized = True
         self._load_config()
     
     def _load_config(self):
@@ -157,9 +123,15 @@ class ContextConfig:
                             value = float(value)
                         
                         # Update config
-                        if section in self.config and setting in self.config[section]:
-                            self.config[section][setting] = value
-                            logger.debug(f"Updated config from env: {section}.{setting} = {value}")
+                        if section in self.config:
+                            if setting in self.config[section]:
+                                self.config[section][setting] = value
+                            elif isinstance(self.config[section], dict):
+                                # Try to handle nested settings
+                                for subsection, subsettings in self.config[section].items():
+                                    if isinstance(subsettings, dict) and setting in subsettings:
+                                        self.config[section][subsection][setting] = value
+                                        break
                 except Exception as e:
                     logger.warning(f"Error processing environment variable {key}: {e}")
     
@@ -183,23 +155,17 @@ class ContextConfig:
         Returns:
             Configuration value
         """
-        if section in self.config and setting in self.config[section]:
-            return self.config[section][setting]
+        if section in self.config:
+            if setting in self.config[section]:
+                return self.config[section][setting]
+            
+            # Try to handle nested settings
+            if isinstance(self.config[section], dict):
+                for subsection, subsettings in self.config[section].items():
+                    if isinstance(subsettings, dict) and setting in subsettings:
+                        return subsettings[setting]
+        
         return default
-    
-    def set(self, section: str, setting: str, value: Any) -> None:
-        """
-        Set a configuration value.
-        
-        Args:
-            section: Configuration section (e.g., "cache", "vector_db")
-            setting: Setting name within the section
-            value: Value to set
-        """
-        if section not in self.config:
-            self.config[section] = {}
-        
-        self.config[section][setting] = value
     
     def get_section(self, section: str) -> Dict[str, Any]:
         """
@@ -227,7 +193,7 @@ class ContextConfig:
     
     def get_vector_db_config(self) -> Dict[str, Any]:
         """
-        Get vector database configuration in the format expected by RPGEntityManager.
+        Get vector database configuration.
         
         Returns:
             Dictionary with vector database configuration
@@ -238,37 +204,34 @@ class ContextConfig:
             "db_type": vector_section.get("db_type", "in_memory"),
             "url": vector_section.get("url"),
             "api_key": vector_section.get("api_key"),
-            "environment": vector_section.get("environment")
+            "dimension": vector_section.get("dimension", 384)
         }
     
-    def save(self, config_path: Optional[str] = None) -> bool:
+    def get_token_budget(self, content_type: str = None) -> int:
         """
-        Save current configuration to file.
+        Get the token budget for a specific content type.
         
         Args:
-            config_path: Path to save configuration (default from environment or "config/context_config.json")
+            content_type: Type of content (e.g., "npcs", "memories")
             
         Returns:
-            True if saved successfully, False otherwise
+            Token budget
         """
-        if config_path is None:
-            config_path = os.environ.get("CONTEXT_CONFIG_PATH", "config/context_config.json")
+        total_budget = self.get("token_budget", "default", 4000)
         
-        try:
-            # Make sure directory exists
-            os.makedirs(os.path.dirname(config_path), exist_ok=True)
-            
-            with open(config_path, "w") as f:
-                json.dump(self.config, f, indent=2)
-            
-            logger.info(f"Saved context configuration to {config_path}")
-            return True
-        except Exception as e:
-            logger.error(f"Error saving config to {config_path}: {e}")
-            return False
+        if content_type is None:
+            return total_budget
+        
+        # Get percentage allocation for the content type
+        allocations = self.config.get("token_budget", {}).get("allocation", {})
+        percentage = allocations.get(content_type, 0) / 100.0
+        
+        # Calculate budget
+        return int(total_budget * percentage)
+
 
 # Singleton instance
-config = ContextConfig()
+config = ContextConfig.get_instance()
 
 def get_config() -> ContextConfig:
     """
