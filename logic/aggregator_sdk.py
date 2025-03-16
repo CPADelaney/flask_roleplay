@@ -1258,3 +1258,262 @@ async def register_with_governance(user_id: int, conversation_id: int):
     )
     
     logging.info("Aggregator system registered with Nyx governance")
+class ContextCache:
+    """Multi-level cache for context management"""
+    
+    def __init__(self):
+        # Level 1: Very short-lived (seconds to minutes)
+        self.l1_cache = {}
+        self.l1_ttl = 60  # 1 minute
+        
+        # Level 2: Medium-lived (minutes)
+        self.l2_cache = {}
+        self.l2_ttl = 300  # 5 minutes
+        
+        # Level 3: Long-lived (hours)
+        self.l3_cache = {}
+        self.l3_ttl = 3600  # 1 hour
+        
+        # Timestamps for each cache entry
+        self.l1_timestamps = {}
+        self.l2_timestamps = {}
+        self.l3_timestamps = {}
+    
+    async def get(self, key, fetch_func, cache_level=1):
+        """Get data from cache or fetch it."""
+        now = time.time()
+        
+        # Try L1 cache first
+        if key in self.l1_cache:
+            if now - self.l1_timestamps[key] < self.l1_ttl:
+                return self.l1_cache[key]
+            else:
+                del self.l1_cache[key]
+                del self.l1_timestamps[key]
+        
+        # Try L2 cache
+        if key in self.l2_cache:
+            if now - self.l2_timestamps[key] < self.l2_ttl:
+                # Promote to L1 cache
+                self.l1_cache[key] = self.l2_cache[key]
+                self.l1_timestamps[key] = now
+                return self.l2_cache[key]
+            else:
+                del self.l2_cache[key]
+                del self.l2_timestamps[key]
+        
+        # Try L3 cache
+        if key in self.l3_cache:
+            if now - self.l3_timestamps[key] < self.l3_ttl:
+                # Promote to L2 cache
+                self.l2_cache[key] = self.l3_cache[key]
+                self.l2_timestamps[key] = now
+                return self.l3_cache[key]
+            else:
+                del self.l3_cache[key]
+                del self.l3_timestamps[key]
+        
+        # Cache miss - fetch the data
+        data = await fetch_func()
+        
+        # Store in appropriate cache level
+        if cache_level >= 1:
+            self.l1_cache[key] = data
+            self.l1_timestamps[key] = now
+        
+        if cache_level >= 2:
+            self.l2_cache[key] = data
+            self.l2_timestamps[key] = now
+        
+        if cache_level >= 3:
+            self.l3_cache[key] = data
+            self.l3_timestamps[key] = now
+        
+        return data
+    
+    def invalidate(self, key_prefix):
+        """Invalidate all cache entries that start with the given prefix."""
+        for key in list(self.l1_cache.keys()):
+            if key.startswith(key_prefix):
+                del self.l1_cache[key]
+                del self.l1_timestamps[key]
+        
+        for key in list(self.l2_cache.keys()):
+            if key.startswith(key_prefix):
+                del self.l2_cache[key]
+                del self.l2_timestamps[key]
+        
+        for key in list(self.l3_cache.keys()):
+            if key.startswith(key_prefix):
+                del self.l3_cache[key]
+                del self.l3_timestamps[key]
+
+# Usage example
+context_cache = ContextCache()
+
+async def get_npc_context(user_id, conv_id, npc_id):
+    cache_key = f"npc:{user_id}:{conv_id}:{npc_id}"
+    
+    async def fetch_npc_data():
+        # Expensive database query
+        return await get_npc_data_from_db(user_id, conv_id, npc_id)
+    
+    # NPCs change infrequently, so use Level 3 cache
+    return await context_cache.get(cache_key, fetch_npc_data, cache_level=3)
+class IncrementalContextManager:
+    def __init__(self):
+        self.last_context_hash = None
+        self.last_context = None
+        self.change_log = []
+    
+    async def get_context(self, user_id, conversation_id, user_input):
+        """Get context with change tracking for efficiency."""
+        # Get current full context
+        current_context = await get_aggregated_roleplay_context(user_id, conversation_id)
+        current_hash = self.hash_context(current_context)
+        
+        # If this is the first request, return full context
+        if not self.last_context_hash:
+            self.last_context_hash = current_hash
+            self.last_context = current_context
+            return {"full_context": current_context, "is_incremental": False}
+        
+        # If hash matches, nothing changed
+        if current_hash == self.last_context_hash:
+            return {"full_context": current_context, "is_incremental": False}
+        
+        # Something changed, compute a delta
+        changes = self.compute_changes(self.last_context, current_context)
+        
+        # Store these changes in change log (limited size)
+        self.change_log.append({
+            "timestamp": datetime.now().isoformat(),
+            "changes": changes
+        })
+        if len(self.change_log) > 10:
+            self.change_log.pop(0)
+        
+        # Update our stored state
+        self.last_context = current_context
+        self.last_context_hash = current_hash
+        
+        return {
+            "delta_context": changes,
+            "full_context": current_context,
+            "is_incremental": True,
+            "change_log": self.change_log
+        }
+    
+    def hash_context(self, context):
+        """Create a hash representation of context to detect changes."""
+        # Simplified example - you would use a more robust approach
+        import hashlib
+        import json
+        serialized = json.dumps(context, sort_keys=True)
+        return hashlib.md5(serialized.encode()).hexdigest()
+    
+    def compute_changes(self, old_context, new_context):
+        """Compute what changed between contexts."""
+        changes = {
+            "added": {},
+            "modified": {},
+            "removed": {}
+        }
+        
+        # Check for added or modified
+        for key, value in new_context.items():
+            if key not in old_context:
+                changes["added"][key] = value
+            elif old_context[key] != value:
+                changes["modified"][key] = {
+                    "old": old_context[key],
+                    "new": value
+                }
+        
+        # Check for removed
+        for key in old_context:
+            if key not in new_context:
+                changes["removed"][key] = old_context[key]
+        
+        return changes
+async def get_optimized_context(user_id, conversation_id, current_input, location=None):
+    """
+    Retrieve context optimized for token efficiency and relevance.
+    """
+    context = {}
+    
+    # 1. Get relevant NPCs only (present in location or mentioned in input)
+    npcs = await get_relevant_npcs(user_id, conversation_id, current_input, location)
+    
+    # 2. Get recent and relevant memories instead of all
+    memories = await retrieve_relevant_memories(user_id, conversation_id, current_input, limit=5)
+    
+    # 3. Get only active conflicts, not all
+    active_conflicts = await get_active_conflicts(user_id, conversation_id)
+    
+    # 4. Always include core game state but optimize size
+    game_state = await get_essential_game_state(user_id, conversation_id)
+    
+    # 5. Calculate context budget (e.g., 4000 tokens max)
+    context_budget = 4000
+    current_usage = estimate_token_usage(npcs, memories, active_conflicts, game_state)
+    
+    # 6. If over budget, trim less important context
+    if current_usage > context_budget:
+        # Prioritize: NPCs in scene > recent memories > active conflicts > other state
+        npcs, memories, active_conflicts, game_state = trim_to_budget(
+            npcs, memories, active_conflicts, game_state, context_budget
+        )
+    
+    # Combine into final context
+    context = {
+        "npcs": npcs,
+        "memories": memories,
+        "active_conflicts": active_conflicts,
+        "game_state": game_state,
+        "current_location": location,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    return context
+
+
+async def trim_to_budget(npcs, memories, conflicts, state, budget):
+    """
+    Intelligently trim context to fit within token budget.
+    """
+    # Estimate tokens for each component
+    npc_tokens = estimate_token_usage(npcs)
+    memory_tokens = estimate_token_usage(memories)
+    conflict_tokens = estimate_token_usage(conflicts)
+    state_tokens = estimate_token_usage(state)
+    
+    total = npc_tokens + memory_tokens + conflict_tokens + state_tokens
+    
+    # If we're under budget, return as is
+    if total <= budget:
+        return npcs, memories, conflicts, state
+    
+    # Calculate how much we need to reduce
+    reduction_needed = total - budget
+    
+    # Strategy: Trim in reverse priority order
+    # 1. First reduce state detail
+    state = simplify_state(state, reduction_needed)
+    reduction_needed = max(0, reduction_needed - (state_tokens - estimate_token_usage(state)))
+    
+    # 2. Next reduce conflicts
+    if reduction_needed > 0:
+        conflicts = limit_conflicts(conflicts, reduction_needed)
+        reduction_needed = max(0, reduction_needed - (conflict_tokens - estimate_token_usage(conflicts)))
+    
+    # 3. Reduce memories
+    if reduction_needed > 0:
+        memories = limit_memories(memories, reduction_needed)
+        reduction_needed = max(0, reduction_needed - (memory_tokens - estimate_token_usage(memories)))
+    
+    # 4. Last resort: reduce NPCs (prioritize NPCs in scene)
+    if reduction_needed > 0:
+        npcs = prioritize_npcs(npcs, reduction_needed)
+    
+    return npcs, memories, conflicts, state
