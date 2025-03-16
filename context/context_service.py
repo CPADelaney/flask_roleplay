@@ -5,7 +5,7 @@ import logging
 import time
 import json
 from typing import Dict, List, Any, Optional, Union, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 
 from context.context_config import get_config
@@ -33,6 +33,9 @@ class ContextService:
         self.vector_service = None
         self.last_context = None
         self.last_context_hash = None
+        
+        # NEW: Progressive summarization integration
+        self.narrative_manager = None
     
     async def initialize(self):
         """Initialize the context service"""
@@ -43,12 +46,39 @@ class ContextService:
         self.context_manager = get_context_manager()
         self.performance_monitor = PerformanceMonitor.get_instance(self.user_id, self.conversation_id)
         
+        # NEW: Initialize memory manager
+        self.memory_manager = await get_memory_manager(self.user_id, self.conversation_id)
+        
+        # NEW: Initialize vector service if enabled
+        if self.config.is_enabled("use_vector_search"):
+            self.vector_service = await get_vector_service(self.user_id, self.conversation_id)
+        
+        # NEW: Initialize narrative manager for progressive summarization
+        try:
+            from story_agent.progressive_summarization import RPGNarrativeManager
+            from db.connection import get_db_connection
+            
+            self.narrative_manager = RPGNarrativeManager(
+                user_id=self.user_id,
+                conversation_id=self.conversation_id,
+                db_connection_string=get_db_connection()
+            )
+            await self.narrative_manager.initialize()
+        except ImportError:
+            logger.info("Progressive summarization not available - narrative manager not initialized")
+            self.narrative_manager = None
+        
         self.initialized = True
         logger.info(f"Initialized context service for user {self.user_id}, conversation {self.conversation_id}")
     
     async def close(self):
         """Close the context service"""
         self.initialized = False
+        
+        # NEW: Close narrative manager if initialized
+        if self.narrative_manager:
+            await self.narrative_manager.close()
+        
         logger.info(f"Closed context service for user {self.user_id}, conversation {self.conversation_id}")
     
     @track_performance("get_context")
@@ -62,7 +92,8 @@ class ContextService:
         include_memories: bool = True,
         include_npcs: bool = True,
         include_location: bool = True,
-        include_quests: bool = True
+        include_quests: bool = True,
+        source_version: Optional[int] = None  # NEW: Version tracking for delta updates
     ) -> Dict[str, Any]:
         """
         Get optimized context for the current interaction
@@ -77,6 +108,7 @@ class ContextService:
             include_npcs: Whether to include NPCs
             include_location: Whether to include location details
             include_quests: Whether to include quests
+            source_version: Optional source version for delta tracking
             
         Returns:
             Optimized context
@@ -87,6 +119,36 @@ class ContextService:
         # Check if vector search should be used
         if use_vector_search is None:
             use_vector_search = self.config.is_enabled("use_vector_search")
+        
+        # NEW: Dynamic token budget based on narrative stage
+        if not context_budget:
+            # Try to get the narrative stage to adjust budget
+            narrative_stage = await self._get_narrative_stage()
+            if narrative_stage:
+                # Adjust budget based on stage
+                stage_name = narrative_stage.get("name", "").lower()
+                if "revelation" in stage_name:
+                    # Later stages need more detail
+                    context_budget = self.config.get_token_budget("default") * 1.2
+                elif "beginning" in stage_name:
+                    # Early stages need less detail
+                    context_budget = self.config.get_token_budget("default") * 0.8
+                else:
+                    context_budget = self.config.get_token_budget("default")
+            else:
+                context_budget = self.config.get_token_budget("default")
+        
+        # Check for delta tracking if source_version is provided
+        if source_version is not None and use_delta:
+            # Get context from context manager with delta tracking
+            context_result = await self.context_manager.get_context(source_version)
+            
+            # If it's incremental, return as is
+            if context_result.get("is_incremental", False):
+                return context_result
+            else:
+                # If not incremental, continue with normal context retrieval
+                pass
         
         # Cache key based on parameters
         cache_key_parts = [
@@ -130,7 +192,7 @@ class ContextService:
             # 3. Get relevant memories if requested
             if include_memories and memory_manager:
                 if input_text:
-                    tasks.append(memory_manager.search_memories(query_text=input_text, limit=5))
+                    tasks.append(memory_manager.search_memories(query_text=input_text, limit=5, use_vector=True))
                 else:
                     tasks.append(memory_manager.get_recent_memories(days=3, limit=5))
             else:
@@ -145,6 +207,12 @@ class ContextService:
             # 5. Get quest information if requested
             if include_quests:
                 tasks.append(self._get_quest_information())
+            else:
+                tasks.append(asyncio.create_task(asyncio.sleep(0)))
+            
+            # NEW: 6. Get progressive summaries if available
+            if self.narrative_manager and input_text:
+                tasks.append(self._get_summarized_narratives(input_text))
             else:
                 tasks.append(asyncio.create_task(asyncio.sleep(0)))
             
@@ -173,6 +241,10 @@ class ContextService:
             
             if include_quests:
                 context["quests"] = results[4]
+            
+            # NEW: Add summarized narratives if available
+            if self.narrative_manager and input_text:
+                context["narrative_summaries"] = results[5]
             
             # Add vector-based content if enabled
             if use_vector_search and vector_service:
@@ -211,6 +283,12 @@ class ContextService:
             
             # Record elapsed time
             context["retrieval_time"] = time.time()
+            
+            # Store in context manager for delta tracking
+            await self.context_manager.update_context(context)
+            
+            # Add version for delta tracking
+            context["version"] = self.context_manager.version
             
             return context
         
@@ -251,6 +329,187 @@ class ContextService:
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
             }
+
+    # NEW: Get narrative stage for context budget adjustment
+    async def _get_narrative_stage(self) -> Dict[str, Any]:
+        """Get the current narrative stage"""
+        try:
+            from logic.narrative_progression import get_current_narrative_stage
+            
+            stage = await get_current_narrative_stage(self.user_id, self.conversation_id)
+            if stage:
+                return {"name": stage.name, "description": stage.description}
+            return None
+        except:
+            return None
+    
+    # NEW: Get summarized narratives from narrative manager
+    async def _get_summarized_narratives(self, query_text: str) -> Dict[str, Any]:
+        """Get summarized narratives relevant to the query"""
+        if not self.narrative_manager:
+            return {}
+        
+        try:
+            # Get optimal narrative context with query
+            return await self.narrative_manager.get_optimal_narrative_context(
+                query=query_text,
+                max_tokens=1000
+            )
+        except Exception as e:
+            logger.error(f"Error getting summarized narratives: {e}")
+            return {}
+    
+    # NEW: Method to get context with appropriate summarization
+    async def get_summarized_context(
+        self,
+        input_text: str = "",
+        summary_level: int = 1,  # 0=Detailed, 1=Condensed, 2=Summary, 3=Headline
+        context_budget: int = 2000,
+        use_vector_search: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Get context with automatic summarization based on importance and recency
+        
+        Args:
+            input_text: Current user input
+            summary_level: Level of summarization to apply
+            context_budget: Maximum token budget
+            use_vector_search: Whether to use vector search
+            
+        Returns:
+            Summarized context
+        """
+        # Initialize if needed
+        await self.initialize()
+        
+        # Get base context
+        context = await self.get_context(
+            input_text=input_text,
+            context_budget=context_budget,
+            use_vector_search=use_vector_search,
+            use_delta=False
+        )
+        
+        # If narrative manager is available, use it for summarization
+        if self.narrative_manager:
+            try:
+                # Get summarized memories
+                narrative_context = await self.narrative_manager.get_optimal_narrative_context(
+                    query=input_text,
+                    max_tokens=context_budget // 4  # Use 25% of budget for narrative context
+                )
+                
+                # Add summarized narratives to context
+                context["narrative_summaries"] = narrative_context
+                
+            except Exception as e:
+                logger.error(f"Error getting narrative summaries: {e}")
+        
+        # Apply summarization to existing memories based on importance/recency
+        if "memories" in context:
+            for i, memory in enumerate(context["memories"]):
+                # Skip recent or important memories
+                importance = memory.get("importance", 0.5)
+                
+                # Parse timestamp to check recency
+                is_recent = False
+                if "created_at" in memory:
+                    created_at = memory["created_at"]
+                    if isinstance(created_at, str):
+                        try:
+                            created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                            days_old = (datetime.now() - created_at).days
+                            is_recent = days_old < 7  # Less than a week old
+                        except:
+                            pass
+                
+                # Skip summarization for recent or important memories
+                if importance > 0.7 or is_recent:
+                    continue
+                
+                # Get the content to summarize
+                content = memory.get("content", "")
+                if not content:
+                    continue
+                
+                # Apply appropriate summarization level
+                summarized = await self._summarize_text(content, summary_level)
+                
+                # Replace content with summarized version
+                context["memories"][i]["content"] = summarized
+                context["memories"][i]["summarized"] = True
+                context["memories"][i]["summary_level"] = summary_level
+        
+        return context
+    
+    # Helper method for summarization
+    async def _summarize_text(self, text: str, level: int) -> str:
+        """
+        Summarize text to the specified level
+        
+        Args:
+            text: Text to summarize
+            level: Summarization level (0-3)
+            
+        Returns:
+            Summarized text
+        """
+        if level == 0:  # Detailed - no summarization
+            return text
+            
+        # Simple rule-based summarization if narrative manager not available
+        if not self.narrative_manager:
+            sentences = text.split(". ")
+            
+            if level == 1:  # Condensed
+                # Keep first, middle and last sentence
+                if len(sentences) >= 3:
+                    middle_idx = len(sentences) // 2
+                    return f"{sentences[0]}. {sentences[middle_idx]}. {sentences[-1]}."
+                return text
+                
+            elif level == 2:  # Summary
+                # Keep just first and last sentences
+                if len(sentences) >= 2:
+                    return f"{sentences[0]}. {sentences[-1]}."
+                return text
+                
+            elif level == 3:  # Headline
+                # Just keep first sentence, truncated if needed
+                if sentences:
+                    if len(sentences[0]) > 100:
+                        return sentences[0][:97] + "..."
+                    return sentences[0]
+                return text
+        
+        # Use narrative manager's summarizer if available
+        try:
+            from story_agent.progressive_summarization import SummaryLevel
+            
+            # Map our levels to SummaryLevel
+            summary_level_map = {
+                0: SummaryLevel.DETAILED,
+                1: SummaryLevel.CONDENSED,
+                2: SummaryLevel.SUMMARY,
+                3: SummaryLevel.HEADLINE
+            }
+            
+            summarizer = self.narrative_manager.narrative.summarizer
+            result = await summarizer.summarize(text, summary_level_map[level])
+            return result
+        except Exception as e:
+            logger.error(f"Error summarizing with narrative manager: {e}")
+            
+            # Fallback to simple summarization
+            sentences = text.split(". ")
+            if level == 1:  # Condensed
+                return ". ".join(sentences[:max(1, len(sentences) // 2)])
+            elif level == 2:  # Summary
+                return ". ".join(sentences[:max(1, len(sentences) // 3)])
+            elif level == 3:  # Headline
+                return sentences[0] if sentences else text
+            
+            return text
     
     async def _get_base_context(self, location: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -327,12 +586,23 @@ class ContextService:
                     for row in rp_rows:
                         roleplay_data[row["key"]] = row["value"]
                     
+                    # NEW: Get narrative stage
+                    from logic.narrative_progression import get_current_narrative_stage
+                    narrative_stage = await get_current_narrative_stage(self.user_id, self.conversation_id)
+                    narrative_stage_info = None
+                    if narrative_stage:
+                        narrative_stage_info = {
+                            "name": narrative_stage.name,
+                            "description": narrative_stage.description
+                        }
+                    
                     # Create base context
                     context = {
                         "time_info": time_info,
                         "player_stats": player_stats,
                         "current_roleplay": roleplay_data,
-                        "current_location": location or roleplay_data.get("CurrentLocation", "Unknown")
+                        "current_location": location or roleplay_data.get("CurrentLocation", "Unknown"),
+                        "narrative_stage": narrative_stage_info
                     }
                     
                     return context
@@ -371,8 +641,8 @@ class ContextService:
         vector_service = None
     ) -> List[Dict[str, Any]]:
         """Get NPCs relevant to current input and location"""
-        # Use vector search if available
-        if vector_service and input_text:
+        # If there's an vector search and input text, prioritize vector search
+        if vector_service and input_text and await vector_service.is_initialized():
             try:
                 # Get vector context for input
                 vector_context = await vector_service.get_context_for_input(
@@ -453,7 +723,7 @@ class ContextService:
             return {}
         
         # Use vector search if available
-        if vector_service:
+        if vector_service and await vector_service.is_initialized():
             try:
                 # Get vector context for location
                 vector_context = await vector_service.get_context_for_input(
@@ -545,7 +815,7 @@ class ContextService:
         """Apply delta tracking to context"""
         # Calculate hash of context (excluding certain fields)
         context_for_hash = {k: v for k, v in context.items() 
-                           if k not in ["timestamp", "token_usage", "is_delta", "delta_changes", "retrieval_time"]}
+                           if k not in ["timestamp", "token_usage", "is_delta", "delta_changes", "retrieval_time", "version"]}
         
         context_hash = self._hash_context(context_for_hash)
         
@@ -630,7 +900,8 @@ class ContextService:
             "quests": ["quests"],
             "time": ["time_info"],
             "roleplay": ["current_roleplay"],
-            "narratives": ["narratives"]
+            "narratives": ["narratives"],
+            "summaries": ["narrative_summaries"]  # NEW: Track narrative summaries
         }
         
         for category, keys in components.items():
@@ -645,7 +916,7 @@ class ContextService:
         skip_keys = set()
         for keys in components.values():
             skip_keys.update(keys)
-        skip_keys.update(["token_usage", "is_delta", "delta_changes", "timestamp", "total_tokens"])
+        skip_keys.update(["token_usage", "is_delta", "delta_changes", "timestamp", "total_tokens", "version"])
         
         other_keys = [k for k in context if k not in skip_keys]
         if other_keys:
@@ -673,6 +944,7 @@ class ContextService:
             "npcs": 5,               # Medium priority
             "memories": 4,           # Medium-low priority
             "narratives": 3,         # Lower priority
+            "summaries": 2,          # Can be trimmed first
             "other": 1               # Lowest priority
         }
         
@@ -749,6 +1021,17 @@ class ContextService:
                 keep_count = max(1, len(sorted_memories) // 2)
                 new_memories = sorted_memories[:keep_count]
                 
+                # Additionally, summarize what we keep if needed
+                if self.narrative_manager and reduction_needed > 0:
+                    for i, memory in enumerate(new_memories):
+                        if "content" in memory and len(memory["content"]) > 200:
+                            # Get a summarized version
+                            content = memory["content"]
+                            summarized = await self._summarize_text(content, 2)  # Level 2 summary
+                            if len(summarized) < len(content):
+                                new_memories[i]["content"] = summarized
+                                new_memories[i]["summarized"] = True
+                
                 # Calculate tokens saved
                 old_tokens = token_usage[component_name]
                 new_tokens = self._calculate_token_usage({"memories": new_memories}).get("memories", 0)
@@ -761,6 +1044,12 @@ class ContextService:
                 # For narratives, we can remove entirely if needed
                 old_tokens = token_usage[component_name]
                 del trimmed["narratives"]
+                reduction_needed -= old_tokens
+            
+            elif component_name == "summaries" and "narrative_summaries" in trimmed:
+                # Remove narrative summaries if needed
+                old_tokens = token_usage[component_name]
+                del trimmed["narrative_summaries"]
                 reduction_needed -= old_tokens
         
         # If we still need to trim, remove the lowest priority components entirely
@@ -801,7 +1090,8 @@ class ContextService:
             "memory_maintenance": None,
             "vector_maintenance": None,
             "cache_maintenance": None,
-            "performance_metrics": None
+            "performance_metrics": None,
+            "narrative_maintenance": None  # NEW: Track narrative maintenance
         }
         
         # 1. Memory maintenance
@@ -828,6 +1118,15 @@ class ContextService:
         # 4. Performance metrics
         results["performance_metrics"] = self.performance_monitor.get_metrics()
         
+        # NEW: 5. Narrative maintenance if available
+        if self.narrative_manager:
+            try:
+                narrative_result = await self.narrative_manager.run_maintenance()
+                results["narrative_maintenance"] = narrative_result
+            except Exception as e:
+                logger.error(f"Error running narrative maintenance: {e}")
+                results["narrative_maintenance"] = {"error": str(e)}
+        
         return results
 
 
@@ -853,7 +1152,9 @@ async def get_comprehensive_context(
     location: Optional[str] = None,
     context_budget: int = 4000,
     use_vector_search: Optional[bool] = None,
-    use_delta: bool = True
+    use_delta: bool = True,
+    source_version: Optional[int] = None,  # NEW: Version tracking for delta updates
+    summary_level: Optional[int] = None  # NEW: Summary level option
 ) -> Dict[str, Any]:
     """
     Get comprehensive context optimized for token efficiency and relevance
@@ -866,6 +1167,8 @@ async def get_comprehensive_context(
         context_budget: Token budget
         use_vector_search: Whether to use vector search
         use_delta: Whether to include delta changes
+        source_version: Optional source version for delta tracking 
+        summary_level: Optional summary level (0-3)
         
     Returns:
         Optimized context dictionary
@@ -873,14 +1176,24 @@ async def get_comprehensive_context(
     # Get context service
     service = await get_context_service(user_id, conversation_id)
     
-    # Get context
-    context = await service.get_context(
-        input_text=input_text,
-        location=location,
-        context_budget=context_budget,
-        use_vector_search=use_vector_search,
-        use_delta=use_delta
-    )
+    # If summarization requested, use that method
+    if summary_level is not None:
+        context = await service.get_summarized_context(
+            input_text=input_text,
+            summary_level=summary_level,
+            context_budget=context_budget,
+            use_vector_search=use_vector_search if use_vector_search is not None else True
+        )
+    else:
+        # Get regular context
+        context = await service.get_context(
+            input_text=input_text,
+            location=location,
+            context_budget=context_budget,
+            use_vector_search=use_vector_search,
+            use_delta=use_delta,
+            source_version=source_version
+        )
     
     return context
 
