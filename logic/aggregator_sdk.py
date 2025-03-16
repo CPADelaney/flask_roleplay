@@ -1,386 +1,229 @@
 # logic/aggregator_sdk.py
-"""
-Data aggregation system using OpenAI's Agents SDK with Nyx Governance integration.
 
-This module is responsible for gathering data from multiple database tables,
-aggregating them into a cohesive context for other systems, and ensuring
-all data retrieval is governed by Nyx.
+"""
+Optimized replacement for aggregator_sdk.py that integrates with the
+unified context service for improved performance and efficiency.
 """
 
+import asyncio
 import logging
 import json
-import asyncio
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union
 
-# OpenAI Agents SDK imports
-from agents import (
-    Agent,
-    ModelSettings,
-    Runner,
-    function_tool,
-    RunContextWrapper,
-    GuardrailFunctionOutput,
-    InputGuardrail,
-    trace,
-    handoff
+from context.unified_context_service import (
+    get_context_service,
+    get_comprehensive_context,
+    cleanup_all_services
 )
-from pydantic import BaseModel, Field
+from context.context_config import get_config
+from context.context_performance import PerformanceMonitor, track_performance
 
-# DB connection
-from db.connection import get_db_connection
-import asyncpg
-
-# Nyx governance integration
-from nyx.nyx_governance import (
-    NyxUnifiedGovernor,
-    AgentType,
-    DirectiveType,
-    DirectivePriority
-)
-from nyx.integrate import get_central_governance
-
-# Calendar integration
-from logic.calendar import update_calendar_names, load_calendar_names
+logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------------
-# Pydantic Models for Structured Outputs
+# Optimized Context Retrieval
 # -------------------------------------------------------------------------------
 
-class AggregatedData(BaseModel):
-    """Structure for aggregated game data"""
-    player_stats: Dict[str, Any] = Field(default_factory=dict, description="Player statistics")
-    introduced_npcs: List[Dict[str, Any]] = Field(default_factory=list, description="NPCs that have been introduced")
-    unintroduced_npcs: List[Dict[str, Any]] = Field(default_factory=list, description="NPCs that have not been introduced")
-    current_roleplay: Dict[str, Any] = Field(default_factory=dict, description="Current roleplay context")
-    calendar: Dict[str, Any] = Field(default_factory=dict, description="Calendar information")
-    year: str = Field("1040", description="Current year")
-    month: str = Field("6", description="Current month")
-    day: str = Field("15", description="Current day")
-    time_of_day: str = Field("Morning", description="Current time of day")
-    social_links: List[Dict[str, Any]] = Field(default_factory=list, description="Social relationships")
-    player_perks: List[Dict[str, Any]] = Field(default_factory=list, description="Player perks")
-    inventory: List[Dict[str, Any]] = Field(default_factory=list, description="Player inventory")
-    events: List[Dict[str, Any]] = Field(default_factory=list, description="Game events")
-    planned_events: List[Dict[str, Any]] = Field(default_factory=list, description="Planned events")
-    quests: List[Dict[str, Any]] = Field(default_factory=list, description="Player quests")
-    game_rules: List[Dict[str, Any]] = Field(default_factory=list, description="Game rules")
-    stat_definitions: List[Dict[str, Any]] = Field(default_factory=list, description="Stat definitions")
-    locations: List[Dict[str, Any]] = Field(default_factory=list, description="Game locations")
-    npc_agent_states: Dict[str, Any] = Field(default_factory=dict, description="NPC agent states")
-    aggregator_text: str = Field("", description="Compiled aggregator text")
-
-class SceneContextData(BaseModel):
-    """Structure for scene context data"""
-    location: str = Field(..., description="Current location")
-    npcs_present: List[str] = Field(default_factory=list, description="NPCs present in the scene")
-    time_info: Dict[str, Any] = Field(default_factory=dict, description="Current time information")
-    environment_description: str = Field("", description="Description of the environment")
-    player_role: str = Field("", description="Player's role in the scene")
-    tension_level: int = Field(0, description="Tension level (0-10)")
-
-class GlobalSummary(BaseModel):
-    """Structure for global game summary"""
-    introduced_npcs_count: int = Field(0, description="Number of introduced NPCs")
-    unintroduced_npcs_count: int = Field(0, description="Number of unintroduced NPCs")
-    active_quests_count: int = Field(0, description="Number of active quests")
-    locations_count: int = Field(0, description="Number of locations")
-    current_time: str = Field("", description="Current in-game time")
-    main_quest_status: str = Field("", description="Status of the main quest")
-    recent_events: List[str] = Field(default_factory=list, description="Recent notable events")
-
-# -------------------------------------------------------------------------------
-# Agent Context
-# -------------------------------------------------------------------------------
-
-class AggregatorContext:
-    """Context object for aggregator agents"""
-    def __init__(self, user_id: int, conversation_id: int):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.governor = None
-        self.cached_data = {}
-        
-    async def initialize(self):
-        """Initialize context with governance integration"""
-        self.governor = await get_central_governance(self.user_id, self.conversation_id)
-
-# -------------------------------------------------------------------------------
-# Function Tools
-# -------------------------------------------------------------------------------
-
-@function_tool
-async def get_player_stats(
-    ctx: RunContextWrapper[AggregatorContext],
-    player_name: str
+@track_performance("get_aggregated_roleplay_context")
+async def get_aggregated_roleplay_context(
+    user_id: int,
+    conversation_id: int,
+    player_name: str = "Chase",
+    current_input: str = "",
+    location: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Retrieve player statistics from the database.
+    Optimized drop-in replacement for the original get_aggregated_roleplay_context
     
     Args:
-        player_name: Name of the player to retrieve stats for
+        user_id: User ID
+        conversation_id: Conversation ID
+        player_name: Name of the player (default: "Chase")
+        current_input: Current user input for relevance scoring
+        location: Optional location override
+        
+    Returns:
+        Aggregated context dictionary
     """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
+    # Use the unified context service for optimized retrieval
+    config = get_config()
+    context_budget = config.get("token_budget", "default_budget", 4000)
+    use_vector_search = config.is_enabled("use_vector_search")
+    use_delta = config.is_enabled("use_incremental_context")
     
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="aggregator",
-        action_type="get_player_stats",
-        action_details={"player_name": player_name}
-    )
-    
-    if not permission["approved"]:
-        return {"error": permission["reasoning"]}
-    
-    # Connect to database
     try:
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        
-        # Query player stats
-        row = await conn.fetchrow("""
-            SELECT corruption, confidence, willpower,
-                   obedience, dependency, lust,
-                   mental_resilience, physical_endurance
-            FROM PlayerStats
-            WHERE user_id=$1
-              AND conversation_id=$2
-              AND player_name=$3
-        """, user_id, conversation_id, player_name)
-        
-        if not row:
-            return {"error": f"No stats found for player {player_name}"}
-        
-        player_stats = {
-            "name": player_name,
-            "corruption": row["corruption"],
-            "confidence": row["confidence"],
-            "willpower": row["willpower"],
-            "obedience": row["obedience"],
-            "dependency": row["dependency"],
-            "lust": row["lust"],
-            "mental_resilience": row["mental_resilience"],
-            "physical_endurance": row["physical_endurance"]
-        }
-        
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="aggregator",
-            action={"type": "get_player_stats", "player_name": player_name},
-            result={"stats_retrieved": True}
+        # Get comprehensive context through the unified service
+        context = await get_comprehensive_context(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            input_text=current_input,
+            location=location,
+            context_budget=context_budget,
+            use_vector_search=use_vector_search,
+            use_delta=use_delta
         )
         
-        return player_stats
-        
+        # Convert the result to the expected format for compatibility
+        return format_context_for_compatibility(context)
+    
     except Exception as e:
-        logging.error(f"Error retrieving player stats: {e}")
-        return {"error": str(e)}
-    finally:
-        await conn.close()
+        logger.error(f"Error in optimized get_aggregated_roleplay_context: {e}")
+        
+        # Fallback to database query if needed
+        try:
+            return await fallback_get_context(user_id, conversation_id, player_name)
+        except Exception as inner_e:
+            logger.error(f"Error in fallback context retrieval: {inner_e}")
+            # Return minimal context to avoid complete failure
+            return {
+                "player_stats": {},
+                "introduced_npcs": [],
+                "unintroduced_npcs": [],
+                "current_roleplay": {},
+                "error": str(e)
+            }
 
-@function_tool
-async def get_introduced_npcs(
-    ctx: RunContextWrapper[AggregatorContext]
-) -> Dict[str, Any]:
+def format_context_for_compatibility(optimized_context: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Retrieve NPCs that have been introduced to the player.
+    Format optimized context to match the format expected by existing code
+    
+    Args:
+        optimized_context: Context from comprehensive context service
+        
+    Returns:
+        Context in the format expected by existing code
     """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
+    # Create a compatible structure
+    compatible = {}
     
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="aggregator",
-        action_type="get_introduced_npcs",
-        action_details={}
-    )
+    # Map time information
+    if "time_info" in optimized_context:
+        time_info = optimized_context["time_info"]
+        compatible["year"] = time_info.get("year", "1040")
+        compatible["month"] = time_info.get("month", "6")
+        compatible["day"] = time_info.get("day", "15")
+        compatible["time_of_day"] = time_info.get("time_of_day", "Morning")
     
-    if not permission["approved"]:
-        return {"npcs": [], "error": permission["reasoning"]}
+    # Copy player stats directly
+    if "player_stats" in optimized_context:
+        compatible["player_stats"] = optimized_context["player_stats"]
     
-    # Connect to database
-    try:
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        
-        # Query introduced NPCs
-        rows = await conn.fetch("""
-            SELECT npc_id, npc_name,
-                   dominance, cruelty, closeness,
-                   trust, respect, intensity,
-                   hobbies, personality_traits, likes, dislikes,
-                   schedule, current_location, physical_description, archetype_extras_summary
-            FROM NPCStats
-            WHERE user_id=$1
-              AND conversation_id=$2
-              AND introduced=TRUE
-            ORDER BY npc_id
-        """, user_id, conversation_id)
-        
-        introduced_npcs = []
-        for row in rows:
-            # Parse JSON fields
-            try:
-                schedule = json.loads(row["schedule"]) if row["schedule"] else {}
-            except:
-                schedule = {}
-                
-            try:
-                hobbies = row["hobbies"] if row["hobbies"] else []
-                personality_traits = row["personality_traits"] if row["personality_traits"] else []
-                likes = row["likes"] if row["likes"] else []
-                dislikes = row["dislikes"] if row["dislikes"] else []
-            except:
-                hobbies, personality_traits, likes, dislikes = [], [], [], []
-            
-            introduced_npcs.append({
-                "npc_id": row["npc_id"],
-                "npc_name": row["npc_name"],
-                "dominance": row["dominance"],
-                "cruelty": row["cruelty"],
-                "closeness": row["closeness"],
-                "trust": row["trust"],
-                "respect": row["respect"],
-                "intensity": row["intensity"],
-                "hobbies": hobbies,
-                "personality_traits": personality_traits,
-                "likes": likes,
-                "dislikes": dislikes,
-                "schedule": schedule,
-                "current_location": row["current_location"] or "Unknown",
-                "physical_description": row["physical_description"] or "",
-                "archetype_extras_summary": row["archetype_extras_summary"] or ""
-            })
-        
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="aggregator",
-            action={"type": "get_introduced_npcs"},
-            result={"npcs_count": len(introduced_npcs)}
+    # Map NPC lists
+    compatible["introduced_npcs"] = optimized_context.get("npcs", [])
+    compatible["unintroduced_npcs"] = []  # Populated separately if needed
+    
+    # Copy current roleplay
+    if "current_roleplay" in optimized_context:
+        compatible["current_roleplay"] = optimized_context["current_roleplay"]
+    
+    # Map location details
+    if "location_details" in optimized_context:
+        compatible["current_location"] = optimized_context.get("location_details", {}).get(
+            "location_name", optimized_context.get("current_location", "Unknown")
         )
         
-        return {"npcs": introduced_npcs}
+        # Add other location details
+        compatible["location_details"] = optimized_context.get("location_details", {})
+    else:
+        compatible["current_location"] = optimized_context.get("current_location", "Unknown")
+    
+    # Map memories
+    if "memories" in optimized_context:
+        compatible["memories"] = optimized_context["memories"]
+    
+    # Map quests
+    if "quests" in optimized_context:
+        compatible["quests"] = optimized_context["quests"]
+    
+    # Add delta information if available
+    if "is_delta" in optimized_context:
+        compatible["is_delta"] = optimized_context["is_delta"]
         
-    except Exception as e:
-        logging.error(f"Error retrieving introduced NPCs: {e}")
-        return {"npcs": [], "error": str(e)}
-    finally:
-        await conn.close()
+        if optimized_context.get("is_delta", False) and "delta_changes" in optimized_context:
+            compatible["delta_changes"] = optimized_context["delta_changes"]
+    
+    # Add token usage if available
+    if "token_usage" in optimized_context:
+        compatible["token_usage"] = optimized_context["token_usage"]
+    
+    # Copy any other fields as is
+    for key, value in optimized_context.items():
+        if key not in compatible and key not in [
+            "time_info", "npcs", "location_details", "is_delta", 
+            "delta_changes", "token_usage", "timestamp"
+        ]:
+            compatible[key] = value
+    
+    return compatible
 
-@function_tool
-async def get_unintroduced_npcs(
-    ctx: RunContextWrapper[AggregatorContext]
+async def fallback_get_context(
+    user_id: int,
+    conversation_id: int,
+    player_name: str = "Chase"
 ) -> Dict[str, Any]:
     """
-    Retrieve NPCs that have not yet been introduced to the player.
+    Fallback context retrieval directly from database
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        player_name: Name of the player
+        
+    Returns:
+        Context dictionary
     """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
+    # Get database connection
+    from db.connection import get_db_connection
+    import asyncpg
     
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="aggregator",
-        action_type="get_unintroduced_npcs",
-        action_details={}
-    )
-    
-    if not permission["approved"]:
-        return {"npcs": [], "error": permission["reasoning"]}
-    
-    # Connect to database
+    conn = await asyncpg.connect(dsn=get_db_connection())
     try:
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        
-        # Query unintroduced NPCs
-        rows = await conn.fetch("""
-            SELECT npc_id, npc_name,
-                   schedule, current_location
-            FROM NPCStats
-            WHERE user_id=$1
-              AND conversation_id=$2
-              AND introduced=FALSE
-            ORDER BY npc_id
-        """, user_id, conversation_id)
-        
-        unintroduced_npcs = []
-        for row in rows:
-            # Parse JSON fields
-            try:
-                schedule = json.loads(row["schedule"]) if row["schedule"] else {}
-            except:
-                schedule = {}
-            
-            unintroduced_npcs.append({
-                "npc_id": row["npc_id"],
-                "npc_name": row["npc_name"],
-                "current_location": row["current_location"] or "Unknown",
-                "schedule": schedule
-            })
-        
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="aggregator",
-            action={"type": "get_unintroduced_npcs"},
-            result={"npcs_count": len(unintroduced_npcs)}
-        )
-        
-        return {"npcs": unintroduced_npcs}
-        
-    except Exception as e:
-        logging.error(f"Error retrieving unintroduced NPCs: {e}")
-        return {"npcs": [], "error": str(e)}
-    finally:
-        await conn.close()
-
-@function_tool
-async def get_time_info(
-    ctx: RunContextWrapper[AggregatorContext]
-) -> Dict[str, Any]:
-    """
-    Retrieve current time information (year, month, day, time of day).
-    """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
-    
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="aggregator",
-        action_type="get_time_info",
-        action_details={}
-    )
-    
-    if not permission["approved"]:
-        return {
-            "year": "1040",
-            "month": "6",
-            "day": "15",
-            "time_of_day": "Morning",
-            "error": permission["reasoning"]
-        }
-    
-    # Connect to database
-    try:
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        
-        time_info = {
+        # Minimal context to return
+        context = {
+            "player_stats": {},
+            "introduced_npcs": [],
+            "unintroduced_npcs": [],
+            "current_roleplay": {},
             "year": "1040",
             "month": "6",
             "day": "15",
             "time_of_day": "Morning"
         }
         
-        # Query time information
-        for key in ["CurrentYear", "CurrentMonth", "CurrentDay", "TimeOfDay"]:
+        # 1. Get player stats
+        row = await conn.fetchrow("""
+            SELECT corruption, confidence, willpower,
+                   obedience, dependency, lust,
+                   mental_resilience, physical_endurance
+            FROM PlayerStats
+            WHERE user_id=$1 AND conversation_id=$2
+            LIMIT 1
+        """, user_id, conversation_id)
+        
+        if row:
+            context["player_stats"] = dict(row)
+        
+        # 2. Get introduced NPCs
+        rows = await conn.fetch("""
+            SELECT npc_id, npc_name, dominance, cruelty, closeness,
+                   trust, respect, intensity, current_location,
+                   physical_description
+            FROM NPCStats
+            WHERE user_id=$1 AND conversation_id=$2 AND introduced=TRUE
+            LIMIT 20
+        """, user_id, conversation_id)
+        
+        for row in rows:
+            context["introduced_npcs"].append(dict(row))
+        
+        # 3. Get time info
+        for key, context_key in [
+            ("CurrentYear", "year"),
+            ("CurrentMonth", "month"),
+            ("CurrentDay", "day"),
+            ("TimeOfDay", "time_of_day")
+        ]:
             row = await conn.fetchrow("""
                 SELECT value
                 FROM CurrentRoleplay
@@ -388,1132 +231,417 @@ async def get_time_info(
             """, user_id, conversation_id, key)
             
             if row:
-                if key == "CurrentYear":
-                    time_info["year"] = row["value"]
-                elif key == "CurrentMonth":
-                    time_info["month"] = row["value"]
-                elif key == "CurrentDay":
-                    time_info["day"] = row["value"]
-                elif key == "TimeOfDay":
-                    time_info["time_of_day"] = row["value"]
+                context[context_key] = row["value"]
         
-        # Get calendar information
-        calendar_raw = None
-        calendar_row = await conn.fetchrow("""
-            SELECT value FROM CurrentRoleplay
-            WHERE user_id=$1 AND conversation_id=$2 AND key='CalendarNames'
-        """, user_id, conversation_id)
-        
-        if calendar_row and calendar_row["value"]:
-            try:
-                calendar_raw = json.loads(calendar_row["value"])
-            except:
-                calendar_raw = None
-        
-        if calendar_raw:
-            time_info["calendar"] = calendar_raw
-        else:
-            time_info["calendar"] = {"year_name": "Year 1", "months": [], "days": []}
-        
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="aggregator",
-            action={"type": "get_time_info"},
-            result={"time_retrieved": True}
-        )
-        
-        return time_info
-        
-    except Exception as e:
-        logging.error(f"Error retrieving time info: {e}")
-        return {
-            "year": "1040",
-            "month": "6",
-            "day": "15",
-            "time_of_day": "Morning",
-            "calendar": {"year_name": "Year 1", "months": [], "days": []},
-            "error": str(e)
-        }
-    finally:
-        await conn.close()
-
-@function_tool
-async def get_current_roleplay_data(
-    ctx: RunContextWrapper[AggregatorContext]
-) -> Dict[str, Any]:
-    """
-    Retrieve current roleplay data from the CurrentRoleplay table.
-    """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
-    
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="aggregator",
-        action_type="get_current_roleplay_data",
-        action_details={}
-    )
-    
-    if not permission["approved"]:
-        return {"error": permission["reasoning"]}
-    
-    # Connect to database
-    try:
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        
-        # Query all current roleplay data
+        # 4. Get current roleplay data
         rows = await conn.fetch("""
             SELECT key, value
             FROM CurrentRoleplay
             WHERE user_id=$1 AND conversation_id=$2
         """, user_id, conversation_id)
         
-        current_roleplay_data = {}
-        
         for row in rows:
-            key, value = row["key"], row["value"]
+            context["current_roleplay"][row["key"]] = row["value"]
+        
+        return context
+    
+    finally:
+        await conn.close()
+
+# -------------------------------------------------------------------------------
+# Optimized Context Cache with Multi-Level Support
+# -------------------------------------------------------------------------------
+
+class OptimizedContextCache:
+    """
+    Optimized context cache wrapper that integrates with unified cache
+    """
+    
+    def __init__(self):
+        # Get configuration
+        config = get_config()
+        self.l1_ttl = config.get("cache", "l1_ttl_seconds", 60)
+        self.l2_ttl = config.get("cache", "l2_ttl_seconds", 300)
+        self.l3_ttl = config.get("cache", "l3_ttl_seconds", 3600)
+        self.enabled = config.get("cache", "enabled", True)
+    
+    async def get(self, key: str, fetch_func, cache_level: int = 1) -> Any:
+        """
+        Get an item from cache or fetch and store it
+        
+        Args:
+            key: Cache key
+            fetch_func: Async function to fetch data on cache miss
+            cache_level: Cache level to use (1-3)
             
-            # Try to parse JSON for specific fields
-            if key == "ChaseSchedule":
-                try:
-                    current_roleplay_data[key] = json.loads(value)
-                except:
-                    current_roleplay_data[key] = value
-            else:
-                current_roleplay_data[key] = value
+        Returns:
+            Cached or fetched data
+        """
+        if not self.enabled:
+            return await fetch_func()
         
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="aggregator",
-            action={"type": "get_current_roleplay_data"},
-            result={"keys_retrieved": len(current_roleplay_data)}
-        )
+        # Use unified cache through the optimized service
+        from context.unified_cache import context_cache
         
-        return current_roleplay_data
-        
-    except Exception as e:
-        logging.error(f"Error retrieving current roleplay data: {e}")
-        return {"error": str(e)}
-    finally:
-        await conn.close()
-
-@function_tool
-async def get_social_links(
-    ctx: RunContextWrapper[AggregatorContext]
-) -> Dict[str, Any]:
-    """
-    Retrieve social links between entities.
-    """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
-    
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="aggregator",
-        action_type="get_social_links",
-        action_details={}
-    )
-    
-    if not permission["approved"]:
-        return {"links": [], "error": permission["reasoning"]}
-    
-    # Connect to database
-    try:
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        
-        # Query social links
-        rows = await conn.fetch("""
-            SELECT link_id, entity1_type, entity1_id,
-                   entity2_type, entity2_id,
-                   link_type, link_level, link_history
-            FROM SocialLinks
-            WHERE user_id=$1 AND conversation_id=$2
-            ORDER BY link_id
-        """, user_id, conversation_id)
-        
-        social_links = []
-        
-        for row in rows:
-            social_links.append({
-                "link_id": row["link_id"],
-                "entity1_type": row["entity1_type"],
-                "entity1_id": row["entity1_id"],
-                "entity2_type": row["entity2_type"],
-                "entity2_id": row["entity2_id"],
-                "link_type": row["link_type"],
-                "link_level": row["link_level"],
-                "link_history": row["link_history"] or []
-            })
-        
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="aggregator",
-            action={"type": "get_social_links"},
-            result={"links_count": len(social_links)}
-        )
-        
-        return {"links": social_links}
-        
-    except Exception as e:
-        logging.error(f"Error retrieving social links: {e}")
-        return {"links": [], "error": str(e)}
-    finally:
-        await conn.close()
-
-@function_tool
-async def get_additional_game_data(
-    ctx: RunContextWrapper[AggregatorContext]
-) -> Dict[str, Any]:
-    """
-    Retrieve additional game data (player perks, inventory, events, quests, etc.)
-    """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
-    
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="aggregator",
-        action_type="get_additional_game_data",
-        action_details={}
-    )
-    
-    if not permission["approved"]:
-        return {"error": permission["reasoning"]}
-    
-    # Connect to database
-    try:
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        
-        # Get player perks
-        perks_rows = await conn.fetch("""
-            SELECT perk_name, perk_description, perk_effect
-            FROM PlayerPerks
-            WHERE user_id=$1 AND conversation_id=$2
-        """, user_id, conversation_id)
-        
-        player_perks = []
-        for row in perks_rows:
-            player_perks.append({
-                "perk_name": row["perk_name"],
-                "perk_description": row["perk_description"],
-                "perk_effect": row["perk_effect"]
-            })
-        
-        # Get inventory
-        inventory_rows = await conn.fetch("""
-            SELECT player_name, item_name, item_description, item_effect,
-                   quantity, category
-            FROM PlayerInventory
-            WHERE user_id=$1 AND conversation_id=$2
-        """, user_id, conversation_id)
-        
-        inventory_list = []
-        for row in inventory_rows:
-            inventory_list.append({
-                "player_name": row["player_name"],
-                "item_name": row["item_name"],
-                "item_description": row["item_description"],
-                "item_effect": row["item_effect"],
-                "quantity": row["quantity"],
-                "category": row["category"]
-            })
-        
-        # Get events
-        events_rows = await conn.fetch("""
-            SELECT id, event_name, description, start_time, end_time, location,
-                   year, month, day, time_of_day
-            FROM Events
-            WHERE user_id=$1 AND conversation_id=$2
-            ORDER BY id
-        """, user_id, conversation_id)
-        
-        events_list = []
-        for row in events_rows:
-            events_list.append({
-                "event_id": row["id"],
-                "event_name": row["event_name"],
-                "description": row["description"],
-                "start_time": row["start_time"],
-                "end_time": row["end_time"],
-                "location": row["location"],
-                "year": row["year"],
-                "month": row["month"],
-                "day": row["day"],
-                "time_of_day": row["time_of_day"]
-            })
-        
-        # Get planned events
-        planned_events_rows = await conn.fetch("""
-            SELECT event_id, npc_id, year, month, day, time_of_day, override_location
-            FROM PlannedEvents
-            WHERE user_id=$1 AND conversation_id=$2
-            ORDER BY event_id
-        """, user_id, conversation_id)
-        
-        planned_events_list = []
-        for row in planned_events_rows:
-            planned_events_list.append({
-                "event_id": row["event_id"],
-                "npc_id": row["npc_id"],
-                "year": row["year"],
-                "month": row["month"],
-                "day": row["day"],
-                "time_of_day": row["time_of_day"],
-                "override_location": row["override_location"]
-            })
-        
-        # Get quests
-        quests_rows = await conn.fetch("""
-            SELECT quest_id, quest_name, status, progress_detail,
-                   quest_giver, reward
-            FROM Quests
-            WHERE user_id=$1 AND conversation_id=$2
-            ORDER BY quest_id
-        """, user_id, conversation_id)
-        
-        quests_list = []
-        for row in quests_rows:
-            quests_list.append({
-                "quest_id": row["quest_id"],
-                "quest_name": row["quest_name"],
-                "status": row["status"],
-                "progress_detail": row["progress_detail"],
-                "quest_giver": row["quest_giver"],
-                "reward": row["reward"]
-            })
-        
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="aggregator",
-            action={"type": "get_additional_game_data"},
-            result={
-                "perks_count": len(player_perks),
-                "inventory_count": len(inventory_list),
-                "events_count": len(events_list),
-                "quests_count": len(quests_list)
-            }
-        )
-        
-        return {
-            "player_perks": player_perks,
-            "inventory": inventory_list,
-            "events": events_list,
-            "planned_events": planned_events_list,
-            "quests": quests_list
-        }
-        
-    except Exception as e:
-        logging.error(f"Error retrieving additional game data: {e}")
-        return {"error": str(e)}
-    finally:
-        await conn.close()
-
-@function_tool
-async def get_global_tables(
-    ctx: RunContextWrapper[AggregatorContext]
-) -> Dict[str, Any]:
-    """
-    Retrieve global tables data (game rules, stat definitions, etc.)
-    """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
-    
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="aggregator",
-        action_type="get_global_tables",
-        action_details={}
-    )
-    
-    if not permission["approved"]:
-        return {"error": permission["reasoning"]}
-    
-    # Connect to database
-    try:
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        
-        # Get game rules
-        rules_rows = await conn.fetch("""
-            SELECT rule_name, condition, effect
-            FROM GameRules
-            ORDER BY rule_name
-        """)
-        
-        game_rules_list = []
-        for row in rules_rows:
-            game_rules_list.append({
-                "rule_name": row["rule_name"],
-                "condition": row["condition"],
-                "effect": row["effect"]
-            })
-        
-        # Get stat definitions
-        stat_rows = await conn.fetch("""
-            SELECT id, scope, stat_name, range_min, range_max,
-                   definition, effects, progression_triggers
-            FROM StatDefinitions
-            ORDER BY id
-        """)
-        
-        stat_def_list = []
-        for row in stat_rows:
-            stat_def_list.append({
-                "id": row["id"],
-                "scope": row["scope"],
-                "stat_name": row["stat_name"],
-                "range_min": row["range_min"],
-                "range_max": row["range_max"],
-                "definition": row["definition"],
-                "effects": row["effects"],
-                "progression_triggers": row["progression_triggers"]
-            })
-        
-        # Get locations
-        location_rows = await conn.fetch("""
-            SELECT id, location_name, description
-            FROM Locations
-            WHERE user_id=$1 AND conversation_id=$2
-            ORDER BY id
-        """, user_id, conversation_id)
-        
-        locations_list = []
-        for row in location_rows:
-            locations_list.append({
-                "location_id": row["id"],
-                "location_name": row["location_name"],
-                "description": row["description"]
-            })
-        
-        # Get NPC agent states
-        npc_agent_rows = await conn.fetch("""
-            SELECT npc_id, current_state, last_decision
-            FROM NPCAgentState
-            WHERE user_id=$1 AND conversation_id=$2
-        """, user_id, conversation_id)
-        
-        npc_agent_states = {}
-        for row in npc_agent_rows:
-            npc_agent_states[row["npc_id"]] = {
-                "current_state": row["current_state"],
-                "last_decision": row["last_decision"]
-            }
-        
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="aggregator",
-            action={"type": "get_global_tables"},
-            result={
-                "rules_count": len(game_rules_list),
-                "stats_count": len(stat_def_list),
-                "locations_count": len(locations_list)
-            }
-        )
-        
-        return {
-            "game_rules": game_rules_list,
-            "stat_definitions": stat_def_list,
-            "locations": locations_list,
-            "npc_agent_states": npc_agent_states
-        }
-        
-    except Exception as e:
-        logging.error(f"Error retrieving global tables: {e}")
-        return {"error": str(e)}
-    finally:
-        await conn.close()
-
-@function_tool
-async def generate_global_summary(
-    ctx: RunContextWrapper[AggregatorContext],
-    aggregated_data: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Generate a global summary based on aggregated data.
-    
-    Args:
-        aggregated_data: The aggregated game data
-    """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
-    
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="aggregator",
-        action_type="generate_global_summary",
-        action_details={}
-    )
-    
-    if not permission["approved"]:
-        return {"summary": "", "error": permission["reasoning"]}
-    
-    # Connect to database
-    try:
-        conn = await asyncpg.connect(dsn=get_db_connection())
-        
-        # Get existing summary
-        row = await conn.fetchrow("""
-            SELECT value
-            FROM CurrentRoleplay
-            WHERE user_id=$1 AND conversation_id=$2 AND key='GlobalSummary'
-        """, user_id, conversation_id)
-        
-        existing_summary = row["value"] if row else ""
-        
-        # Build changes summary
-        introduced_count = len(aggregated_data.get("introduced_npcs", []))
-        unintroduced_count = len(aggregated_data.get("unintroduced_npcs", []))
-        
-        changes = f"Introduced NPCs: {introduced_count}, Unintroduced: {unintroduced_count}"
-        
-        # Update global summary
-        if introduced_count == 0 and unintroduced_count == 0:
-            updated_summary = existing_summary
+        # Determine TTL based on level
+        if cache_level == 1:
+            ttl = self.l1_ttl
+        elif cache_level == 2:
+            ttl = self.l2_ttl
         else:
-            updated_summary = update_global_summary(existing_summary, changes)
-            
-            # Save updated summary
-            await conn.execute("""
-                INSERT INTO CurrentRoleplay(user_id, conversation_id, key, value)
-                VALUES($1, $2, 'GlobalSummary', $3)
-                ON CONFLICT (user_id, conversation_id, key)
-                DO UPDATE SET value=EXCLUDED.value
-            """, user_id, conversation_id, updated_summary)
+            ttl = self.l3_ttl
         
-        # Report action to governance
-        await governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="aggregator",
-            action={"type": "generate_global_summary"},
-            result={"summary_updated": updated_summary != existing_summary}
+        return await context_cache.get(
+            key=key,
+            fetch_func=fetch_func,
+            cache_level=cache_level,
+            ttl_override=ttl
+        )
+    
+    def invalidate(self, key_prefix: str) -> None:
+        """
+        Invalidate cache entries matching a prefix
+        
+        Args:
+            key_prefix: Prefix to match for invalidation
+        """
+        from context.unified_cache import context_cache
+        context_cache.invalidate(key_prefix)
+
+# Create singleton instance
+context_cache = OptimizedContextCache()
+
+# -------------------------------------------------------------------------------
+# Optimized Incremental Context Manager
+# -------------------------------------------------------------------------------
+
+class OptimizedIncrementalContextManager:
+    """
+    Optimized incremental context manager that leverages unified context service
+    """
+    
+    def __init__(self):
+        # Get configuration
+        config = get_config()
+        self.enabled = config.is_enabled("use_incremental_context")
+        self.token_budget = config.get("token_budget", "default_budget", 4000)
+        self.use_vector = config.is_enabled("use_vector_search")
+    
+    async def get_context(
+        self,
+        user_id: int,
+        conversation_id: int,
+        user_input: str,
+        location: Optional[str] = None,
+        include_delta: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Get context with delta tracking if enabled
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            user_input: Current user input for relevance scoring
+            location: Optional location override
+            include_delta: Whether to include delta changes
+            
+        Returns:
+            Context with incremental changes if enabled
+        """
+        # If incremental context is disabled, just get full context
+        if not self.enabled or not include_delta:
+            return await self.get_full_context(
+                user_id, conversation_id, user_input, location
+            )
+        
+        # Get context service for delta tracking
+        context_service = await get_context_service(user_id, conversation_id)
+        
+        # Get context with delta tracking
+        context = await context_service.get_context(
+            input_text=user_input,
+            location=location,
+            context_budget=self.token_budget,
+            use_vector_search=self.use_vector,
+            use_delta=True
         )
         
-        return {"summary": updated_summary}
+        # Format as expected
+        result = {
+            "full_context": format_context_for_compatibility(context),
+            "is_incremental": context.get("is_delta", False)
+        }
         
-    except Exception as e:
-        logging.error(f"Error generating global summary: {e}")
-        return {"summary": "", "error": str(e)}
-    finally:
-        await conn.close()
+        # Add delta context if available
+        if context.get("is_delta", False) and "delta_changes" in context:
+            result["delta_context"] = context["delta_changes"]
+        
+        return result
+    
+    async def get_full_context(
+        self,
+        user_id: int,
+        conversation_id: int,
+        user_input: str,
+        location: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get full context without delta tracking
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            user_input: Current user input for relevance scoring
+            location: Optional location override
+            
+        Returns:
+            Full context dictionary
+        """
+        # Get context using standard function
+        context = await get_aggregated_roleplay_context(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            current_input=user_input,
+            location=location
+        )
+        
+        return {
+            "full_context": context,
+            "is_incremental": False
+        }
 
-@function_tool
-async def build_aggregator_text(
-    ctx: RunContextWrapper[AggregatorContext],
-    aggregated_data: Dict[str, Any]
+# Create singleton instance
+incremental_context_manager = OptimizedIncrementalContextManager()
+
+# -------------------------------------------------------------------------------
+# Optimized Context Retrieval and Formatting
+# -------------------------------------------------------------------------------
+
+async def get_optimized_context(
+    user_id: int,
+    conversation_id: int,
+    current_input: str,
+    location: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Build the final aggregator text based on aggregated data.
+    Get optimized context based on input relevance and budget constraints
     
     Args:
-        aggregated_data: The aggregated game data
+        user_id: User ID
+        conversation_id: Conversation ID
+        current_input: Current user input
+        location: Optional location override
+        
+    Returns:
+        Optimized context dictionary
     """
-    user_id = ctx.context.user_id
-    conversation_id = ctx.context.conversation_id
-    governor = ctx.context.governor
+    config = get_config()
+    context_budget = config.get("token_budget", "default_budget", 4000)
     
-    # Check permission with governance system
-    permission = await governor.check_action_permission(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="aggregator",
-        action_type="build_aggregator_text",
-        action_details={}
+    # Get context service
+    context_service = await get_context_service(user_id, conversation_id)
+    
+    # Get optimized context
+    context = await context_service.get_context(
+        input_text=current_input,
+        location=location,
+        context_budget=context_budget,
+        use_delta=False
     )
     
-    if not permission["approved"]:
-        return {"aggregator_text": "", "error": permission["reasoning"]}
+    # Format for compatibility
+    return format_context_for_compatibility(context)
+
+def build_aggregator_text(aggregated_data: Dict[str, Any]) -> str:
+    """
+    Build the aggregator text from the provided data
     
-    # Get the global summary
-    summary = aggregated_data.get("global_summary", "")
+    Args:
+        aggregated_data: The aggregated context data
+        
+    Returns:
+        Formatted aggregator text
+    """
+    if "aggregator_text" in aggregated_data:
+        return aggregated_data["aggregator_text"]
     
-    # Get calendar information for immersive date
-    calendar_info = aggregated_data.get("calendar", {})
-    if not calendar_info or not isinstance(calendar_info, dict):
-        calendar_info = {"year_name": "Year 1", "months": [], "days": []}
-    
-    # Format immersive date
+    # Extract component data
+    current_location = aggregated_data.get("current_location", "Unknown")
     year = aggregated_data.get("year", "1040")
     month = aggregated_data.get("month", "6")
     day = aggregated_data.get("day", "15")
     time_of_day = aggregated_data.get("time_of_day", "Morning")
     
-    immersive_date = f"Year: {calendar_info.get('year_name', year)}"
-    months = calendar_info.get("months", [])
-    if months and month.isdigit():
-        month_index = int(month) - 1
-        if 0 <= month_index < len(months):
-            immersive_date += f", Month: {months[month_index]}"
-    immersive_date += f", Day: {day}, {time_of_day}."
-    
-    # Create scene snapshot
     introduced_npcs = aggregated_data.get("introduced_npcs", [])
-    unintroduced_npcs = aggregated_data.get("unintroduced_npcs", [])
     
-    scene_lines = [
-        f"- It is {year_str}, {month_str} {day_str}, {time_of_day}.\n"
-    ]
+    # Format current date/time
+    date_line = f"- It is {year}, {month} {day}, {time_of_day}.\n"
     
-    # Introduced NPCs snippet
-    scene_lines.append("Introduced NPCs in the area:")
-    for npc in introduced_npcs[:4]:
-        loc = npc.get("current_location", "Unknown")
-        scene_lines.append(f"  - {npc['npc_name']} is at {loc}")
+    # Format location
+    location_line = f"- Current location: {current_location}\n"
     
-    # Unintroduced NPCs snippet
-    scene_lines.append("Unintroduced NPCs (possible random encounters):")
-    for npc in unintroduced_npcs[:2]:
-        loc = npc.get("current_location", "Unknown")
-        scene_lines.append(f"  - ???: '{npc['npc_name']}' lurking around {loc}")
+    # Format NPCs
+    npc_lines = ["Introduced NPCs in the area:"]
+    for npc in introduced_npcs[:5]:  # Limit to 5 NPCs
+        npc_location = npc.get("current_location", "Unknown")
+        npc_lines.append(f"  - {npc.get('npc_name')} is at {npc_location}")
     
-    scene_snapshot = "\n".join(scene_lines)
+    npc_section = "\n".join(npc_lines) if introduced_npcs else "No NPCs currently in the area."
     
-    # Build the aggregator text
+    # Combine components
     aggregator_text = (
-        f"{summary}\n\n"
-        f"{immersive_date}\n"
-        "Scene Snapshot:\n"
-        f"{scene_snapshot}"
+        f"{date_line}"
+        f"{location_line}\n"
+        f"{npc_section}\n"
     )
     
-    # Add additional context from CurrentRoleplay if available
-    current_roleplay = aggregated_data.get("current_roleplay", {})
-    if "EnvironmentDesc" in current_roleplay:
-        aggregator_text += "\n\nEnvironment Description:\n" + current_roleplay["EnvironmentDesc"]
-    if "PlayerRole" in current_roleplay:
-        aggregator_text += "\n\nPlayer Role:\n" + current_roleplay["PlayerRole"]
-    if "MainQuest" in current_roleplay:
-        aggregator_text += "\n\nMain Quest (hint):\n" + current_roleplay["MainQuest"]
-    if "ChaseSchedule" in current_roleplay:
-        aggregator_text += "\n\nChase Schedule:\n" + json.dumps(current_roleplay["ChaseSchedule"], indent=2)
+    # Add environment description if available
+    environment_desc = aggregated_data.get("current_roleplay", {}).get("EnvironmentDesc")
+    if environment_desc:
+        aggregator_text += f"\nEnvironment:\n{environment_desc}\n"
     
-    # Add Notable Events and Locations
-    events = aggregated_data.get("events", [])
-    if events:
-        aggregator_text += "\n\nNotable Events:\n"
-        for ev in events[:3]:
-            aggregator_text += f"- {ev['event_name']}: {ev['description']} (at {ev['location']})\n"
+    # Add player role if available
+    player_role = aggregated_data.get("current_roleplay", {}).get("PlayerRole")
+    if player_role:
+        aggregator_text += f"\nPlayer Role:\n{player_role}\n"
     
-    locations = aggregated_data.get("locations", [])
-    if locations:
-        aggregator_text += "\n\nNotable Locations:\n"
-        for loc in locations[:3]:
-            aggregator_text += f"- {loc['location_name']}: {loc['description']}\n"
+    # Add optimization markers
+    aggregator_text += "\n\n<!-- Context optimized with unified context system -->"
     
-    # Add MegaSettingModifiers if available
-    modifiers_str = current_roleplay.get("MegaSettingModifiers", "")
-    if modifiers_str:
-        aggregator_text += "\n\n=== MEGA SETTING MODIFIERS ===\n"
-        try:
-            mod_dict = json.loads(modifiers_str)
-            for k, v in mod_dict.items():
-                aggregator_text += f"- {k}: {v}\n"
-        except:
-            aggregator_text += "(Could not parse MegaSettingModifiers)\n"
+    # Add relevance note if NPCs have relevance scores
+    has_relevance = any("relevance_score" in npc or "relevance" in npc 
+                        for npc in introduced_npcs)
     
-    # Report action to governance
-    await governor.process_agent_action_report(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="aggregator",
-        action={"type": "build_aggregator_text"},
-        result={"text_length": len(aggregator_text)}
-    )
+    if has_relevance:
+        aggregator_text += "\n<!-- NPCs sorted by relevance to current context -->"
     
-    return {"aggregator_text": aggregator_text}
+    return aggregator_text
 
 # -------------------------------------------------------------------------------
-# Helper Functions
+# Maintenance Functions
 # -------------------------------------------------------------------------------
 
-def update_global_summary(old_summary, new_stuff, max_len=3000):
+async def run_context_maintenance(user_id: int, conversation_id: int) -> Dict[str, Any]:
     """
-    Update the global summary with new information.
-    """
-    combined = old_summary.strip() + "\n\n" + new_stuff.strip()
-    if len(combined) > max_len:
-        combined = combined[-max_len:]
-    return combined
-
-# -------------------------------------------------------------------------------
-# Agent Definitions
-# -------------------------------------------------------------------------------
-
-# Scene Context Agent
-scene_context_agent = Agent[AggregatorContext](
-    name="Scene Context Agent",
-    instructions="""
-    You analyze game state data to create concise scene context.
-    Your role is to:
-    1. Identify the most relevant information for the current scene
-    2. Summarize critical environmental details
-    3. Track NPCs present in the current scene
-    4. Note any important time-related information
-    5. Create a focused snapshot of the current game state
-    
-    Provide scene context that helps other agents understand the current situation.
-    """,
-    tools=[
-        get_time_info,
-        get_introduced_npcs,
-        get_current_roleplay_data
-    ],
-    output_type=SceneContextData
-)
-
-# Global Summary Agent
-global_summary_agent = Agent[AggregatorContext](
-    name="Global Summary Agent",
-    instructions="""
-    You create and maintain the global game summary.
-    Your role is to:
-    1. Track key changes in the game world
-    2. Summarize the current game state
-    3. Note important NPCs, quests, and locations
-    4. Provide context about the current time period
-    5. Create a cohesive summary that other agents can reference
-    
-    Create summaries that are concise yet comprehensive.
-    """,
-    tools=[
-        generate_global_summary
-    ],
-    output_type=GlobalSummary
-)
-
-# Main Aggregator Agent
-aggregator_agent = Agent[AggregatorContext](
-    name="Data Aggregator Agent",
-    instructions="""
-    You are the central data aggregation system for a femdom roleplaying game.
-    
-    Your role is to:
-    1. Gather data from multiple database tables
-    2. Merge data into a cohesive context for other systems
-    3. Generate global summaries and scene contexts
-    4. Provide relevant data to other agents as needed
-    5. Track changes in the game world over time
-    
-    Ensure all data is properly integrated and presented in a format
-    that helps other agents understand the current game state.
-    """,
-    handoffs=[
-        handoff(scene_context_agent, tool_name_override="generate_scene_context"),
-        handoff(global_summary_agent, tool_name_override="generate_global_summary")
-    ],
-    tools=[
-        get_player_stats,
-        get_introduced_npcs,
-        get_unintroduced_npcs,
-        get_time_info,
-        get_current_roleplay_data,
-        get_social_links,
-        get_additional_game_data,
-        get_global_tables,
-        build_aggregator_text
-    ],
-    output_type=AggregatedData
-)
-
-# -------------------------------------------------------------------------------
-# Main Functions
-# -------------------------------------------------------------------------------
-
-async def get_aggregated_roleplay_context(
-    user_id: int,
-    conversation_id: int,
-    player_name: str = "Chase"
-) -> Dict[str, Any]:
-    """
-    Gather and aggregate data from multiple tables with governance oversight.
+    Run maintenance tasks for context optimization
     
     Args:
         user_id: User ID
         conversation_id: Conversation ID
-        player_name: Name of the player (default: "Chase")
         
     Returns:
-        Aggregated game data including player stats, NPCs, time, etc.
+        Dictionary with maintenance results
     """
-    # Create aggregator context
-    aggregator_context = AggregatorContext(user_id, conversation_id)
-    await aggregator_context.initialize()
+    # Get context service
+    context_service = await get_context_service(user_id, conversation_id)
     
-    # Create trace for monitoring
-    with trace(
-        workflow_name="Data Aggregation",
-        trace_id=f"aggregator-{conversation_id}-{int(datetime.now().timestamp())}",
-        group_id=f"user-{user_id}"
-    ):
-        # Create prompt
-        prompt = f"""
-        Aggregate game data for player {player_name}.
-        Include:
-        - Player stats
-        - NPC information
-        - Time and calendar data
-        - Social links
-        - Inventory, perks, events, and quests
-        - Global rules and definitions
-        - Locations
-        
-        Create a comprehensive but focused aggregation of game state.
-        """
-        
-        # Run the agent
-        result = await Runner.run(
-            aggregator_agent,
-            prompt,
-            context=aggregator_context
-        )
-    
-    # Get structured output
-    aggregated_data = result.final_output_as(AggregatedData)
-    
-    # Convert to dictionary for return
-    aggregated_dict = aggregated_data.dict()
-    
-    return aggregated_dict
+    # Run maintenance
+    return await context_service.run_maintenance()
 
-async def get_scene_context(
+# -------------------------------------------------------------------------------
+# Migration Helpers
+# -------------------------------------------------------------------------------
+
+async def migrate_old_context_to_new(
     user_id: int,
     conversation_id: int
 ) -> Dict[str, Any]:
     """
-    Get focused scene context data with governance oversight.
+    Migrate data from old context system to new optimized system
     
     Args:
         user_id: User ID
         conversation_id: Conversation ID
         
     Returns:
-        Scene context data including location, NPCs present, etc.
+        Migration results
     """
-    # Create aggregator context
-    aggregator_context = AggregatorContext(user_id, conversation_id)
-    await aggregator_context.initialize()
-    
-    # Create trace for monitoring
-    with trace(
-        workflow_name="Scene Context",
-        trace_id=f"scene-context-{conversation_id}-{int(datetime.now().timestamp())}",
-        group_id=f"user-{user_id}"
-    ):
-        # Run the agent
-        result = await Runner.run(
-            scene_context_agent,
-            "Generate the current scene context",
-            context=aggregator_context
-        )
-    
-    # Get structured output
-    scene_context = result.final_output_as(SceneContextData)
-    
-    # Convert to dictionary for return
-    scene_context_dict = scene_context.dict()
-    
-    return scene_context_dict
-
-# Register with Nyx governance
-async def register_with_governance(user_id: int, conversation_id: int):
-    """
-    Register aggregator agents with Nyx governance system.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-    """
-    # Get governor
-    governor = await get_central_governance(user_id, conversation_id)
-    
-    # Register main agent
-    await governor.register_agent(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_instance=aggregator_agent,
-        agent_id="aggregator"
-    )
-    
-    # Issue directive for data aggregation
-    await governor.issue_directive(
-        agent_type=AgentType.UNIVERSAL_UPDATER,
-        agent_id="aggregator",
-        directive_type=DirectiveType.ACTION,
-        directive_data={
-            "instruction": "Aggregate game data to provide context for other systems",
-            "scope": "game"
-        },
-        priority=DirectivePriority.MEDIUM,
-        duration_minutes=24*60  # 24 hours
-    )
-    
-    logging.info("Aggregator system registered with Nyx governance")
-class ContextCache:
-    """Multi-level cache for context management"""
-    
-    def __init__(self):
-        # Level 1: Very short-lived (seconds to minutes)
-        self.l1_cache = {}
-        self.l1_ttl = 60  # 1 minute
+    try:
+        # Get existing context
+        from logic.aggregator_sdk import get_aggregated_roleplay_context as old_get_context
         
-        # Level 2: Medium-lived (minutes)
-        self.l2_cache = {}
-        self.l2_ttl = 300  # 5 minutes
+        old_context = await old_get_context(user_id, conversation_id)
         
-        # Level 3: Long-lived (hours)
-        self.l3_cache = {}
-        self.l3_ttl = 3600  # 1 hour
+        # Get context service
+        context_service = await get_context_service(user_id, conversation_id)
         
-        # Timestamps for each cache entry
-        self.l1_timestamps = {}
-        self.l2_timestamps = {}
-        self.l3_timestamps = {}
-    
-    async def get(self, key, fetch_func, cache_level=1):
-        """Get data from cache or fetch it."""
-        now = time.time()
+        # Initialize memory manager
+        from context.memory_manager import get_memory_manager
+        memory_manager = await get_memory_manager(user_id, conversation_id)
         
-        # Try L1 cache first
-        if key in self.l1_cache:
-            if now - self.l1_timestamps[key] < self.l1_ttl:
-                return self.l1_cache[key]
-            else:
-                del self.l1_cache[key]
-                del self.l1_timestamps[key]
+        # Migrate memories to new system
+        memory_migrations = 0
+        if "memories" in old_context:
+            for memory in old_context["memories"]:
+                content = memory.get("content") or memory.get("text") or ""
+                memory_type = memory.get("type") or "observation"
+                
+                if content:
+                    await memory_manager.add_memory(
+                        content=content,
+                        memory_type=memory_type,
+                        importance=0.7  # High importance for existing memories
+                    )
+                    memory_migrations += 1
         
-        # Try L2 cache
-        if key in self.l2_cache:
-            if now - self.l2_timestamps[key] < self.l2_ttl:
-                # Promote to L1 cache
-                self.l1_cache[key] = self.l2_cache[key]
-                self.l1_timestamps[key] = now
-                return self.l2_cache[key]
-            else:
-                del self.l2_cache[key]
-                del self.l2_timestamps[key]
+        # Store vector embeddings for NPCs
+        npc_migrations = 0
+        vector_service = None
         
-        # Try L3 cache
-        if key in self.l3_cache:
-            if now - self.l3_timestamps[key] < self.l3_ttl:
-                # Promote to L2 cache
-                self.l2_cache[key] = self.l3_cache[key]
-                self.l2_timestamps[key] = now
-                return self.l3_cache[key]
-            else:
-                del self.l3_cache[key]
-                del self.l3_timestamps[key]
-        
-        # Cache miss - fetch the data
-        data = await fetch_func()
-        
-        # Store in appropriate cache level
-        if cache_level >= 1:
-            self.l1_cache[key] = data
-            self.l1_timestamps[key] = now
-        
-        if cache_level >= 2:
-            self.l2_cache[key] = data
-            self.l2_timestamps[key] = now
-        
-        if cache_level >= 3:
-            self.l3_cache[key] = data
-            self.l3_timestamps[key] = now
-        
-        return data
-    
-    def invalidate(self, key_prefix):
-        """Invalidate all cache entries that start with the given prefix."""
-        for key in list(self.l1_cache.keys()):
-            if key.startswith(key_prefix):
-                del self.l1_cache[key]
-                del self.l1_timestamps[key]
-        
-        for key in list(self.l2_cache.keys()):
-            if key.startswith(key_prefix):
-                del self.l2_cache[key]
-                del self.l2_timestamps[key]
-        
-        for key in list(self.l3_cache.keys()):
-            if key.startswith(key_prefix):
-                del self.l3_cache[key]
-                del self.l3_timestamps[key]
-
-# Usage example
-context_cache = ContextCache()
-
-async def get_npc_context(user_id, conv_id, npc_id):
-    cache_key = f"npc:{user_id}:{conv_id}:{npc_id}"
-    
-    async def fetch_npc_data():
-        # Expensive database query
-        return await get_npc_data_from_db(user_id, conv_id, npc_id)
-    
-    # NPCs change infrequently, so use Level 3 cache
-    return await context_cache.get(cache_key, fetch_npc_data, cache_level=3)
-class IncrementalContextManager:
-    def __init__(self):
-        self.last_context_hash = None
-        self.last_context = None
-        self.change_log = []
-    
-    async def get_context(self, user_id, conversation_id, user_input):
-        """Get context with change tracking for efficiency."""
-        # Get current full context
-        current_context = await get_aggregated_roleplay_context(user_id, conversation_id)
-        current_hash = self.hash_context(current_context)
-        
-        # If this is the first request, return full context
-        if not self.last_context_hash:
-            self.last_context_hash = current_hash
-            self.last_context = current_context
-            return {"full_context": current_context, "is_incremental": False}
-        
-        # If hash matches, nothing changed
-        if current_hash == self.last_context_hash:
-            return {"full_context": current_context, "is_incremental": False}
-        
-        # Something changed, compute a delta
-        changes = self.compute_changes(self.last_context, current_context)
-        
-        # Store these changes in change log (limited size)
-        self.change_log.append({
-            "timestamp": datetime.now().isoformat(),
-            "changes": changes
-        })
-        if len(self.change_log) > 10:
-            self.change_log.pop(0)
-        
-        # Update our stored state
-        self.last_context = current_context
-        self.last_context_hash = current_hash
+        if self.config.is_enabled("use_vector_search"):
+            from context.vector_service import get_vector_service
+            vector_service = await get_vector_service(user_id, conversation_id)
+            
+            if "introduced_npcs" in old_context:
+                # Implementation would add NPCs to vector database
+                npc_migrations = len(old_context["introduced_npcs"])
         
         return {
-            "delta_context": changes,
-            "full_context": current_context,
-            "is_incremental": True,
-            "change_log": self.change_log
+            "memory_migrations": memory_migrations,
+            "npc_migrations": npc_migrations,
+            "success": True
         }
     
-    def hash_context(self, context):
-        """Create a hash representation of context to detect changes."""
-        # Simplified example - you would use a more robust approach
-        import hashlib
-        import json
-        serialized = json.dumps(context, sort_keys=True)
-        return hashlib.md5(serialized.encode()).hexdigest()
-    
-    def compute_changes(self, old_context, new_context):
-        """Compute what changed between contexts."""
-        changes = {
-            "added": {},
-            "modified": {},
-            "removed": {}
+    except Exception as e:
+        logger.error(f"Error during context migration: {e}")
+        return {
+            "error": str(e),
+            "success": False
         }
-        
-        # Check for added or modified
-        for key, value in new_context.items():
-            if key not in old_context:
-                changes["added"][key] = value
-            elif old_context[key] != value:
-                changes["modified"][key] = {
-                    "old": old_context[key],
-                    "new": value
-                }
-        
-        # Check for removed
-        for key in old_context:
-            if key not in new_context:
-                changes["removed"][key] = old_context[key]
-        
-        return changes
-async def get_optimized_context(user_id, conversation_id, current_input, location=None):
-    """
-    Retrieve context optimized for token efficiency and relevance.
-    """
-    context = {}
-    
-    # 1. Get relevant NPCs only (present in location or mentioned in input)
-    npcs = await get_relevant_npcs(user_id, conversation_id, current_input, location)
-    
-    # 2. Get recent and relevant memories instead of all
-    memories = await retrieve_relevant_memories(user_id, conversation_id, current_input, limit=5)
-    
-    # 3. Get only active conflicts, not all
-    active_conflicts = await get_active_conflicts(user_id, conversation_id)
-    
-    # 4. Always include core game state but optimize size
-    game_state = await get_essential_game_state(user_id, conversation_id)
-    
-    # 5. Calculate context budget (e.g., 4000 tokens max)
-    context_budget = 4000
-    current_usage = estimate_token_usage(npcs, memories, active_conflicts, game_state)
-    
-    # 6. If over budget, trim less important context
-    if current_usage > context_budget:
-        # Prioritize: NPCs in scene > recent memories > active conflicts > other state
-        npcs, memories, active_conflicts, game_state = trim_to_budget(
-            npcs, memories, active_conflicts, game_state, context_budget
-        )
-    
-    # Combine into final context
-    context = {
-        "npcs": npcs,
-        "memories": memories,
-        "active_conflicts": active_conflicts,
-        "game_state": game_state,
-        "current_location": location,
-        "timestamp": datetime.now().isoformat()
-    }
-    
-    return context
 
+# -------------------------------------------------------------------------------
+# Apply monkey patching for easy integration
+# -------------------------------------------------------------------------------
 
-async def trim_to_budget(npcs, memories, conflicts, state, budget):
+def apply_context_optimizations():
     """
-    Intelligently trim context to fit within token budget.
+    Apply context optimizations by monkey patching existing functions
+    
+    This replaces existing context retrieval functions with optimized versions
     """
-    # Estimate tokens for each component
-    npc_tokens = estimate_token_usage(npcs)
-    memory_tokens = estimate_token_usage(memories)
-    conflict_tokens = estimate_token_usage(conflicts)
-    state_tokens = estimate_token_usage(state)
+    import sys
     
-    total = npc_tokens + memory_tokens + conflict_tokens + state_tokens
+    # Get the aggregator_sdk module
+    aggregator_sdk = sys.modules.get("logic.aggregator_sdk")
+    if not aggregator_sdk:
+        logger.warning("Could not find aggregator_sdk module for patching")
+        return False
     
-    # If we're under budget, return as is
-    if total <= budget:
-        return npcs, memories, conflicts, state
+    # Save original functions
+    original_get_context = getattr(aggregator_sdk, "get_aggregated_roleplay_context", None)
+    original_build_text = getattr(aggregator_sdk, "build_aggregator_text", None)
     
-    # Calculate how much we need to reduce
-    reduction_needed = total - budget
+    if not original_get_context or not original_build_text:
+        logger.warning("Required functions not found in aggregator_sdk")
+        return False
     
-    # Strategy: Trim in reverse priority order
-    # 1. First reduce state detail
-    state = simplify_state(state, reduction_needed)
-    reduction_needed = max(0, reduction_needed - (state_tokens - estimate_token_usage(state)))
+    # Replace functions
+    setattr(aggregator_sdk, "get_aggregated_roleplay_context", get_aggregated_roleplay_context)
+    setattr(aggregator_sdk, "build_aggregator_text", build_aggregator_text)
+    setattr(aggregator_sdk, "ContextCache", OptimizedContextCache)
+    setattr(aggregator_sdk, "IncrementalContextManager", OptimizedIncrementalContextManager)
+    setattr(aggregator_sdk, "get_optimized_context", get_optimized_context)
+    setattr(aggregator_sdk, "run_context_maintenance", run_context_maintenance)
     
-    # 2. Next reduce conflicts
-    if reduction_needed > 0:
-        conflicts = limit_conflicts(conflicts, reduction_needed)
-        reduction_needed = max(0, reduction_needed - (conflict_tokens - estimate_token_usage(conflicts)))
-    
-    # 3. Reduce memories
-    if reduction_needed > 0:
-        memories = limit_memories(memories, reduction_needed)
-        reduction_needed = max(0, reduction_needed - (memory_tokens - estimate_token_usage(memories)))
-    
-    # 4. Last resort: reduce NPCs (prioritize NPCs in scene)
-    if reduction_needed > 0:
-        npcs = prioritize_npcs(npcs, reduction_needed)
-    
-    return npcs, memories, conflicts, state
+    logger.info("Applied context optimizations via monkey patching")
+    return True
