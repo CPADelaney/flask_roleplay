@@ -4,13 +4,13 @@
 Nyx-Integrated Storyteller Agent with Enhanced Context Management
 
 This module implements the Storyteller Agent with enhanced context management,
-fully integrated with the new context system and Nyx central governance system.
+fully integrated with the context system and Nyx central governance system.
 
 Key Enhancements:
-1. Integrated comprehensive context retrieval with vector search
+1. Consistent use of comprehensive context retrieval with vector search
 2. Progressive summarization for memory management
 3. Performance monitoring and token budget management
-4. Consistent delta tracking for efficient updates
+4. Context version tracking for efficient delta updates
 5. Memory system integration for narrative coherence
 """
 
@@ -42,7 +42,7 @@ from nyx.integrate import (
 # Enhanced context system integration
 from context.context_service import get_context_service, get_comprehensive_context
 from context.context_config import get_config
-from context.memory_manager import get_memory_manager
+from context.memory_manager import get_memory_manager, Memory
 from context.vector_service import get_vector_service
 from context.context_manager import get_context_manager, ContextDiff
 from context.performance import PerformanceMonitor, track_performance
@@ -211,7 +211,7 @@ class StorytellerAgent:
             """,
             output_type=UniversalUpdateInput,
             tools=[
-                function_tool(self.get_aggregated_context)
+                function_tool(self.get_comprehensive_context)
             ]
         )
         
@@ -239,9 +239,9 @@ class StorytellerAgent:
             always prioritizing compliance with Nyx's governance framework.
             """,
             tools=[
-                function_tool(self.get_comprehensive_context),  # NEW: Enhanced context retrieval
-                function_tool(self.get_narratively_relevant_content),  # NEW: Vector search
-                function_tool(self.get_summarized_memories),  # NEW: Progressive summarization
+                function_tool(self.get_comprehensive_context),
+                function_tool(self.get_narratively_relevant_content),
+                function_tool(self.get_summarized_memories),
                 function_tool(self.process_npc_responses),
                 function_tool(self.process_time_advancement),
                 function_tool(self.generate_narrative_response),
@@ -259,17 +259,23 @@ class StorytellerAgent:
         # Directive handler for processing Nyx directives
         self.directive_handler = None
         
-        # NEW: Context version tracking
+        # Context version tracking
         self.last_context_version = None
         
-        # NEW: Narrative manager for progressive summarization
+        # Narrative manager for progressive summarization
         self.narrative_manager = None
         
-        # NEW: Performance monitor
+        # Performance monitor
         self.performance_monitor = None
         
-        # NEW: Store previous inputs for continuity
+        # Store previous inputs for continuity
         self.previous_inputs = []
+        
+        # Cache for contextually relevant data
+        self.context_cache = {}
+        
+        # Last retrieval timestamp to know when to invalidate cache
+        self.last_retrieval_time = 0
     
     async def initialize_directive_handler(self, user_id: int, conversation_id: int):
         """Initialize directive handler with comprehensive directive handling"""
@@ -301,7 +307,7 @@ class StorytellerAgent:
         # Start background processing of directives
         await self.directive_handler.start_background_processing()
         
-        # NEW: Initialize narrative manager for progressive summarization
+        # Initialize narrative manager for progressive summarization
         self.narrative_manager = RPGNarrativeManager(
             user_id=user_id,
             conversation_id=conversation_id,
@@ -309,24 +315,121 @@ class StorytellerAgent:
         )
         await self.narrative_manager.initialize()
         
-        # NEW: Initialize performance monitor
+        # Initialize performance monitor
         self.performance_monitor = PerformanceMonitor.get_instance(user_id, conversation_id)
         
-        # NEW: Subscribe to context changes
+        # Subscribe to context changes
         context_manager = get_context_manager()
         context_manager.subscribe_to_changes("/narrative_stage", self.handle_narrative_stage_change)
         context_manager.subscribe_to_changes("/npcs", self.handle_npc_changes)
+        
+        # Initialize context service and memory manager for later use
+        self.context_service = await get_context_service(user_id, conversation_id)
+        self.memory_manager = await get_memory_manager(user_id, conversation_id)
+        self.vector_service = await get_vector_service(user_id, conversation_id)
     
-    # NEW: Context change handlers
     async def handle_narrative_stage_change(self, changes: List[ContextDiff]):
         """Handle changes to the narrative stage"""
         logger.info(f"Narrative stage changed: {changes}")
-        # You could trigger specific behaviors here when the narrative stage changes
-        
+        for change in changes:
+            if change.operation in ("add", "replace"):
+                stage_info = change.value
+                if isinstance(stage_info, dict) and "name" in stage_info:
+                    # Create a memory about the stage change
+                    ctx = type('obj', (object,), {'context': {
+                        'user_id': self.directive_handler.user_id, 
+                        'conversation_id': self.directive_handler.conversation_id
+                    }})
+                    
+                    await self.create_memory_for_nyx(
+                        ctx,
+                        f"Narrative stage progressed to {stage_info['name']}",
+                        "narrative_progression",
+                        0.9  # Very high importance for stage changes
+                    )
+                    
+                    # Add to narrative manager for progressive summarization
+                    if self.narrative_manager:
+                        await self.narrative_manager.add_revelation(
+                            content=f"The narrative has progressed to the {stage_info['name']} stage: {stage_info['description']}",
+                            revelation_type="stage_progression",
+                            importance=0.9,
+                            tags=["narrative_stage", "progression", stage_info['name'].lower().replace(" ", "_")]
+                        )
+                    
+                    # Report to governance
+                    governance = await get_central_governance(
+                        self.directive_handler.user_id, 
+                        self.directive_handler.conversation_id
+                    )
+                    await governance.process_agent_action_report(
+                        agent_type=AgentType.STORY_DIRECTOR,
+                        agent_id="director",
+                        action={"type": "narrative_stage_change"},
+                        result={"new_stage": stage_info["name"]}
+                    )
+                    
+                    # Invalidate all context caches to ensure fresh data with new stage
+                    self.context_cache = {}
+                    self.last_retrieval_time = 0
+                    context_cache.invalidate()
+    
     async def handle_npc_changes(self, changes: List[ContextDiff]):
         """Handle changes to NPCs"""
         logger.info(f"NPC data changed: {changes}")
-        # You could update relationship data or trigger events when NPCs change
+        
+        significant_changes = False
+        npc_names = []
+        details = []
+        
+        for change in changes:
+            if isinstance(change.value, dict) and "npc_name" in change.value:
+                npc_names.append(change.value["npc_name"])
+                
+                # Detect significant changes that should create memories
+                if change.operation == "add":
+                    details.append(f"NPC {change.value['npc_name']} was added")
+                    significant_changes = True
+                elif change.operation == "replace":
+                    # Check for significant stat changes
+                    if (change.old_value and isinstance(change.old_value, dict) and 
+                        isinstance(change.value, dict)):
+                        for key in ["dominance", "cruelty", "closeness", "trust", "respect", "intensity"]:
+                            if (key in change.value and key in change.old_value and 
+                                abs(change.value.get(key, 0) - change.old_value.get(key, 0)) > 10):
+                                details.append(f"{change.value['npc_name']}'s {key} changed significantly")
+                                significant_changes = True
+                                break
+                        
+                        # Location change
+                        if (change.value.get("current_location") != change.old_value.get("current_location") and
+                            change.value.get("current_location") and change.old_value.get("current_location")):
+                            details.append(f"{change.value['npc_name']} moved from {change.old_value.get('current_location')} to {change.value.get('current_location')}")
+                            significant_changes = True
+        
+        # Create a memory for significant changes
+        if significant_changes and npc_names:
+            ctx = type('obj', (object,), {'context': {
+                'user_id': self.directive_handler.user_id, 
+                'conversation_id': self.directive_handler.conversation_id
+            }})
+            
+            memory_content = f"NPC changes detected: {'; '.join(details)}"
+            
+            await self.create_memory_for_nyx(
+                ctx,
+                memory_content,
+                "npc_change",
+                0.7
+            )
+            
+            # Add to narrative manager for progressive summarization
+            if self.narrative_manager:
+                await self.narrative_manager.add_interaction(
+                    content=memory_content,
+                    importance=0.6,
+                    tags=["npc_change"] + [name.lower().replace(" ", "_") for name in npc_names]
+                )
     
     async def handle_action_directive(self, directive: dict) -> dict:
         """Handle an action directive from Nyx"""
@@ -594,7 +697,7 @@ class StorytellerAgent:
                 tags=[memory_type, "storyteller_memory"]
             )
             
-            # NEW: Also add to context memory system
+            # Also add to context memory system
             memory_manager = await get_memory_manager(user_id, conversation_id)
             importance = significance / 10.0  # Convert 1-10 to 0.0-1.0
             
@@ -606,13 +709,18 @@ class StorytellerAgent:
                 metadata={"source": "storyteller", "significance": significance}
             )
             
-            # NEW: Also add to narrative summarizer for progressive summarization
+            # Also add to narrative summarizer for progressive summarization
             if self.narrative_manager:
                 await self.narrative_manager.add_interaction(
                     content=memory_text,
                     importance=importance,
                     tags=[memory_type, "storyteller_memory"]
                 )
+            
+            # Since we're creating a new memory, we should invalidate any cached contexts
+            # that might need this new information
+            self.context_cache = {}
+            self.last_retrieval_time = 0
             
             return {
                 "nyx_result": nyx_result,
@@ -648,7 +756,7 @@ class StorytellerAgent:
         conversation_id = ctx.context["conversation_id"]
         
         try:
-            # NEW: Try context system first for semantic search
+            # Try context system first for semantic search
             memory_manager = await get_memory_manager(user_id, conversation_id)
             context_memories = await memory_manager.search_memories(
                 query_text=query or context_text or "",
@@ -658,8 +766,15 @@ class StorytellerAgent:
             
             # If we got good results from context system, use them
             if context_memories and len(context_memories) > 0:
+                memory_dicts = []
+                for memory in context_memories:
+                    if hasattr(memory, 'to_dict'):
+                        memory_dicts.append(memory.to_dict())
+                    else:
+                        memory_dicts.append(memory)
+                        
                 return {
-                    "memories": [mem.to_dict() for mem in context_memories],
+                    "memories": memory_dicts,
                     "source": "context_system"
                 }
             
@@ -682,12 +797,12 @@ class StorytellerAgent:
                 "memories": []
             }
     
-    # NEW: Enhanced context retrieval methods
+    # Enhanced context retrieval methods
     
     @with_governance_permission(AgentType.STORY_DIRECTOR, "get_comprehensive_context")
     async def get_comprehensive_context(self, ctx, user_input: str = "") -> Dict[str, Any]:
         """
-        Get comprehensive game context using the new context system.
+        Get comprehensive game context using the context system.
         
         Args:
             user_input: Current user input for relevance scoring
@@ -698,12 +813,24 @@ class StorytellerAgent:
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
+        # Check if we have a recent cached context to avoid redundant retrievals
+        cache_key = f"comprehensive_context:{user_input[:50]}"
+        current_time = time.time()
+        
+        # Cache context for 10 seconds to prevent redundant retrievals in the same turn
+        if (cache_key in self.context_cache and 
+            current_time - self.last_retrieval_time < 10):
+            return self.context_cache[cache_key]
+        
         # Start timer for performance tracking
-        timer_id = self.performance_monitor.start_timer("get_comprehensive_context")
+        timer_id = None
+        if self.performance_monitor:
+            timer_id = self.performance_monitor.start_timer("get_comprehensive_context")
         
         try:
             # Get context service
-            context_service = await get_context_service(user_id, conversation_id)
+            if not hasattr(self, 'context_service') or not self.context_service:
+                self.context_service = await get_context_service(user_id, conversation_id)
             
             # Get configuration
             config = get_config()
@@ -713,7 +840,7 @@ class StorytellerAgent:
             
             # Get comprehensive context with optional delta tracking
             if self.last_context_version is not None and use_delta:
-                context_result = await context_service.get_context(
+                context_result = await self.context_service.get_context(
                     input_text=user_input,
                     context_budget=context_budget,
                     use_vector_search=use_vector_search,
@@ -726,7 +853,7 @@ class StorytellerAgent:
                     self.last_context_version = context_result["version"]
             else:
                 # First retrieval - get full context
-                context_result = await context_service.get_context(
+                context_result = await self.context_service.get_context(
                     input_text=user_input,
                     context_budget=context_budget,
                     use_vector_search=use_vector_search,
@@ -743,11 +870,16 @@ class StorytellerAgent:
             # Build aggregator text for easy use
             formatted_context["aggregator_text"] = build_aggregator_text(formatted_context)
             
+            # Cache the context
+            self.context_cache[cache_key] = formatted_context
+            self.last_retrieval_time = current_time
+            
             return formatted_context
         finally:
             # Stop timer
-            elapsed = self.performance_monitor.stop_timer(timer_id)
-            logger.info(f"Comprehensive context retrieval took {elapsed:.3f}s")
+            if timer_id and self.performance_monitor:
+                elapsed = self.performance_monitor.stop_timer(timer_id)
+                logger.info(f"Comprehensive context retrieval took {elapsed:.3f}s")
     
     @with_governance_permission(AgentType.STORY_DIRECTOR, "get_aggregated_context")
     async def get_aggregated_context(self, ctx, conversation_id=None, player_name="Chase"):
@@ -767,15 +899,22 @@ class StorytellerAgent:
         # Get current input from context if available for better relevance
         current_input = ctx.context.get("user_input", "")
         
-        # Get context
-        aggregator_data = await get_aggregated_roleplay_context(
-            user_id, 
-            conv_id, 
-            player_name,
-            current_input=current_input  # Pass current input for relevance
-        )
-        
-        return aggregator_data
+        # Try to use the more comprehensive context system first
+        try:
+            context = await self.get_comprehensive_context(ctx, current_input)
+            return context
+        except Exception as e:
+            logger.warning(f"Error getting comprehensive context, falling back to legacy system: {e}")
+            
+            # Fallback to legacy system
+            aggregator_data = await get_aggregated_roleplay_context(
+                user_id, 
+                conv_id, 
+                player_name,
+                current_input=current_input
+            )
+            
+            return aggregator_data
     
     @with_governance_permission(AgentType.STORY_DIRECTOR, "get_narratively_relevant_content")
     async def get_narratively_relevant_content(
@@ -797,11 +936,21 @@ class StorytellerAgent:
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
+        # Cache key for this particular query
+        cache_key = f"vector_search:{query_text[:50]}:{narrative_stage}"
+        current_time = time.time()
+        
+        # Use cached results if recent (last 30 seconds)
+        if (cache_key in self.context_cache and 
+            current_time - self.last_retrieval_time < 30):
+            return self.context_cache[cache_key]
+        
         # Get vector service
-        vector_service = await get_vector_service(user_id, conversation_id)
+        if not hasattr(self, 'vector_service') or not self.vector_service:
+            self.vector_service = await get_vector_service(user_id, conversation_id)
         
         # If no vector search, return empty
-        if not vector_service.enabled:
+        if not self.vector_service.enabled:
             return []
         
         # Enhance query with narrative stage if provided
@@ -810,12 +959,15 @@ class StorytellerAgent:
             enhanced_query = f"{query_text} [Stage: {narrative_stage}]"
         
         # Get relevant items across multiple entity types
-        results = await vector_service.search_entities(
+        results = await self.vector_service.search_entities(
             query_text=enhanced_query,
             entity_types=["npc", "memory", "narrative", "location"],
             top_k=5,
             hybrid_ranking=True
         )
+        
+        # Cache the results
+        self.context_cache[cache_key] = results
         
         return results
     
@@ -841,20 +993,44 @@ class StorytellerAgent:
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
+        # Cache key for this query
+        cache_key = f"summarized_memories:{query_text[:50]}:{summary_level}:{max_tokens}"
+        current_time = time.time()
+        
+        # Use cached results if recent (last 20 seconds)
+        if (cache_key in self.context_cache and 
+            current_time - self.last_retrieval_time < 20):
+            return self.context_cache[cache_key]
+        
         # Use narrative manager's optimized context
-        if self.narrative_manager:
-            optimal_context = await self.narrative_manager.get_optimal_narrative_context(
-                query=query_text or "",
-                max_tokens=max_tokens
+        if not hasattr(self, 'narrative_manager') or not self.narrative_manager:
+            self.narrative_manager = RPGNarrativeManager(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                db_connection_string=DB_DSN
             )
-            
-            return optimal_context
+            await self.narrative_manager.initialize()
+        
+        if self.narrative_manager:
+            try:
+                optimal_context = await self.narrative_manager.get_optimal_narrative_context(
+                    query=query_text or "",
+                    max_tokens=max_tokens
+                )
+                
+                # Cache the results
+                self.context_cache[cache_key] = optimal_context
+                
+                return optimal_context
+            except Exception as e:
+                logger.warning(f"Error getting optimal narrative context: {e}")
         
         # Fallback to memory manager if narrative manager unavailable
-        memory_manager = await get_memory_manager(user_id, conversation_id)
+        if not hasattr(self, 'memory_manager') or not self.memory_manager:
+            self.memory_manager = await get_memory_manager(user_id, conversation_id)
         
         # Search for relevant memories
-        memories = await memory_manager.search_memories(
+        memories = await self.memory_manager.search_memories(
             query_text=query_text or "",
             limit=10,
             use_vector=True
@@ -884,11 +1060,16 @@ class StorytellerAgent:
             
             memory_list.append(memory_dict)
         
-        return {
+        result = {
             "memories": memory_list,
             "query": query_text,
             "total_memories": len(memory_list)
         }
+        
+        # Cache the results
+        self.context_cache[cache_key] = result
+        
+        return result
     
     @with_governance_permission(AgentType.STORY_DIRECTOR, "get_nearby_npcs")
     async def get_nearby_npcs(self, ctx, location=None):
@@ -904,6 +1085,52 @@ class StorytellerAgent:
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
+        # Try to get from comprehensive context first for better integration
+        try:
+            comprehensive_context = await self.get_comprehensive_context(ctx)
+            npcs = comprehensive_context.get("introduced_npcs", [])
+            
+            # Filter by location if specified
+            if location:
+                nearby_npcs = [
+                    npc for npc in npcs 
+                    if npc.get("current_location") == location
+                ]
+            else:
+                nearby_npcs = npcs[:5]  # Limit to 5 if no location filter
+                
+            # Format appropriately
+            result = []
+            for npc in nearby_npcs:
+                formatted_npc = {
+                    "npc_id": npc.get("npc_id"),
+                    "npc_name": npc.get("npc_name"),
+                    "current_location": npc.get("current_location"),
+                    "dominance": npc.get("dominance"),
+                    "cruelty": npc.get("cruelty"),
+                }
+                
+                # Add archetypes and memories if available
+                if "archetypes" in npc:
+                    formatted_npc["archetypes"] = npc["archetypes"]
+                else:
+                    formatted_npc["archetypes"] = []
+                
+                if "memory" in npc:
+                    formatted_npc["recent_memories"] = npc["memory"][:3] if isinstance(npc["memory"], list) else []
+                else:
+                    formatted_npc["recent_memories"] = []
+                
+                result.append(formatted_npc)
+                
+            # If we found NPCs, return them
+            if result:
+                return result
+                
+        except Exception as e:
+            logger.warning(f"Error getting NPCs from context system: {e}, falling back to database")
+        
+        # Fallback to direct database query
         conn = await asyncpg.connect(dsn=DB_DSN)
         try:
             if location:
@@ -963,6 +1190,26 @@ class StorytellerAgent:
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
+        # Try to get from context system first
+        try:
+            comprehensive_context = await self.get_comprehensive_context(ctx)
+            
+            # Extract time info from context
+            time_info = comprehensive_context.get("time_info", {})
+            current_roleplay = comprehensive_context.get("current_roleplay", {})
+            
+            if time_info:
+                year = int(time_info.get("year", "1")) if time_info.get("year", "").isdigit() else 1
+                month = int(time_info.get("month", "1")) if time_info.get("month", "").isdigit() else 1
+                day = int(time_info.get("day", "1")) if time_info.get("day", "").isdigit() else 1
+                time_of_day = time_info.get("time_of_day", "Morning")
+                
+                return year, month, day, time_of_day
+                
+        except Exception as e:
+            logger.warning(f"Error getting time from context system: {e}, falling back to database")
+        
+        # Fallback to direct database query
         conn = await asyncpg.connect(dsn=DB_DSN)
         try:
             year, month, day, time_of_day = 1, 1, 1, "Morning"
@@ -1006,7 +1253,9 @@ class StorytellerAgent:
             List of NPC responses
         """
         # Start timer for performance tracking
-        timer_id = self.performance_monitor.start_timer("process_npc_responses")
+        timer_id = None
+        if self.performance_monitor:
+            timer_id = self.performance_monitor.start_timer("process_npc_responses")
         
         try:
             # If there's an override action from a directive, apply it
@@ -1024,20 +1273,38 @@ class StorytellerAgent:
             if not nearby_npcs:
                 return []
             
-            # NEW: Get context using comprehensive system
+            # Get context using comprehensive system
             context_data = await self.get_comprehensive_context(ctx, user_input)
             
-            # NEW: Get relevant memories for each NPC
+            # Get relevant memories for each NPC
             for i, npc in enumerate(nearby_npcs):
-                # Only get memories if we have a narrative manager
-                if self.narrative_manager:
-                    memories = await self.narrative_manager.get_npc_interaction_history(
-                        npc_name=npc["npc_name"],
-                        max_events=3,
-                        summary_level=SummaryLevel.CONDENSED
+                # Get memories for this NPC using vector search
+                if not hasattr(self, 'memory_manager') or not self.memory_manager:
+                    self.memory_manager = await get_memory_manager(
+                        ctx.context["user_id"], 
+                        ctx.context["conversation_id"]
                     )
-                    
-                    nearby_npcs[i]["interaction_history"] = memories
+                
+                # Try to get memories related to this NPC with vector search
+                npc_name = npc["npc_name"]
+                npc_query = f"{npc_name} interaction with player"
+                memories = await self.memory_manager.search_memories(
+                    query_text=npc_query,
+                    tags=[npc_name.lower().replace(" ", "_")],
+                    limit=3,
+                    use_vector=True
+                )
+                
+                # Format memories
+                memory_content = []
+                for memory in memories:
+                    if hasattr(memory, 'content'):
+                        memory_content.append(memory.content)
+                    elif isinstance(memory, dict) and 'content' in memory:
+                        memory_content.append(memory['content'])
+                
+                # Add memories to NPC data
+                nearby_npcs[i]["interaction_history"] = memory_content
             
             # Create prompt for the NPC handler
             prompt = f"""
@@ -1053,7 +1320,7 @@ class StorytellerAgent:
             - Relate to the player's input or activity
             - Include subtle hints of control where appropriate
             - Consider the NPC's recent memories and interaction history
-          """
+            """
             
             # Run the NPC handler
             result = await Runner.run(
@@ -1077,8 +1344,9 @@ class StorytellerAgent:
             return npc_responses
         finally:
             # Stop timer
-            elapsed = self.performance_monitor.stop_timer(timer_id)
-            logger.info(f"NPC response processing took {elapsed:.3f}s")
+            if timer_id and self.performance_monitor:
+                elapsed = self.performance_monitor.stop_timer(timer_id)
+                logger.info(f"NPC response processing took {elapsed:.3f}s")
     
     @with_governance(
         agent_type=AgentType.STORY_DIRECTOR,
@@ -1097,7 +1365,9 @@ class StorytellerAgent:
             Time advancement results
         """
         # Start timer for performance tracking
-        timer_id = self.performance_monitor.start_timer("process_time_advancement")
+        timer_id = None
+        if self.performance_monitor:
+            timer_id = self.performance_monitor.start_timer("process_time_advancement")
         
         try:
             # If there's an override action from a directive, apply it
@@ -1113,7 +1383,7 @@ class StorytellerAgent:
             # Get current time
             year, month, day, time_of_day = await self.get_current_game_time(ctx)
             
-            # NEW: Consider context when determining time advancement
+            # Consider context when determining time advancement
             context_data = await self.get_comprehensive_context(ctx)
             npc_count = len(context_data.get("introduced_npcs", []))
             
@@ -1172,6 +1442,11 @@ class StorytellerAgent:
                         5
                     )
                     
+                    # Invalidate context cache since time changed
+                    self.context_cache = {}
+                    self.last_retrieval_time = 0
+                    context_cache.invalidate("time_info")
+                    
                     # If time advanced to a new day's morning, run maintenance
                     if new_time_of_day == "Morning" and new_day > day:
                         await nightly_maintenance(user_id, conversation_id)
@@ -1190,8 +1465,9 @@ class StorytellerAgent:
             return time_result
         finally:
             # Stop timer
-            elapsed = self.performance_monitor.stop_timer(timer_id)
-            logger.info(f"Time advancement processing took {elapsed:.3f}s")
+            if timer_id and self.performance_monitor:
+                elapsed = self.performance_monitor.stop_timer(timer_id)
+                logger.info(f"Time advancement processing took {elapsed:.3f}s")
     
     @with_governance_permission(AgentType.STORY_DIRECTOR, "check_for_addiction_status")
     async def check_for_addiction_status(self, ctx):
@@ -1224,6 +1500,17 @@ class StorytellerAgent:
         user_id = ctx.context["user_id"]
         conversation_id = ctx.context["conversation_id"]
         
+        # Try to get from context system first
+        try:
+            comprehensive_context = await self.get_comprehensive_context(ctx)
+            
+            # Check if context already has crossroads info
+            if "relationship_crossroads" in comprehensive_context:
+                return comprehensive_context["relationship_crossroads"]
+        except Exception as e:
+            logger.warning(f"Error getting crossroads from context: {e}")
+        
+        # Fallback to direct database query
         conn = await asyncpg.connect(dsn=DB_DSN)
         try:
             rows = await conn.fetch("""
@@ -1278,7 +1565,9 @@ class StorytellerAgent:
             Narrative response
         """
         # Start timer for performance tracking
-        timer_id = self.performance_monitor.start_timer("generate_narrative_response")
+        timer_id = None
+        if self.performance_monitor:
+            timer_id = self.performance_monitor.start_timer("generate_narrative_response")
         
         try:
             # If there's an override action from a directive, apply it
@@ -1327,7 +1616,7 @@ class StorytellerAgent:
                 for cr in crossroads:
                     crossroads_text += f"- Link {cr['link_id']}: {cr['crossroads'].get('name', 'Unnamed crossroads')}\n"
             
-            # NEW: Get narratively relevant content using vector search
+            # Get narratively relevant content using vector search
             relevant_content = await self.get_narratively_relevant_content(
                 ctx,
                 user_input,
@@ -1343,7 +1632,7 @@ class StorytellerAgent:
                     if content:
                         relevant_content_text += f"- {entity_type.capitalize()}: {content[:100]}...\n"
             
-            # NEW: Get summarized memories relevant to the current input
+            # Get summarized memories relevant to the current input
             memory_context = await self.get_summarized_memories(
                 ctx,
                 query_text=user_input,
@@ -1357,7 +1646,7 @@ class StorytellerAgent:
                     if isinstance(mem, dict) and "content" in mem:
                         memory_text += f"- {mem['content'][:100]}...\n"
             
-            # NEW: Get token budget for narrative
+            # Get token budget for narrative
             config = get_config()
             narrative_budget = config.get_token_budget("narrative") or 2000
             
@@ -1424,7 +1713,7 @@ class StorytellerAgent:
                 5
             )
             
-            # NEW: Add to narrative manager for progressive summarization
+            # Add to narrative manager for progressive summarization
             if self.narrative_manager:
                 await self.narrative_manager.add_interaction(
                     content=f"Player: {user_input}\n\nNarrator: {narrative_response.message[:200]}...",
@@ -1437,8 +1726,9 @@ class StorytellerAgent:
             return narrative_response
         finally:
             # Stop timer
-            elapsed = self.performance_monitor.stop_timer(timer_id)
-            logger.info(f"Narrative response generation took {elapsed:.3f}s")
+            if timer_id and self.performance_monitor:
+                elapsed = self.performance_monitor.stop_timer(timer_id)
+                logger.info(f"Narrative response generation took {elapsed:.3f}s")
     
     @with_governance(
         agent_type=AgentType.STORY_DIRECTOR,
@@ -1457,16 +1747,18 @@ class StorytellerAgent:
             Update results
         """
         # Start timer for performance tracking
-        timer_id = self.performance_monitor.start_timer("apply_universal_updates")
+        timer_id = None
+        if self.performance_monitor:
+            timer_id = self.performance_monitor.start_timer("apply_universal_updates")
         
         try:
             user_id = ctx.context["user_id"]
             conversation_id = ctx.context["conversation_id"]
             
             # Create prompt for the universal updater
-            aggregator_data = await self.get_comprehensive_context(ctx)
+            comprehensive_context = await self.get_comprehensive_context(ctx)
             
-            # NEW: Get relevant memories to use for update context
+            # Get relevant memories to use for update context
             memory_context = await self.get_summarized_memories(
                 ctx,
                 query_text=narrative_response.message,
@@ -1547,16 +1839,22 @@ class StorytellerAgent:
                     4
                 )
                 
-                # NEW: Invalidate context cache to reflect updates
-                context_cache.invalidate("base_context")
+                # Invalidate context cache to reflect updates
+                self.context_cache = {}
+                self.last_retrieval_time = 0
+                context_cache.invalidate()
+                
+                # Reset context version to force full refresh next time
+                self.last_context_version = None
                 
                 return update_result
             finally:
                 await conn.close()
         finally:
             # Stop timer
-            elapsed = self.performance_monitor.stop_timer(timer_id)
-            logger.info(f"Universal updates took {elapsed:.3f}s")
+            if timer_id and self.performance_monitor:
+                elapsed = self.performance_monitor.stop_timer(timer_id)
+                logger.info(f"Universal updates took {elapsed:.3f}s")
     
     @with_governance(
         agent_type=AgentType.STORY_DIRECTOR,
@@ -1574,7 +1872,9 @@ class StorytellerAgent:
             Image generation results
         """
         # Start timer for performance tracking
-        timer_id = self.performance_monitor.start_timer("generate_image")
+        timer_id = None
+        if self.performance_monitor:
+            timer_id = self.performance_monitor.start_timer("generate_image")
         
         try:
             # If image generation not requested, don't proceed
@@ -1630,8 +1930,9 @@ class StorytellerAgent:
                 return {"generated": False, "error": str(e)}
         finally:
             # Stop timer
-            elapsed = self.performance_monitor.stop_timer(timer_id)
-            logger.info(f"Image generation took {elapsed:.3f}s")
+            if timer_id and self.performance_monitor:
+                elapsed = self.performance_monitor.stop_timer(timer_id)
+                logger.info(f"Image generation took {elapsed:.3f}s")
     
     @with_governance_permission(AgentType.STORY_DIRECTOR, "store_message")
     async def store_message(self, ctx, sender, content):
@@ -1798,7 +2099,7 @@ class StorytellerAgent:
             # 14. Build and return the final response
             tracker.start_phase("build_response")
             
-            # NEW: Get performance metrics
+            # Get performance metrics
             performance_metrics = self.performance_monitor.get_metrics()
             
             response = {
@@ -1809,7 +2110,6 @@ class StorytellerAgent:
                 "npc_responses": [resp.dict() for resp in npc_responses],
                 "performance_metrics": {**tracker.get_metrics(), **performance_metrics},
                 "governance_approved": True,
-                # NEW: Indicate these came from integrated context system
                 "context_source": "integrated_system",
                 "context_version": self.last_context_version
             }
