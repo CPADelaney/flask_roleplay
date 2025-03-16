@@ -1,10 +1,5 @@
 # context/memory_manager.py
 
-"""
-Integrated Memory Manager that combines memory consolidation, prioritization,
-retrieval, and storage for efficient long-term game management.
-"""
-
 import asyncio
 import logging
 import json
@@ -13,6 +8,8 @@ import math
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Union, Tuple, Set
 import hashlib
+import copy
+import numpy as np
 
 from context.unified_cache import context_cache
 from context.context_config import get_config
@@ -20,69 +17,9 @@ from context.vector_service import get_vector_service
 
 logger = logging.getLogger(__name__)
 
-class MemoryImportance:
-    """Utility class for scoring memory importance"""
-    
-    @staticmethod
-    def score_memory(
-        memory_content: str,
-        memory_type: str,
-        recency: float,
-        access_count: int
-    ) -> float:
-        """
-        Score a memory's importance based on various factors
-        
-        Args:
-            memory_content: The text content
-            memory_type: Type of memory (observation, event, etc.)
-            recency: How recent (0-1, 1 being very recent)
-            access_count: How many times this has been accessed
-            
-        Returns:
-            Importance score from 0-1
-        """
-        # Base score by type
-        type_scores = {
-            "observation": 0.3,
-            "event": 0.5,
-            "scene": 0.4,
-            "decision": 0.6,
-            "character_development": 0.7,
-            "game_mechanic": 0.5,
-            "quest": 0.8
-        }
-        type_score = type_scores.get(memory_type, 0.4)
-        
-        # Content-based score
-        content_score = min(1.0, len(memory_content) / 500) * 0.2
-        
-        # Text-based importance markers
-        important_terms = [
-            "vital", "important", "critical", "key", "crucial", 
-            "significant", "essential", "fundamental", "pivotal"
-        ]
-        term_score = 0.0
-        for term in important_terms:
-            if term in memory_content.lower():
-                term_score += 0.1
-        term_score = min(0.3, term_score)
-        
-        # Recency factor
-        recency_score = recency * 0.2
-        
-        # Access count factor (with diminishing returns)
-        access_score = min(0.3, 0.05 * math.log(1 + access_count))
-        
-        # Combine scores
-        total_score = type_score + content_score + term_score + recency_score + access_score
-        
-        # Normalize to 0-1
-        return min(1.0, total_score)
-
 class Memory:
     """
-    Enhanced representation of a memory with metadata
+    Unified memory representation with metadata and embeddings
     """
     
     def __init__(
@@ -94,10 +31,9 @@ class Memory:
         importance: float = 0.5,
         access_count: int = 0,
         last_accessed: Optional[datetime] = None,
-        tags: List[str] = None,
-        vector_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
         embedding: Optional[List[float]] = None,
-        metadata: Dict[str, Any] = None
+        metadata: Optional[Dict[str, Any]] = None
     ):
         self.memory_id = memory_id
         self.content = content
@@ -107,10 +43,10 @@ class Memory:
         self.access_count = access_count
         self.last_accessed = last_accessed or self.created_at
         self.tags = tags or []
-        self.vector_id = vector_id
         self.embedding = embedding
         self.metadata = metadata or {}
-        
+        self.token_count = None
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
         result = {
@@ -122,88 +58,125 @@ class Memory:
             "access_count": self.access_count,
             "last_accessed": self.last_accessed.isoformat(),
             "tags": self.tags,
-            "metadata": self.metadata
+            "metadata": self.metadata,
+            "token_count": self.token_count
         }
         
-        # Only include embedding if available
         if self.embedding:
             result["embedding"] = self.embedding
         
-        if self.vector_id:
-            result["vector_id"] = self.vector_id
-            
         return result
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Memory':
         """Create from dictionary"""
-        return cls(
+        timestamp = datetime.fromisoformat(data["created_at"]) if isinstance(data["created_at"], str) else data["created_at"]
+        last_accessed = datetime.fromisoformat(data["last_accessed"]) if isinstance(data["last_accessed"], str) else data["last_accessed"]
+        
+        memory = cls(
             memory_id=data["memory_id"],
             content=data["content"],
             memory_type=data["memory_type"],
-            created_at=datetime.fromisoformat(data["created_at"]) if isinstance(data["created_at"], str) else data["created_at"],
-            importance=data["importance"],
-            access_count=data["access_count"],
-            last_accessed=datetime.fromisoformat(data["last_accessed"]) if isinstance(data["last_accessed"], str) else data["last_accessed"],
+            created_at=timestamp,
+            importance=data.get("importance", 0.5),
+            access_count=data.get("access_count", 0),
+            last_accessed=last_accessed,
             tags=data.get("tags", []),
-            vector_id=data.get("vector_id"),
             embedding=data.get("embedding"),
             metadata=data.get("metadata", {})
         )
+        memory.token_count = data.get("token_count")
+        return memory
     
     def access(self) -> None:
         """Record an access to this memory"""
         self.access_count += 1
         self.last_accessed = datetime.now()
     
-    def get_recency(self) -> float:
+    def get_recency_score(self) -> float:
         """
-        Get recency score (0-1)
+        Get recency score (0.0 to 1.0)
         1.0 = very recent, 0.0 = very old
         """
         now = datetime.now()
-        age = (now - self.created_at).total_seconds()
+        age_days = (now - self.created_at).days
         
-        # Scale recency - exponential decay over 30 days
-        decay_factor = 2592000  # 30 days in seconds
-        recency = math.exp(-age / decay_factor)
-        
-        return recency
+        # Items from the past day get a high score
+        if age_days < 1:
+            return 1.0
+        # Score decreases over 30 days
+        elif age_days < 30:
+            return 1.0 - (age_days / 30)
+        else:
+            return 0.0
     
     def calculate_importance(self) -> float:
         """Calculate and update the importance score"""
-        recency = self.get_recency()
+        # Base score by type
+        type_scores = {
+            "observation": 0.3,
+            "event": 0.5,
+            "scene": 0.4,
+            "decision": 0.6,
+            "character_development": 0.7,
+            "game_mechanic": 0.5,
+            "quest": 0.8,
+            "summary": 0.7
+        }
+        type_score = type_scores.get(self.memory_type, 0.4)
         
-        # Score memory based on multiple factors
-        score = MemoryImportance.score_memory(
-            self.content,
-            self.memory_type,
-            recency,
-            self.access_count
+        # Recency score
+        recency = self.get_recency_score()
+        
+        # Access score (with diminishing returns)
+        access_score = min(0.3, 0.05 * math.log(1 + self.access_count))
+        
+        # Content-based importance
+        content_score = 0.0
+        if self.content:
+            # Length factor (longer tends to be more important, but with diminishing returns)
+            content_score += min(0.3, len(self.content) / 1000)
+            
+            # Important terms
+            important_terms = [
+                "vital", "important", "critical", "key", "crucial", 
+                "significant", "essential", "fundamental", "pivotal"
+            ]
+            if any(term in self.content.lower() for term in important_terms):
+                content_score += 0.2
+        
+        # Combine scores with weights
+        final_score = (
+            (type_score * 0.3) + 
+            (recency * 0.3) + 
+            (access_score * 0.2) + 
+            (content_score * 0.2)
         )
         
         # Update importance
-        self.importance = score
+        self.importance = min(1.0, final_score)
         
-        return score
+        return self.importance
+
 
 class MemoryManager:
     """
-    Integrated memory manager that combines various memory features
+    Integrated memory manager that combines memory storage, retrieval, and consolidation
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.config = get_config()
-        self.memories = {}  # In-memory cache of recent memories
+        self.memories = {}  # In-memory cache of recent/important memories
+        self.memory_index = {}  # Indices for efficient lookup
         self.consolidation_task = None
         self.maintenance_interval = self.config.get(
             "memory_consolidation", "consolidation_interval_hours", 24
         ) * 3600  # Convert to seconds
         self.last_maintenance = time.time()
         self.is_initialized = False
-        
+    
     async def initialize(self):
         """Initialize the memory manager"""
         if self.is_initialized:
@@ -218,6 +191,19 @@ class MemoryManager:
         
         self.is_initialized = True
         logger.info(f"Initialized memory manager for user {self.user_id}, conversation {self.conversation_id}")
+    
+    async def close(self):
+        """Close the memory manager"""
+        if self.consolidation_task:
+            self.consolidation_task.cancel()
+            try:
+                await self.consolidation_task
+            except asyncio.CancelledError:
+                pass
+            self.consolidation_task = None
+        
+        self.is_initialized = False
+        logger.info(f"Closed memory manager for user {self.user_id}, conversation {self.conversation_id}")
     
     async def _run_maintenance_loop(self):
         """Run the maintenance loop in the background"""
@@ -234,19 +220,6 @@ class MemoryManager:
         except asyncio.CancelledError:
             # Task cancelled
             logger.info(f"Memory maintenance task cancelled for user {self.user_id}")
-    
-    async def close(self):
-        """Close the memory manager"""
-        if self.consolidation_task:
-            self.consolidation_task.cancel()
-            try:
-                await self.consolidation_task
-            except asyncio.CancelledError:
-                pass
-            self.consolidation_task = None
-        
-        self.is_initialized = False
-        logger.info(f"Closed memory manager for user {self.user_id}, conversation {self.conversation_id}")
     
     async def _load_important_memories(self):
         """Load important memories into local cache"""
@@ -326,15 +299,48 @@ class MemoryManager:
         # Store in local cache
         self.memories = memories
         
+        # Build indices
+        self._build_memory_indices()
+        
         return len(memories)
+    
+    def _build_memory_indices(self):
+        """Build memory indices for efficient lookup"""
+        # Reset indices
+        self.memory_index = {
+            "type": {},
+            "tag": {},
+            "timestamp": []
+        }
+        
+        # Build type index
+        for memory_id, memory in self.memories.items():
+            # Type index
+            memory_type = memory.memory_type
+            if memory_type not in self.memory_index["type"]:
+                self.memory_index["type"][memory_type] = set()
+            self.memory_index["type"][memory_type].add(memory_id)
+            
+            # Tag index
+            for tag in memory.tags:
+                if tag not in self.memory_index["tag"]:
+                    self.memory_index["tag"][tag] = set()
+                self.memory_index["tag"][tag].add(memory_id)
+            
+            # Timestamp index (sorted by created_at)
+            self.memory_index["timestamp"].append((memory.created_at, memory_id))
+        
+        # Sort timestamp index
+        self.memory_index["timestamp"].sort(reverse=True)
     
     async def add_memory(
         self,
         content: str,
         memory_type: str = "observation",
         importance: Optional[float] = None,
-        tags: List[str] = None,
-        metadata: Dict[str, Any] = None
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        store_vector: bool = True
     ) -> str:
         """
         Add a new memory with vector storage integration
@@ -345,6 +351,7 @@ class MemoryManager:
             importance: Optional importance override (auto-calculated if None)
             tags: Optional tags
             metadata: Optional additional metadata
+            store_vector: Whether to store in vector database
             
         Returns:
             Memory ID
@@ -401,11 +408,12 @@ class MemoryManager:
                 memory.memory_id = str(db_id)
                 
                 # If the memory is important, store in local cache
-                if importance >= 0.7:
+                if importance >= 0.5:
                     self.memories[memory.memory_id] = memory
+                    self._build_memory_indices()
                 
                 # Store vector embedding if vector search is enabled
-                if self.config.is_enabled("use_vector_search"):
+                if store_vector and self.config.is_enabled("use_vector_search"):
                     # Get vector service
                     vector_service = await get_vector_service(self.user_id, self.conversation_id)
                     
@@ -504,6 +512,7 @@ class MemoryManager:
                     # If important, store in local cache
                     if memory.importance >= 0.5:
                         self.memories[memory.memory_id] = memory
+                        self._build_memory_indices()
                     
                     return memory
                 
@@ -531,8 +540,8 @@ class MemoryManager:
     async def search_memories(
         self,
         query_text: str,
-        memory_types: List[str] = None,
-        tags: List[str] = None,
+        memory_types: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
         limit: int = 5,
         use_vector: bool = True
     ) -> List[Memory]:
@@ -611,22 +620,11 @@ class MemoryManager:
     async def _search_memories_in_db(
         self,
         query_text: str,
-        memory_types: List[str] = None,
-        tags: List[str] = None,
+        memory_types: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
         limit: int = 5
     ) -> List[Memory]:
-        """
-        Search memories in database using text search
-        
-        Args:
-            query_text: Search query text
-            memory_types: Optional list of memory types to filter
-            tags: Optional list of tags to filter
-            limit: Maximum results to return
-            
-        Returns:
-            List of matching Memory objects
-        """
+        """Search memories in database using text search"""
         try:
             # Get database connection
             from db.connection import get_db_connection
@@ -711,7 +709,7 @@ class MemoryManager:
     async def get_recent_memories(
         self,
         days: int = 3,
-        memory_types: List[str] = None,
+        memory_types: Optional[List[str]] = None,
         limit: int = 10
     ) -> List[Memory]:
         """
@@ -1020,24 +1018,20 @@ class MemoryManager:
         # 2. Vector maintenance (verify embeddings exist for important memories)
         if self.config.is_enabled("use_vector_search"):
             # This would verify and fix any memories missing from vector DB
-            results["vector_maintenance"] = True
-        
-        # 3. Update importance scores for memories
-        # This would recalculate importance scores for memories that
-        # have changed in access patterns
-        
-        # 4. Clean up temporary or very old, unimportant memories
-        # This would remove or archive memories that are no longer needed
+            results["vector_maintenance"] = {"status": "vector_service_active"}
         
         return results
 
-# Global function to get or create memory manager
+
+# Global manager registry
+_memory_managers = {}
+
 async def get_memory_manager(user_id: int, conversation_id: int) -> MemoryManager:
     """
     Get or create a memory manager instance
     """
     # Use the cache to avoid creating multiple instances
-    cache_key = f"memory_manager:{user_id}:{conversation_id}"
+    cache_key = f"memory_manager:{user_id}:{self.conversation_id}"
     
     async def create_manager():
         manager = MemoryManager(user_id, conversation_id)
