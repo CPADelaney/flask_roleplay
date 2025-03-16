@@ -8,8 +8,6 @@ import math
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Union, Tuple, Set
 import hashlib
-import copy
-import numpy as np
 
 from context.unified_cache import context_cache
 from context.context_config import get_config
@@ -18,9 +16,7 @@ from context.vector_service import get_vector_service
 logger = logging.getLogger(__name__)
 
 class Memory:
-    """
-    Unified memory representation with metadata and embeddings
-    """
+    """Unified memory representation with metadata"""
     
     def __init__(
         self,
@@ -32,7 +28,6 @@ class Memory:
         access_count: int = 0,
         last_accessed: Optional[datetime] = None,
         tags: Optional[List[str]] = None,
-        embedding: Optional[List[float]] = None,
         metadata: Optional[Dict[str, Any]] = None
     ):
         self.memory_id = memory_id
@@ -43,13 +38,11 @@ class Memory:
         self.access_count = access_count
         self.last_accessed = last_accessed or self.created_at
         self.tags = tags or []
-        self.embedding = embedding
         self.metadata = metadata or {}
-        self.token_count = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
-        result = {
+        return {
             "memory_id": self.memory_id,
             "content": self.content,
             "memory_type": self.memory_type,
@@ -58,14 +51,8 @@ class Memory:
             "access_count": self.access_count,
             "last_accessed": self.last_accessed.isoformat(),
             "tags": self.tags,
-            "metadata": self.metadata,
-            "token_count": self.token_count
+            "metadata": self.metadata
         }
-        
-        if self.embedding:
-            result["embedding"] = self.embedding
-        
-        return result
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Memory':
@@ -82,33 +69,14 @@ class Memory:
             access_count=data.get("access_count", 0),
             last_accessed=last_accessed,
             tags=data.get("tags", []),
-            embedding=data.get("embedding"),
             metadata=data.get("metadata", {})
         )
-        memory.token_count = data.get("token_count")
         return memory
     
     def access(self) -> None:
         """Record an access to this memory"""
         self.access_count += 1
         self.last_accessed = datetime.now()
-    
-    def get_recency_score(self) -> float:
-        """
-        Get recency score (0.0 to 1.0)
-        1.0 = very recent, 0.0 = very old
-        """
-        now = datetime.now()
-        age_days = (now - self.created_at).days
-        
-        # Items from the past day get a high score
-        if age_days < 1:
-            return 1.0
-        # Score decreases over 30 days
-        elif age_days < 30:
-            return 1.0 - (age_days / 30)
-        else:
-            return 0.0
     
     def calculate_importance(self) -> float:
         """Calculate and update the importance score"""
@@ -125,44 +93,21 @@ class Memory:
         }
         type_score = type_scores.get(self.memory_type, 0.4)
         
-        # Recency score
-        recency = self.get_recency_score()
+        # Recency factor (newer = more important)
+        age_days = (datetime.now() - self.created_at).days
+        recency = 1.0 if age_days < 1 else max(0.0, 1.0 - (age_days / 30))
         
-        # Access score (with diminishing returns)
+        # Access score (frequently accessed = more important)
         access_score = min(0.3, 0.05 * math.log(1 + self.access_count))
         
-        # Content-based importance
-        content_score = 0.0
-        if self.content:
-            # Length factor (longer tends to be more important, but with diminishing returns)
-            content_score += min(0.3, len(self.content) / 1000)
-            
-            # Important terms
-            important_terms = [
-                "vital", "important", "critical", "key", "crucial", 
-                "significant", "essential", "fundamental", "pivotal"
-            ]
-            if any(term in self.content.lower() for term in important_terms):
-                content_score += 0.2
-        
-        # Combine scores with weights
-        final_score = (
-            (type_score * 0.3) + 
-            (recency * 0.3) + 
-            (access_score * 0.2) + 
-            (content_score * 0.2)
-        )
-        
-        # Update importance
-        self.importance = min(1.0, final_score)
+        # Calculate final score
+        self.importance = min(1.0, (type_score * 0.5) + (recency * 0.3) + (access_score * 0.2))
         
         return self.importance
 
 
 class MemoryManager:
-    """
-    Integrated memory manager that combines memory storage, retrieval, and consolidation
-    """
+    """Integrated memory manager for storage, retrieval, and consolidation"""
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
@@ -170,11 +115,6 @@ class MemoryManager:
         self.config = get_config()
         self.memories = {}  # In-memory cache of recent/important memories
         self.memory_index = {}  # Indices for efficient lookup
-        self.consolidation_task = None
-        self.maintenance_interval = self.config.get(
-            "memory_consolidation", "consolidation_interval_hours", 24
-        ) * 3600  # Convert to seconds
-        self.last_maintenance = time.time()
         self.is_initialized = False
     
     async def initialize(self):
@@ -185,41 +125,13 @@ class MemoryManager:
         # Load important memories
         await self._load_important_memories()
         
-        # Schedule background consolidation if enabled
-        if self.config.get("memory_consolidation", "enabled", True):
-            self.consolidation_task = asyncio.create_task(self._run_maintenance_loop())
-        
         self.is_initialized = True
         logger.info(f"Initialized memory manager for user {self.user_id}, conversation {self.conversation_id}")
     
     async def close(self):
         """Close the memory manager"""
-        if self.consolidation_task:
-            self.consolidation_task.cancel()
-            try:
-                await self.consolidation_task
-            except asyncio.CancelledError:
-                pass
-            self.consolidation_task = None
-        
         self.is_initialized = False
         logger.info(f"Closed memory manager for user {self.user_id}, conversation {self.conversation_id}")
-    
-    async def _run_maintenance_loop(self):
-        """Run the maintenance loop in the background"""
-        try:
-            while True:
-                # Sleep until next maintenance interval
-                await asyncio.sleep(self.maintenance_interval)
-                
-                # Run maintenance
-                try:
-                    await self.run_maintenance()
-                except Exception as e:
-                    logger.error(f"Error during memory maintenance: {e}")
-        except asyncio.CancelledError:
-            # Task cancelled
-            logger.info(f"Memory maintenance task cancelled for user {self.user_id}")
     
     async def _load_important_memories(self):
         """Load important memories into local cache"""
@@ -242,7 +154,7 @@ class MemoryManager:
                         WHERE user_id = $1 AND conversation_id = $2
                           AND (importance >= 0.7 OR last_accessed > NOW() - INTERVAL '7 days')
                         ORDER BY importance DESC, last_accessed DESC
-                        LIMIT 100
+                        LIMIT 50
                     """, self.user_id, self.conversation_id)
                     
                     # Convert to Memory objects
@@ -342,20 +254,7 @@ class MemoryManager:
         metadata: Optional[Dict[str, Any]] = None,
         store_vector: bool = True
     ) -> str:
-        """
-        Add a new memory with vector storage integration
-        
-        Args:
-            content: Memory content text
-            memory_type: Type of memory
-            importance: Optional importance override (auto-calculated if None)
-            tags: Optional tags
-            metadata: Optional additional metadata
-            store_vector: Whether to store in vector database
-            
-        Returns:
-            Memory ID
-        """
+        """Add a new memory with vector storage integration"""
         # Generate unique memory ID
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         hash_base = f"{self.user_id}:{self.conversation_id}:{content}:{timestamp}"
@@ -436,15 +335,7 @@ class MemoryManager:
             return ""
     
     async def get_memory(self, memory_id: str) -> Optional[Memory]:
-        """
-        Get a memory by ID
-        
-        Args:
-            memory_id: Memory ID
-            
-        Returns:
-            Memory object or None if not found
-        """
+        """Get a memory by ID"""
         # Check local cache first
         if memory_id in self.memories:
             memory = self.memories[memory_id]
@@ -545,19 +436,7 @@ class MemoryManager:
         limit: int = 5,
         use_vector: bool = True
     ) -> List[Memory]:
-        """
-        Search memories by query text with vector search option
-        
-        Args:
-            query_text: Search query text
-            memory_types: Optional list of memory types to filter
-            tags: Optional list of tags to filter
-            limit: Maximum results to return
-            use_vector: Whether to use vector search
-            
-        Returns:
-            List of matching Memory objects
-        """
+        """Search memories by query text with vector search option"""
         cache_key = f"memory_search:{self.user_id}:{self.conversation_id}:{query_text}:{memory_types}:{tags}:{limit}:{use_vector}"
         
         async def perform_search():
@@ -608,7 +487,7 @@ class MemoryManager:
             return results
         
         # Get from cache or search (30 second TTL, importance based on query)
-        importance = min(0.8, 0.3 + (len(query_text) / 100))
+        importance = min(0.7, 0.3 + (len(query_text) / 100))
         return await context_cache.get(
             cache_key, 
             perform_search, 
@@ -712,17 +591,7 @@ class MemoryManager:
         memory_types: Optional[List[str]] = None,
         limit: int = 10
     ) -> List[Memory]:
-        """
-        Get recent memories
-        
-        Args:
-            days: Number of days to look back
-            memory_types: Optional list of memory types to filter
-            limit: Maximum results to return
-            
-        Returns:
-            List of recent Memory objects
-        """
+        """Get recent memories"""
         cache_key = f"recent_memories:{self.user_id}:{self.conversation_id}:{days}:{memory_types}:{limit}"
         
         async def fetch_recent_memories():
@@ -808,21 +677,17 @@ class MemoryManager:
             ttl_override=120  # 2 minutes
         )
     
-    async def consolidate_memories(
-        self,
-        days_threshold: int = 7,
-        min_memories: int = 5
-    ) -> Dict[str, Any]:
-        """
-        Consolidate old memories into summaries
+    async def run_maintenance(self) -> Dict[str, Any]:
+        """Run maintenance tasks"""
+        # Determine if consolidation is needed based on configuration
+        should_consolidate = self.config.get("memory_consolidation", "enabled", True)
         
-        Args:
-            days_threshold: Age in days for consolidation
-            min_memories: Minimum number of memories to consolidate
+        if not should_consolidate:
+            return {
+                "consolidated": False,
+                "reason": "Memory consolidation disabled in config"
+            }
             
-        Returns:
-            Dictionary with consolidation results
-        """
         try:
             # Get database connection
             from db.connection import get_db_connection
@@ -830,240 +695,74 @@ class MemoryManager:
             
             conn = await asyncpg.connect(dsn=get_db_connection())
             try:
-                # Get old memories
+                # Count old, unconsolidated memories
+                days_threshold = self.config.get("memory_consolidation", "days_threshold", 7)
+                min_memories = self.config.get("memory_consolidation", "min_memories_to_consolidate", 5)
+                
                 cutoff_date = datetime.now() - timedelta(days=days_threshold)
                 
-                rows = await conn.fetch("""
-                    SELECT id, entry_type, entry_text, created_at, importance
+                count_row = await conn.fetchrow("""
+                    SELECT COUNT(*) as count
                     FROM PlayerJournal
                     WHERE user_id = $1 AND conversation_id = $2
                       AND created_at < $3
                       AND consolidated = FALSE
-                    ORDER BY entry_type, created_at
                 """, self.user_id, self.conversation_id, cutoff_date)
                 
-                # Group by memory type
-                memories_by_type = {}
-                for row in rows:
-                    memory_type = row["entry_type"]
-                    if memory_type not in memories_by_type:
-                        memories_by_type[memory_type] = []
-                    
-                    memories_by_type[memory_type].append({
-                        "id": row["id"],
-                        "content": row["entry_text"],
-                        "created_at": row["created_at"],
-                        "importance": row["importance"]
-                    })
+                if not count_row or count_row["count"] < min_memories:
+                    return {
+                        "consolidated": False,
+                        "reason": f"Not enough old memories to consolidate: {count_row['count'] if count_row else 0} < {min_memories}"
+                    }
                 
-                # Process each group
-                consolidation_results = {}
-                total_consolidated = 0
-                
-                for memory_type, memories in memories_by_type.items():
-                    # Skip if not enough memories
-                    if len(memories) < min_memories:
-                        continue
-                    
-                    # Sort by created_at
-                    memories.sort(key=lambda m: m["created_at"])
-                    
-                    # Create consolidation batches (by week)
-                    batches = []
-                    current_batch = []
-                    current_week = memories[0]["created_at"].isocalendar()[1]  # Week number
-                    
-                    for memory in memories:
-                        memory_week = memory["created_at"].isocalendar()[1]
-                        
-                        if memory_week != current_week or len(current_batch) >= 20:
-                            # Start a new batch
-                            if current_batch:
-                                batches.append(current_batch)
-                            current_batch = [memory]
-                            current_week = memory_week
-                        else:
-                            # Add to current batch
-                            current_batch.append(memory)
-                    
-                    # Add last batch
-                    if current_batch:
-                        batches.append(current_batch)
-                    
-                    # Process each batch
-                    for batch in batches:
-                        # Generate summary ID
-                        batch_start = batch[0]["created_at"].strftime("%Y-%m-%d")
-                        batch_end = batch[-1]["created_at"].strftime("%Y-%m-%d")
-                        summary_id = f"summary-{memory_type}-{batch_start}-to-{batch_end}"
-                        
-                        # Generate summary content
-                        memory_contents = [m["content"] for m in batch]
-                        summary_text = await self._generate_memory_summary(memory_contents, memory_type)
-                        
-                        # Calculate importance (average of source memories)
-                        avg_importance = sum(m["importance"] for m in batch) / len(batch)
-                        
-                        # Create tags
-                        tags = ["summary", memory_type, f"period:{batch_start}-to-{batch_end}"]
-                        
-                        # Create metadata
-                        metadata = {
-                            "summary_type": "time_period",
-                            "source_memory_ids": [m["id"] for m in batch],
-                            "start_date": batch_start,
-                            "end_date": batch_end,
-                            "memory_count": len(batch)
-                        }
-                        
-                        # Add the summary memory
-                        await self.add_memory(
-                            content=summary_text,
-                            memory_type=f"summary_{memory_type}",
-                            importance=avg_importance,
-                            tags=tags,
-                            metadata=metadata
-                        )
-                        
-                        # Mark original memories as consolidated
-                        memory_ids = [m["id"] for m in batch]
-                        placeholders = ', '.join(str(id) for id in memory_ids)
-                        
-                        await conn.execute(f"""
-                            UPDATE PlayerJournal
-                            SET consolidated = TRUE
-                            WHERE id IN ({placeholders})
-                        """)
-                        
-                        # Record results
-                        if memory_type not in consolidation_results:
-                            consolidation_results[memory_type] = []
-                        
-                        consolidation_results[memory_type].append({
-                            "summary_id": summary_id,
-                            "memory_count": len(batch),
-                            "period": f"{batch_start} to {batch_end}"
-                        })
-                        
-                        total_consolidated += len(batch)
+                # At this point, we would perform memory consolidation
+                # Simplified version just marks memories as consolidated
+                await conn.execute("""
+                    UPDATE PlayerJournal
+                    SET consolidated = TRUE
+                    WHERE user_id = $1 AND conversation_id = $2
+                      AND created_at < $3
+                      AND consolidated = FALSE
+                """, self.user_id, self.conversation_id, cutoff_date)
                 
                 return {
-                    "consolidated": total_consolidated > 0,
-                    "total_memories_consolidated": total_consolidated,
-                    "summaries_created": sum(len(summaries) for summaries in consolidation_results.values()),
-                    "results_by_type": consolidation_results
+                    "consolidated": True,
+                    "count": count_row["count"],
+                    "threshold_days": days_threshold
                 }
             
             finally:
                 await conn.close()
-        
+                
         except Exception as e:
-            logger.error(f"Error consolidating memories: {e}")
+            logger.error(f"Error during memory maintenance: {e}")
             return {
                 "consolidated": False,
                 "error": str(e)
             }
-    
-    async def _generate_memory_summary(
-        self,
-        memory_contents: List[str],
-        memory_type: str
-    ) -> str:
-        """
-        Generate a summary from multiple memories
-        
-        Args:
-            memory_contents: List of memory content strings
-            memory_type: Type of memories
-            
-        Returns:
-            Summary text
-        """
-        # In a production system, you would use an LLM here
-        # For this example, we'll create a simple concatenation
-        combined = "\n".join(memory_contents)
-        
-        # Truncate if too long
-        if len(combined) > 500:
-            combined = combined[:497] + "..."
-        
-        return f"Summary of {len(memory_contents)} {memory_type} memories: {combined}"
-    
-    async def run_maintenance(self) -> Dict[str, Any]:
-        """
-        Run all maintenance tasks
-        
-        Returns:
-            Dictionary with maintenance results
-        """
-        self.last_maintenance = time.time()
-        
-        results = {
-            "memory_consolidation": None,
-            "vector_maintenance": False,
-            "embedding_verification": False
-        }
-        
-        # 1. Memory consolidation
-        days_threshold = self.config.get("memory_consolidation", "days_threshold", 7)
-        min_memories = self.config.get("memory_consolidation", "min_memories_to_consolidate", 5)
-        
-        consolidation_result = await self.consolidate_memories(
-            days_threshold=days_threshold,
-            min_memories=min_memories
-        )
-        
-        results["memory_consolidation"] = consolidation_result
-        
-        # 2. Vector maintenance (verify embeddings exist for important memories)
-        if self.config.is_enabled("use_vector_search"):
-            # This would verify and fix any memories missing from vector DB
-            results["vector_maintenance"] = {"status": "vector_service_active"}
-        
-        return results
 
 
 # Global manager registry
 _memory_managers = {}
 
 async def get_memory_manager(user_id: int, conversation_id: int) -> MemoryManager:
-    """
-    Get or create a memory manager instance
-    """
-    # Use the cache to avoid creating multiple instances
-    cache_key = f"memory_manager:{user_id}:{self.conversation_id}"
+    """Get or create a memory manager instance"""
+    key = f"{user_id}:{conversation_id}"
     
-    async def create_manager():
+    if key not in _memory_managers:
         manager = MemoryManager(user_id, conversation_id)
         await manager.initialize()
-        return manager
+        _memory_managers[key] = manager
     
-    # Get from cache or create new with 10 minute TTL (level 2 cache)
-    return await context_cache.get(
-        cache_key, 
-        create_manager, 
-        cache_level=2, 
-        ttl_override=600
-    )
+    return _memory_managers[key]
 
-# Cleanup function
 async def cleanup_memory_managers():
     """Close all memory managers"""
-    # Get all memory manager keys from cache
-    memory_manager_keys = [
-        key for key in context_cache.l1_cache.keys() 
-        if key.startswith("memory_manager:")
-    ]
-    memory_manager_keys.extend([
-        key for key in context_cache.l2_cache.keys() 
-        if key.startswith("memory_manager:")
-    ])
+    global _memory_managers
     
     # Close each manager
-    for key in set(memory_manager_keys):
-        manager = context_cache.l1_cache.get(key) or context_cache.l2_cache.get(key)
-        if manager:
-            await manager.close()
+    for manager in _memory_managers.values():
+        await manager.close()
     
-    # Clear from cache
-    context_cache.invalidate("memory_manager:")
+    # Clear registry
+    _memory_managers.clear()
