@@ -264,3 +264,45 @@ async def generate_embedding(text: str) -> List[float]:
         logger.error(f"Error generating embedding: {e}")
         # Return a zero vector of the correct dimension as fallback
         return [0.0] * 1536  # ada-002 embeddings have 1536 dimensions
+
+# Add these functions to the existing llm_integration.py file
+
+async def get_text_embedding(text: str) -> np.ndarray:
+    """
+    Get embedding vector for text.
+    
+    Args:
+        text: Text to get embedding for
+        
+    Returns:
+        numpy array with embedding vector
+    """
+    try:
+        # In production, this would call an actual LLM API
+        # For example, with OpenAI:
+        # response = await openai.Embedding.acreate(
+        #     input=text,
+        #     model="text-embedding-ada-002"
+        # )
+        # return np.array(response["data"][0]["embedding"])
+        
+        # For this implementation, we'll use a simpler approach
+        # This is a placeholder - not for production use
+        import numpy as np
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        
+        # Create a simple embedding based on TF-IDF
+        vectorizer = TfidfVectorizer(max_features=1536)
+        tfidf_matrix = vectorizer.fit_transform([text])
+        
+        # Convert to dense array and pad/truncate to 1536 dimensions
+        dense_vector = tfidf_matrix.toarray()[0]
+        padded_vector = np.zeros(1536)
+        padded_vector[:min(len(dense_vector), 1536)] = dense_vector[:1536]
+        
+        return padded_vector
+        
+    except Exception as e:
+        logger.error(f"Error getting text embedding: {e}")
+        # Return a zero vector as fallback
+        return np.zeros(1536)
