@@ -8,6 +8,7 @@ This module organizes tools into logical categories:
 - conflict_tools: Tools for managing conflicts
 - resource_tools: Tools for resource management
 - narrative_tools: Tools for narrative elements
+- context_tools: NEW: Tools for context management
 """
 
 import logging
@@ -38,11 +39,287 @@ from logic.social_links_agentic import (
     apply_crossroads_choice
 )
 
+# NEW: Context system imports
+from context.context_service import get_context_service, get_comprehensive_context
+from context.memory_manager import get_memory_manager
+from context.vector_service import get_vector_service
+from context.context_manager import get_context_manager, ContextDiff
+from context.performance import PerformanceMonitor, track_performance
+from context.unified_cache import context_cache
+
 logger = logging.getLogger(__name__)
+
+# ----- NEW: Context Tools -----
+
+@function_tool
+async def get_optimized_context(ctx, query_text: str = "", use_vector: bool = True) -> Dict[str, Any]:
+    """
+    Get optimized context using the comprehensive context system.
+    
+    Args:
+        query_text: Optional query text for relevance scoring
+        use_vector: Whether to use vector search for relevance
+        
+    Returns:
+        Dictionary with comprehensive context information
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    try:
+        # Get context service
+        context_service = await get_context_service(user_id, conversation_id)
+        
+        # Determine token budget and settings
+        from context.context_config import get_config
+        config = get_config()
+        token_budget = config.get_token_budget("default")
+        
+        # Get context
+        context = await context_service.get_context(
+            input_text=query_text,
+            context_budget=token_budget,
+            use_vector_search=use_vector
+        )
+        
+        # Track performance
+        if hasattr(ctx.context, 'performance_monitor'):
+            perf_monitor = ctx.context.performance_monitor
+        else:
+            perf_monitor = PerformanceMonitor.get_instance(user_id, conversation_id)
+            
+        # Record token usage
+        if "token_usage" in context:
+            total_tokens = sum(context["token_usage"].values())
+            perf_monitor.record_token_usage(total_tokens)
+        
+        return context
+    except Exception as e:
+        logger.error(f"Error getting optimized context: {str(e)}", exc_info=True)
+        return {
+            "error": str(e),
+            "user_id": user_id,
+            "conversation_id": conversation_id
+        }
+
+@function_tool
+async def retrieve_relevant_memories(
+    ctx, 
+    query_text: str, 
+    memory_type: Optional[str] = None,
+    limit: int = 5
+) -> List[Dict[str, Any]]:
+    """
+    Retrieve relevant memories using vector search.
+    
+    Args:
+        query_text: Query text for relevance matching
+        memory_type: Optional type filter (observation, event, etc.)
+        limit: Maximum number of memories to return
+        
+    Returns:
+        List of relevant memories
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    try:
+        # Get memory manager
+        memory_manager = await get_memory_manager(user_id, conversation_id)
+        
+        # Search for memories
+        memory_types = [memory_type] if memory_type else None
+        memories = await memory_manager.search_memories(
+            query_text=query_text,
+            memory_types=memory_types,
+            limit=limit,
+            use_vector=True
+        )
+        
+        # Convert to dictionaries
+        memory_dicts = []
+        for memory in memories:
+            if hasattr(memory, 'to_dict'):
+                memory_dicts.append(memory.to_dict())
+            else:
+                memory_dicts.append(memory)
+        
+        return memory_dicts
+    except Exception as e:
+        logger.error(f"Error retrieving relevant memories: {str(e)}", exc_info=True)
+        return []
+
+@function_tool
+async def store_narrative_memory(
+    ctx,
+    content: str,
+    memory_type: str = "observation",
+    importance: float = 0.6,
+    tags: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Store a narrative memory in the memory system.
+    
+    Args:
+        content: Content of the memory
+        memory_type: Type of memory
+        importance: Importance score (0.0-1.0)
+        tags: Optional tags for categorization
+        
+    Returns:
+        Stored memory information
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    try:
+        # Get memory manager
+        memory_manager = await get_memory_manager(user_id, conversation_id)
+        
+        # Add memory
+        memory_id = await memory_manager.add_memory(
+            content=content,
+            memory_type=memory_type,
+            importance=importance,
+            tags=tags or [memory_type, "story_director"],
+            metadata={
+                "source": "story_director_tool",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        
+        # Check if there's a narrative manager for progressive summarization
+        if hasattr(ctx.context, 'narrative_manager') and ctx.context.narrative_manager:
+            # Add to narrative manager
+            await ctx.context.narrative_manager.add_interaction(
+                content=content,
+                importance=importance,
+                tags=tags or [memory_type, "story_director"]
+            )
+        
+        return {
+            "memory_id": memory_id,
+            "content": content,
+            "memory_type": memory_type,
+            "importance": importance,
+            "success": True
+        }
+    except Exception as e:
+        logger.error(f"Error storing narrative memory: {str(e)}", exc_info=True)
+        return {
+            "error": str(e),
+            "success": False
+        }
+
+@function_tool
+async def search_by_vector(
+    ctx,
+    query_text: str,
+    entity_types: Optional[List[str]] = None,
+    top_k: int = 5
+) -> List[Dict[str, Any]]:
+    """
+    Search for entities by semantic similarity using vector search.
+    
+    Args:
+        query_text: Query text for semantic search
+        entity_types: Types of entities to search for
+        top_k: Maximum number of results to return
+        
+    Returns:
+        List of semantically similar entities
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    try:
+        # Get vector service
+        vector_service = await get_vector_service(user_id, conversation_id)
+        
+        # If vector service is not enabled, return empty list
+        if not vector_service.enabled:
+            return []
+        
+        # Search for entities
+        entity_types = entity_types or ["npc", "location", "memory", "narrative"]
+        
+        results = await vector_service.search_entities(
+            query_text=query_text,
+            entity_types=entity_types,
+            top_k=top_k,
+            hybrid_ranking=True
+        )
+        
+        return results
+    except Exception as e:
+        logger.error(f"Error in vector search: {str(e)}", exc_info=True)
+        return []
+
+@function_tool
+async def get_summarized_narrative_context(
+    ctx,
+    query: str,
+    max_tokens: int = 1000
+) -> Dict[str, Any]:
+    """
+    Get automatically summarized narrative context using progressive summarization.
+    
+    Args:
+        query: Query for relevance matching
+        max_tokens: Maximum tokens for context
+        
+    Returns:
+        Summarized narrative context
+    """
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+    
+    try:
+        # Check if narrative manager is available
+        if hasattr(ctx.context, 'narrative_manager') and ctx.context.narrative_manager:
+            # Use narrative manager's optimized context
+            narrative_manager = ctx.context.narrative_manager
+        else:
+            # Try to import narrative manager
+            try:
+                from story_agent.progressive_summarization import RPGNarrativeManager
+                
+                narrative_manager = RPGNarrativeManager(
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    db_connection_string=get_db_connection()
+                )
+                await narrative_manager.initialize()
+                
+                # Store for future use
+                ctx.context.narrative_manager = narrative_manager
+            except Exception as import_error:
+                logger.error(f"Error initializing narrative manager: {import_error}")
+                return {
+                    "error": "Narrative manager not available",
+                    "memories": [],
+                    "arcs": []
+                }
+        
+        # Get optimal context
+        context = await narrative_manager.get_optimal_narrative_context(
+            query=query,
+            max_tokens=max_tokens
+        )
+        
+        return context
+    except Exception as e:
+        logger.error(f"Error getting summarized narrative context: {str(e)}", exc_info=True)
+        return {
+            "error": str(e),
+            "memories": [],
+            "arcs": []
+        }
 
 # ----- Story State Tools -----
 
 @function_tool
+@track_performance("get_story_state")  # NEW: Performance tracking
 async def get_story_state(ctx) -> Dict[str, Any]:
     """
     Get the current state of the story, including active conflicts, narrative stage, 
@@ -58,6 +335,18 @@ async def get_story_state(ctx) -> Dict[str, Any]:
     resource_manager = context.resource_manager
     
     try:
+        # NEW: Get comprehensive context first
+        comprehensive_context = None
+        
+        # Try to use context service if available
+        if hasattr(context, 'get_comprehensive_context'):
+            try:
+                comprehensive_context = await context.get_comprehensive_context()
+            except Exception as context_error:
+                logger.warning(f"Error getting comprehensive context: {context_error}")
+        
+        # If we couldn't get comprehensive context, fall back to individual components
+        
         # Get current narrative stage
         narrative_stage = await get_current_narrative_stage(user_id, conversation_id)
         stage_info = None
@@ -138,6 +427,17 @@ async def get_story_state(ctx) -> Dict[str, Any]:
         crossroads = await check_for_relationship_crossroads(user_id, conversation_id)
         ritual = await check_for_relationship_ritual(user_id, conversation_id)
         
+        # NEW: Get relevant memories
+        relevant_memories = []
+        if hasattr(context, 'get_relevant_memories'):
+            try:
+                relevant_memories = await context.get_relevant_memories(
+                    "current story state overview recent events",
+                    limit=3
+                )
+            except Exception as mem_error:
+                logger.warning(f"Error getting relevant memories: {mem_error}")
+        
         # Generate key observations based on current state
         key_observations = []
         
@@ -179,6 +479,18 @@ async def get_story_state(ctx) -> Dict[str, Any]:
             elif narrative_stage.name == "Full Revelation":
                 story_direction = "The true nature of relationships should be explicit, with NPCs acknowledging their control"
         
+        # NEW: Create a memory about this state retrieval
+        if hasattr(context, 'add_narrative_memory'):
+            await context.add_narrative_memory(
+                f"Retrieved story state with {len(conflict_infos)} conflicts and narrative stage: {stage_info['name'] if stage_info else 'Unknown'}",
+                "story_state_retrieval",
+                0.4
+            )
+        
+        # NEW: Track performance if context has performance monitor
+        if hasattr(context, 'performance_monitor'):
+            context.performance_monitor.record_memory_usage()
+        
         return {
             "narrative_stage": stage_info,
             "active_conflicts": conflict_infos,
@@ -189,7 +501,9 @@ async def get_story_state(ctx) -> Dict[str, Any]:
             "relationship_crossroads": crossroads,
             "relationship_ritual": ritual,
             "story_direction": story_direction,
-            "last_updated": datetime.now().isoformat()
+            "memories": relevant_memories,  # NEW: Include relevant memories
+            "last_updated": datetime.now().isoformat(),
+            "context_source": "integrated" if comprehensive_context else "direct"
         }
     except Exception as e:
         logger.error(f"Error getting story state: {str(e)}", exc_info=True)
@@ -204,6 +518,7 @@ async def get_story_state(ctx) -> Dict[str, Any]:
         }
 
 @function_tool
+@track_performance("get_key_npcs")
 async def get_key_npcs(ctx, limit: int = 5) -> List[Dict[str, Any]]:
     """
     Get the key NPCs in the current game state, ordered by importance.
@@ -265,6 +580,7 @@ async def get_key_npcs(ctx, limit: int = 5) -> List[Dict[str, Any]]:
         conn.close()
 
 @function_tool
+@track_performance("get_narrative_stages")
 async def get_narrative_stages(ctx) -> List[Dict[str, str]]:
     """
     Get information about all narrative stages in the game.
@@ -281,6 +597,7 @@ async def get_narrative_stages(ctx) -> List[Dict[str, str]]:
     return stages
 
 @function_tool
+@track_performance("analyze_narrative_and_activity")
 async def analyze_narrative_and_activity(
     ctx,
     narrative_text: str,
@@ -368,6 +685,7 @@ async def analyze_narrative_and_activity(
 # ----- Conflict Tools -----
 
 @function_tool
+@track_performance("generate_conflict")
 async def generate_conflict(ctx, conflict_type: Optional[str] = None) -> Dict[str, Any]:
     """
     Generate a new conflict of the specified type, or determine the appropriate type
@@ -384,6 +702,14 @@ async def generate_conflict(ctx, conflict_type: Optional[str] = None) -> Dict[st
     
     try:
         conflict = await conflict_manager.generate_conflict(conflict_type)
+        
+        # NEW: Store this as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            await context.add_narrative_memory(
+                f"Generated new {conflict['conflict_type']} conflict: {conflict['conflict_name']}",
+                "conflict_generation",
+                0.7
+            )
         
         return {
             "conflict_id": conflict['conflict_id'],
@@ -405,6 +731,7 @@ async def generate_conflict(ctx, conflict_type: Optional[str] = None) -> Dict[st
         }
 
 @function_tool
+@track_performance("update_conflict_progress")
 async def update_conflict_progress(
     ctx, 
     conflict_id: int, 
@@ -431,6 +758,28 @@ async def update_conflict_progress(
         # Update progress
         updated_conflict = await conflict_manager.update_conflict_progress(conflict_id, progress_increment)
         
+        # NEW: Store this update as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            memory_importance = 0.5  # Default importance
+            
+            # Increase importance if phase changed
+            if updated_conflict['phase'] != old_phase:
+                memory_importance = 0.7
+                
+            memory_content = (
+                f"Updated conflict {updated_conflict['conflict_name']} progress by {progress_increment} points "
+                f"to {updated_conflict['progress']}%. "
+            )
+            
+            if updated_conflict['phase'] != old_phase:
+                memory_content += f"Phase advanced from {old_phase} to {updated_conflict['phase']}."
+                
+            await context.add_narrative_memory(
+                memory_content,
+                "conflict_progression",
+                memory_importance
+            )
+        
         return {
             "conflict_id": conflict_id,
             "new_progress": updated_conflict['progress'],
@@ -450,6 +799,7 @@ async def update_conflict_progress(
         }
 
 @function_tool
+@track_performance("resolve_conflict")
 async def resolve_conflict(ctx, conflict_id: int) -> Dict[str, Any]:
     """
     Resolve a conflict and apply consequences.
@@ -470,6 +820,20 @@ async def resolve_conflict(ctx, conflict_id: int) -> Dict[str, Any]:
         for consequence in result.get('consequences', []):
             consequences.append(consequence.get('description', ''))
         
+        # NEW: Store this resolution as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            memory_content = (
+                f"Resolved conflict {result.get('conflict_name', f'ID: {conflict_id}')} "
+                f"with outcome: {result.get('outcome', 'unknown')}. "
+                f"Consequences: {'; '.join(consequences)}"
+            )
+            
+            await context.add_narrative_memory(
+                memory_content,
+                "conflict_resolution",
+                0.8  # High importance for conflict resolutions
+            )
+        
         return {
             "conflict_id": conflict_id,
             "outcome": result.get('outcome', 'unknown'),
@@ -486,6 +850,7 @@ async def resolve_conflict(ctx, conflict_id: int) -> Dict[str, Any]:
         }
 
 @function_tool
+@track_performance("analyze_narrative_for_conflict")
 async def analyze_narrative_for_conflict(ctx, narrative_text: str) -> Dict[str, Any]:
     """
     Analyze a narrative text to see if it should trigger a conflict.
@@ -501,6 +866,23 @@ async def analyze_narrative_for_conflict(ctx, narrative_text: str) -> Dict[str, 
     
     try:
         result = await conflict_manager.add_conflict_to_narrative(narrative_text)
+        
+        # NEW: Store this analysis as a memory if possible
+        if hasattr(context, 'add_narrative_memory') and result.get("conflict_generated", False):
+            conflict_info = result.get("conflict", {})
+            
+            memory_content = (
+                f"Analysis detected conflict in narrative and generated new "
+                f"{conflict_info.get('conflict_type', 'unknown')} conflict: "
+                f"{conflict_info.get('conflict_name', 'Unnamed conflict')}"
+            )
+            
+            await context.add_narrative_memory(
+                memory_content,
+                "conflict_analysis",
+                0.6
+            )
+        
         return result
     except Exception as e:
         logger.error(f"Error analyzing narrative for conflict: {str(e)}", exc_info=True)
@@ -514,6 +896,7 @@ async def analyze_narrative_for_conflict(ctx, narrative_text: str) -> Dict[str, 
         }
 
 @function_tool
+@track_performance("set_player_involvement")
 async def set_player_involvement(
     ctx, 
     conflict_id: int, 
@@ -557,10 +940,39 @@ async def set_player_involvement(
                 "success": False
             }
         
+        # Get conflict info for memory
+        conflict_info = await conflict_manager.get_conflict(conflict_id)
+        
         result = await conflict_manager.set_player_involvement(
             conflict_id, involvement_level, faction,
             money_committed, supplies_committed, influence_committed, action
         )
+        
+        # NEW: Store this involvement as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            resources_text = []
+            if money_committed > 0:
+                resources_text.append(f"{money_committed} money")
+            if supplies_committed > 0:
+                resources_text.append(f"{supplies_committed} supplies")
+            if influence_committed > 0:
+                resources_text.append(f"{influence_committed} influence")
+                
+            resources_committed = ", ".join(resources_text) if resources_text else "no resources"
+            
+            memory_content = (
+                f"Player set involvement in conflict {conflict_info.get('conflict_name', f'ID: {conflict_id}')} "
+                f"to {involvement_level}, supporting {faction} faction with {resources_committed}."
+            )
+            
+            if action:
+                memory_content += f" Action taken: {action}"
+                
+            await context.add_narrative_memory(
+                memory_content,
+                "conflict_involvement",
+                0.7
+            )
         
         # Add success flag
         if isinstance(result, dict):
@@ -590,6 +1002,7 @@ async def set_player_involvement(
         }
 
 @function_tool
+@track_performance("get_conflict_details")
 async def get_conflict_details(ctx, conflict_id: int) -> Dict[str, Any]:
     """
     Get detailed information about a specific conflict.
@@ -642,6 +1055,7 @@ async def get_conflict_details(ctx, conflict_id: int) -> Dict[str, Any]:
 # ----- Resource Tools -----
 
 @function_tool
+@track_performance("check_resources")
 async def check_resources(ctx, money: int = 0, supplies: int = 0, influence: int = 0) -> Dict[str, Any]:
     """
     Check if player has sufficient resources.
@@ -674,6 +1088,7 @@ async def check_resources(ctx, money: int = 0, supplies: int = 0, influence: int
         }
 
 @function_tool
+@track_performance("commit_resources_to_conflict")
 async def commit_resources_to_conflict(
     ctx, 
     conflict_id: int, 
@@ -697,6 +1112,14 @@ async def commit_resources_to_conflict(
     resource_manager = context.resource_manager
     
     try:
+        # Get conflict info for memory
+        conflict_info = None
+        if hasattr(context, 'conflict_manager'):
+            try:
+                conflict_info = await context.conflict_manager.get_conflict(conflict_id)
+            except Exception as conflict_error:
+                logger.warning(f"Could not get conflict info: {conflict_error}")
+        
         result = await resource_manager.commit_resources_to_conflict(
             conflict_id, money, supplies, influence
         )
@@ -712,6 +1135,30 @@ async def commit_resources_to_conflict(
                 money_result['formatted_change'] = await resource_manager.get_formatted_money(money_result['change'])
                 result['money_result'] = money_result
         
+        # NEW: Store this commitment as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            resources_text = []
+            if money > 0:
+                resources_text.append(f"{money} money")
+            if supplies > 0:
+                resources_text.append(f"{supplies} supplies")
+            if influence > 0:
+                resources_text.append(f"{influence} influence")
+                
+            resources_committed = ", ".join(resources_text)
+            
+            conflict_name = conflict_info.get('conflict_name', f"ID: {conflict_id}") if conflict_info else f"ID: {conflict_id}"
+            
+            memory_content = (
+                f"Committed {resources_committed} to conflict {conflict_name}"
+            )
+                
+            await context.add_narrative_memory(
+                memory_content,
+                "resource_commitment",
+                0.6
+            )
+        
         return result
     except Exception as e:
         logger.error(f"Error committing resources: {str(e)}", exc_info=True)
@@ -721,6 +1168,7 @@ async def commit_resources_to_conflict(
         }
 
 @function_tool
+@track_performance("get_player_resources")
 async def get_player_resources(ctx) -> Dict[str, Any]:
     """
     Get the current player resources and vitals.
@@ -760,6 +1208,7 @@ async def get_player_resources(ctx) -> Dict[str, Any]:
         }
 
 @function_tool
+@track_performance("analyze_activity_effects")
 async def analyze_activity_effects(ctx, activity_text: str) -> Dict[str, Any]:
     """
     Analyze an activity to determine its effects on player resources.
@@ -778,6 +1227,27 @@ async def analyze_activity_effects(ctx, activity_text: str) -> Dict[str, Any]:
         result = await activity_analyzer.analyze_activity(activity_text, apply_effects=False)
         
         effects = result.get('effects', {})
+        
+        # NEW: Store this analysis as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            effects_description = []
+            
+            for resource_type, value in effects.items():
+                if value:
+                    direction = "increased" if value > 0 else "decreased"
+                    effects_description.append(f"{resource_type} {direction} by {abs(value)}")
+            
+            effects_text = ", ".join(effects_description) if effects_description else "no significant effects"
+            
+            memory_content = (
+                f"Analyzed activity: {activity_text[:100]}... with {effects_text}"
+            )
+                
+            await context.add_narrative_memory(
+                memory_content,
+                "activity_analysis",
+                0.4  # Lower importance for analysis only
+            )
         
         return {
             "activity_type": result.get('activity_type', 'unknown'),
@@ -799,6 +1269,7 @@ async def analyze_activity_effects(ctx, activity_text: str) -> Dict[str, Any]:
         }
 
 @function_tool
+@track_performance("apply_activity_effects")
 async def apply_activity_effects(ctx, activity_text: str) -> Dict[str, Any]:
     """
     Analyze and apply the effects of an activity to player resources.
@@ -822,6 +1293,28 @@ async def apply_activity_effects(ctx, activity_text: str) -> Dict[str, Any]:
             resources = await resource_manager.get_resources()
             result['formatted_money'] = await resource_manager.get_formatted_money(resources.get('money', 0))
         
+        # NEW: Store this application as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            effects = result.get('effects', {})
+            effects_description = []
+            
+            for resource_type, value in effects.items():
+                if value:
+                    direction = "increased" if value > 0 else "decreased"
+                    effects_description.append(f"{resource_type} {direction} by {abs(value)}")
+            
+            effects_text = ", ".join(effects_description) if effects_description else "no significant effects"
+            
+            memory_content = (
+                f"Applied activity effects for: {activity_text[:100]}... with {effects_text}"
+            )
+                
+            await context.add_narrative_memory(
+                memory_content,
+                "activity_application",
+                0.5
+            )
+        
         return result
     except Exception as e:
         logger.error(f"Error applying activity effects: {str(e)}", exc_info=True)
@@ -833,6 +1326,7 @@ async def apply_activity_effects(ctx, activity_text: str) -> Dict[str, Any]:
         }
 
 @function_tool
+@track_performance("get_resource_history")
 async def get_resource_history(ctx, resource_type: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
     """
     Get the history of resource changes.
@@ -911,6 +1405,7 @@ async def get_resource_history(ctx, resource_type: Optional[str] = None, limit: 
 # ----- Narrative Tools -----
 
 @function_tool
+@track_performance("generate_personal_revelation")
 async def generate_personal_revelation(ctx, npc_name: str, revelation_type: str) -> Dict[str, Any]:
     """
     Generate a personal revelation for the player about their relationship with an NPC.
@@ -975,6 +1470,25 @@ async def generate_personal_revelation(ctx, npc_name: str, revelation_type: str)
             journal_id = cursor.fetchone()[0]
             conn.commit()
             
+            # NEW: Store this as a memory if possible
+            if hasattr(context, 'add_narrative_memory'):
+                await context.add_narrative_memory(
+                    f"Personal revelation about {npc_name}: {inner_monologue}",
+                    "personal_revelation",
+                    0.8,  # High importance for revelations
+                    tags=[revelation_type, "revelation", npc_name.lower().replace(" ", "_")]
+                )
+            
+            # NEW: Check for narrative manager
+            if hasattr(context, 'narrative_manager') and context.narrative_manager:
+                # Add to narrative manager
+                await context.narrative_manager.add_revelation(
+                    content=inner_monologue,
+                    revelation_type=revelation_type,
+                    importance=0.8,
+                    tags=[revelation_type, "revelation"]
+                )
+            
             return {
                 "type": "personal_revelation",
                 "name": f"{revelation_type.capitalize()} Awareness",
@@ -999,6 +1513,7 @@ async def generate_personal_revelation(ctx, npc_name: str, revelation_type: str)
         }
 
 @function_tool
+@track_performance("generate_dream_sequence")
 async def generate_dream_sequence(ctx, npc_names: List[str]) -> Dict[str, Any]:
     """
     Generate a symbolic dream sequence based on player's current state.
@@ -1066,6 +1581,25 @@ async def generate_dream_sequence(ctx, npc_names: List[str]) -> Dict[str, Any]:
             journal_id = cursor.fetchone()[0]
             conn.commit()
             
+            # NEW: Store this as a memory if possible
+            if hasattr(context, 'add_narrative_memory'):
+                await context.add_narrative_memory(
+                    f"Dream sequence: {dream_text}",
+                    "dream_sequence",
+                    0.7,  # High importance for dreams
+                    tags=["dream", "symbolic"] + [npc.lower().replace(" ", "_") for npc in npc_names[:3]]
+                )
+            
+            # NEW: Check for narrative manager
+            if hasattr(context, 'narrative_manager') and context.narrative_manager:
+                # Add to narrative manager
+                await context.narrative_manager.add_dream_sequence(
+                    content=dream_text,
+                    symbols=[npc1, npc2, npc3, "control", "manipulation"],
+                    importance=0.7,
+                    tags=["dream", "symbolic"]
+                )
+            
             return {
                 "type": "dream_sequence",
                 "text": dream_text,
@@ -1088,6 +1622,7 @@ async def generate_dream_sequence(ctx, npc_names: List[str]) -> Dict[str, Any]:
         }
 
 @function_tool
+@track_performance("check_relationship_events")
 async def check_relationship_events(ctx) -> Dict[str, Any]:
     """
     Check for relationship events like crossroads or rituals.
@@ -1106,6 +1641,25 @@ async def check_relationship_events(ctx) -> Dict[str, Any]:
         # Check for rituals
         ritual = await check_for_relationship_ritual(user_id, conversation_id)
         
+        # NEW: Store this as a memory if crossroads or ritual found
+        if (crossroads or ritual) and hasattr(context, 'add_narrative_memory'):
+            event_type = "crossroads" if crossroads else "ritual"
+            npc_name = "Unknown"
+            
+            if crossroads:
+                npc_name = crossroads.get("npc_name", "Unknown")
+            elif ritual:
+                npc_name = ritual.get("npc_name", "Unknown")
+            
+            memory_content = f"Relationship {event_type} detected with {npc_name}"
+            
+            await context.add_narrative_memory(
+                memory_content,
+                f"relationship_{event_type}",
+                0.8,  # High importance for relationship events
+                tags=[event_type, "relationship", npc_name.lower().replace(" ", "_")]
+            )
+        
         return {
             "crossroads": crossroads,
             "ritual": ritual,
@@ -1121,6 +1675,7 @@ async def check_relationship_events(ctx) -> Dict[str, Any]:
         }
 
 @function_tool
+@track_performance("apply_crossroads_choice")
 async def apply_crossroads_choice(
     ctx,
     link_id: int,
@@ -1147,6 +1702,61 @@ async def apply_crossroads_choice(
             user_id, conversation_id, link_id, crossroads_name, choice_index
         )
         
+        # NEW: Store this as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            # Get NPC from link ID if possible
+            npc_name = "Unknown"
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT entity2_id
+                    FROM SocialLinks
+                    WHERE link_id = %s AND entity2_type = 'npc'
+                """, (link_id,))
+                
+                row = cursor.fetchone()
+                if row:
+                    npc_id = row[0]
+                    
+                    cursor.execute("""
+                        SELECT npc_name
+                        FROM NPCStats
+                        WHERE npc_id = %s
+                    """, (npc_id,))
+                    
+                    npc_row = cursor.fetchone()
+                    if npc_row:
+                        npc_name = npc_row[0]
+                        
+                cursor.close()
+                conn.close()
+            except Exception as db_error:
+                logger.warning(f"Could not get NPC name for memory: {db_error}")
+            
+            memory_content = (
+                f"Applied crossroads choice {choice_index} for '{crossroads_name}' "
+                f"with {npc_name}"
+            )
+                
+            await context.add_narrative_memory(
+                memory_content,
+                "crossroads_choice",
+                0.8,  # High importance for relationship choices
+                tags=["crossroads", "relationship", npc_name.lower().replace(" ", "_")]
+            )
+            
+            # NEW: Check for narrative manager
+            if hasattr(context, 'narrative_manager') and context.narrative_manager:
+                # Add to narrative manager
+                await context.narrative_manager.add_interaction(
+                    content=memory_content,
+                    npc_name=npc_name,
+                    importance=0.8,
+                    tags=["crossroads", "relationship_choice"]
+                )
+        
         return result
     except Exception as e:
         logger.error(f"Error applying crossroads choice: {str(e)}", exc_info=True)
@@ -1159,6 +1769,7 @@ async def apply_crossroads_choice(
         }
 
 @function_tool
+@track_performance("check_npc_relationship")
 async def check_npc_relationship(
     ctx, 
     npc_id: int
@@ -1215,6 +1826,7 @@ async def check_npc_relationship(
         }
 
 @function_tool
+@track_performance("add_moment_of_clarity")
 async def add_moment_of_clarity(ctx, realization_text: str) -> Dict[str, Any]:
     """
     Add a moment of clarity where the player briefly becomes aware of their situation.
@@ -1234,6 +1846,25 @@ async def add_moment_of_clarity(ctx, realization_text: str) -> Dict[str, Any]:
         
         result = await add_clarity(user_id, conversation_id, realization_text)
         
+        # NEW: Store this as a memory if possible
+        if hasattr(context, 'add_narrative_memory'):
+            await context.add_narrative_memory(
+                f"Moment of clarity: {realization_text}",
+                "moment_of_clarity",
+                0.9,  # Very high importance for moments of clarity
+                tags=["clarity", "realization", "awareness"]
+            )
+            
+            # NEW: Check for narrative manager
+            if hasattr(context, 'narrative_manager') and context.narrative_manager:
+                # Add to narrative manager
+                await context.narrative_manager.add_revelation(
+                    content=realization_text,
+                    revelation_type="clarity",
+                    importance=0.9,
+                    tags=["clarity", "realization"]
+                )
+        
         return {
             "type": "moment_of_clarity",
             "content": result,
@@ -1249,6 +1880,7 @@ async def add_moment_of_clarity(ctx, realization_text: str) -> Dict[str, Any]:
         }
 
 @function_tool
+@track_performance("get_player_journal_entries")
 async def get_player_journal_entries(ctx, entry_type: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
     """
     Get entries from the player's journal.
@@ -1350,4 +1982,13 @@ narrative_tools = [
     check_npc_relationship,
     add_moment_of_clarity,
     get_player_journal_entries
+]
+
+# NEW: Context management tools
+context_tools = [
+    get_optimized_context,
+    retrieve_relevant_memories,
+    store_narrative_memory,
+    search_by_vector,
+    get_summarized_narrative_context
 ]
