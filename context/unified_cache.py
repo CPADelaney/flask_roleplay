@@ -4,16 +4,14 @@
 Unified caching system for RPG context management.
 
 This module provides a flexible, multi-level caching system that can be used
-across all context-related components, eliminating redundancy while providing
-specialized functionality for different use cases.
+across all context-related components.
 """
 
 import time
-import math
 import logging
 import json
 import hashlib
-from typing import Dict, Any, Optional, Callable, Tuple, List, Set
+from typing import Dict, Any, Optional, Callable
 import asyncio
 
 logger = logging.getLogger(__name__)
@@ -26,8 +24,7 @@ class CacheItem:
         key: str, 
         value: Any, 
         timestamp: float = None,
-        importance: float = 1.0,
-        metadata: Dict[str, Any] = None
+        importance: float = 0.5
     ):
         self.key = key
         self.value = value
@@ -35,7 +32,6 @@ class CacheItem:
         self.last_access = self.timestamp
         self.access_count = 0
         self.importance = importance  # 0.0 to 1.0
-        self.metadata = metadata or {}
     
     def access(self) -> None:
         """Record an access to this item"""
@@ -59,93 +55,46 @@ class CacheItem:
         Calculate eviction score (higher scores are evicted first)
         Factors: age, access frequency, importance
         """
-        age_factor = self.age() / 3600  # Normalize to hours
-        access_factor = 1.0 / (1.0 + self.access_count * 0.1)  # Less accesses = higher score
-        recency_factor = self.time_since_access() / 3600  # Normalize to hours
+        # Normalize age to hours
+        age_factor = self.age() / 3600
+        
+        # Less accesses = higher score
+        access_factor = 1.0 / (1.0 + self.access_count)
+        
+        # Normalize time since last access to hours
+        recency_factor = self.time_since_access() / 3600
         
         # Combine factors (importance reduces score)
-        return (0.4 * age_factor + 0.3 * access_factor + 0.3 * recency_factor) * (2.0 - self.importance)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization"""
-        return {
-            "key": self.key,
-            "value": self.value,
-            "timestamp": self.timestamp,
-            "last_access": self.last_access,
-            "access_count": self.access_count,
-            "importance": self.importance,
-            "metadata": self.metadata
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'CacheItem':
-        """Create from dictionary"""
-        item = cls(
-            key=data["key"],
-            value=data["value"],
-            timestamp=data["timestamp"],
-            importance=data.get("importance", 1.0),
-            metadata=data.get("metadata", {})
-        )
-        item.last_access = data["last_access"]
-        item.access_count = data["access_count"]
-        return item
+        return (0.4 * age_factor + 0.3 * access_factor + 0.3 * recency_factor) * (1.0 - self.importance)
 
 
 class UnifiedCache:
     """
     Unified multi-level caching system with intelligent eviction.
-    
-    This cache supports multiple levels with different TTLs and size limits.
-    It features importance-based prioritization, intelligent eviction,
-    and optional compression for large values.
     """
     
-    def __init__(self, levels: int = 3, config: Dict[str, Any] = None):
-        """
-        Initialize the cache.
+    def __init__(self):
+        """Initialize the cache."""
+        # L1: Short-term cache (1 minute TTL, 100 items)
+        # L2: Medium-term cache (5 minutes TTL, 500 items)
+        # L3: Long-term cache (30 minutes TTL, 2000 items)
+        self.l1_cache = {}
+        self.l2_cache = {}
+        self.l3_cache = {}
         
-        Args:
-            levels: Number of cache levels (default: 3)
-            config: Configuration dictionary with TTLs and size limits
-        """
-        self.levels = levels
+        self.l1_ttl = 60  # 1 minute
+        self.l2_ttl = 300  # 5 minutes
+        self.l3_ttl = 1800  # 30 minutes
         
-        # Default configuration
-        default_config = {
-            "compression_threshold": 10000,  # Size in bytes to trigger compression
-            "cache_metrics": True           # Whether to track metrics
-        }
-        
-        # Default level configurations
-        for i in range(1, levels + 1):
-            # Level 1: 1 minute, 100 items
-            # Level 2: 5 minutes, 500 items
-            # Level 3: 1 hour, 2000 items
-            default_config[f"l{i}_ttl"] = 60 * (5 ** (i - 1))
-            default_config[f"l{i}_max_size"] = 100 * (5 ** (i - 1))
-        
-        # Apply custom config
-        self.config = default_config.copy()
-        if config:
-            self.config.update(config)
-        
-        # Initialize cache levels (dictionaries of CacheItem objects)
-        self.cache_levels = [{} for _ in range(levels)]
+        self.l1_max_size = 100
+        self.l2_max_size = 500
+        self.l3_max_size = 2000
         
         # Metrics
         self.hits = 0
         self.misses = 0
-        self.promotions = 0
-        self.evictions = 0
-        self.inserts = 0
         
-        # Compression stat tracking
-        self.compressed_items = 0
-        self.compression_savings = 0
-        
-        # Performance tracking
+        # Last cleanup time
         self.last_cleanup = time.time()
         self.cleanup_interval = 300  # 5 minutes
     
@@ -155,9 +104,7 @@ class UnifiedCache:
         fetch_func: Callable, 
         cache_level: int = 1,
         importance: float = 0.5,
-        ttl_override: Optional[float] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        compress: bool = False
+        ttl_override: Optional[float] = None
     ) -> Any:
         """
         Get an item from cache, or fetch and cache it if not found.
@@ -165,37 +112,31 @@ class UnifiedCache:
         Args:
             key: Cache key
             fetch_func: Async function to call if cache miss
-            cache_level: Desired cache level (1 to levels)
+            cache_level: Desired cache level (1-3)
             importance: Importance score (0.0 to 1.0)
             ttl_override: Optional TTL override in seconds
-            metadata: Optional metadata to store with the item
-            compress: Whether to compress large values
             
         Returns:
             The cached or fetched value
         """
-        cache_level = min(max(1, cache_level), self.levels)
+        cache_level = min(max(1, cache_level), 3)
         
-        # Try to get from cache, starting from highest level requested
+        # Try to get from all cache levels
         for level in range(cache_level, 0, -1):
-            level_idx = level - 1
-            cache = self.cache_levels[level_idx]
+            cache = self._get_cache_by_level(level)
+            ttl = ttl_override or self._get_ttl_by_level(level)
             
             if key in cache:
                 item = cache[key]
-                ttl = ttl_override or self.config[f"l{level}_ttl"]
                 
                 if not item.is_stale(ttl):
                     # Cache hit
                     item.access()
                     self.hits += 1
                     
-                    # Promote to higher levels if needed
-                    await self._promote_item(item, level_idx)
+                    # Promote to higher level if needed
+                    self._promote_item(item, level, cache_level)
                     
-                    # Return decompressed value if needed
-                    if isinstance(item.value, dict) and item.value.get('_compressed'):
-                        return self._decompress_value(item.value)
                     return item.value
                 else:
                     # Stale item, remove it
@@ -211,88 +152,82 @@ class UnifiedCache:
             logger.error(f"Error fetching data for key {key}: {e}")
             raise
         
-        # Prepare metadata
-        meta = metadata or {}
-        if importance is not None:
-            meta['importance'] = importance
+        # Store in cache at requested level
+        item = CacheItem(
+            key=key,
+            value=value,
+            importance=importance
+        )
         
-        # Compress if needed
-        original_value = value
-        compressed = False
-        if compress and self._should_compress(value):
-            value = self._compress_value(value)
-            compressed = True
+        cache = self._get_cache_by_level(cache_level)
+        cache[key] = item
         
-        # Store in cache
-        for level in range(1, cache_level + 1):
-            level_idx = level - 1
-            
-            # Create cache item
-            item = CacheItem(
-                key=key,
-                value=value,
-                importance=importance,
-                metadata=meta
-            )
-            
-            # Add to cache
-            self.cache_levels[level_idx][key] = item
-            
-            # Check size limit
-            self._check_size_limit(level)
-        
-        self.inserts += 1
+        # Check size limit
+        self._check_size_limit(cache_level)
         
         # Maybe run cleanup
         await self._maybe_cleanup()
         
-        # Return the original value (not compressed)
-        return original_value
+        return value
     
-    async def _promote_item(self, item: CacheItem, current_level: int) -> None:
-        """Promote an item to higher cache levels based on access patterns"""
-        # Only promote items that have been accessed multiple times
+    def _get_cache_by_level(self, level: int) -> Dict[str, CacheItem]:
+        """Get cache dictionary by level"""
+        if level == 1:
+            return self.l1_cache
+        elif level == 2:
+            return self.l2_cache
+        else:
+            return self.l3_cache
+    
+    def _get_ttl_by_level(self, level: int) -> float:
+        """Get TTL by level"""
+        if level == 1:
+            return self.l1_ttl
+        elif level == 2:
+            return self.l2_ttl
+        else:
+            return self.l3_ttl
+    
+    def _get_max_size_by_level(self, level: int) -> int:
+        """Get max size by level"""
+        if level == 1:
+            return self.l1_max_size
+        elif level == 2:
+            return self.l2_max_size
+        else:
+            return self.l3_max_size
+    
+    def _promote_item(self, item: CacheItem, current_level: int, max_level: int) -> None:
+        """Promote an item to higher cache levels"""
+        # Only promote items with multiple accesses
         if item.access_count < 2:
             return
-            
-        # Check if promotion is warranted
-        should_promote = (
-            item.access_count > 5 or  # Frequently accessed
-            item.importance > 0.7 or  # Important item
-            time.time() - item.last_access < 60  # Recently accessed
-        )
         
-        if not should_promote:
+        # Skip if already at highest requested level
+        if current_level >= max_level:
             return
-            
-        # Promote to levels above current level
-        for level in range(current_level + 1, self.levels):
-            # Skip if already at highest requested level
-            if level >= self.levels:
-                break
-                
-            # Add to higher level
-            self.cache_levels[level][item.key] = item
-            
-            # Check size limit
-            self._check_size_limit(level + 1)
-            
-        self.promotions += 1
+        
+        # Add to one level higher
+        higher_level = min(current_level + 1, 3)
+        higher_cache = self._get_cache_by_level(higher_level)
+        higher_cache[item.key] = item
+        
+        # Check size limit
+        self._check_size_limit(higher_level)
     
     def _check_size_limit(self, level: int) -> None:
         """Check if a cache level exceeds its size limit and evict if necessary"""
-        level_idx = level - 1
-        cache = self.cache_levels[level_idx]
-        max_size = self.config[f"l{level}_max_size"]
+        cache = self._get_cache_by_level(level)
+        max_size = self._get_max_size_by_level(level)
         
         if len(cache) > max_size:
-            # Calculate how many items to evict (20% of excess)
-            evict_count = max(1, int((len(cache) - max_size) * 0.2))
-            self._evict_items(level_idx, evict_count)
+            # Calculate how many items to evict (10% of max size)
+            evict_count = max(1, int(max_size * 0.1))
+            self._evict_items(level, evict_count)
     
-    def _evict_items(self, level_idx: int, count: int) -> None:
+    def _evict_items(self, level: int, count: int) -> None:
         """Evict items from a cache level based on eviction scores"""
-        cache = self.cache_levels[level_idx]
+        cache = self._get_cache_by_level(level)
         
         # Calculate eviction scores
         scores = [(item.get_eviction_score(), key) for key, item in cache.items()]
@@ -304,7 +239,6 @@ class UnifiedCache:
         for _, key in scores[:count]:
             if key in cache:
                 del cache[key]
-                self.evictions += 1
     
     def invalidate(self, key_prefix: Optional[str] = None) -> int:
         """
@@ -318,9 +252,7 @@ class UnifiedCache:
         """
         count = 0
         
-        for level_idx in range(self.levels):
-            cache = self.cache_levels[level_idx]
-            
+        for cache in [self.l1_cache, self.l2_cache, self.l3_cache]:
             if key_prefix is None:
                 # Invalidate all
                 count += len(cache)
@@ -345,20 +277,27 @@ class UnifiedCache:
         asyncio.create_task(self._cleanup())
     
     async def _cleanup(self) -> None:
-        """Remove stale items and compact cache"""
+        """Remove stale items"""
         start = time.time()
         removed = 0
         
-        for level_idx in range(self.levels):
-            level = level_idx + 1
-            cache = self.cache_levels[level_idx]
-            ttl = self.config[f"l{level}_ttl"]
-            
-            # Remove stale items
-            stale_keys = [k for k, item in cache.items() if item.is_stale(ttl)]
-            for key in stale_keys:
-                del cache[key]
-                removed += 1
+        # Clean L1 cache
+        stale_keys = [k for k, item in self.l1_cache.items() if item.is_stale(self.l1_ttl)]
+        for key in stale_keys:
+            del self.l1_cache[key]
+            removed += 1
+        
+        # Clean L2 cache
+        stale_keys = [k for k, item in self.l2_cache.items() if item.is_stale(self.l2_ttl)]
+        for key in stale_keys:
+            del self.l2_cache[key]
+            removed += 1
+        
+        # Clean L3 cache
+        stale_keys = [k for k, item in self.l3_cache.items() if item.is_stale(self.l3_ttl)]
+        for key in stale_keys:
+            del self.l3_cache[key]
+            removed += 1
         
         duration = time.time() - start
         logger.debug(f"Cache cleanup completed in {duration:.3f}s: removed {removed} items")
@@ -368,89 +307,16 @@ class UnifiedCache:
         total_requests = self.hits + self.misses
         hit_rate = self.hits / total_requests if total_requests > 0 else 0
         
-        metrics = {
+        return {
             "hits": self.hits,
             "misses": self.misses,
             "hit_rate": hit_rate,
-            "insertions": self.inserts,
-            "evictions": self.evictions,
-            "promotions": self.promotions,
-            "compressed_items": self.compressed_items,
-            "compression_savings_bytes": self.compression_savings,
-            "levels": {}
+            "l1_size": len(self.l1_cache),
+            "l2_size": len(self.l2_cache),
+            "l3_size": len(self.l3_cache),
+            "total_items": len(self.l1_cache) + len(self.l2_cache) + len(self.l3_cache)
         }
-        
-        # Add level-specific metrics
-        for level_idx in range(self.levels):
-            level = level_idx + 1
-            cache = self.cache_levels[level_idx]
-            
-            metrics["levels"][f"l{level}"] = {
-                "size": len(cache),
-                "max_size": self.config[f"l{level}_max_size"],
-                "ttl": self.config[f"l{level}_ttl"],
-                "utilization": len(cache) / self.config[f"l{level}_max_size"]
-            }
-        
-        return metrics
-    
-    def _should_compress(self, value: Any) -> bool:
-        """Check if a value should be compressed"""
-        if not isinstance(value, (dict, list, str)):
-            return False
-            
-        # Estimate size in bytes
-        try:
-            value_size = len(json.dumps(value).encode('utf-8'))
-            return value_size > self.config["compression_threshold"]
-        except Exception:
-            return False
-    
-    def _compress_value(self, value: Any) -> Dict[str, Any]:
-        """Compress a value for storage"""
-        import zlib
-        import base64
-        
-        try:
-            # Convert to JSON and compress
-            json_value = json.dumps(value)
-            original_size = len(json_value)
-            
-            # Compress with zlib
-            compressed = zlib.compress(json_value.encode('utf-8'))
-            compressed_b64 = base64.b64encode(compressed).decode('ascii')
-            
-            compressed_size = len(compressed)
-            self.compressed_items += 1
-            self.compression_savings += (original_size - compressed_size)
-            
-            return {
-                "_compressed": True,
-                "format": "zlib+b64",
-                "data": compressed_b64,
-                "original_type": type(value).__name__
-            }
-        except Exception as e:
-            logger.warning(f"Compression failed: {e}")
-            return value
-    
-    def _decompress_value(self, compressed: Dict[str, Any]) -> Any:
-        """Decompress a stored value"""
-        import zlib
-        import base64
-        
-        try:
-            # Only support zlib+b64 format for now
-            if compressed.get("format") != "zlib+b64":
-                logger.warning(f"Unknown compression format: {compressed.get('format')}")
-                return compressed
-                
-            # Decode and decompress
-            compressed_data = base64.b64decode(compressed["data"])
-            json_value = zlib.decompress(compressed_data).decode('utf-8')
-            
-            # Parse JSON
-            return json.loads(json_value)
-        except Exception as e:
-            logger.error(f"Decompression failed: {e}")
-            return compressed
+
+
+# Singleton instance
+context_cache = UnifiedCache()
