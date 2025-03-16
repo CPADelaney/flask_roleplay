@@ -44,117 +44,74 @@ from lore.lore_tools import (
 import re
 
 class LoreCache:
-    """Unified cache system for all lore types with namespace support"""
+    """Unified cache system for all lore types with improved organization"""
     
     def __init__(self, max_size=1000, ttl=7200):
-        """
-        Initialize the cache.
-        
-        Args:
-            max_size: Maximum number of items in cache
-            ttl: Default time-to-live in seconds
-        """
         self.cache = {}
         self.max_size = max_size
         self.default_ttl = ttl
-        self.access_times = {}  # For LRU implementation
-        
-    def get(self, namespace, key, user_id=None, conversation_id=None):
-        """
-        Get an item from the specified namespace.
-        
-        Args:
-            namespace: Namespace for the key
-            key: Cache key
-            user_id: Optional user ID for scoping
-            conversation_id: Optional conversation ID for scoping
-            
-        Returns:
-            Cached value or None if not found/expired
-        """
+        self.access_times = {}
+        self._lock = asyncio.Lock()  # Thread-safety for async operations
+    
+    async def get(self, namespace, key, user_id=None, conversation_id=None):
+        """Get an item from the cache with async support"""
         full_key = self._create_key(namespace, key, user_id, conversation_id)
         
-        if full_key in self.cache:
-            value, expiry = self.cache[full_key]
-            if expiry > datetime.datetime.now().timestamp():
-                # Update access time for LRU
-                self.access_times[full_key] = datetime.datetime.now().timestamp()
-                return value
-            # Remove expired item
-            self._remove_key(full_key)
+        async with self._lock:
+            if full_key in self.cache:
+                value, expiry = self.cache[full_key]
+                if expiry > datetime.now().timestamp():
+                    # Update access time for LRU
+                    self.access_times[full_key] = datetime.now().timestamp()
+                    return value
+                # Remove expired item
+                self._remove_key(full_key)
         return None
     
-    def set(self, namespace, key, value, ttl=None, user_id=None, conversation_id=None):
-        """
-        Set an item in the specified namespace.
-        
-        Args:
-            namespace: Namespace for the key
-            key: Cache key
-            value: Value to cache
-            ttl: Time-to-live in seconds (optional)
-            user_id: Optional user ID for scoping
-            conversation_id: Optional conversation ID for scoping
-        """
+    async def set(self, namespace, key, value, ttl=None, user_id=None, conversation_id=None):
+        """Set an item in the cache with async support"""
         full_key = self._create_key(namespace, key, user_id, conversation_id)
-        expiry = datetime.datetime.now().timestamp() + (ttl or self.default_ttl)
+        expiry = datetime.now().timestamp() + (ttl or self.default_ttl)
         
-        # Manage cache size - use LRU strategy
-        if len(self.cache) >= self.max_size:
-            # Find oldest accessed item
-            oldest_key = min(self.access_times.items(), key=lambda x: x[1])[0]
-            self._remove_key(oldest_key)
-            
-        self.cache[full_key] = (value, expiry)
-        self.access_times[full_key] = datetime.datetime.now().timestamp()
+        async with self._lock:
+            # Manage cache size - use LRU strategy
+            if len(self.cache) >= self.max_size:
+                # Find oldest accessed item
+                oldest_key = min(self.access_times.items(), key=lambda x: x[1])[0]
+                self._remove_key(oldest_key)
+                
+            self.cache[full_key] = (value, expiry)
+            self.access_times[full_key] = datetime.now().timestamp()
     
-    def invalidate(self, namespace, key, user_id=None, conversation_id=None):
-        """
-        Invalidate a specific key in a namespace.
-        
-        Args:
-            namespace: Namespace for the key
-            key: Cache key to invalidate
-            user_id: Optional user ID for scoping
-            conversation_id: Optional conversation ID for scoping
-        """
+    async def invalidate(self, namespace, key, user_id=None, conversation_id=None):
+        """Invalidate a specific key with async support"""
         full_key = self._create_key(namespace, key, user_id, conversation_id)
-        self._remove_key(full_key)
+        async with self._lock:
+            self._remove_key(full_key)
     
-    def invalidate_pattern(self, namespace, pattern, user_id=None, conversation_id=None):
-        """
-        Invalidate keys matching a pattern in a namespace.
-        
-        Args:
-            namespace: Namespace for the keys
-            pattern: Regex pattern to match keys
-            user_id: Optional user ID for scoping
-            conversation_id: Optional conversation ID for scoping
-        """
+    async def invalidate_pattern(self, namespace, pattern, user_id=None, conversation_id=None):
+        """Invalidate keys matching a pattern with async support"""
         namespace_pattern = f"{namespace}:"
-        keys_to_remove = []
-        
-        for key in self.cache.keys():
-            if key.startswith(namespace_pattern):
-                # Extract the key part after the namespace
-                key_part = key[len(namespace_pattern):]
-                if re.search(pattern, key_part):
-                    keys_to_remove.append(key)
-                    
-        for key in keys_to_remove:
-            self._remove_key(key)
+        async with self._lock:
+            keys_to_remove = []
+            
+            for key in self.cache.keys():
+                if key.startswith(namespace_pattern):
+                    # Extract the key part after the namespace
+                    key_part = key[len(namespace_pattern):]
+                    if re.search(pattern, key_part):
+                        keys_to_remove.append(key)
+                        
+            for key in keys_to_remove:
+                self._remove_key(key)
     
-    def clear_namespace(self, namespace):
-        """
-        Clear all keys in a namespace.
-        
-        Args:
-            namespace: Namespace to clear
-        """
+    async def clear_namespace(self, namespace):
+        """Clear all keys in a namespace with async support"""
         namespace_prefix = f"{namespace}:"
-        keys_to_remove = [k for k in self.cache.keys() if k.startswith(namespace_prefix)]
-        for key in keys_to_remove:
-            self._remove_key(key)
+        async with self._lock:
+            keys_to_remove = [k for k in self.cache.keys() if k.startswith(namespace_prefix)]
+            for key in keys_to_remove:
+                self._remove_key(key)
     
     def _create_key(self, namespace, key, user_id=None, conversation_id=None):
         """Create a full cache key with optional scoping"""
@@ -179,8 +136,7 @@ GLOBAL_LORE_CACHE = LoreCache()
 class BaseLoreManager:
     """
     Enhanced base class for all lore management systems.
-    Provides common functionality for governance registration,
-    database access, authorization, and table initialization.
+    Centralized database operations, authorization and table management.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
@@ -196,35 +152,67 @@ class BaseLoreManager:
         self.governor = None
         self.initialized = False
         self.cache_namespace = self.__class__.__name__.lower()
+        self.db_pool = None
+        
+        # Define standard table columns for common operations
+        self._standard_columns = {
+            'id': 'SERIAL PRIMARY KEY',
+            'name': 'TEXT NOT NULL',
+            'description': 'TEXT NOT NULL',
+            'timestamp': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+            'embedding': 'VECTOR(1536)'
+        }
     
     async def ensure_initialized(self):
         """
         Ensure governance is initialized and any necessary tables exist.
-        Should be overridden by derived classes to include table initialization.
         """
         if not self.initialized:
             await self._initialize_governance()
             await self._initialize_tables()
+            await self._initialize_db_pool()
             self.initialized = True
     
     async def _initialize_governance(self):
-        """
-        Initialize Nyx governance connection.
-        
-        Returns:
-            The governance instance
-        """
+        """Initialize Nyx governance connection."""
         if not self.governor:
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
         return self.governor
     
+    async def _initialize_db_pool(self):
+        """Initialize database connection pool."""
+        if not self.db_pool:
+            self.db_pool = await get_db_connection(self.user_id, self.conversation_id)
+        return self.db_pool
+    
     async def _initialize_tables(self):
-        """
-        Initialize database tables.
-        Should be overridden by derived classes.
-        """
+        """Initialize database tables - to be implemented by derived classes."""
         pass
     
+    async def initialize_tables_for_class(self, table_definitions: Dict[str, str]):
+        """
+        Initialize tables using a dictionary of table definitions.
+        
+        Args:
+            table_definitions: Dictionary mapping table names to CREATE TABLE statements
+        """
+        db_pool = await self._initialize_db_pool()
+        async with db_pool.acquire() as conn:
+            for table_name, create_statement in table_definitions.items():
+                # Check if table exists
+                table_exists = await conn.fetchval(f"""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = '{table_name.lower()}'
+                    );
+                """)
+                
+                if not table_exists:
+                    # Create the table
+                    await conn.execute(create_statement)
+                    logging.info(f"{table_name} table created")
+    
+    # Enhanced governance registration with sensible defaults
     async def register_with_governance(
         self, 
         agent_type: AgentType = None, 
@@ -234,20 +222,13 @@ class BaseLoreManager:
         priority: DirectivePriority = DirectivePriority.MEDIUM
     ):
         """
-        Register with Nyx governance system.
-        
-        Args:
-            agent_type: Type of agent (from AgentType enum)
-            agent_id: Unique ID for this agent
-            directive_text: Text describing the directive
-            scope: Scope of the directive
-            priority: Priority level for the directive
+        Register with Nyx governance system with sensible defaults.
         """
         await self.ensure_initialized()
         
         # Default values if not provided
         agent_type = agent_type or AgentType.NARRATIVE_CRAFTER
-        agent_id = agent_id or self.__class__.__name__
+        agent_id = agent_id or self.__class__.__name__.lower()
         directive_text = directive_text or f"Manage {self.__class__.__name__} for the world setting."
         
         # Register this system with governance
@@ -270,194 +251,189 @@ class BaseLoreManager:
             duration_minutes=24*60  # 24 hours
         )
         
-        logging.info(f"{agent_id} registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
+        logging.info(f"{agent_id} registered with governance for user {self.user_id}, conversation {self.conversation_id}")
     
-    async def check_permission(
-        self, 
-        agent_type: AgentType, 
-        agent_id: str, 
-        action_type: str, 
-        action_details: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Check if an action is permitted by governance system.
-        
-        Args:
-            agent_type: Type of agent
-            agent_id: ID of the agent
-            action_type: Type of action
-            action_details: Details of the action
+    # Standardized CRUD operations with error handling and permission checking
+    
+    @with_governance_permission
+    async def create_record(self, table_name: str, data: Dict[str, Any]) -> int:
+        """Create a record with governance oversight."""
+        return await self._create_record_internal(table_name, data)
+    
+    async def _create_record_internal(self, table_name: str, data: Dict[str, Any]) -> int:
+        """Internal method for record creation with error handling."""
+        try:
+            columns = list(data.keys())
+            values = list(data.values())
+            placeholders = [f"${i+1}" for i in range(len(values))]
             
-        Returns:
-            Dictionary with permission result
-        """
-        await self.ensure_initialized()
-        
-        return await self.governor.check_action_permission(
-            agent_type=agent_type,
-            agent_id=agent_id,
-            action_type=action_type,
-            action_details=action_details
-        )
-    
-    async def report_action(
-        self, 
-        agent_type: AgentType, 
-        agent_id: str, 
-        action: Dict[str, Any], 
-        result: Dict[str, Any]
-    ):
-        """
-        Report an action to the governance system.
-        
-        Args:
-            agent_type: Type of agent
-            agent_id: ID of the agent
-            action: Action details
-            result: Result of the action
-        """
-        await self.ensure_initialized()
-        
-        await self.governor.process_agent_action_report(
-            agent_type=agent_type,
-            agent_id=agent_id,
-            action=action,
-            result=result
-        )
-    
-    async def get_connection_pool(self):
-        """
-        Get a database connection pool.
-        
-        Returns:
-            Database connection pool
-        """
-        return await get_db_connection(self.user_id, self.conversation_id)
-    
-    async def initialize_tables_from_definitions(self, table_definitions: Dict[str, str]):
-        """
-        Initialize tables using a dictionary of table definitions.
-        
-        Args:
-            table_definitions: Dictionary mapping table names to CREATE TABLE statements
-        """
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                for table_name, create_statement in table_definitions.items():
-                    # Check if table exists
-                    table_exists = await conn.fetchval(f"""
-                        SELECT EXISTS (
-                            SELECT FROM information_schema.tables 
-                            WHERE table_name = '{table_name.lower()}'
-                        );
-                    """)
-                    
-                    if not table_exists:
-                        # Create the table
-                        await conn.execute(create_statement)
-                        logging.info(f"{table_name} table created")
-    
-    # New standardized CRUD methods
-    
-    async def get_by_id(self, table_name: str, id_value: Any, id_field: str = "id") -> Optional[Dict[str, Any]]:
-        """
-        Get a record by ID.
-        
-        Args:
-            table_name: Table name
-            id_value: ID value
-            id_field: ID field name (default: "id")
+            query = f"""
+                INSERT INTO {table_name} 
+                ({', '.join(columns)})
+                VALUES ({', '.join(placeholders)})
+                RETURNING id
+            """
             
-        Returns:
-            Record as dict or None if not found
-        """
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
+            db_pool = await self._initialize_db_pool()
+            async with db_pool.acquire() as conn:
+                record_id = await conn.fetchval(query, *values)
+                
+                # Generate embedding if text data is provided
+                if 'name' in data and 'description' in data and 'embedding' not in data:
+                    embedding_text = f"{data['name']} {data['description']}"
+                    await self.generate_and_store_embedding(embedding_text, conn, table_name, "id", record_id)
+                
+                return record_id
+        except Exception as e:
+            logging.error(f"Error creating record in {table_name}: {e}")
+            raise
+    
+    @with_governance_permission
+    async def get_record(self, table_name: str, record_id: int) -> Optional[Dict[str, Any]]:
+        """Get a record by ID with governance oversight."""
+        # Check cache first
+        cache_key = f"{table_name}_{record_id}"
+        cached = self.get_cache(cache_key)
+        if cached:
+            return cached
+            
+        try:
+            db_pool = await self._initialize_db_pool()
+            async with db_pool.acquire() as conn:
                 record = await conn.fetchrow(f"""
                     SELECT * FROM {table_name}
-                    WHERE {id_field} = $1
-                """, id_value)
+                    WHERE id = $1
+                """, record_id)
                 
-                return dict(record) if record else None
+                if record:
+                    result = dict(record)
+                    # Cache the result
+                    self.set_cache(cache_key, result)
+                    return result
+                return None
+        except Exception as e:
+            logging.error(f"Error fetching record {record_id} from {table_name}: {e}")
+            return None
     
-    async def insert_record(self, table_name: str, data: Dict[str, Any], return_field: str = "id") -> Any:
-        """
-        Insert a record.
-        
-        Args:
-            table_name: Table name
-            data: Record data
-            return_field: Field to return (default: "id")
+    @with_governance_permission
+    async def update_record(self, table_name: str, record_id: int, data: Dict[str, Any]) -> bool:
+        """Update a record with governance oversight."""
+        try:
+            if not data:
+                return False
+                
+            columns = list(data.keys())
+            values = list(data.values())
+            set_clause = ", ".join([f"{col} = ${i+1}" for i, col in enumerate(columns)])
             
-        Returns:
-            Value of the return field
-        """
-        columns = list(data.keys())
-        values = list(data.values())
-        placeholders = [f"${i+1}" for i in range(len(values))]
-        
-        query = f"""
-            INSERT INTO {table_name} 
-            ({', '.join(columns)})
-            VALUES ({', '.join(placeholders)})
-            RETURNING {return_field}
-        """
-        
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                return await conn.fetchval(query, *values)
-    
-    async def update_record(self, table_name: str, id_value: Any, data: Dict[str, Any], id_field: str = "id") -> bool:
-        """
-        Update a record.
-        
-        Args:
-            table_name: Table name
-            id_value: ID value
-            data: Record data
-            id_field: ID field name (default: "id")
+            query = f"""
+                UPDATE {table_name}
+                SET {set_clause}
+                WHERE id = ${len(values) + 1}
+            """
             
-        Returns:
-            True if updated, False if not found
-        """
-        if not data:
-            return False
-            
-        columns = list(data.keys())
-        values = list(data.values())
-        set_clause = ", ".join([f"{col} = ${i+1}" for i, col in enumerate(columns)])
-        
-        query = f"""
-            UPDATE {table_name}
-            SET {set_clause}
-            WHERE {id_field} = ${len(values) + 1}
-        """
-        
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                result = await conn.execute(query, *values, id_value)
+            db_pool = await self._initialize_db_pool()
+            async with db_pool.acquire() as conn:
+                result = await conn.execute(query, *values, record_id)
+                
+                # Update embedding if text content changed
+                if ('name' in data or 'description' in data):
+                    # Get full record data
+                    record = await conn.fetchrow(f"SELECT * FROM {table_name} WHERE id = $1", record_id)
+                    if record:
+                        record_dict = dict(record)
+                        embedding_text = f"{record_dict.get('name', '')} {record_dict.get('description', '')}"
+                        await self.generate_and_store_embedding(embedding_text, conn, table_name, "id", record_id)
+                
+                # Invalidate cache
+                self.invalidate_cache(f"{table_name}_{record_id}")
+                
                 return result != "UPDATE 0"
+        except Exception as e:
+            logging.error(f"Error updating record {record_id} in {table_name}: {e}")
+            return False
     
-    async def delete_record(self, table_name: str, id_value: Any, id_field: str = "id") -> bool:
-        """
-        Delete a record.
-        
-        Args:
-            table_name: Table name
-            id_value: ID value
-            id_field: ID field name (default: "id")
-            
-        Returns:
-            True if deleted, False if not found
-        """
-        async with await self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
+    @with_governance_permission
+    async def delete_record(self, table_name: str, record_id: int) -> bool:
+        """Delete a record with governance oversight."""
+        try:
+            db_pool = await self._initialize_db_pool()
+            async with db_pool.acquire() as conn:
                 result = await conn.execute(f"""
                     DELETE FROM {table_name}
-                    WHERE {id_field} = $1
-                """, id_value)
+                    WHERE id = $1
+                """, record_id)
+                
+                # Invalidate cache
+                self.invalidate_cache(f"{table_name}_{record_id}")
                 
                 return result != "DELETE 0"
+        except Exception as e:
+            logging.error(f"Error deleting record {record_id} from {table_name}: {e}")
+            return False
+    
+    @with_governance_permission
+    async def query_records(self, table_name: str, conditions: Dict[str, Any] = None, 
+                           limit: int = 100, order_by: str = None) -> List[Dict[str, Any]]:
+        """Query records with conditions and governance oversight."""
+        try:
+            # Build query
+            query = f"SELECT * FROM {table_name}"
+            values = []
+            
+            if conditions:
+                where_clauses = []
+                for i, (col, val) in enumerate(conditions.items()):
+                    where_clauses.append(f"{col} = ${i+1}")
+                    values.append(val)
+                query += f" WHERE {' AND '.join(where_clauses)}"
+            
+            if order_by:
+                query += f" ORDER BY {order_by}"
+                
+            query += f" LIMIT {limit}"
+            
+            # Execute query
+            db_pool = await self._initialize_db_pool()
+            async with db_pool.acquire() as conn:
+                records = await conn.fetch(query, *values)
+                return [dict(record) for record in records]
+        except Exception as e:
+            logging.error(f"Error querying records from {table_name}: {e}")
+            return []
+    
+    async def search_by_similarity(self, table_name: str, text: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Search records by semantic similarity to the provided text."""
+        try:
+            # Generate embedding for the query text
+            embedding = await generate_embedding(text)
+            
+            db_pool = await self._initialize_db_pool()
+            async with db_pool.acquire() as conn:
+                # Check if the table has an embedding column
+                has_embedding = await conn.fetchval(f"""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_name = '{table_name.lower()}' AND column_name = 'embedding'
+                    );
+                """)
+                
+                if not has_embedding:
+                    return []
+                
+                # Perform similarity search
+                records = await conn.fetch(f"""
+                    SELECT *, 1 - (embedding <=> $1) as similarity
+                    FROM {table_name}
+                    WHERE embedding IS NOT NULL
+                    ORDER BY embedding <=> $1
+                    LIMIT $2
+                """, embedding, limit)
+                
+                return [dict(record) for record in records]
+        except Exception as e:
+            logging.error(f"Error performing similarity search in {table_name}: {e}")
+            return []
     
     async def generate_and_store_embedding(
         self, 
@@ -477,128 +453,191 @@ class BaseLoreManager:
             id_field: Name of the ID field
             id_value: Value of the ID
         """
-        # Generate embedding
-        embedding = await generate_embedding(text)
-        
-        # Update the table
-        await conn.execute(f"""
-            UPDATE {table_name}
-            SET embedding = $1
-            WHERE {id_field} = $2
-        """, embedding, id_value)
+        try:
+            # Generate embedding
+            embedding = await generate_embedding(text)
+            
+            # Update the table
+            await conn.execute(f"""
+                UPDATE {table_name}
+                SET embedding = $1
+                WHERE {id_field} = $2
+            """, embedding, id_value)
+        except Exception as e:
+            logging.error(f"Error generating embedding for {table_name}.{id_field}={id_value}: {e}")
     
-    # Cache methods
+    # Standardized caching methods
     
     def get_cache(self, key: str) -> Any:
-        """
-        Get an item from the cache.
-        
-        Args:
-            key: Cache key
-            
-        Returns:
-            Cached item or None
-        """
+        """Get an item from the cache."""
         return GLOBAL_LORE_CACHE.get(self.cache_namespace, key, self.user_id, self.conversation_id)
     
     def set_cache(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        """
-        Set an item in the cache.
-        
-        Args:
-            key: Cache key
-            value: Value to cache
-            ttl: Optional time-to-live in seconds
-        """
+        """Set an item in the cache."""
         GLOBAL_LORE_CACHE.set(self.cache_namespace, key, value, ttl, self.user_id, self.conversation_id)
     
     def invalidate_cache(self, key: str) -> None:
-        """
-        Invalidate a specific cache key.
-        
-        Args:
-            key: Cache key to invalidate
-        """
+        """Invalidate a specific cache key."""
         GLOBAL_LORE_CACHE.invalidate(self.cache_namespace, key, self.user_id, self.conversation_id)
     
     def invalidate_cache_pattern(self, pattern: str) -> None:
-        """
-        Invalidate cache keys matching a pattern.
-        
-        Args:
-            pattern: Pattern to match
-        """
+        """Invalidate cache keys matching a pattern."""
         GLOBAL_LORE_CACHE.invalidate_pattern(self.cache_namespace, pattern, self.user_id, self.conversation_id)
     
     def clear_cache(self) -> None:
-        """Clear all cache entries for this manager"""
+        """Clear all cache entries for this manager."""
         GLOBAL_LORE_CACHE.clear_namespace(self.cache_namespace)
-        
+    
+    # Utility methods
+    
     def create_run_context(self, ctx):
-        """Create a run context from context"""
+        """Create a run context from context."""
         if hasattr(ctx, 'context'):
             return ctx
         return RunContextWrapper(context=ctx)
-
+    
+    async def execute_llm_prompt(self, prompt: str, agent_name: str = None, model: str = "o3-mini") -> str:
+        """Execute a prompt with an LLM agent."""
+        # Create run context
+        run_ctx = RunContextWrapper(context={
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        })
+        
+        # Create agent
+        agent = Agent(
+            name=agent_name or f"{self.__class__.__name__}Agent",
+            instructions=f"You help with generating content for {self.__class__.__name__}.",
+            model=model
+        )
+        
+        # Run prompt
+        result = await Runner.run(agent, prompt, context=run_ctx.context)
+        return result.final_output
+    
+    async def create_table_definition(self, table_name: str, extra_columns: Dict[str, str] = None,
+                                     include_standard: bool = True, foreign_keys: Dict[str, str] = None) -> str:
+        """
+        Create a standardized table definition.
+        
+        Args:
+            table_name: Name of the table
+            extra_columns: Additional columns beyond the standard ones
+            include_standard: Whether to include standard columns
+            foreign_keys: Dictionary mapping column names to referenced tables/columns
+            
+        Returns:
+            SQL CREATE TABLE statement
+        """
+        all_columns = {}
+        
+        # Add standard columns if requested
+        if include_standard:
+            all_columns.update(self._standard_columns)
+        
+        # Add extra columns
+        if extra_columns:
+            all_columns.update(extra_columns)
+        
+        # Build column definitions
+        column_defs = [f"{col} {definition}" for col, definition in all_columns.items()]
+        
+        # Add foreign keys
+        if foreign_keys:
+            for column, reference in foreign_keys.items():
+                column_defs.append(f"FOREIGN KEY ({column}) REFERENCES {reference} ON DELETE CASCADE")
+        
+        # Create the SQL statement
+        sql = f"""
+            CREATE TABLE {table_name} (
+                {', '.join(column_defs)}
+            );
+            
+            CREATE INDEX IF NOT EXISTS idx_{table_name.lower()}_embedding 
+            ON {table_name} USING ivfflat (embedding vector_cosine_ops);
+        """
+        
+        return sql
+                                         
 class ManagerRegistry:
     """
-    Registry for all manager classes with lazy loading.
+    Enhanced registry for all manager classes with lazy loading and dependency injection.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
         self.user_id = user_id
         self.conversation_id = conversation_id
         self._managers = {}
+        self._class_map = {
+            'lore_dynamics': LoreDynamicsSystem,
+            'geopolitical': GeopoliticalSystemManager,
+            'local_lore': LocalLoreManager,
+            'religion': ReligionManager,
+            'world_politics': WorldPoliticsManager,
+            'regional_culture': RegionalCultureSystem,
+            'educational': EducationalSystemManager,
+            'master': MatriarchalLoreSystem
+        }
     
-    def get_manager(self, manager_class):
+    async def get_manager(self, manager_key: str) -> BaseLoreManager:
         """
-        Get a manager instance, creating it if not already created.
+        Get a manager instance by key, creating it if not already created.
+        Will ensure the manager is initialized.
         
         Args:
-            manager_class: Class of the manager to get
+            manager_key: Key of the manager to get
             
         Returns:
             Instance of the manager
         """
-        class_name = manager_class.__name__
-        if class_name not in self._managers:
-            self._managers[class_name] = manager_class(self.user_id, self.conversation_id)
-        return self._managers[class_name]
+        if manager_key not in self._managers:
+            if manager_key not in self._class_map:
+                raise ValueError(f"Unknown manager key: {manager_key}")
+                
+            manager_class = self._class_map[manager_key]
+            self._managers[manager_key] = manager_class(self.user_id, self.conversation_id)
+        
+        # Ensure manager is initialized
+        manager = self._managers[manager_key]
+        await manager.ensure_initialized()
+        return manager
     
-    def get_lore_dynamics(self):
+    async def get_lore_dynamics(self) -> LoreDynamicsSystem:
         """Get the LoreDynamicsSystem instance"""
-        from lore.lore_tools import LoreDynamicsSystem
-        return self.get_manager(LoreDynamicsSystem)
+        return await self.get_manager('lore_dynamics')
     
-    def get_geopolitical_manager(self):
+    async def get_geopolitical_manager(self) -> GeopoliticalSystemManager:
         """Get the GeopoliticalSystemManager instance"""
-        from lore.lore_tools import GeopoliticalSystemManager
-        return self.get_manager(GeopoliticalSystemManager)
+        return await self.get_manager('geopolitical')
     
-    def get_local_lore_manager(self):
+    async def get_local_lore_manager(self) -> LocalLoreManager:
         """Get the LocalLoreManager instance"""
-        from lore.lore_tools import LocalLoreManager
-        return self.get_manager(LocalLoreManager)
+        return await self.get_manager('local_lore')
     
-    def get_religion_manager(self):
+    async def get_religion_manager(self) -> ReligionManager:
         """Get the ReligionManager instance"""
-        from lore.lore_tools import ReligionManager
-        return self.get_manager(ReligionManager)
+        return await self.get_manager('religion')
     
-    def get_world_politics_manager(self):
+    async def get_world_politics_manager(self) -> WorldPoliticsManager:
         """Get the WorldPoliticsManager instance"""
-        from lore.lore_tools import WorldPoliticsManager
-        return self.get_manager(WorldPoliticsManager)
+        return await self.get_manager('world_politics')
     
-    def get_regional_culture_system(self):
+    async def get_regional_culture_system(self) -> RegionalCultureSystem:
         """Get the RegionalCultureSystem instance"""
-        from lore.lore_tools import RegionalCultureSystem
-        return self.get_manager(RegionalCultureSystem)
+        return await self.get_manager('regional_culture')
     
-    def get_educational_system_manager(self):
+    async def get_educational_system_manager(self) -> EducationalSystemManager:
         """Get the EducationalSystemManager instance"""
-        from lore.lore_tools import EducationalSystemManager
-        return self.get_manager(EducationalSystemManager)
+        return await self.get_manager('educational')
+    
+    async def get_master_lore_system(self) -> MatriarchalLoreSystem:
+        """Get the MatriarchalLoreSystem instance"""
+        return await self.get_manager('master')
+    
+    async def initialize_all(self):
+        """Initialize all manager instances."""
+        for key in self._class_map.keys():
+            await self.get_manager(key)
 
 class MatriarchalPowerStructureFramework(BaseLoreManager):
     """
@@ -7709,17 +7748,17 @@ class MatriarchalLoreSystem(BaseLoreManager):
     def __init__(self, user_id: int, conversation_id: int):
         super().__init__(user_id, conversation_id)
         
-        # Use manager registry for lazy loading subsystems
-        self.managers = ManagerRegistry(user_id, conversation_id)
+        # Create registry for component managers
+        self.registry = ManagerRegistry(user_id, conversation_id)
         self.cache_namespace = "matriarchal_lore"
     
     async def ensure_initialized(self):
         """Ensure system is initialized"""
         if not self.initialized:
             await super().ensure_initialized()
-            # Only initialize core subsystems - others will be loaded on demand
-            await self.managers.get_lore_dynamics().ensure_initialized()
-            await self.managers.get_geopolitical_manager().ensure_initialized()
+            # Initialize core subsystems - others will be loaded on demand
+            await self.registry.get_lore_dynamics()
+            await self.registry.get_geopolitical_manager()
             self.initialized = True
     
     @with_governance(
@@ -7752,42 +7791,33 @@ class MatriarchalLoreSystem(BaseLoreManager):
         # First apply matriarchal theming to the event description
         themed_event = MatriarchalThemingUtils.apply_matriarchal_theme("event", event_description, emphasis_level=1)
         
-        # Use LoreDynamicsSystem to evolve general lore
-        lore_dynamics = self.managers.get_lore_dynamics()
-        lore_updates = await lore_dynamics.evolve_lore_with_event(themed_event)
+        # Create response structure
+        response = {
+            "event": themed_event,
+            "original_event": event_description,
+            "event_impact": await self._calculate_event_impact(themed_event),
+            "lore_updates": None,
+            "local_updates": None,
+            "conflict_results": None
+        }
         
-        # If a specific location is affected, update local lore as well
-        local_updates = None
+        # Evolve general lore
+        lore_dynamics = await self.registry.get_lore_dynamics()
+        response["lore_updates"] = await lore_dynamics.evolve_lore_with_event(themed_event)
+        
+        # If a specific location is affected, update local lore
         if affected_location_id:
-            # Load the local lore system only when needed
-            local_lore_manager = self.managers.get_local_lore_manager()
-            await local_lore_manager.ensure_initialized()
-            
-            local_updates = await local_lore_manager.evolve_location_lore(
+            local_lore_manager = await self.registry.get_local_lore_manager()
+            response["local_updates"] = await local_lore_manager.evolve_location_lore(
                 run_ctx, affected_location_id, themed_event
             )
         
-        # Check if the event should affect international relations
-        event_impact = await self._calculate_event_impact(themed_event)
+        # If event has significant impact, update conflicts
+        if response["event_impact"] > 6:
+            world_politics = await self.registry.get_world_politics_manager()
+            response["conflict_results"] = await world_politics.evolve_all_conflicts(run_ctx, days_passed=7)
         
-        # If significant impact, evolve conflicts
-        conflict_results = None
-        if event_impact > 6:
-            # Load the world politics manager only when needed
-            world_politics = self.managers.get_world_politics_manager()
-            await world_politics.ensure_initialized()
-            
-            # Evolve conflicts based on the event
-            conflict_results = await world_politics.evolve_all_conflicts(run_ctx, days_passed=7)
-        
-        return {
-            "event": themed_event,
-            "original_event": event_description,
-            "lore_updates": lore_updates,
-            "event_impact": event_impact,
-            "conflict_results": conflict_results,
-            "local_lore_updates": local_updates
-        }
+        return response
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -7808,68 +7838,61 @@ class MatriarchalLoreSystem(BaseLoreManager):
         # Create run context
         run_ctx = self.create_run_context(ctx)
         
+        # Track progress
+        progress = {}
+        
         # 1. Generate foundation lore through DynamicLoreGenerator
         dynamic_lore = DynamicLoreGenerator(self.user_id, self.conversation_id)
         
-        # Generate foundation lore
+        # Generate foundation lore with matriarchal theming
         foundation_data = await dynamic_lore.initialize_world_lore(environment_desc)
-        
-        # Apply matriarchal theming to foundation lore
         for key, content in foundation_data.items():
             foundation_data[key] = MatriarchalThemingUtils.apply_matriarchal_theme(key, content)
+        progress["foundation_lore"] = foundation_data
         
         # 2. Generate factions with matriarchal power structures
         factions_data = await dynamic_lore.generate_factions(environment_desc, foundation_data)
+        progress["factions"] = factions_data
         
         # 3. Generate cultural elements
         cultural_data = await dynamic_lore.generate_cultural_elements(environment_desc, factions_data)
+        progress["cultural_elements"] = cultural_data
         
         # 4. Generate historical events emphasizing matriarchal history
         historical_data = await dynamic_lore.generate_historical_events(
             environment_desc, foundation_data, factions_data
         )
+        progress["historical_events"] = historical_data
         
         # 5. Generate locations
         locations_data = await dynamic_lore.generate_locations(environment_desc, factions_data)
+        progress["locations"] = locations_data
         
         # 6. Generate quest hooks
         quests_data = await dynamic_lore.generate_quest_hooks(factions_data, locations_data)
+        progress["quests"] = quests_data
         
         # 7. Generate world nations
-        geopolitical_manager = self.managers.get_geopolitical_manager()
-        await geopolitical_manager.ensure_initialized()
+        geopolitical_manager = await self.registry.get_geopolitical_manager()
         nations = await geopolitical_manager.generate_world_nations(run_ctx)
+        progress["nations"] = nations
         
-        # 8. Generate religion (load on demand)
-        religion_manager = self.managers.get_religion_manager()
-        await religion_manager.ensure_initialized()
+        # 8. Generate religion
+        religion_manager = await self.registry.get_religion_manager()
         religious_data = await religion_manager.generate_complete_faith_system(run_ctx)
+        progress["religions"] = religious_data
         
-        # 9. Generate international conflicts (load on demand)
-        world_politics = self.managers.get_world_politics_manager()
-        await world_politics.ensure_initialized()
+        # 9. Generate international conflicts
+        world_politics = await self.registry.get_world_politics_manager()
         conflicts = await world_politics.generate_initial_conflicts(run_ctx, count=3)
+        progress["conflicts"] = conflicts
         
-        # 10. Generate regional cultures (load on demand)
-        culture_system = self.managers.get_regional_culture_system()
-        await culture_system.ensure_initialized()
+        # 10. Generate regional cultures
+        culture_system = await self.registry.get_regional_culture_system()
         languages = await culture_system.generate_languages(run_ctx, count=3)
+        progress["languages"] = languages
         
-        # Combine all results
-        complete_lore = {
-            "foundation_lore": foundation_data,
-            "factions": factions_data,
-            "cultural_elements": cultural_data,
-            "historical_events": historical_data,
-            "locations": locations_data,
-            "quests": quests_data,
-            "nations": nations,
-            "religions": religious_data,
-            "conflicts": conflicts,
-            "languages": languages
-        }
-        
-        return complete_lore
+        return progress
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -7891,230 +7914,8 @@ class MatriarchalLoreSystem(BaseLoreManager):
         run_ctx = self.create_run_context(ctx)
         
         # Use the lore dynamics system to evolve the world
-        lore_dynamics = self.managers.get_lore_dynamics()
-        evolution_results = await lore_dynamics.evolve_world_over_time(ctx, days_passed)
-        
-        return evolution_results
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="handle_world_event",
-        action_description="Processing world event impact",
-        id_from_context=lambda ctx: "matriarchal_lore_system"
-    )
-    async def handle_world_event(
-        self, 
-        ctx,
-        event_description: str,
-        affected_location_ids: List[int] = None,
-        affected_nation_ids: List[int] = None,
-        event_type: str = "general",
-        severity: int = 5
-    ) -> Dict[str, Any]:
-        """
-        Universal method to handle any type of world event and its impacts.
-        
-        Args:
-            event_description: Description of the event
-            affected_location_ids: Optional list of specifically affected locations
-            affected_nation_ids: Optional list of specifically affected nations
-            event_type: Type of event (general, political, natural, etc.)
-            severity: Severity of the event (1-10)
-            
-        Returns:
-            Dictionary with all updates applied
-        """
-        # Create run context
-        run_ctx = self.create_run_context(ctx)
-        
-        # First apply matriarchal theming to the event description
-        themed_event = MatriarchalThemingUtils.apply_matriarchal_theme("event", event_description, emphasis_level=2)
-        
-        # Use LoreDynamicsSystem to evolve general lore
-        lore_dynamics = self.managers.get_lore_dynamics()
-        lore_updates = await lore_dynamics.evolve_lore_with_event(themed_event)
-        
-        # Track all updates
-        all_updates = {
-            "event": themed_event,
-            "original_event": event_description,
-            "event_type": event_type,
-            "severity": severity,
-            "lore_updates": lore_updates,
-            "location_updates": {},
-            "nation_updates": {},
-            "religion_updates": {},
-            "culture_updates": {}
-        }
-        
-        # If specific locations are affected, update local lore
-        if affected_location_ids:
-            local_lore_manager = self.managers.get_local_lore_manager()
-            await local_lore_manager.ensure_initialized()
-            
-            for location_id in affected_location_ids:
-                local_updates = await local_lore_manager.evolve_location_lore(
-                    run_ctx, location_id, themed_event
-                )
-                all_updates["location_updates"][location_id] = local_updates
-        
-        # If specific nations are affected, update national politics
-        if affected_nation_ids:
-            world_politics = self.managers.get_world_politics_manager()
-            await world_politics.ensure_initialized()
-            
-            for nation_id in affected_nation_ids:
-                # Need to implement this method in WorldPoliticsManager
-                nation_updates = await world_politics.evolve_nation_politics(
-                    run_ctx, nation_id, themed_event, severity
-                )
-                all_updates["nation_updates"][nation_id] = nation_updates
-        
-        # If event is severe enough, update religious context
-        if severity >= 7:
-            religion_manager = self.managers.get_religion_manager()
-            await religion_manager.ensure_initialized()
-            
-            # Need to implement this method in ReligionManager
-            religion_updates = await religion_manager.respond_to_world_event(
-                run_ctx, themed_event, affected_nation_ids, severity
-            )
-            all_updates["religion_updates"] = religion_updates
-        
-        # If this is a cultural event, update cultural norms
-        if event_type in ["cultural", "social"] or severity >= 8:
-            culture_system = self.managers.get_regional_culture_system()
-            await culture_system.ensure_initialized()
-            
-            # Need to implement this method in RegionalCultureSystem
-            culture_updates = await culture_system.evolve_cultural_norms_from_event(
-                run_ctx, themed_event, affected_nation_ids, severity
-            )
-            all_updates["culture_updates"] = culture_updates
-        
-        return all_updates
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="generate_additional_content",
-        action_description="Generating additional content of type: {content_type}",
-        id_from_context=lambda ctx: "matriarchal_lore_system"
-    )
-    async def generate_additional_content(
-        self, 
-        ctx, 
-        content_type: str, 
-        parameters: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
-        """
-        Generate additional content of a specific type
-        
-        Args:
-            content_type: Type of content to generate (faction, location, etc.)
-            parameters: Optional parameters specific to the content type
-            
-        Returns:
-            Generated content
-        """
-        # Create run context
-        run_ctx = self.create_run_context(ctx)
-        parameters = parameters or {}
-        
-        # Delegate to appropriate subsystem based on content type
-        if content_type == "faction":
-            lore_dynamics = self.managers.get_lore_dynamics()
-            return await lore_dynamics.generate_additional_faction(run_ctx, **parameters)
-        
-        elif content_type == "location":
-            lore_dynamics = self.managers.get_lore_dynamics()
-            return await lore_dynamics.generate_additional_locations(run_ctx, **parameters)
-        
-        elif content_type == "cultural_element":
-            lore_dynamics = self.managers.get_lore_dynamics()
-            return await lore_dynamics.generate_additional_cultural_elements(run_ctx, **parameters)
-            
-        elif content_type == "nation":
-            geopolitical_manager = self.managers.get_geopolitical_manager()
-            await geopolitical_manager.ensure_initialized()
-            return await geopolitical_manager.generate_additional_nation(run_ctx, **parameters)
-            
-        elif content_type == "religion":
-            religion_manager = self.managers.get_religion_manager()
-            await religion_manager.ensure_initialized()
-            
-            if "pantheon_id" in parameters:
-                # Generate components for existing pantheon
-                if "component_type" in parameters:
-                    component_type = parameters["component_type"]
-                    pantheon_id = parameters["pantheon_id"]
-                    
-                    if component_type == "religious_practices":
-                        return await religion_manager.generate_religious_practices(run_ctx, pantheon_id)
-                    elif component_type == "holy_sites":
-                        return await religion_manager.generate_holy_sites(run_ctx, pantheon_id)
-                    else:
-                        return {"error": f"Unknown religion component type: {component_type}"}
-            else:
-                # Generate new pantheon
-                return await religion_manager.generate_pantheon(run_ctx)
-                
-        elif content_type == "conflict":
-            world_politics = self.managers.get_world_politics_manager()
-            await world_politics.ensure_initialized()
-            return await world_politics.generate_initial_conflicts(run_ctx, count=parameters.get("count", 1))
-            
-        elif content_type == "language":
-            culture_system = self.managers.get_regional_culture_system()
-            await culture_system.ensure_initialized()
-            return await culture_system.generate_languages(run_ctx, count=parameters.get("count", 1))
-            
-        elif content_type == "local_lore":
-            if "location_id" not in parameters:
-                return {"error": "location_id parameter required for local_lore generation"}
-                
-            local_lore_manager = self.managers.get_local_lore_manager()
-            await local_lore_manager.ensure_initialized()
-            
-            location_id = parameters["location_id"]
-            return await local_lore_manager.generate_location_lore(run_ctx, {"id": location_id})
-            
-        else:
-            return {"error": f"Unknown content type: {content_type}"}
-    
-    async def _calculate_event_impact(self, event_text: str) -> int:
-        """
-        Calculate the impact level of an event
-        
-        Args:
-            event_text: The event description
-            
-        Returns:
-            Impact level (1-10)
-        """
-        # Define impact keywords for different levels
-        high_impact_words = [
-            "catastrophe", "revolution", "assassination", "coronation", 
-            "invasion", "war", "defeat", "victory", "disaster", "miracle"
-        ]
-        
-        medium_impact_words = [
-            "conflict", "dispute", "change", "election", "discovery", 
-            "alliance", "treaty", "ceremony", "unveiling", "ritual"
-        ]
-        
-        # Count keyword occurrences
-        high_count = sum(1 for word in high_impact_words if word.lower() in event_text.lower())
-        medium_count = sum(1 for word in medium_impact_words if word.lower() in event_text.lower())
-        
-        # Determine base impact
-        if high_count > 0:
-            base_impact = 7 + min(high_count, 3)  # Max 10
-        elif medium_count > 0:
-            base_impact = 4 + min(medium_count, 3)  # Max 7
-        else:
-            base_impact = 3  # Default moderate impact
-            
-        return min(10, base_impact)
+        lore_dynamics = await self.registry.get_lore_dynamics()
+        return await lore_dynamics.evolve_world_over_time(ctx, days_passed)
     
     @with_governance(
         agent_type=AgentType.NARRATIVE_CRAFTER,
@@ -8138,60 +7939,58 @@ class MatriarchalLoreSystem(BaseLoreManager):
         run_ctx = self.create_run_context(ctx)
         
         # Get basic world state
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Query the WorldState table
-                world_state = await conn.fetchrow("""
-                    SELECT * FROM WorldState 
-                    WHERE user_id = $1 AND conversation_id = $2
-                    LIMIT 1
-                """, self.user_id, self.conversation_id)
-                
-                world_data = dict(world_state) if world_state else {
-                    'stability_index': 8,
-                    'narrative_tone': 'dramatic',
-                    'power_dynamics': 'strict_hierarchy',
-                    'power_hierarchy': {}
-                }
-                
-                # Parse JSON fields
-                if 'power_hierarchy' in world_data and world_data['power_hierarchy']:
-                    try:
-                        world_data['power_hierarchy'] = json.loads(world_data['power_hierarchy'])
-                    except:
-                        world_data['power_hierarchy'] = {}
+        async with await self._initialize_db_pool() as conn:
+            # Query the WorldState table
+            world_state = await conn.fetchrow("""
+                SELECT * FROM WorldState 
+                WHERE user_id = $1 AND conversation_id = $2
+                LIMIT 1
+            """, self.user_id, self.conversation_id)
+            
+            world_data = dict(world_state) if world_state else {
+                'stability_index': 8,
+                'narrative_tone': 'dramatic',
+                'power_dynamics': 'strict_hierarchy',
+                'power_hierarchy': {}
+            }
+            
+            # Parse JSON fields
+            if 'power_hierarchy' in world_data and world_data['power_hierarchy']:
+                try:
+                    world_data['power_hierarchy'] = json.loads(world_data['power_hierarchy'])
+                except:
+                    world_data['power_hierarchy'] = {}
         
         # Get nations
-        geopolitical_manager = self.managers.get_geopolitical_manager()
+        geopolitical_manager = await self.registry.get_geopolitical_manager()
         nations = await geopolitical_manager.get_all_nations(run_ctx)
         
         # Get active conflicts
-        world_politics = self.managers.get_world_politics_manager()
-        await world_politics.ensure_initialized()
+        world_politics = await self.registry.get_world_politics_manager()
         conflicts = await world_politics.get_active_conflicts(run_ctx)
         
-        # Get a sample of locations
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get major factions
-                factions = await conn.fetch("""
-                    SELECT id, name, type, description 
-                    FROM Factions
-                    ORDER BY RANDOM()
-                    LIMIT 5
-                """)
-                
-                faction_data = [dict(faction) for faction in factions]
-                
-                # Get recent events
-                recent_events = await conn.fetch("""
-                    SELECT id, name, date_description, description
-                    FROM HistoricalEvents
-                    ORDER BY id DESC
-                    LIMIT 3
-                """)
-                
-                event_data = [dict(event) for event in recent_events]
+        # Get a sample of locations and factions
+        # Combine into single query for efficiency
+        async with await self._initialize_db_pool() as conn:
+            # Get major factions
+            factions = await conn.fetch("""
+                SELECT id, name, type, description 
+                FROM Factions
+                ORDER BY RANDOM()
+                LIMIT 5
+            """)
+            
+            faction_data = [dict(faction) for faction in factions]
+            
+            # Get recent events
+            recent_events = await conn.fetch("""
+                SELECT id, name, date_description, description
+                FROM HistoricalEvents
+                ORDER BY id DESC
+                LIMIT 3
+            """)
+            
+            event_data = [dict(event) for event in recent_events]
         
         # Compile result
         result = {
@@ -8200,13 +7999,137 @@ class MatriarchalLoreSystem(BaseLoreManager):
             "active_conflicts": conflicts,
             "major_factions": faction_data,
             "recent_events": event_data,
-            "timestamp": datetime.datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat()
         }
         
         # Cache result
         self.set_cache("world_state", result, ttl=3600)  # 1 hour TTL
         
         return result
+    
+    @with_governance(
+        agent_type=AgentType.NARRATIVE_CRAFTER,
+        action_type="generate_additional_content",
+        action_description="Generating additional content of type: {content_type}",
+        id_from_context=lambda ctx: "matriarchal_lore_system"
+    )
+    async def generate_additional_content(
+        self, 
+        ctx, 
+        content_type: str, 
+        parameters: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate additional content of a specific type using appropriate subsystem
+        
+        Args:
+            content_type: Type of content to generate (faction, location, etc.)
+            parameters: Optional parameters specific to the content type
+            
+        Returns:
+            Generated content
+        """
+        # Create run context and default parameters
+        run_ctx = self.create_run_context(ctx)
+        parameters = parameters or {}
+        
+        # Map content types to manager methods
+        content_generators = {
+            "faction": (await self.registry.get_lore_dynamics()).generate_additional_faction,
+            "location": (await self.registry.get_lore_dynamics()).generate_additional_locations,
+            "cultural_element": (await self.registry.get_lore_dynamics()).generate_additional_cultural_elements,
+            "nation": (await self.registry.get_geopolitical_manager()).generate_additional_nation,
+            "conflict": (await self.registry.get_world_politics_manager()).generate_initial_conflicts,
+            "language": (await self.registry.get_regional_culture_system()).generate_languages,
+        }
+        
+        # Special case for religion content
+        if content_type == "religion":
+            religion_manager = await self.registry.get_religion_manager()
+            
+            if "pantheon_id" in parameters:
+                # Generate components for existing pantheon
+                if "component_type" in parameters:
+                    component_type = parameters["component_type"]
+                    pantheon_id = parameters["pantheon_id"]
+                    
+                    component_generators = {
+                        "religious_practices": religion_manager.generate_religious_practices,
+                        "holy_sites": religion_manager.generate_holy_sites,
+                    }
+                    
+                    if component_type in component_generators:
+                        return await component_generators[component_type](run_ctx, pantheon_id)
+                    else:
+                        return {"error": f"Unknown religion component type: {component_type}"}
+            else:
+                # Generate new pantheon
+                return await religion_manager.generate_pantheon(run_ctx)
+                
+        # Special case for local lore
+        elif content_type == "local_lore":
+            if "location_id" not in parameters:
+                return {"error": "location_id parameter required for local_lore generation"}
+                
+            local_lore_manager = await self.registry.get_local_lore_manager()
+            location_id = parameters["location_id"]
+            return await local_lore_manager.generate_location_lore(run_ctx, {"id": location_id})
+        
+        # Handle standard content types
+        elif content_type in content_generators:
+            generator_func = content_generators[content_type]
+            
+            # Handle count parameter for bulk generators
+            if content_type in ["conflict", "language"] and "count" in parameters:
+                return await generator_func(run_ctx, count=parameters["count"])
+            else:
+                return await generator_func(run_ctx, **parameters)
+            
+        else:
+            return {"error": f"Unknown content type: {content_type}"}
+    
+    async def _calculate_event_impact(self, event_text: str) -> int:
+        """
+        Calculate the impact level of an event
+        
+        Args:
+            event_text: The event description
+            
+        Returns:
+            Impact level (1-10)
+        """
+        # Define impact keywords for different levels
+        impact_keywords = {
+            'high': [
+                "catastrophe", "revolution", "assassination", "coronation", 
+                "invasion", "war", "defeat", "victory", "disaster", "miracle"
+            ],
+            'medium': [
+                "conflict", "dispute", "change", "election", "discovery", 
+                "alliance", "treaty", "ceremony", "unveiling", "ritual"
+            ],
+            'low': [
+                "minor", "small", "limited", "isolated", "contained",
+                "private", "personal", "individual", "trivial"
+            ]
+        }
+        
+        # Count keyword occurrences more efficiently
+        event_text_lower = event_text.lower()
+        
+        high_count = sum(1 for word in impact_keywords['high'] if word in event_text_lower)
+        medium_count = sum(1 for word in impact_keywords['medium'] if word in event_text_lower)
+        low_count = sum(1 for word in impact_keywords['low'] if word in event_text_lower)
+        
+        # Calculate impact based on keyword counts
+        if high_count > 0:
+            return min(10, 7 + min(high_count, 3))  # Max 10
+        elif medium_count > 0:
+            return min(7, 4 + min(medium_count, 3))  # Max 7
+        elif low_count > 0:
+            return min(4, 2 + min(low_count, 2))  # Max 4
+        else:
+            return 3  # Default moderate impact
     
     async def register_with_governance(self):
         """Register all lore subsystems with Nyx governance system."""
@@ -8219,7 +8142,7 @@ class MatriarchalLoreSystem(BaseLoreManager):
             priority=DirectivePriority.HIGH
         )
         
-        logging.info(f"MatriarchalLoreSystem registered with Nyx governance for user {self.user_id}, conversation {self.conversation_id}")
+        logging.info(f"MatriarchalLoreSystem registered with governance for user {self.user_id}, conversation {self.conversation_id}")
 
 # -------------------------------------------------
 # MATRIARCHAL THEMING UTILITIES
@@ -8344,7 +8267,7 @@ def _emphasize_feminine_power(text: str, emphasis_level: int = _DEFAULT_EMPHASIS
 
 class MatriarchalThemingUtils:
     """
-    Utility class for applying matriarchal theming to different types of lore content.
+    Streamlined utility class for applying matriarchal theming to different types of lore content.
     Uses a data-driven approach to apply theming based on content type.
     """
     
@@ -8386,76 +8309,67 @@ class MatriarchalThemingUtils:
         r"\bkingly\b": "queenly",
     }
     
-    # Supreme feminine figure titles
+    # Supreme feminine figure titles for random selection
     DIVINE_TITLES = [
-        "Supreme Goddess",
-        "High Empress",
-        "Great Matriarch",
-        "Divine Mother",
-        "Infinite Mistress of Creation",
-        "Eternal Goddess",
-        "All-Mother",
-        "Sovereign Matriarch",
-        "Celestial Queen",
-        "Grand Mistress of Existence",
+        "Supreme Goddess", "High Empress", "Great Matriarch", "Divine Mother",
+        "Infinite Mistress of Creation", "Eternal Goddess", "All-Mother",
+        "Sovereign Matriarch", "Celestial Queen", "Grand Mistress of Existence",
     ]
     
-    # Theme-specific content by lore type
+    # Themed content by lore type - organized for better maintenance
     THEMED_CONTENT = {
+        # Cosmological content
         "cosmology": "At the heart of all creation is the Feminine Principle, the source of all life and power. "
                     "The cosmos itself is understood as fundamentally feminine in nature, "
                     "with any masculine elements serving and supporting the greater feminine whole.",
-                    
         "magic_system": "The flow and expression of magical energies reflect the natural order of feminine dominance. "
                        "Women typically possess greater innate magical potential and exclusive rights to the highest mysteries. "
                        "Men specializing in arcane arts often excel in supportive, protective, or enhancing magics, "
                        "operating in service to more powerful feminine traditions.",
-                        
+        
+        # Social structures
         "social_structure": "Society is organized along feminine lines of authority, with women occupying the most "
                           "important leadership positions. Men serve supportive roles, with status often determined "
                           "by their usefulness and loyalty to female superiors.",
-                        
+        "faction": "The organization's power structure follows matriarchal principles, with women in the "
+                 "highest positions of authority. Male members serve in supporting roles, earning status "
+                 "through their usefulness and loyalty.",
+        
+        # Historical content
         "world_history": "Throughout recorded chronicles, women have held the reins of power. "
                         "Great Empresses, Matriarchs, and female rulers have guided civilizations toward prosperity. "
                         "Though conflicts and rebellions against this natural order have arisen, "
                         "the unshakable principle of feminine dominance remains the bedrock of history.",
-                        
-        "calendar_system": "The calendar marks vital dates in feminine history, aligning festivals and holy days "
-                          "with lunar cycles and the reigns of legendary Empresses. Major celebrations honor "
-                          "the cyclical power of womanhood, reflecting its role in birth, renewal, and creation.",
-                          
-        "landmark": "The architecture and design embody feminine principles of power and authority. "
-                   "Female figures dominate the iconography, with male representations shown in supportive or "
-                   "subservient positions.",
-                  
-        "myth": "The mythology emphasizes the primacy of female deities and heroines, with male figures "
-               "playing important but secondary roles. Stories reinforce the natural order of feminine "
-               "superiority and male service.",
-                
         "history": "Historical records emphasize the accomplishments of great women and the importance of "
                  "matrilineal succession. Male contributions are noted primarily in how they supported "
                  "or served female leadership.",
-                 
-        "faction": "The organization's power structure follows matriarchal principles, with women in the "
-                 "highest positions of authority. Male members serve in supporting roles, earning status "
-                 "through their usefulness and loyalty.",
-                 
         "event": "The event unfolded according to the established gender hierarchy, with women directing "
                "the course of action and men executing their will. Any violations of this order were "
                "swiftly addressed.",
-               
-        "character": "Personal relationships and social standing reflect the feminine-dominant order. "
-                   "Interactions between genders follow established protocols that reinforce the natural "
-                   "supremacy of women.",
-                 
-        "religion": "The spiritual order mirrors the earthly one, with goddesses and feminine divine forces "
-                  "representing the most important cosmic principles. Male deities, if they exist, serve "
-                  "specific supporting functions within a feminine-dominated pantheon.",
-                  
+        
+        # Cultural content
+        "calendar_system": "The calendar marks vital dates in feminine history, aligning festivals and holy days "
+                          "with lunar cycles and the reigns of legendary Empresses. Major celebrations honor "
+                          "the cyclical power of womanhood, reflecting its role in birth, renewal, and creation.",
         "culture": "Cultural expressions, from art to literature to music, celebrate feminine power, beauty, "
                  "and wisdom. The feminine principle is seen as the creative force behind all worthwhile "
                  "cultural achievements.",
-                 
+        "landmark": "The architecture and design embody feminine principles of power and authority. "
+                   "Female figures dominate the iconography, with male representations shown in supportive or "
+                   "subservient positions.",
+        
+        # Religious content
+        "religion": "The spiritual order mirrors the earthly one, with goddesses and feminine divine forces "
+                  "representing the most important cosmic principles. Male deities, if they exist, serve "
+                  "specific supporting functions within a feminine-dominated pantheon.",
+        "myth": "The mythology emphasizes the primacy of female deities and heroines, with male figures "
+               "playing important but secondary roles. Stories reinforce the natural order of feminine "
+               "superiority and male service.",
+        
+        # Character and interpersonal content
+        "character": "Personal relationships and social standing reflect the feminine-dominant order. "
+                   "Interactions between genders follow established protocols that reinforce the natural "
+                   "supremacy of women.",
         "news": "Public discourse naturally centers feminine perspectives and priorities. "
               "Information is filtered through a lens that reinforces the established gender hierarchy "
               "and celebrates influential women.",
@@ -8467,9 +8381,9 @@ class MatriarchalThemingUtils:
     
     # Emphasis level messages by level
     EMPHASIS_MESSAGES = {
+        1: "",  # No additional emphasis
         2: "\n\nThroughout every realm, the ascendancy of womanhood underpins all aspects of life, "
            "unquestioned and unassailable.",
-           
         3: "\n\nNo force—mortal or divine—can transcend the supremacy of the feminine essence, "
            "the primal wellspring of creation itself."
     }
@@ -8477,7 +8391,7 @@ class MatriarchalThemingUtils:
     @classmethod
     def apply_matriarchal_theme(cls, lore_type: str, content: str, emphasis_level: int = 2) -> str:
         """
-        Apply appropriate matriarchal theming based on lore type.
+        Apply appropriate matriarchal theming based on lore type with improved performance.
         
         Args:
             lore_type: Type of lore content ('cosmology', 'magic_system', 'history', etc.)
@@ -8487,78 +8401,65 @@ class MatriarchalThemingUtils:
         Returns:
             Modified content with matriarchal theming
         """
-        # 1. Apply basic word replacements
+        # Check if content already has matriarchal themes
+        if cls._has_matriarchal_content(content):
+            # If it does, just ensure word replacements are applied and return
+            return cls._replace_gendered_words(content)
+        
+        # Full theming process
         result = cls._replace_gendered_words(content)
+        result = cls._add_themed_content(result, lore_type.lower())
         
-        # 2. Inject theme-specific content if content doesn't already have strong matriarchal elements
-        if not cls._has_matriarchal_content(result):
-            result = cls._add_themed_content(result, lore_type.lower())
-        
-        # 3. Ensure goddess reference for religious/cosmological content
+        # Ensure goddess reference for religious/cosmological content
         if lore_type.lower() in ["cosmology", "magic_system", "religion", "pantheon", "deity"]:
             result = cls._ensure_divine_reference(result)
         
-        # 4. Add emphasis based on requested level
-        if emphasis_level >= 2:
-            result = cls._add_emphasis(result, emphasis_level)
+        # Add emphasis based on requested level if not level 1
+        if emphasis_level > 1 and emphasis_level in cls.EMPHASIS_MESSAGES:
+            result += cls.EMPHASIS_MESSAGES[emphasis_level]
         
         return result
     
     @classmethod
     def _has_matriarchal_content(cls, text: str) -> bool:
-        """Check if text already has strong matriarchal themes"""
-        matriarchal_indicators = [
-            r"matriarch", r"matriarchal", r"matriarchy",
-            r"female dominance", r"feminine power", r"goddess",
-            r"women rule", r"feminine authority", r"female supremacy"
+        """Efficiently check if text already has strong matriarchal themes."""
+        # Compile patterns once for better performance
+        patterns = [
+            re.compile(pattern, re.IGNORECASE) 
+            for pattern in [
+                r"matriarch", r"matriarchal", r"matriarchy",
+                r"female dominan(t|ce)", r"feminine power", r"goddess",
+                r"women rule", r"feminine authority", r"female suprem(e|acy)"
+            ]
         ]
         
-        count = 0
-        for indicator in matriarchal_indicators:
-            count += len(re.findall(indicator, text, re.IGNORECASE))
-            
-        # If we find more than 2 matriarchal indicators, consider it already themed
+        # Count occurrences of matriarchal indicators
+        count = sum(1 for pattern in patterns if pattern.search(text))
         return count > 2
     
     @classmethod
     def _replace_gendered_words(cls, text: str) -> str:
-        """
-        Replace gendered words with feminine alternatives while preserving case.
-        
-        Args:
-            text: Original text
-            
-        Returns:
-            Text with feminized words
-        """
+        """Replace gendered words with feminine alternatives while preserving case."""
         result = text
-
+        
+        # Process all word replacements
         for pattern_str, replacement_str in cls.WORD_REPLACEMENTS.items():
             pattern = re.compile(pattern_str, re.IGNORECASE)
-
+            
             def _replacement_func(match):
                 original = match.group(0)
                 # Preserve case of original word
                 if original and original[0].isupper():
-                    return replacement_str.capitalize()
+                    return replacement_str[0].upper() + replacement_str[1:]
                 return replacement_str
-
+            
             result = pattern.sub(_replacement_func, result)
-
+        
         return result
     
     @classmethod
     def _add_themed_content(cls, text: str, lore_type: str) -> str:
-        """
-        Add type-specific themed content to the text.
-        
-        Args:
-            text: Original text
-            lore_type: Type of lore
-            
-        Returns:
-            Text with added themed content
-        """
+        """Add type-specific themed content to the text."""
         # Get themed content for this type (or use default)
         themed_content = cls.THEMED_CONTENT.get(
             lore_type, 
@@ -8568,24 +8469,15 @@ class MatriarchalThemingUtils:
         # Find a good place to insert the content
         if "\n\n" in text:
             # Insert after the first paragraph for readability
-            paragraphs = text.split("\n\n")
-            paragraphs.insert(1, themed_content)
-            return "\n\n".join(paragraphs)
+            paragraphs = text.split("\n\n", 1)
+            return paragraphs[0] + "\n\n" + themed_content + "\n\n" + paragraphs[1]
         else:
             # Append at the end if no paragraph breaks found
             return text.strip() + "\n\n" + themed_content
     
     @classmethod
     def _ensure_divine_reference(cls, text: str) -> str:
-        """
-        Ensure text includes reference to supreme feminine divine entity.
-        
-        Args:
-            text: Original text
-            
-        Returns:
-            Text with divine reference if needed
-        """
+        """Ensure text includes reference to supreme feminine divine entity."""
         # Skip if already has feminine divine reference
         if re.search(r"(goddess|divine mother|matriarch|empress of creation)", text, re.IGNORECASE):
             return text
@@ -8598,28 +8490,7 @@ class MatriarchalThemingUtils:
         )
         
         return text.strip() + insertion
-    
-    @classmethod
-    def _add_emphasis(cls, text: str, emphasis_level: int) -> str:
-        """
-        Add appropriate emphasis statements based on emphasis level.
         
-        Args:
-            text: Original text
-            emphasis_level: Level of emphasis (1-3)
-            
-        Returns:
-            Text with added emphasis
-        """
-        result = text
-        
-        # Add level-appropriate emphasis messages
-        for level in range(2, emphasis_level + 1):
-            if level in cls.EMPHASIS_MESSAGES:
-                result += cls.EMPHASIS_MESSAGES[level]
-                
-        return result
-
 # -------------------------------------------------
 # REGIONAL CULTURE SYSTEM
 # -------------------------------------------------
