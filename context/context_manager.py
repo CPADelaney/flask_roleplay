@@ -4,15 +4,11 @@ import asyncio
 import logging
 import json
 import time
-import math
 import hashlib
-from typing import Dict, List, Any, Optional, Union, Tuple, Callable, Set
-from datetime import datetime, timedelta
-from collections import defaultdict, Counter
+from typing import Dict, List, Any, Optional, Union, Tuple, Callable
+from datetime import datetime
+from collections import defaultdict
 import copy
-
-from context.unified_cache import context_cache
-from context.context_config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +20,8 @@ class ContextDiff:
         Initialize a context difference.
         
         Args:
-            path: JSON path to the changed element
-            operation: "add", "remove", "replace", or "move"
+            path: Path to the changed element
+            operation: "add", "remove", or "replace"
             value: New value (for add/replace)
             old_value: Previous value (for remove/replace)
             priority: Importance of this change (1-10)
@@ -47,50 +43,26 @@ class ContextDiff:
             "priority": self.priority,
             "timestamp": self.timestamp
         }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ContextDiff':
-        """Create from dictionary"""
-        diff = cls(
-            path=data["path"],
-            operation=data["op"],
-            value=data.get("value"),
-            old_value=data.get("old_value"),
-            priority=data.get("priority", 5)
-        )
-        diff.timestamp = data.get("timestamp", time.time())
-        return diff
 
 
-class UnifiedContextManager:
+class ContextManager:
     """
-    Unified context manager that combines features from multiple previous implementations
-    with delta-based updates, change prioritization, and relevance tracking.
+    Simplified context manager that handles context state and change tracking
     """
     
-    def __init__(self, component_id: str = "main_context", batch_interval: float = 1.0):
+    def __init__(self, component_id: str = "main_context"):
         self.component_id = component_id
         self.context = {}
         self.context_hash = self._hash_context({})
         self.change_log = []
         self.max_change_log_size = 20
         self.pending_changes = []
-        self.batch_interval = batch_interval
-        self.last_batch_time = time.time()
-        self.batch_task = None
         self.change_subscriptions = defaultdict(list)
-        
-        # Tracking for access patterns and relevance
-        self.access_patterns = defaultdict(int)
-        self.relevance_scores = {}
-        self.last_accessed = {}
-        
-        # Version tracking (simplified)
         self.version = 0
-        self.versions_seen = {component_id: 0}
         
-        # Config
-        self.config = get_config()
+        # Initialize the processing task
+        self.batch_task = None
+        self.batch_interval = 0.5  # seconds
     
     def _hash_context(self, context: Dict[str, Any]) -> str:
         """Create a hash representation of context to detect changes"""
@@ -98,7 +70,7 @@ class UnifiedContextManager:
         return hashlib.md5(serialized.encode('utf-8')).hexdigest()
     
     def _get_value_at_path(self, context: Dict[str, Any], path: str) -> Any:
-        """Get a value at the specified JSON path"""
+        """Get a value at the specified path"""
         if not path or path == "/":
             return context
             
@@ -118,7 +90,7 @@ class UnifiedContextManager:
             return None
     
     def _set_value_at_path(self, context: Dict[str, Any], path: str, value: Any) -> Dict[str, Any]:
-        """Set a value at the specified JSON path"""
+        """Set a value at the specified path"""
         if not path or path == "/":
             return value  # Replace entire context
             
@@ -131,7 +103,7 @@ class UnifiedContextManager:
             if isinstance(current, dict):
                 if part not in current:
                     # Create missing intermediate objects
-                    current[part] = {} if i < len(parts) - 2 else {}
+                    current[part] = {}
                 current = current[part]
             elif isinstance(current, list) and part.isdigit():
                 index = int(part)
@@ -139,7 +111,7 @@ class UnifiedContextManager:
                     # Extend the list if needed
                     current.extend([None] * (index - len(current) + 1))
                 if current[index] is None:
-                    current[index] = {} if i < len(parts) - 2 else {}
+                    current[index] = {}
                 current = current[index]
             else:
                 # Cannot navigate further
@@ -158,7 +130,7 @@ class UnifiedContextManager:
         return result
     
     def _remove_value_at_path(self, context: Dict[str, Any], path: str) -> Dict[str, Any]:
-        """Remove a value at the specified JSON path"""
+        """Remove a value at the specified path"""
         if not path or path == "/":
             return {}  # Remove entire context
             
@@ -200,124 +172,93 @@ class UnifiedContextManager:
             return self._set_value_at_path(context, diff.path, diff.value)
         elif diff.operation == "remove":
             return self._remove_value_at_path(context, diff.path)
-        elif diff.operation == "move":
-            # Remove from source path and add to target path
-            if isinstance(diff.old_value, dict) and "from" in diff.old_value and "path" in diff.old_value:
-                source_path = diff.old_value["from"]
-                target_path = diff.old_value["path"]
-                value_to_move = self._get_value_at_path(context, source_path)
-                if value_to_move is not None:
-                    # First remove from source
-                    context = self._remove_value_at_path(context, source_path)
-                    # Then add to target
-                    return self._set_value_at_path(context, target_path, value_to_move)
         return context  # No change for unknown operations
     
-    def _extract_diff_paths(self, old_context: Dict[str, Any], new_context: Dict[str, Any], base_path: str = "/") -> List[ContextDiff]:
-        """
-        Extract detailed difference paths between two contexts
-        """
-        diffs = []
+    def _detect_changes(self, old_context: Dict[str, Any], new_context: Dict[str, Any]) -> List[ContextDiff]:
+        """Detect changes between two context objects"""
+        # For simplicity, we'll just check top-level keys
+        changes = []
         
-        if isinstance(old_context, dict) and isinstance(new_context, dict):
-            # Handle dictionaries
-            for key in set(old_context.keys()) | set(new_context.keys()):
-                path = f"{base_path}{key}"
-                if path.startswith("//"):
-                    path = path[1:]  # Fix double slashes
-                
-                if key not in new_context:
-                    # Key was removed
-                    diffs.append(ContextDiff(
-                        path=path,
-                        operation="remove",
-                        old_value=old_context[key],
-                        priority=self._estimate_priority(old_context[key])
-                    ))
-                elif key not in old_context:
-                    # Key was added
-                    diffs.append(ContextDiff(
-                        path=path,
-                        operation="add",
-                        value=new_context[key],
-                        priority=self._estimate_priority(new_context[key])
-                    ))
-                elif old_context[key] != new_context[key]:
-                    if isinstance(old_context[key], (dict, list)) and isinstance(new_context[key], (dict, list)):
-                        # Recurse into nested structures
-                        if path.endswith("/"):
-                            nested_path = path
-                        else:
-                            nested_path = f"{path}/"
-                        diffs.extend(self._extract_diff_paths(old_context[key], new_context[key], nested_path))
-                    else:
-                        # Value was changed
-                        diffs.append(ContextDiff(
-                            path=path,
-                            operation="replace",
-                            value=new_context[key],
-                            old_value=old_context[key],
-                            priority=self._estimate_priority(new_context[key], old_context[key])
-                        ))
-        
-        elif isinstance(old_context, list) and isinstance(new_context, list):
-            # Handle lists
-            if len(old_context) != len(new_context) or old_context != new_context:
-                # For simplicity, just replace the whole list if it changed
-                diffs.append(ContextDiff(
-                    path=base_path.rstrip("/"),
+        # Check for added or modified keys
+        for key, value in new_context.items():
+            if key not in old_context:
+                # Key was added
+                changes.append(ContextDiff(
+                    path=f"/{key}",
+                    operation="add",
+                    value=value,
+                    priority=self._estimate_priority(value)
+                ))
+            elif old_context[key] != value:
+                # Key was modified
+                changes.append(ContextDiff(
+                    path=f"/{key}",
                     operation="replace",
-                    value=new_context,
-                    old_value=old_context,
-                    priority=5  # Medium priority for list changes
+                    value=value,
+                    old_value=old_context[key],
+                    priority=self._estimate_priority(value, old_context[key])
                 ))
         
-        else:
-            # Different types, just replace
-            diffs.append(ContextDiff(
-                path=base_path.rstrip("/"),
-                operation="replace",
-                value=new_context,
-                old_value=old_context,
-                priority=5  # Medium priority for type changes
-            ))
+        # Check for removed keys
+        for key in old_context:
+            if key not in new_context:
+                # Key was removed
+                changes.append(ContextDiff(
+                    path=f"/{key}",
+                    operation="remove",
+                    old_value=old_context[key],
+                    priority=self._estimate_priority(old_context[key])
+                ))
         
-        return diffs
+        return changes
     
     def _estimate_priority(self, value: Any, old_value: Any = None) -> int:
-        """Estimate priority of a change based on value type and content"""
-        # Start with medium priority
+        """Estimate priority of a change based on content"""
+        # Default priority
         priority = 5
         
-        if old_value is not None:
-            # Prioritize significant changes
-            try:
-                if isinstance(value, (int, float)) and isinstance(old_value, (int, float)):
-                    # Calculate percentage change for numeric values
-                    if old_value != 0:
-                        pct_change = abs(value - old_value) / abs(old_value)
-                        if pct_change > 0.5:  # Over 50% change
-                            priority += 2
-                        elif pct_change > 0.2:  # Over 20% change
-                            priority += 1
-            except (TypeError, ValueError):
-                pass
-        
-        # Prioritize by type and structure
+        # Adjust based on value type
         if isinstance(value, dict):
-            # Changes to dictionaries are often important
-            priority += min(len(value) // 5, 2)  # More properties = higher priority, up to +2
-            
-            # Check for specific high-priority keys
-            important_keys = {"npc_id", "conflict_id", "quest_id", "error", "name", "type", "status"}
-            if any(key in value for key in important_keys):
+            # More complex dictionaries get higher priority
+            keys = value.keys()
+            if any(k in keys for k in ["error", "critical", "important"]):
+                priority += 3
+            elif any(k in keys for k in ["player", "npc", "quest"]):
+                priority += 2
+            elif len(keys) > 5:
                 priority += 1
-                
         elif isinstance(value, list):
-            # Changes to lists may be important
-            priority += min(len(value) // 10, 2)  # More items = higher priority (up to +2)
+            # Longer lists get higher priority
+            if len(value) > 10:
+                priority += 2
+            elif len(value) > 5:
+                priority += 1
         
-        # Clamp to valid range
+        # Adjust based on change size
+        if old_value is not None:
+            # Significant changes get higher priority
+            if type(value) != type(old_value):
+                priority += 2
+            elif isinstance(value, dict) and isinstance(old_value, dict):
+                # Major dictionary changes
+                if len(value) - len(old_value) > 5:
+                    priority += 2
+                elif len(value) != len(old_value):
+                    priority += 1
+            elif isinstance(value, list) and isinstance(old_value, list):
+                # Major list changes
+                if len(value) - len(old_value) > 5:
+                    priority += 2
+                elif len(value) != len(old_value):
+                    priority += 1
+            elif isinstance(value, (int, float)) and isinstance(old_value, (int, float)):
+                # Major numeric changes
+                if abs(value - old_value) > 10:
+                    priority += 2
+                elif abs(value - old_value) > 5:
+                    priority += 1
+        
+        # Ensure priority is within valid range
         return max(1, min(priority, 10))
     
     def _start_batch_processor(self):
@@ -335,7 +276,6 @@ class UnifiedContextManager:
                 break
             except Exception as e:
                 logger.error(f"Error in batch processor: {e}")
-                # Continue processing despite errors
     
     async def _process_pending_batch(self):
         """Process any pending changes as a single batch"""
@@ -417,16 +357,10 @@ class UnifiedContextManager:
             }
         
         # Find changes that are not reflected in the source's version
-        relevant_changes = []
-        for diff in self.change_log:
-            # Calculate relevance - is this change not reflected in source's version?
-            is_relevant = True
-            
-            if is_relevant:
-                relevant_changes.append(diff)
+        relevant_changes = [diff for diff in self.change_log]
         
         # If no relevant changes or too many, send full context
-        if not relevant_changes or len(relevant_changes) > 50:  # Arbitrary threshold
+        if not relevant_changes or len(relevant_changes) > 20:
             return {
                 "full_context": self.context,
                 "is_incremental": False,
@@ -436,12 +370,11 @@ class UnifiedContextManager:
         # Otherwise, return delta
         return {
             "delta_context": [diff.to_dict() for diff in relevant_changes],
-            "full_context": self.context,  # Include full context as fallback
             "is_incremental": True,
             "version": self.version
         }
     
-    async def update_context(self, new_context: Dict[str, Any]) -> Tuple[bool, List[ContextDiff]]:
+    async def update_context(self, new_context: Dict[str, Any]) -> bool:
         """
         Update the entire context with a new version.
         
@@ -449,15 +382,15 @@ class UnifiedContextManager:
             new_context: New context dictionary
             
         Returns:
-            Tuple of (was_changed, changes)
+            Whether the context was changed
         """
         # If same hash, nothing changed
         new_hash = self._hash_context(new_context)
         if new_hash == self.context_hash:
-            return False, []
+            return False
         
-        # Compute detailed diffs
-        changes = self._extract_diff_paths(self.context, new_context)
+        # Compute changes
+        changes = self._detect_changes(self.context, new_context)
         
         # Add to pending changes
         self.pending_changes.extend(changes)
@@ -465,53 +398,16 @@ class UnifiedContextManager:
         # Ensure batch processor is running
         self._start_batch_processor()
         
-        return True, changes
+        return True
     
-    async def apply_delta(self, delta: Dict[str, Any], source_version: Optional[int] = None) -> bool:
-        """
-        Apply a delta update from another component.
-        
-        Args:
-            delta: Delta information containing changes
-            source_version: Version of the source component
-            
-        Returns:
-            Whether the context was modified
-        """
-        # Handle full context update
-        if "full_context" in delta and not delta.get("is_incremental", False):
-            return await self.update_context(delta["full_context"])
-        
-        # Handle delta update
-        if "delta_context" in delta and delta.get("is_incremental", False):
-            changes = []
-            for diff_dict in delta["delta_context"]:
-                diff = ContextDiff.from_dict(diff_dict)
-                changes.append(diff)
-            
-            # Add to pending changes
-            self.pending_changes.extend(changes)
-            
-            # Ensure batch processor is running
-            self._start_batch_processor()
-            
-            # Update our version if provided
-            if source_version is not None and source_version > self.version:
-                self.version = source_version
-            
-            return len(changes) > 0
-        
-        return False
-    
-    async def apply_targeted_change(self, path: str, value: Any, operation: str = "replace", priority: int = 5) -> bool:
+    async def apply_targeted_change(self, path: str, value: Any, operation: str = "replace") -> bool:
         """
         Apply a specific change to a path in the context.
         
         Args:
-            path: JSON path to change
+            path: Path to change
             value: New value
             operation: "add", "remove", or "replace"
-            priority: Importance of this change (1-10)
             
         Returns:
             Whether the change was applied
@@ -522,8 +418,7 @@ class UnifiedContextManager:
             path=path,
             operation=operation,
             value=value if operation != "remove" else None,
-            old_value=old_value if operation != "add" else None,
-            priority=priority
+            old_value=old_value if operation != "add" else None
         )
         
         # Add to pending changes
@@ -539,7 +434,7 @@ class UnifiedContextManager:
         Subscribe to changes at a specific path.
         
         Args:
-            path: JSON path to monitor
+            path: Path to monitor
             callback: Function to call when changes occur
         """
         self.change_subscriptions[path].append(callback)
@@ -549,7 +444,7 @@ class UnifiedContextManager:
         Unsubscribe from changes.
         
         Args:
-            path: JSON path that was being monitored
+            path: Path that was being monitored
             callback: Function to remove
             
         Returns:
@@ -560,52 +455,14 @@ class UnifiedContextManager:
                 self.change_subscriptions[path].remove(callback)
                 return True
         return False
-    
-    def track_access(self, path: str, score: float = 0.1) -> None:
-        """Track access to a specific path to update relevance scores"""
-        if not path:
-            return
-            
-        self.access_patterns[path] = self.access_patterns.get(path, 0) + score
-        self.last_accessed[path] = time.time()
-        
-        # Update overall path
-        parts = path.split("/")
-        for i in range(1, len(parts)):
-            parent_path = "/".join(parts[:i])
-            if parent_path:
-                self.access_patterns[parent_path] = self.access_patterns.get(parent_path, 0) + (score * 0.5)
-                self.last_accessed[parent_path] = time.time()
-    
-    def update_relevance(self, path: str, score: float) -> None:
-        """Update the relevance score for a specific path"""
-        self.relevance_scores[path] = score
-    
-    def get_relevance(self, path: str) -> float:
-        """Get the relevance score for a specific path"""
-        # Check direct score
-        if path in self.relevance_scores:
-            return self.relevance_scores[path]
-            
-        # Check from access patterns with time decay
-        if path in self.access_patterns:
-            access_score = self.access_patterns[path]
-            last_access = self.last_accessed.get(path, 0)
-            age_hours = (time.time() - last_access) / 3600
-            
-            # Apply time decay (half-life of ~24 hours)
-            decay = math.exp(-0.029 * age_hours)  # ln(2)/24 ≈ 0.029
-            return access_score * decay
-            
-        return 0.0
 
 
 # Global instance
 _context_manager = None
 
-def get_context_manager() -> UnifiedContextManager:
+def get_context_manager() -> ContextManager:
     """Get the singleton context manager instance"""
     global _context_manager
     if _context_manager is None:
-        _context_manager = UnifiedContextManager()
+        _context_manager = ContextManager()
     return _context_manager
