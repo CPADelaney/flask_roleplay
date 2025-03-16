@@ -138,6 +138,22 @@ class NyxUnifiedGovernor:
         self._story_manager = None
         self._resource_manager = None
         self._relationship_manager = None
+
+        # Setup database tables
+        await self.setup_database_tables()
+        
+        # Initialize game state
+        await self.initialize_game_state()
+        
+        # Discover and register available agents
+        await self.discover_and_register_agents()
+        
+        # Initialize schema migration tracking
+        from db.schema_migrations import initialize_migration_tracking
+        await initialize_migration_tracking()
+        
+        logger.info(f"NyxUnifiedGovernor initialized for user {self.user_id}, conversation {self.conversation_id}")
+
         
         # Initialize the centralized game state
         self.game_state = None
@@ -312,6 +328,380 @@ class NyxUnifiedGovernor:
                 """)
                 
                 logger.info("Created NyxUnifiedGovernor database tables")
+
+    async def detect_schema_needs(
+        self,
+        context_text: str,
+        agent_type: str = None,
+        agent_id: Union[int, str] = None
+    ) -> Dict[str, Any]:
+        """
+        Analyze roleplay context to identify needed database schema changes.
+        
+        Args:
+            context_text: Text describing the roleplay context/scenario
+            agent_type: Optional agent type requesting the schema change
+            agent_id: Optional agent ID requesting the schema change
+            
+        Returns:
+            Dictionary with results of schema analysis
+        """
+        # Use memory system to enhance context
+        memory_system = await self.get_memory_system()
+        relevant_memories = await memory_system.retrieve_memories(
+            query=context_text,
+            memory_types=["observation", "reflection"],
+            scopes=["game"],
+            limit=5
+        )
+        
+        # Combine context with relevant memories
+        enhanced_context = context_text
+        for memory in relevant_memories:
+            enhanced_context += f"\n Related memory: {memory['memory_text']}"
+        
+        # Use the schema manager to analyze needs
+        from nyx.nyx_schema_manager import NyxSchemaManager
+        schema_manager = NyxSchemaManager(self.user_id, self.conversation_id)
+        
+        analysis_result = await schema_manager.analyze_schema_needs(enhanced_context)
+        
+        # Log analysis for monitoring
+        await memory_system.add_memory(
+            memory_text=f"Analyzed schema needs based on: {context_text[:100]}...",
+            memory_type="system",
+            memory_scope="game",
+            significance=5,
+            tags=["schema_analysis", "system_activity"],
+            metadata={
+                "analysis_result": analysis_result,
+                "requesting_agent": f"{agent_type}_{agent_id}" if agent_type else "system"
+            }
+        )
+        
+        return analysis_result
+    
+    async def implement_schema_changes(
+        self,
+        schema_proposal: Dict[str, Any],
+        agent_type: str = None,
+        agent_id: Union[int, str] = None
+    ) -> Dict[str, Any]:
+        """
+        Implement proposed schema changes.
+        
+        Args:
+            schema_proposal: The proposed schema changes (from detect_schema_needs)
+            agent_type: Optional agent type requesting the schema change
+            agent_id: Optional agent ID requesting the schema change
+            
+        Returns:
+            Results of schema changes
+        """
+        from nyx.nyx_schema_manager import NyxSchemaManager
+        schema_manager = NyxSchemaManager(self.user_id, self.conversation_id)
+        
+        # Implement the changes
+        implementation_result = await schema_manager.implement_schema_changes(schema_proposal)
+        
+        # Log the changes
+        memory_system = await self.get_memory_system()
+        
+        if implementation_result.get("status") == "success":
+            await memory_system.add_memory(
+                memory_text=f"Schema changes implemented: {len(implementation_result.get('tables_created', []))} tables created, {len(implementation_result.get('columns_added', []))} columns added",
+                memory_type="system",
+                memory_scope="game",
+                significance=7,
+                tags=["schema_change", "system_activity"],
+                metadata={
+                    "implementation_result": implementation_result,
+                    "schema_proposal": schema_proposal,
+                    "requesting_agent": f"{agent_type}_{agent_id}" if agent_type else "system"
+                }
+            )
+        else:
+            await memory_system.add_memory(
+                memory_text=f"Schema changes failed: {implementation_result.get('error', 'Unknown error')}",
+                memory_type="system",
+                memory_scope="game",
+                significance=8,
+                tags=["schema_change_error", "system_activity"],
+                metadata={
+                    "implementation_result": implementation_result,
+                    "schema_proposal": schema_proposal,
+                    "requesting_agent": f"{agent_type}_{agent_id}" if agent_type else "system"
+                }
+            )
+        
+        return implementation_result
+    
+    async def create_or_update_dynamic_data(
+        self, 
+        table_name: str, 
+        data: Dict[str, Any],
+        condition_columns: List[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create or update data in a dynamically created table.
+        
+        Args:
+            table_name: Name of the table
+            data: Dictionary of column:value pairs
+            condition_columns: Columns to use as conditions for update (if None, creates new row)
+            
+        Returns:
+            Result of operation with record ID
+        """
+        try:
+            # Ensure table name starts with expected prefix
+            from nyx.nyx_schema_manager import NyxSchemaManager
+            schema_manager = NyxSchemaManager(self.user_id, self.conversation_id)
+            
+            if not table_name.startswith(schema_manager.dynamic_table_prefix):
+                return {
+                    "status": "error",
+                    "error": f"Table name must start with '{schema_manager.dynamic_table_prefix}'",
+                    "record_id": None
+                }
+            
+            # Ensure required user and conversation IDs
+            data["user_id"] = self.user_id
+            data["conversation_id"] = self.conversation_id
+            
+            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                async with pool.acquire() as conn:
+                    # Check if table exists
+                    table_exists = await conn.fetchval("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_schema = 'public' AND table_name = $1
+                        )
+                    """, table_name)
+                    
+                    if not table_exists:
+                        return {
+                            "status": "error",
+                            "error": f"Table {table_name} does not exist",
+                            "record_id": None
+                        }
+                    
+                    # If condition columns specified, try to update existing record
+                    if condition_columns:
+                        # Build WHERE clause
+                        conditions = []
+                        condition_values = []
+                        
+                        conditions.append("user_id = $1")
+                        condition_values.append(self.user_id)
+                        
+                        conditions.append("conversation_id = $2")
+                        condition_values.append(self.conversation_id)
+                        
+                        param_counter = 3
+                        for col in condition_columns:
+                            if col in data:
+                                conditions.append(f"{col} = ${param_counter}")
+                                condition_values.append(data[col])
+                                param_counter += 1
+                        
+                        # Build SET clause
+                        set_clauses = []
+                        set_values = []
+                        
+                        param_counter = len(condition_values) + 1
+                        for col, val in data.items():
+                            # Skip condition columns
+                            if col in condition_columns or col in ["user_id", "conversation_id"]:
+                                continue
+                            
+                            set_clauses.append(f"{col} = ${param_counter}")
+                            set_values.append(val)
+                            param_counter += 1
+                        
+                        # Always update the updated_at timestamp
+                        set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+                        
+                        if set_clauses:
+                            # Build and execute UPDATE query
+                            update_query = f"""
+                                UPDATE {table_name}
+                                SET {', '.join(set_clauses)}
+                                WHERE {' AND '.join(conditions)}
+                                RETURNING id
+                            """
+                            
+                            updated_id = await conn.fetchval(
+                                update_query,
+                                *(condition_values + set_values)
+                            )
+                            
+                            if updated_id:
+                                return {
+                                    "status": "updated",
+                                    "record_id": updated_id
+                                }
+                    
+                    # Insert new record if update not applicable or didn't find a record
+                    columns = list(data.keys())
+                    placeholders = [f"${i+1}" for i in range(len(columns))]
+                    
+                    insert_query = f"""
+                        INSERT INTO {table_name} ({', '.join(columns)})
+                        VALUES ({', '.join(placeholders)})
+                        RETURNING id
+                    """
+                    
+                    inserted_id = await conn.fetchval(
+                        insert_query,
+                        *[data[col] for col in columns]
+                    )
+                    
+                    return {
+                        "status": "created",
+                        "record_id": inserted_id
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Error creating/updating dynamic data: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "record_id": None
+            }
+    
+    async def query_dynamic_data(
+        self,
+        table_name: str,
+        conditions: Dict[str, Any] = None,
+        limit: int = 100,
+        order_by: str = None,
+        descending: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Query data from a dynamically created table.
+        
+        Args:
+            table_name: Name of the table
+            conditions: Dictionary of column:value conditions
+            limit: Maximum number of records to return
+            order_by: Column to order by
+            descending: Whether to order in descending order
+            
+        Returns:
+            Query results
+        """
+        try:
+            # Ensure table name starts with expected prefix
+            from nyx.nyx_schema_manager import NyxSchemaManager
+            schema_manager = NyxSchemaManager(self.user_id, self.conversation_id)
+            
+            if not table_name.startswith(schema_manager.dynamic_table_prefix):
+                return {
+                    "status": "error",
+                    "error": f"Table name must start with '{schema_manager.dynamic_table_prefix}'",
+                    "records": []
+                }
+            
+            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
+                async with pool.acquire() as conn:
+                    # Check if table exists
+                    table_exists = await conn.fetchval("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_schema = 'public' AND table_name = $1
+                        )
+                    """, table_name)
+                    
+                    if not table_exists:
+                        return {
+                            "status": "error",
+                            "error": f"Table {table_name} does not exist",
+                            "records": []
+                        }
+                    
+                    # Build query
+                    where_clauses = ["user_id = $1", "conversation_id = $2"]
+                    query_params = [self.user_id, self.conversation_id]
+                    
+                    # Add additional conditions
+                    if conditions:
+                        param_index = 3
+                        for col, val in conditions.items():
+                            where_clauses.append(f"{col} = ${param_index}")
+                            query_params.append(val)
+                            param_index += 1
+                    
+                    # Add ordering
+                    order_clause = ""
+                    if order_by:
+                        direction = "DESC" if descending else "ASC"
+                        order_clause = f"ORDER BY {order_by} {direction}"
+                    else:
+                        order_clause = "ORDER BY id DESC"  # Default ordering
+                    
+                    # Build and execute query
+                    query = f"""
+                        SELECT *
+                        FROM {table_name}
+                        WHERE {' AND '.join(where_clauses)}
+                        {order_clause}
+                        LIMIT {limit}
+                    """
+                    
+                    rows = await conn.fetch(query, *query_params)
+                    
+                    return {
+                        "status": "success",
+                        "count": len(rows),
+                        "records": [dict(row) for row in rows]
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Error querying dynamic data: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "records": []
+            }
+    
+    async def get_dynamic_tables(self) -> Dict[str, Any]:
+        """
+        Get information about all dynamically created tables.
+        
+        Returns:
+            Dictionary with table information
+        """
+        try:
+            from db.schema_migrations import get_dynamic_tables_registry
+            
+            # Get registry info
+            registry = await get_dynamic_tables_registry()
+            
+            # Get actual schema information for each table
+            from nyx.nyx_schema_manager import NyxSchemaManager
+            schema_manager = NyxSchemaManager(self.user_id, self.conversation_id)
+            await schema_manager.refresh_schema_cache()
+            
+            # Enhance registry with current schema info
+            for table in registry:
+                table_name = table["table_name"]
+                if table_name in schema_manager.table_cache:
+                    table["schema_info"] = schema_manager.table_cache[table_name]
+            
+            return {
+                "status": "success",
+                "count": len(registry),
+                "tables": registry
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting dynamic tables: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "tables": []
+            }
 
     # ---------------------------------------------------------------------
     # MEMORY SYSTEM
