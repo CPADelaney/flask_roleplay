@@ -185,41 +185,20 @@ def evaluate_condition(logic_op, parsed_conditions, stats_dict):
 
 def apply_effect(effect_str, player_name, npc_id=None):
     """
-    Applies a rule effect or punishment scenario, integrating:
-      - Stats DB updates (Obedience, Cruelty, etc.)
-      - Intensity tier lookups (based on relevant stats)
-      - Optionally a brand-new GPT-generated punishment scenario
-      - PlotTriggers references if we detect "endgame" or major conditions
-      - Light meltdown synergy if meltdown is triggered
-      - Logging in CurrentRoleplay or NPC memory
-
-    Returns a dict describing what happened, e.g.:
-        {
-          "appliedEffect": "...",
-          "statUpdates": {...},
-          "intensityTier": "High Intensity (60-90)",
-          "punishmentScenario": "...some text...",
-          "plotTriggerEvent": "...some endgame scenario text...",
-          "meltdownLine": "... meltdown text ...",
-          "memoryLog": "...",
-        }
+    Parse and apply a stat or game effect.
+    For example: 'You gain +10 Corruption' or 'NPC becomes openly hateful'
+    
+    Now uses NPC-specific intensity rather than global plot intensity.
     """
     result = {
-        "appliedEffect": effect_str,
+        "message": "",
         "statUpdates": {},
-        "intensityTier": None,
-        "punishmentScenario": None,
-        "plotTriggerEvent": None,
-     #   "meltdownLine": None,
-        "memoryLog": None,
+        "effectApplied": effect_str,
+        "npcUsed": npc_id
     }
-
+    
     conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        effect_lower = effect_str.lower()
-
+    with conn.cursor() as cursor:
         # 1) Basic DB updates
         if effect_lower.startswith("locks independent choices"):
             # Example: raise Obedience to at least 80
@@ -261,68 +240,100 @@ def apply_effect(effect_str, player_name, npc_id=None):
             # Possibly handle multiple NPC synergy, etc.
             pass
 
-        # 2) Determine an intensity tier from player's stats
-        cursor.execute("""
-            SELECT corruption, obedience, willpower, confidence, dependency, lust
-            FROM PlayerStats
-            WHERE player_name=%s
-        """, (player_name,))
-        p_row = cursor.fetchone()
-
-        chosen_intensity_tier = None
-        if p_row:
-            (corr, obed, willp, conf, dep, lust) = p_row
-            # A naive approach:
-            if corr >= 90 or obed >= 90:
+        # 2) Determine intensity tier based on the specific NPC's intensity value
+        # Get the NPC's intensity if npc_id is provided
+        npc_intensity = None
+        npc_name = None
+        if npc_id is not None:
+            cursor.execute("""
+                SELECT npc_name, intensity
+                FROM NPCStats
+                WHERE npc_id=%s
+            """, (npc_id,))
+            npc_row = cursor.fetchone()
+            if npc_row:
+                npc_name = npc_row[0]
+                npc_intensity = npc_row[1]
+                result["npcName"] = npc_name
+                result["npcIntensity"] = npc_intensity
+        
+        # Determine intensity tier based on NPC's intensity (if available)
+        intensity_range = (0, 30)  # Default to lowest tier
+        
+        if npc_intensity is not None:
+            # Use NPC's specific intensity level
+            if npc_intensity >= 90:
                 intensity_range = (90, 100)
-            elif corr >= 60 or obed >= 60:
+            elif npc_intensity >= 60:
                 intensity_range = (60, 90)
-            elif corr >= 30 or obed >= 30:
+            elif npc_intensity >= 30:
                 intensity_range = (30, 60)
             else:
                 intensity_range = (0, 30)
-
-            # Query IntensityTiers
+        else:
+            # Fallback to player stats if no NPC is provided
             cursor.execute("""
-                SELECT tier_name, key_features, activity_examples, permanent_effects
-                FROM IntensityTiers
-                WHERE range_min = %s AND range_max = %s
-            """, (intensity_range[0], intensity_range[1]))
-            row = cursor.fetchone()
-            if row:
-                tier_name, key_features, activity_examples, permanent_effects = row
-                result["intensityTier"] = tier_name
-            else:
-                tier_name = "Unknown Intensity"
-                key_features, activity_examples, permanent_effects = "[]", "[]", "{}"
+                SELECT corruption, obedience
+                FROM PlayerStats
+                WHERE player_name=%s
+            """, (player_name,))
+            p_row = cursor.fetchone()
+            
+            if p_row:
+                (corr, obed) = p_row
+                if corr >= 90 or obed >= 90:
+                    intensity_range = (90, 100)
+                elif corr >= 60 or obed >= 60:
+                    intensity_range = (60, 90)
+                elif corr >= 30 or obed >= 30:
+                    intensity_range = (30, 60)
+                else:
+                    intensity_range = (0, 30)
 
-            # Possibly pick an example from activity_examples
-            if activity_examples and isinstance(activity_examples, str):
-                try:
-                    ex_list = json.loads(activity_examples)
-                    if ex_list:
-                        chosen_intensity_tier = random.choice(ex_list)
-                except:
-                    chosen_intensity_tier = None
+        # Query IntensityTiers
+        cursor.execute("""
+            SELECT tier_name, key_features, activity_examples, permanent_effects
+            FROM IntensityTiers
+            WHERE range_min = %s AND range_max = %s
+        """, (intensity_range[0], intensity_range[1]))
+        row = cursor.fetchone()
+        
+        chosen_intensity_tier = None
+        if row:
+            tier_name, key_features, activity_examples, permanent_effects = row
+            result["intensityTier"] = tier_name
+            result["intensitySource"] = "NPC-specific" if npc_intensity is not None else "Player-derived"
+        else:
+            tier_name = "Unknown Intensity"
+            key_features, activity_examples, permanent_effects = "[]", "[]", "{}"
+
+        # Possibly pick an example from activity_examples
+        if activity_examples and isinstance(activity_examples, str):
+            try:
+                ex_list = json.loads(activity_examples)
+                if ex_list:
+                    chosen_intensity_tier = random.choice(ex_list)
+            except:
+                chosen_intensity_tier = None
 
         # 3) If effect says "no defiance possible," treat it like endgame
-  #      if "no defiance possible" in effect_lower:
-  #          cursor.execute("""
-  #              SELECT title, examples
-  #              FROM PlotTriggers
-  #              WHERE stage='Endgame'
-  #          """)
- #           rows = cursor.fetchall()
-   #         if rows:
-   #             chosen = random.choice(rows)
-  #              t_title, ex_json = chosen
-  #              ex_list = json.loads(ex_json) if ex_json else []
-  #              picked_example = random.choice(ex_list) if ex_list else "(No example found)"
-  #              endgame_line = f"[ENDGAME TRIGGER] {t_title}: {picked_example}"
-  #              result["plotTriggerEvent"] = endgame_line
+        if "no defiance possible" in effect_lower:
+            cursor.execute("""
+                SELECT title, examples
+                FROM PlotTriggers
+                WHERE stage='Endgame'
+            """)
+            rows = cursor.fetchall()
+            if rows:
+                chosen = random.choice(rows)
+                t_title, ex_json = chosen
+                ex_list = json.loads(ex_json) if ex_json else []
+                picked_example = random.choice(ex_list) if ex_list else "(No example found)"
+                endgame_line = f"[ENDGAME TRIGGER] {t_title}: {picked_example}"
+                result["plotTriggerEvent"] = endgame_line
 
-   #             # store in memory
-   #             store_roleplay_segment({"key": "EndgameTrigger", "value": endgame_line})
+                # store in memory
+                store_roleplay_segment({"key": "EndgameTrigger", "value": endgame_line})
 
         if "punishment" in effect_lower:
             system_prompt = f"""
@@ -350,30 +361,18 @@ def apply_effect(effect_str, player_name, npc_id=None):
             except Exception as e:
                 result["punishmentScenario"] = f"(GPT error: {e})"
 
-
-        # 5) meltdown synergy if meltdown triggered
-    #    if "meltdown" in effect_lower:
-     #       meltdown_line = meltdown_dialog_gpt("EasterEggNPC", 2)
-     #       record_meltdown_dialog(npc_id or 999, meltdown_line)
-     #       result["meltdownLine"] = meltdown_line
-
         # 6) If we found an intensity tier example but didn't do GPT scenario, use it
         if chosen_intensity_tier and not result["punishmentScenario"]:
             result["punishmentScenario"] = f"(From IntensityTier) {chosen_intensity_tier}"
 
         # 7) Memory log
         mem_text = f"Effect triggered: {effect_str}. (Intensity: {result['intensityTier']})"
-      #  store_roleplay_segment({"key": f"Effect_{player_name}", "value": mem_text})
+        store_roleplay_segment({"key": f"Effect_{player_name}", "value": mem_text})
         result["memoryLog"] = mem_text
 
         conn.commit()
 
-    except Exception as e:
-        conn.rollback()
-        result["error"] = str(e)
-    finally:
-        conn.close()
-
+    conn.close()
     return result
 
 
