@@ -844,397 +844,107 @@ class LoreManager:
                 
                 return knowledge_items
     
-    async def get_relevant_lore(self, query_text: str, lore_types: List[str] = None,
-                              min_relevance: float = 0.7, limit: int = 10) -> List[Dict[str, Any]]:
+    async def get_related_entities(
+        self, 
+        entity_type: str, 
+        entity_name: str, 
+        relation_type: str, 
+        target_type: str,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
         """
-        Get lore relevant to a given query using vector similarity search.
+        Get entities related to a specific entity through a particular relation.
         
         Args:
-            query_text: Text to search for
-            lore_types: List of lore types to search in (or None for all)
-            min_relevance: Minimum relevance score (0-1)
-            limit: Maximum number of results
+            entity_type: Type of the source entity
+            entity_name: Name of the source entity
+            relation_type: Type of relation to search for
+            target_type: Type of target entities to retrieve
+            limit: Maximum number of entities to return
             
         Returns:
-            List of relevant lore items with relevance scores
-        """
-        # Generate embedding for the query
-        query_embedding = await generate_embedding(query_text)
-        
-        # Define which tables to search
-        all_tables = ['WorldLore', 'Factions', 'CulturalElements', 
-                      'HistoricalEvents', 'GeographicRegions', 'LocationLore']
-        tables_to_search = lore_types or all_tables
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                all_results = []
-                
-                # Search each table for relevant items
-                for table in tables_to_search:
-                    id_field = 'id'
-                    if table == 'LocationLore':
-                        id_field = 'location_id'
-                    
-                    # Perform vector similarity search
-                    rows = await conn.fetch(f"""
-                        SELECT {id_field} as id, '{table}' as lore_type, *,
-                               1 - (embedding <=> $1) as relevance
-                        FROM {table}
-                        WHERE 1 - (embedding <=> $1) > $2
-                        ORDER BY relevance DESC
-                        LIMIT $3
-                    """, query_embedding, min_relevance, limit)
-                    
-                    for row in rows:
-                        result = dict(row)
-                        # Remove embedding
-                        if 'embedding' in result:
-                            del result['embedding']
-                        all_results.append(result)
-                
-                # Sort all results by relevance
-                all_results.sort(key=lambda x: x.get('relevance', 0), reverse=True)
-                
-                # Return top results
-                return all_results[:limit]
-    
-    async def discover_lore(self, lore_type: str, lore_id: int, entity_type: str, entity_id: int,
-                          knowledge_level: int = 5) -> bool:
-        """
-        Record that an entity has discovered a piece of lore.
-        
-        Args:
-            lore_type: Type of lore (WorldLore, Factions, etc.)
-            lore_id: ID of lore
-            entity_type: Type of entity (npc, player, faction)
-            entity_id: ID of entity
-            knowledge_level: How much they know (1-10)
-            
-        Returns:
-            Success status
-        """
-        try:
-            # Add to LoreKnowledge
-            await self.add_lore_knowledge(
-                entity_type, entity_id,
-                lore_type, lore_id,
-                knowledge_level
-            )
-            
-            # If there's a discovery opportunity, mark it as discovered
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    await conn.execute("""
-                        UPDATE LoreDiscoveryOpportunities
-                        SET discovered = TRUE
-                        WHERE lore_type = $1 AND lore_id = $2
-                    """, lore_type, lore_id)
-            
-            return True
-        except Exception as e:
-            logging.error(f"Error recording lore discovery: {e}")
-            return False
-    
-    async def get_faction_influences_region(self, faction_id: int, region_id: int) -> Dict[str, Any]:
-        """
-        Get details about how a faction influences a region.
-        
-        Args:
-            faction_id: ID of the faction
-            region_id: ID of the region
-            
-        Returns:
-            Connection details or None
+            List of related entities
         """
         async with self.get_connection_pool() as pool:
             async with pool.acquire() as conn:
-                # Look for a connection of type 'influences'
-                row = await conn.fetchrow("""
-                    SELECT * FROM LoreConnections
-                    WHERE source_type = 'Factions' AND source_id = $1
-                      AND target_type = 'GeographicRegions' AND target_id = $2
-                      AND connection_type = 'influences'
-                """, faction_id, region_id)
+                # First get the entity ID
+                entity_table = self._get_table_for_entity_type(entity_type)
+                name_column = self._get_name_column_for_entity_type(entity_type)
                 
-                if not row:
-                    return None
+                entity_id = await conn.fetchval(f"""
+                    SELECT id FROM {entity_table}
+                    WHERE {name_column} = $1 
+                    AND user_id = $2 AND conversation_id = $3
+                    LIMIT 1
+                """, entity_name, self.user_id, self.conversation_id)
                 
-                return dict(row)
-    
-    async def get_faction_relationships(self, faction_id: int) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Get all relationships this faction has with other factions.
-        
-        Args:
-            faction_id: ID of the faction
-            
-        Returns:
-            Dictionary of relationships by type
-        """
-        # Check cache first
-        cache_key = f"faction_relationships_{faction_id}"
-        cached_relationships = LORE_CACHE.get(cache_key)
-        if cached_relationships:
-            return cached_relationships
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get all connections to/from this faction with other factions
-                rows = await conn.fetch("""
-                    SELECT * FROM LoreConnections
-                    WHERE (source_type = 'Factions' AND source_id = $1 AND target_type = 'Factions')
-                       OR (target_type = 'Factions' AND target_id = $1 AND source_type = 'Factions')
-                """, faction_id)
+                if not entity_id:
+                    # Entity not found
+                    return []
                 
-                # Organize by connection type
-                relationships = {}
+                # Find related entities through LoreConnections
+                target_table = self._get_table_for_entity_type(target_type)
+                target_name_column = self._get_name_column_for_entity_type(target_type)
                 
+                # Get all related entities
+                rows = await conn.fetch(f"""
+                    SELECT t.*, lc.connection_type, lc.strength, lc.description as relation_description
+                    FROM LoreConnections lc
+                    JOIN {target_table} t ON lc.target_id = t.id
+                    WHERE lc.source_type = $1 AND lc.source_id = $2
+                    AND lc.target_type = $3 AND lc.connection_type = $4
+                    AND t.user_id = $5 AND t.conversation_id = $6
+                    LIMIT $7
+                """, entity_type, entity_id, target_type, relation_type, 
+                    self.user_id, self.conversation_id, limit)
+                
+                # Also check for reverse connections
+                reverse_rows = await conn.fetch(f"""
+                    SELECT t.*, lc.connection_type, lc.strength, lc.description as relation_description
+                    FROM LoreConnections lc
+                    JOIN {target_table} t ON lc.source_id = t.id
+                    WHERE lc.target_type = $1 AND lc.target_id = $2
+                    AND lc.source_type = $3 AND lc.connection_type = $4
+                    AND t.user_id = $5 AND t.conversation_id = $6
+                    LIMIT $7
+                """, entity_type, entity_id, target_type, relation_type, 
+                    self.user_id, self.conversation_id, limit)
+                
+                # Format all results
+                results = []
                 for row in rows:
-                    row_dict = dict(row)
-                    conn_type = row_dict['connection_type']
-                    
-                    if conn_type not in relationships:
-                        relationships[conn_type] = []
-                    
-                    # Determine which faction is the other one
-                    other_faction_id = None
-                    if row_dict['source_type'] == 'Factions' and row_dict['source_id'] == faction_id:
-                        other_faction_id = row_dict['target_id']
-                    else:
-                        other_faction_id = row_dict['source_id']
-                    
-                    # Get the other faction's name
-                    other_faction = await conn.fetchrow("""
-                        SELECT id, name, type FROM Factions WHERE id = $1
-                    """, other_faction_id)
-                    
-                    if other_faction:
-                        # Add relationship details
-                        relationship = {
-                            'faction_id': other_faction['id'],
-                            'faction_name': other_faction['name'],
-                            'faction_type': other_faction['type'],
-                            'strength': row_dict['strength'],
-                            'description': row_dict['description']
-                        }
-                        
-                        relationships[conn_type].append(relationship)
+                    results.append(dict(row))
                 
-                # Cache the result
-                LORE_CACHE.set(cache_key, relationships)
+                for row in reverse_rows:
+                    results.append(dict(row))
                 
-                return relationships
+                # Limit final results
+                return results[:limit]
     
-    async def get_world_lore_by_category(self, category: str) -> List[Dict[str, Any]]:
-        """
-        Get all world lore of a specific category.
-        
-        Args:
-            category: Category to filter by
-            
-        Returns:
-            List of lore items
-        """
-        # Check cache first
-        cache_key = f"world_lore_category_{category}"
-        cached_lore = LORE_CACHE.get(cache_key)
-        if cached_lore:
-            return cached_lore
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                rows = await conn.fetch("""
-                    SELECT * FROM WorldLore
-                    WHERE category = $1
-                    ORDER BY significance DESC
-                """, category)
-                
-                lore_items = []
-                for row in rows:
-                    item = dict(row)
-                    if 'embedding' in item:
-                        del item['embedding']
-                    lore_items.append(item)
-                
-                # Cache the result
-                LORE_CACHE.set(cache_key, lore_items)
-                
-                return lore_items
+    def _get_table_for_entity_type(self, entity_type: str) -> str:
+        """Get the database table name for an entity type."""
+        entity_type = entity_type.lower()
+        if entity_type == "faction":
+            return "Factions"
+        elif entity_type == "cultural_element":
+            return "CulturalElements"
+        elif entity_type == "historical_event":
+            return "HistoricalEvents"
+        elif entity_type == "location":
+            return "Locations"
+        else:
+            return entity_type.capitalize()
     
-    async def update_npc_lore_knowledge(self, npc_id: int, cultural_background: str = None,
-                                      faction_memberships: List[str] = None) -> bool:
-        """
-        Update an NPC's lore knowledge fields.
-        
-        Args:
-            npc_id: ID of the NPC
-            cultural_background: Cultural background (affects knowledge)
-            faction_memberships: List of faction names the NPC belongs to
-            
-        Returns:
-            Success status
-        """
-        updates = {}
-        
-        if cultural_background is not None:
-            updates['cultural_background'] = cultural_background
-        
-        if faction_memberships is not None:
-            updates['faction_memberships'] = faction_memberships
-        
-        if not updates:
-            return False
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                try:
-                    # Construct set clause
-                    set_clauses = []
-                    values = []
-                    
-                    for i, (key, value) in enumerate(updates.items()):
-                        set_clauses.append(f"{key} = ${i+2}")
-                        values.append(value)
-                    
-                    set_clause = ', '.join(set_clauses)
-                    
-                    # Update NPC
-                    await conn.execute(f"""
-                        UPDATE NPCStats
-                        SET {set_clause}
-                        WHERE npc_id = $1
-                    """, npc_id, *values)
-                    
-                    return True
-                except Exception as e:
-                    logging.error(f"Error updating NPC lore knowledge: {e}")
-                    return False
+    def _get_name_column_for_entity_type(self, entity_type: str) -> str:
+        """Get the name column for an entity type."""
+        entity_type = entity_type.lower()
+        if entity_type == "location":
+            return "location_name"
+        elif entity_type == "npc":
+            return "npc_name"
+        else:
+            return "name"
     
-    async def get_location_with_lore(self, location_id: int) -> Dict[str, Any]:
-        """
-        Get a location with its associated lore.
-        
-        Args:
-            location_id: ID of the location
-            
-        Returns:
-            Location data with lore
-        """
-        # Check cache first
-        cache_key = f"location_with_lore_{location_id}"
-        cached_location = LORE_CACHE.get(cache_key)
-        if cached_location:
-            return cached_location
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get basic location info
-                location = await conn.fetchrow("""
-                    SELECT * FROM Locations
-                    WHERE id = $1
-                """, location_id)
-                
-                if not location:
-                    return None
-                
-                # Get location lore
-                lore = await conn.fetchrow("""
-                    SELECT * FROM LocationLore
-                    WHERE location_id = $1
-                """, location_id)
-                
-                # Get connections
-                connections = await conn.fetch("""
-                    SELECT * FROM LoreConnections
-                    WHERE (source_type = 'LocationLore' AND source_id = $1)
-                       OR (target_type = 'LocationLore' AND target_id = $1)
-                """, location_id)
-                
-                # Combine data
-                result = dict(location)
-                
-                if lore:
-                    lore_dict = dict(lore)
-                    if 'embedding' in lore_dict:
-                        del lore_dict['embedding']
-                    
-                    # Merge in lore fields
-                    for key, value in lore_dict.items():
-                        if key != 'location_id' and key != 'id':
-                            result[f"lore_{key}"] = value
-                
-                if connections:
-                    result['connections'] = [dict(conn) for conn in connections]
-                
-                # Cache the result
-                LORE_CACHE.set(cache_key, result)
-                
-                return result
-    
-    async def generate_available_lore_for_context(self, context_text: str, entity_type: str = None,
-                                                entity_id: int = None, limit: int = 5) -> List[Dict[str, Any]]:
-        """
-        Generate available lore for a given context, optionally filtered by entity knowledge.
-        
-        Args:
-            context_text: Context to find relevant lore for
-            entity_type: Optional entity type to filter by knowledge
-            entity_id: Optional entity ID to filter by knowledge
-            limit: Maximum number of results
-            
-        Returns:
-            List of relevant lore items
-        """
-        # Get relevant lore based on context
-        relevant_lore = await self.get_relevant_lore(
-            context_text,
-            min_relevance=0.65,
-            limit=limit * 2  # Get more than needed to allow for knowledge filtering
-        )
-        
-        # If no entity filtering, return the top results
-        if entity_type is None or entity_id is None:
-            return relevant_lore[:limit]
-        
-        # Get entity's knowledge
-        entity_knowledge = await self.get_entity_lore_knowledge(entity_type, entity_id)
-        known_lore_ids = {(k['lore_type'], k['id']): k['knowledge_level'] for k in entity_knowledge}
-        
-        # Filter and organize lore
-        filtered_lore = []
-        
-        for lore in relevant_lore:
-            lore_type = lore['lore_type']
-            lore_id = lore['id']
-            
-            # Check if entity knows this lore
-            if (lore_type, lore_id) in known_lore_ids:
-                # Entity knows this lore - adjust description based on knowledge level
-                knowledge_level = known_lore_ids[(lore_type, lore_id)]
-                
-                # For low knowledge, provide less detailed information
-                if knowledge_level < 4:
-                    # Keep basic info but truncate detailed description
-                    if 'description' in lore and len(lore['description']) > 100:
-                        lore['description'] = lore['description'][:100] + "... [more knowledge needed]"
-                
-                lore['entity_knowledge_level'] = knowledge_level
-                filtered_lore.append(lore)
-            else:
-                # Entity doesn't know this lore yet, but it's relevant
-                # Include a hint but not the full details
-                if 'description' in lore and len(lore['description']) > 50:
-                    lore['description'] = lore['description'][:50] + "... [unknown lore]"
-                
-                lore['entity_knowledge_level'] = 0
-                filtered_lore.append(lore)
-        
-        # Sort by knowledge level (known first) then relevance
-        filtered_lore.sort(key=lambda x: (x.get('entity_knowledge_level', 0), x.get('relevance', 0)), reverse=True)
-        
-        return filtered_lore[:limit]
-                                                    
     async def register_with_governance(self):
         """Register with Nyx governance system"""
         await self.initialize_governance()

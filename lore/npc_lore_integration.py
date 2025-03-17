@@ -2,11 +2,17 @@
 
 import logging
 import asyncio
+import random
 from typing import Dict, List, Any, Optional, Tuple
+import json
 
 from db.connection import get_db_connection
 from lore.lore_manager import LoreManager
 from memory.wrapper import MemorySystem
+
+# Import belief system
+from npcs.npc_belief_formation import NPCBeliefFormation
+from npcs.belief_system_integration import NPCBeliefSystemIntegration
 
 # Import Nyx governance
 from nyx.integrate import get_central_governance
@@ -32,12 +38,24 @@ class NPCLoreIntegration:
         self.npc_id = npc_id
         self.lore_manager = LoreManager(user_id, conversation_id)
         self.governor = None
+        
+        # Initialize belief systems
+        self.belief_integration = NPCBeliefSystemIntegration(user_id, conversation_id)
+        self.belief_system = None
+        if npc_id:
+            self.belief_system = self.belief_integration.get_belief_system_for_npc(npc_id)
     
     async def initialize_governance(self):
         """Initialize Nyx governance connection"""
         if not self.governor:
             self.governor = await get_central_governance(self.user_id, self.conversation_id)
         return self.governor
+    
+    async def initialize_belief_system(self):
+        """Initialize belief system if needed"""
+        if self.npc_id and self.belief_system:
+            await self.belief_system.initialize()
+        await self.belief_integration.initialize()
     
     @with_governance(
         agent_type=AgentType.NPC,
@@ -555,6 +573,10 @@ class NPCLoreIntegration:
         # Get memory system for this NPC
         memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
         
+        # Get belief system for this NPC
+        belief_system = self.belief_integration.get_belief_system_for_npc(npc_id)
+        await belief_system.initialize()
+        
         # Create memories for faction knowledge
         for faction in knowledge_granted["factions"]:
             if faction["knowledge_level"] >= 7:
@@ -584,6 +606,12 @@ class NPCLoreIntegration:
                         importance="high",
                         tags=["lore", "faction", "identity"]
                     )
+                    
+                    # Form a belief about the faction (high factuality since it's their own faction)
+                    await belief_system.form_subjective_belief_from_observation(
+                        observation=f"{faction_data['name']} is a faction that represents my interests and values.",
+                        factuality=0.9
+                    )
         
         # Create memories for cultural knowledge
         significant_culture = [c for c in knowledge_granted["cultural_elements"] if c["knowledge_level"] >= 6]
@@ -604,6 +632,16 @@ class NPCLoreIntegration:
                         importance="medium",
                         tags=["lore", "culture", "beliefs"]
                     )
+                    
+                    # Form a cultural belief (medium-high factuality)
+                    if culture_data.get("type") in ["religion", "faith", "belief system"]:
+                        await belief_system.form_culturally_influenced_belief(
+                            subject="values"
+                        )
+                    else:
+                        await belief_system.form_culturally_influenced_belief(
+                            subject="society"
+                        )
         
         # Create memories for significant historical events
         significant_events = [e for e in knowledge_granted["historical_events"] if e["knowledge_level"] >= 7]
@@ -624,11 +662,19 @@ class NPCLoreIntegration:
                         importance="medium",
                         tags=["lore", "history", "event"]
                     )
+                    
+                    # Form a belief about the historical event (with medium factuality)
+                    # Historical interpretations often have bias
+                    await belief_system.form_subjective_belief_from_observation(
+                        observation=f"The {event_data['name']} had a significant impact on our history.",
+                        factuality=0.7  # Allow for some personal interpretation
+                    )
     
     async def _create_discovery_memory(self, npc_id: int, lore_data: Dict[str, Any],
                                      knowledge_level: int, discovery_method: str):
         """
         Create a memory for the NPC about discovering lore.
+        Also forms subjective beliefs based on the discovery.
         
         Args:
             npc_id: ID of the NPC
@@ -638,6 +684,10 @@ class NPCLoreIntegration:
         """
         # Get memory system
         memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
+        
+        # Get belief system for this NPC
+        belief_system = self.belief_integration.get_belief_system_for_npc(npc_id)
+        await belief_system.initialize()
         
         # Create discovery memory
         lore_name = lore_data.get("name", "something")
@@ -671,46 +721,155 @@ class NPCLoreIntegration:
             importance="medium" if knowledge_level >= 6 else "low",
             tags=["lore", "discovery", lore_type.lower()]
         )
+        
+        # Now form subjective belief about this discovery
+        # Factuality depends on knowledge level and discovery method
+        base_factuality = min(knowledge_level / 10.0, 0.9)  # Max 0.9 factuality
+        
+        # Adjust factuality based on discovery method
+        method_factuality_map = {
+            "observation": 0.8,  # Direct observation is fairly reliable
+            "investigation": 0.7,  # Investigation can have bias
+            "conversation": 0.6,  # Conversations might contain misinformation
+            "book": 0.75,        # Books are somewhat reliable but may have bias
+            "rumor": 0.4,        # Rumors are often unreliable
+            "default": 0.6       # Default for unknown methods
+        }
+        
+        method_factuality = method_factuality_map.get(discovery_method, method_factuality_map["default"])
+        
+        # Combine knowledge level and method reliability
+        factuality = (base_factuality * 0.7) + (method_factuality * 0.3)
+        
+        # Create belief from the discovery with calculated factuality
+        lore_description = lore_data.get("description", f"Information about {lore_name}")
+        
+        # Trim description to keep observation concise
+        if len(lore_description) > 200:
+            lore_description = lore_description[:200] + "..."
+        
+        await belief_system.form_subjective_belief_from_observation(
+            observation=lore_description,
+            factuality=factuality
+        )
+        
+        # For significant discoveries, also update any existing related beliefs
+        if knowledge_level >= 6:
+            await self.belief_integration.update_beliefs_on_knowledge_discovery(
+                npc_id=npc_id,
+                knowledge_type=lore_type,
+                knowledge_id=lore_data["id"]
+            )
+        
+        # For very significant discoveries (knowledge_level >= 8), form a narrative
+        # that connects this discovery to other memories
+        if knowledge_level >= 8:
+            await self.belief_integration.form_narrative_from_recent_events(
+                npc_id=npc_id,
+                max_events=4  # Include a few recent memories
+            )
     
     async def _get_npc_personality(self, npc_id: int) -> Dict[str, Any]:
         """
-        Get an NPC's personality traits for lore response styling.
+        Get NPC personality traits and other relevant attributes.
+        Uses cached data when possible for improved performance.
         
         Args:
             npc_id: ID of the NPC
             
         Returns:
-            Dictionary of personality data
+            Dictionary with personality information
         """
-        async with self.lore_manager.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get personality traits and related stats
-                npc_data = await conn.fetchrow("""
-                    SELECT npc_name, personality_traits, dominance, cruelty, respect, trust
-                    FROM NPCStats
-                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-                """, npc_id, self.user_id, self.conversation_id)
+        try:
+            # Create a simple cache key
+            cache_key = f"npc_personality:{npc_id}:{self.user_id}:{self.conversation_id}"
+            
+            # Check if there's an in-memory personality cache in the class
+            if not hasattr(self.__class__, '_personality_cache'):
+                self.__class__._personality_cache = {}
+            
+            # Check for cached data (with 5-minute expiration)
+            if cache_key in self.__class__._personality_cache:
+                cached_data, timestamp = self.__class__._personality_cache[cache_key]
+                from datetime import datetime
+                if (datetime.now() - timestamp).total_seconds() < 300:  # 5 minutes TTL
+                    return cached_data
+            
+            # Get NPC data using the more efficient NPCDataAccess
+            from data.npc_dal import NPCDataAccess
+            
+            npc_data = await NPCDataAccess.get_npc_details(
+                npc_id=npc_id,
+                user_id=self.user_id,
+                conversation_id=self.conversation_id
+            )
+            
+            if not npc_data:
+                return {"traits": {}, "dominance": 50, "archetypes": [], "alignment": "neutral"}
+            
+            # Extract personality
+            personality = npc_data.get("personality", {})
+            
+            # Parse the personality if it's a string
+            if isinstance(personality, str):
+                try:
+                    personality = json.loads(personality)
+                except json.JSONDecodeError:
+                    logging.warning(f"Failed to parse personality JSON for NPC {npc_id}")
+                    personality = {}
+            
+            # Ensure personality format is consistent
+            if not isinstance(personality, dict):
+                personality = {}
+            
+            # Create structured personality data
+            result = {
+                "traits": {},
+                "dominance": npc_data.get("dominance", 50),
+                "archetypes": [],
+                "alignment": "neutral"
+            }
+            
+            # Extract traits with their values
+            traits = personality.get("traits", {})
+            if isinstance(traits, dict):
+                result["traits"] = traits
+            elif isinstance(traits, list):
+                # Convert list format to dict format
+                for trait in traits:
+                    if isinstance(trait, dict) and "name" in trait and "value" in trait:
+                        result["traits"][trait["name"]] = trait["value"]
+                    elif isinstance(trait, str):
+                        # Assume default strength if only trait name provided
+                        result["traits"][trait] = 7
+            
+            # Get archetypes from archetype field or fallback to backstory
+            archetypes = npc_data.get("archetypes", [])
+            if isinstance(archetypes, list):
+                result["archetypes"] = archetypes[:3]  # Limit to top 3
+            elif isinstance(archetypes, dict) and "primary" in archetypes:
+                # Handle structured archetype format
+                result["archetypes"] = [archetypes["primary"]]
+                if "secondary" in archetypes:
+                    result["archetypes"].append(archetypes["secondary"])
                 
-                if not npc_data:
-                    return {}
+            # Get alignment
+            psychological_profile = npc_data.get("psychological_profile", {})
+            if isinstance(psychological_profile, dict):
+                result["alignment"] = psychological_profile.get("alignment", "neutral")
                 
-                # Process traits
-                traits = npc_data["personality_traits"]
-                if isinstance(traits, str):
-                    try:
-                        import json
-                        traits = json.loads(traits)
-                    except:
-                        traits = []
-                
-                return {
-                    "name": npc_data["npc_name"],
-                    "traits": traits,
-                    "dominance": npc_data["dominance"],
-                    "cruelty": npc_data["cruelty"],
-                    "respect": npc_data["respect"],
-                    "trust": npc_data["trust"]
-                }
+                # Add additional temperament data if available
+                if "temperament" in psychological_profile:
+                    result["temperament"] = psychological_profile["temperament"]
+            
+            # Cache the result with timestamp
+            from datetime import datetime
+            self.__class__._personality_cache[cache_key] = (result, datetime.now())
+            
+            return result
+        except Exception as e:
+            logging.error(f"Error getting NPC personality: {e}", exc_info=True)
+            return {"traits": {}, "dominance": 50, "archetypes": [], "alignment": "neutral"}
     
     async def _generate_lore_response(self, lore: Dict[str, Any], knowledge_level: int,
                                     is_secret: bool, personality: Dict[str, Any]) -> str:
@@ -822,6 +981,213 @@ class NPCLoreIntegration:
         
         # Default for other lore types
         return intro + description
+    
+    @with_governance(
+        agent_type=AgentType.NPC,
+        action_type="get_npc_speech_patterns",
+        action_description="Getting speech patterns for NPC {npc_id}",
+        id_from_context=lambda ctx: f"npc_{ctx.npc_id}"
+    )
+    async def get_npc_speech_patterns(self, ctx, npc_id: int) -> Dict[str, Any]:
+        """
+        Get speech patterns for an NPC based on their cultural background, dialects, and language knowledge.
+        This is used to style NPC dialogue with appropriate dialectal features.
+        
+        Args:
+            npc_id: ID of the NPC
+            
+        Returns:
+            Dictionary with speech pattern information including:
+            - primary_language: Main language spoken by the NPC
+            - dialect: Information about the NPC's dialect
+            - dialect_features: Specific features of the dialect (accent, vocabulary, grammar, etc.)
+            - formality_level: The NPC's typical level of formality
+            - cultural_expressions: Cultural-specific phrases or expressions
+        """
+        try:
+            # Get the LoreSystem instance
+            from lore.lore_system import LoreSystem
+            lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
+            await lore_system.initialize()
+            
+            # Get the NPC's complete cultural attributes
+            cultural_attrs = await lore_system.get_npc_cultural_attributes(npc_id)
+            
+            if not cultural_attrs or "error" in cultural_attrs:
+                return {
+                    "primary_language": None,
+                    "dialect": None,
+                    "dialect_features": {},
+                    "formality_level": "neutral",
+                    "cultural_expressions": []
+                }
+            
+            # Get NPC details for personality traits
+            npc_personality = await self._get_npc_personality(npc_id)
+            
+            # Initialize speech pattern data
+            speech_patterns = {
+                "primary_language": None,
+                "dialect": None,
+                "dialect_features": {},
+                "formality_level": "neutral",  # Default formality
+                "cultural_expressions": []
+            }
+            
+            # Set primary language (if any languages are known)
+            languages = cultural_attrs.get("languages", [])
+            if languages:
+                # Sort by fluency (highest first)
+                languages.sort(key=lambda x: x.get("fluency", 0), reverse=True)
+                primary_language = languages[0]
+                
+                speech_patterns["primary_language"] = {
+                    "id": primary_language.get("id"),
+                    "name": primary_language.get("name"),
+                    "fluency": primary_language.get("fluency", 7),
+                    "writing_system": primary_language.get("writing_system")
+                }
+                
+                # Get formality levels from primary language
+                formality_levels = primary_language.get("formality_levels", [])
+                
+                # Set dialect information if available
+                if cultural_attrs.get("primary_dialect"):
+                    speech_patterns["dialect"] = cultural_attrs["primary_dialect"]
+                    speech_patterns["dialect_features"] = cultural_attrs.get("dialect_features", {})
+                
+                # Extract cultural expressions from common phrases if available
+                common_phrases = primary_language.get("common_phrases", {})
+                if common_phrases and isinstance(common_phrases, dict):
+                    expressions = []
+                    for category, phrases in common_phrases.items():
+                        if isinstance(phrases, list):
+                            expressions.extend(phrases[:3])  # Limit to 3 phrases per category
+                    
+                    speech_patterns["cultural_expressions"] = expressions
+            
+            # Determine formality level based on personality and cultural background
+            personality_traits = npc_personality.get("personality_traits", [])
+            
+            # Default to neutral formality
+            formality = "neutral"
+            
+            # Check personality traits for formality indicators
+            formal_traits = ["proper", "pompous", "dignified", "aristocratic", "strict", "refined"]
+            casual_traits = ["casual", "relaxed", "easygoing", "informal", "blunt", "direct"]
+            
+            if any(trait.lower() in formal_traits for trait in personality_traits):
+                formality = "formal"
+            elif any(trait.lower() in casual_traits for trait in personality_traits):
+                formality = "casual"
+            
+            # Cultural norms can override personality
+            cultural_norms = cultural_attrs.get("cultural_norms_followed", [])
+            for norm in cultural_norms:
+                if norm.get("category", "").lower() in ["speech", "communication", "greetings"]:
+                    if "formal" in norm.get("description", "").lower():
+                        formality = "formal"
+                        break
+                    elif "casual" in norm.get("description", "").lower() or "informal" in norm.get("description", "").lower():
+                        formality = "casual"
+                        break
+            
+            speech_patterns["formality_level"] = formality
+            
+            return speech_patterns
+            
+        except Exception as e:
+            logging.error(f"Error getting NPC speech patterns: {e}")
+            return {
+                "primary_language": None,
+                "dialect": None,
+                "dialect_features": {},
+                "formality_level": "neutral",
+                "cultural_expressions": [],
+                "error": str(e)
+            }
+    
+    async def apply_dialect_to_text(self, ctx, npc_id: int, text: str, intensity: str = 'medium') -> str:
+        """
+        Apply dialect features to a text based on NPC's dialect.
+        Uses optimized regex matching and caching for better performance.
+        
+        Args:
+            ctx: Governance context
+            npc_id: ID of the NPC
+            text: Original text
+            intensity: Intensity of dialect application ('light', 'medium', 'strong')
+            
+        Returns:
+            Modified text with dialect features applied
+        """
+        if not text or not text.strip():
+            return text
+        
+        try:
+            # Get the LoreSystem instance
+            from lore.lore_system import LoreSystem
+            lore_system = LoreSystem.get_instance(self.user_id, self.conversation_id)
+            await lore_system.initialize()
+            
+            # Create a simple cache key for speech patterns
+            cache_key = f"npc_speech:{npc_id}:{self.user_id}:{self.conversation_id}"
+            
+            # Check if there's an in-memory speech pattern cache in the class
+            if not hasattr(self.__class__, '_speech_pattern_cache'):
+                self.__class__._speech_pattern_cache = {}
+            
+            # Get the dialect information to use
+            speech_patterns = None
+            
+            # Check for cached speech pattern data (with 5-minute expiration)
+            dialect_id = None
+            if cache_key in self.__class__._speech_pattern_cache:
+                cached_data, timestamp = self.__class__._speech_pattern_cache[cache_key]
+                from datetime import datetime
+                if (datetime.now() - timestamp).total_seconds() < 300:  # 5 minutes TTL
+                    speech_patterns = cached_data
+                    if speech_patterns and speech_patterns.get('dialect'):
+                        dialect_id = speech_patterns['dialect'].get('id')
+            
+            # If not cached, get speech patterns and cache them
+            if not speech_patterns:
+                speech_patterns = await lore_system.get_npc_speech_patterns(npc_id)
+                
+                # Cache the speech patterns
+                from datetime import datetime
+                self.__class__._speech_pattern_cache[cache_key] = (speech_patterns, datetime.now())
+                
+                if speech_patterns and speech_patterns.get('primary_dialect'):
+                    dialect_id = speech_patterns['primary_dialect'].get('id')
+            
+            # If no dialect found, return original text
+            if not dialect_id:
+                return text
+            
+            # Apply the dialect to the text with optimized regex in lore_system
+            modified_text = await lore_system.apply_dialect_to_text(
+                text=text,
+                dialect_id=dialect_id,
+                intensity=intensity,
+                npc_id=npc_id
+            )
+            
+            # Report action to governance
+            await ctx.report_action(
+                action="applied_dialect_to_text",
+                details={
+                    "npc_id": npc_id,
+                    "dialect_id": dialect_id,
+                    "intensity": intensity,
+                    "text_length": len(text)
+                }
+            )
+            
+            return modified_text
+        except Exception as e:
+            logging.error(f"Error applying dialect to text: {e}", exc_info=True)
+            return text  # Return original text on error
     
     async def register_with_nyx_governance(self):
         """Register with Nyx governance system."""
@@ -973,53 +1339,6 @@ class NPCLoreIntegration:
                             )
                 
                 return {"discoveries": discoveries}
-    
-    async def _create_discovery_memory(self, npc_id: int, lore_data: Dict[str, Any],
-                                     knowledge_level: int, discovery_method: str):
-        """
-        Create a memory for the NPC about discovering lore.
-        
-        Args:
-            npc_id: ID of the NPC
-            lore_data: The discovered lore
-            knowledge_level: Level of knowledge gained
-            discovery_method: How it was discovered
-        """
-        # Get memory system
-        memory_system = await MemorySystem.get_instance(self.user_id, self.conversation_id)
-        
-        # Create discovery memory
-        lore_name = lore_data.get("name", "something")
-        lore_type = lore_data["lore_type"]
-        
-        # Format the memory based on discovery method
-        if discovery_method == "observation":
-            memory_text = f"I noticed {lore_name} while observing my surroundings."
-        elif discovery_method == "conversation":
-            memory_text = f"I learned about {lore_name} during a conversation."
-        elif discovery_method == "investigation":
-            memory_text = f"I discovered information about {lore_name} by investigating."
-        elif discovery_method == "book":
-            memory_text = f"I read about {lore_name} in a book."
-        else:
-            memory_text = f"I learned about {lore_name}."
-        
-        # Add details based on knowledge level
-        if knowledge_level >= 5:
-            # Add a brief description for higher knowledge levels
-            description = lore_data.get("description", "")
-            if description and len(description) > 150:
-                description = description[:150] + "..."
-            memory_text += f" {description}"
-        
-        # Create the memory
-        await memory_system.remember(
-            entity_type="npc",
-            entity_id=npc_id,
-            memory_text=memory_text,
-            importance="medium" if knowledge_level >= 6 else "low",
-            tags=["lore", "discovery", lore_type.lower()]
-        )
 
 
 class DMAgentLoreIntegration:
@@ -1098,10 +1417,10 @@ class DMAgentLoreIntegration:
                         """, location, self.user_id, self.conversation_id)
                         
                         if location_id:
-                            # Get location lore
-                            location_lore = await self.lore_manager.get_location_with_lore(location_id)
-                            if location_lore:
-                                lore_by_type["LocationLore"] = [location_lore]
+                            # Get this location's lore
+                            location_with_lore = await self.lore_manager.get_location_with_lore(location_id)
+                            if location_with_lore:
+                                lore_by_type["LocationLore"] = [location_with_lore]
             except Exception as e:
                 logging.error(f"Error getting location lore: {e}")
         

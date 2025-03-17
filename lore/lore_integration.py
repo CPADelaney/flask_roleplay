@@ -77,53 +77,140 @@ class LoreIntegrationSystem:
 
     async def get_comprehensive_location_context(self, location_name: str, context: str = "public") -> Dict[str, Any]:
         """
-        Get comprehensive context about a location including cultural, religious, and political information.
+        Get comprehensive lore context for a specific location.
         
         Args:
             location_name: Name of the location
-            context: Social context (public, private, court, etc.)
+            context: Context type (public, private, dm)
             
         Returns:
-            Dictionary with comprehensive location context
+            Dictionary with location lore
         """
-        # Get basic location details
-        location_details = await self._get_location_details(location_name)
+        # Get location details from the database
+        location_details = {}
+        location_id = None
         
-        # Get cultural information
-        from lore.regional_culture_system import RegionalCultureSystem
-        culture_system = RegionalCultureSystem(self.user_id, self.conversation_id)
-        cultural_info = await culture_system.get_relevant_cultural_info(location_name, context)
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get location from Locations table
+                location_row = await conn.fetchrow("""
+                    SELECT * FROM Locations 
+                    WHERE location_name = $1 AND user_id = $2 AND conversation_id = $3
+                """, location_name, self.user_id, self.conversation_id)
+                
+                if location_row:
+                    location_details = dict(location_row)
+                    location_id = location_details.get("id")
+                    
+                    # Get location lore if exists
+                    location_lore = await conn.fetchrow("""
+                        SELECT * FROM LocationLore
+                        WHERE location_id = $1
+                    """, location_id)
+                    
+                    if location_lore:
+                        lore_details = dict(location_lore)
+                        # Add lore fields to location details
+                        for key, value in lore_details.items():
+                            if key not in ["id", "user_id", "conversation_id", "location_id", "embedding"]:
+                                location_details[f"lore_{key}"] = value
         
-        # Get religious information
-        from lore.religious_distribution_system import ReligiousDistributionSystem
-        religion_system = ReligiousDistributionSystem(self.user_id, self.conversation_id)
-        religion_info = await religion_system.get_location_religion(location_name)
+        # Get cultural context
+        cultural_info = await self._get_cultural_context_for_location(location_name)
         
-        # Get political information and conflicts
-        from lore.national_conflict_system import NationalConflictSystem
-        conflict_system = NationalConflictSystem(self.user_id, self.conversation_id)
+        # Get religious context
+        religion_info = await self._get_religious_context_for_location(location_name)
         
-        # Determine nation_id from cultural_info
-        nation_id = cultural_info.get("nation", {}).get("id")
-        
-        political_info = {}
-        if nation_id:
-            # Get domestic issues
-            domestic_issues = await conflict_system.get_nation_domestic_issues(nation_id)
-            
-            # Get culture wars
-            culture_wars = await conflict_system.get_nation_culture_wars(nation_id)
-            
-            political_info = {
-                "domestic_issues": domestic_issues,
-                "culture_wars": culture_wars
-            }
+        # Get political context
+        political_info = await self._get_political_context_for_location(location_name)
         
         return {
             "location": location_details,
             "cultural_context": cultural_info,
             "religious_context": religion_info,
             "political_context": political_info
+        }
+
+    async def _get_cultural_context_for_location(self, location_name: str) -> Dict[str, Any]:
+        """Get cultural context for a location."""
+        cultural_elements = []
+        
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get cultural elements practiced at this location
+                rows = await conn.fetch("""
+                    SELECT ce.* 
+                    FROM CulturalElements ce
+                    JOIN LoreConnections lc ON ce.id = lc.source_id
+                    JOIN Locations l ON lc.target_id = l.id
+                    WHERE l.location_name = $1
+                    AND ce.user_id = $2 AND ce.conversation_id = $3
+                    AND lc.source_type = 'CulturalElements'
+                    AND lc.target_type = 'Locations'
+                    AND lc.connection_type = 'practiced_at'
+                """, location_name, self.user_id, self.conversation_id)
+                
+                if rows:
+                    cultural_elements = [dict(row) for row in rows]
+        
+        return {
+            "elements": cultural_elements,
+            "count": len(cultural_elements)
+        }
+
+    async def _get_religious_context_for_location(self, location_name: str) -> Dict[str, Any]:
+        """Get religious context for a location."""
+        religious_elements = []
+        
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get religious elements specific to this location
+                rows = await conn.fetch("""
+                    SELECT ce.* 
+                    FROM CulturalElements ce
+                    JOIN LoreConnections lc ON ce.id = lc.source_id
+                    JOIN Locations l ON lc.target_id = l.id
+                    WHERE l.location_name = $1
+                    AND ce.user_id = $2 AND ce.conversation_id = $3
+                    AND ce.element_type = 'religion'
+                    AND lc.source_type = 'CulturalElements'
+                    AND lc.target_type = 'Locations'
+                    AND lc.connection_type = 'practiced_at'
+                """, location_name, self.user_id, self.conversation_id)
+                
+                if rows:
+                    religious_elements = [dict(row) for row in rows]
+        
+        return {
+            "elements": religious_elements,
+            "count": len(religious_elements)
+        }
+
+    async def _get_political_context_for_location(self, location_name: str) -> Dict[str, Any]:
+        """Get political context for a location."""
+        ruling_factions = []
+        
+        async with self.lore_manager.get_connection_pool() as pool:
+            async with pool.acquire() as conn:
+                # Get factions ruling or influencing this location
+                rows = await conn.fetch("""
+                    SELECT f.*, lc.strength as influence_level, lc.description as influence_description 
+                    FROM Factions f
+                    JOIN LoreConnections lc ON f.id = lc.source_id
+                    JOIN Locations l ON lc.target_id = l.id
+                    WHERE l.location_name = $1
+                    AND f.user_id = $2 AND f.conversation_id = $3
+                    AND lc.source_type = 'Factions'
+                    AND lc.target_type = 'Locations'
+                    AND (lc.connection_type = 'controls' OR lc.connection_type = 'influences')
+                """, location_name, self.user_id, self.conversation_id)
+                
+                if rows:
+                    ruling_factions = [dict(row) for row in rows]
+        
+        return {
+            "ruling_factions": ruling_factions,
+            "count": len(ruling_factions)
         }
 
     @with_governance(
