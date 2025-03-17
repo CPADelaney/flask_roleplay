@@ -820,6 +820,31 @@ async def process_ai_response_with_nyx(user_id, conv_id, user_input, context, ag
     Returns:
         Tuple of (final_response, image_result)
     """
+    # Get Nyx governance to enhance context with lore and conflicts
+    try:
+        # Get central governance
+        from nyx.integrate import get_central_governance
+        governance = await get_central_governance(user_id, conv_id)
+        
+        # Enhance context with lore and conflicts
+        enhanced_context = await governance.enhance_context_with_lore(context)
+        
+        # Add any specific location-based lore if available
+        if "location" in context and context["location"]:
+            from lore.lore_system import LoreSystem
+            lore_system = LoreSystem.get_instance(user_id, conv_id)
+            await lore_system.initialize()
+            location_context = await lore_system.get_location_lore_context(context["location"])
+            enhanced_context["location_lore_context"] = location_context
+        
+        logging.info(f"Enhanced context with lore for user {user_id}, conversation {conv_id}")
+        
+        # Use the enhanced context instead of the original
+        context = enhanced_context
+    except Exception as e:
+        logging.error(f"Error enhancing context with lore: {e}", exc_info=True)
+        # Continue with original context if enhancement fails
+    
     # Initialize Nyx agent
     from nyx.nyx_agent import NyxAgent
     nyx_agent = NyxAgent(user_id, conv_id)
@@ -1708,7 +1733,7 @@ async def next_storybeat():
                 tracker.end_phase()
 
             # 6) (Optional) NPC interactions if you want them before Nyx's response
-            # If you do want to do “process_npc_responses” with the old approach:
+            # If you do want to do "process_npc_responses" with the old approach:
             tracker.start_phase("npc_interactions")
             npc_responses = await process_npc_responses(
                 resources["npc_system"], 

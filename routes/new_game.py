@@ -53,8 +53,8 @@ async def spaced_gpt_call(conversation_id, context, prompt, delay=1.0):
 
 @new_game_bp.route('/start_new_game', methods=['POST'])
 def start_new_game():
-    from tasks import process_new_game_task  # or wherever tasks.py is located
-    logging.info("=== /start_new_game endpoint called (offloading to background task) ===")
+    from tasks import process_new_game_task  # Import task that uses NewGameAgent and Nyx governance
+    logging.info("=== /start_new_game endpoint called (offloading to background task using NewGameAgent) ===")
     
     user_id = session.get("user_id")
     if not user_id:
@@ -69,7 +69,7 @@ def start_new_game():
         conversation_id = conversation_data["conversation_id"]
 
     task = process_new_game_task.delay(user_id, conversation_data)
-    logging.info(f"Enqueued process_new_game_task for user_id={user_id}, conversation_id={conversation_id}, task id: {task.id}")
+    logging.info(f"Enqueued process_new_game_task with NewGameAgent for user_id={user_id}, conversation_id={conversation_id}, task id: {task.id}")
 
     return jsonify({"job_id": task.id, "conversation_id": conversation_id}), 202
 
