@@ -10,6 +10,7 @@ and the rest of the game, with special focus on player manipulation mechanics.
 import logging
 import json
 import asyncio
+import random
 from typing import Dict, List, Any, Optional, Union, Tuple
 
 from logic.conflict_system.conflict_manager import ConflictManager
@@ -780,3 +781,37 @@ class ConflictSystemIntegration:
         else:
             # Generic manipulation is neutral
             return base_intimacy
+async def register_with_governance(user_id: int, conversation_id: int):
+    """
+    Register conflict system with governance system.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+    """
+    governance = await get_central_governance(user_id, conversation_id)
+    
+    # Create conflict system instance
+    conflict_system = ConflictSystemIntegration(user_id, conversation_id)
+    
+    # Register with governance
+    await governance.register_agent(
+        agent_type=AgentType.CONFLICT_ANALYST, 
+        agent_instance=conflict_system, 
+        agent_id="conflict_manager"
+    )
+    
+    # Issue directive for conflict analysis
+    await governance.issue_directive(
+        agent_type=AgentType.CONFLICT_ANALYST,
+        agent_id="conflict_manager",
+        directive_type=DirectiveType.ACTION,
+        directive_data={
+            "instruction": "Manage conflicts and their progression in the game world",
+            "scope": "game"
+        },
+        priority=DirectivePriority.MEDIUM,
+        duration_minutes=24*60  # 24 hours
+    )
+    
+    logger.info("Conflict System registered with Nyx governance")
