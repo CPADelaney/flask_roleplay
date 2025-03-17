@@ -1943,6 +1943,468 @@ async def get_player_journal_entries(ctx, entry_type: Optional[str] = None, limi
         cursor.close()
         conn.close()
 
+@function_tool
+async def analyze_conflict_potential(ctx, narrative_text: str) -> Dict[str, Any]:
+    """
+    Analyze narrative text for conflict potential.
+    
+    Args:
+        narrative_text: The narrative text to analyze
+        
+    Returns:
+        Conflict potential analysis
+    """
+    user_id = ctx.context["user_id"]
+    conversation_id = ctx.context["conversation_id"]
+    
+    try:
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+        
+        conflict_keywords = [
+            "argument", "disagreement", "tension", "rivalry", "competition",
+            "dispute", "feud", "clash", "confrontation", "battle", "fight",
+            "war", "conflict", "power struggle", "contest", "strife"
+        ]
+        
+        matched_keywords = []
+        for keyword in conflict_keywords:
+            if keyword in narrative_text.lower():
+                matched_keywords.append(keyword)
+        
+        # Calculate conflict intensity based on keyword matches
+        conflict_intensity = min(10, len(matched_keywords) * 2)
+        
+        # Check for NPC mentions
+        from logic.conflict_system.conflict_manager import ConflictManager
+        conflict_manager = ConflictManager(user_id, conversation_id)
+        npcs = await conflict_manager._get_available_npcs()
+        
+        mentioned_npcs = []
+        for npc in npcs:
+            if npc["npc_name"] in narrative_text:
+                mentioned_npcs.append({
+                    "npc_id": npc["npc_id"],
+                    "npc_name": npc["npc_name"],
+                    "dominance": npc["dominance"],
+                    "faction_affiliations": npc.get("faction_affiliations", [])
+                })
+        
+        # Look for faction mentions
+        mentioned_factions = []
+        for npc in mentioned_npcs:
+            for affiliation in npc.get("faction_affiliations", []):
+                faction_name = affiliation.get("faction_name")
+                if faction_name and faction_name in narrative_text:
+                    mentioned_factions.append({
+                        "faction_id": affiliation.get("faction_id"),
+                        "faction_name": faction_name
+                    })
+        
+        # Check for relationship indicators between NPCs
+        npc_relationships = []
+        for i, npc1 in enumerate(mentioned_npcs):
+            for npc2 in mentioned_npcs[i+1:]:
+                # Look for both NPCs in the same sentence
+                sentences = narrative_text.split('.')
+                for sentence in sentences:
+                    if npc1["npc_name"] in sentence and npc2["npc_name"] in sentence:
+                        # Check for relationship indicators
+                        relationship_type = "unknown"
+                        for word in ["allies", "friends", "partners", "together"]:
+                            if word in sentence.lower():
+                                relationship_type = "alliance"
+                                break
+                        for word in ["enemies", "rivals", "hate", "against"]:
+                            if word in sentence.lower():
+                                relationship_type = "rivalry"
+                                break
+                        
+                        npc_relationships.append({
+                            "npc1_id": npc1["npc_id"],
+                            "npc1_name": npc1["npc_name"],
+                            "npc2_id": npc2["npc_id"],
+                            "npc2_name": npc2["npc_name"],
+                            "relationship_type": relationship_type,
+                            "sentence": sentence.strip()
+                        })
+        
+        # Determine appropriate conflict type based on analysis
+        conflict_type = "minor"
+        if conflict_intensity >= 8:
+            conflict_type = "major"
+        elif conflict_intensity >= 5:
+            conflict_type = "standard"
+        
+        # Check for potential internal faction conflict
+        internal_faction_conflict = None
+        if len(mentioned_npcs) >= 2 and len(mentioned_factions) > 0:
+            for faction in mentioned_factions:
+                faction_npcs = [npc for npc in mentioned_npcs 
+                               if any(aff.get("faction_id") == faction["faction_id"] 
+                                     for aff in npc.get("faction_affiliations", []))]
+                
+                if len(faction_npcs) >= 2:
+                    # Check for potential challenger and target
+                    faction_npcs.sort(key=lambda x: x["dominance"], reverse=True)
+                    internal_faction_conflict = {
+                        "faction_id": faction["faction_id"],
+                        "faction_name": faction["faction_name"],
+                        "challenger_npc_id": faction_npcs[1]["npc_id"],
+                        "challenger_npc_name": faction_npcs[1]["npc_name"],
+                        "target_npc_id": faction_npcs[0]["npc_id"],
+                        "target_npc_name": faction_npcs[0]["npc_name"],
+                        "prize": "leadership",
+                        "approach": "subtle"
+                    }
+        
+        return {
+            "conflict_intensity": conflict_intensity,
+            "matched_keywords": matched_keywords,
+            "mentioned_npcs": mentioned_npcs,
+            "mentioned_factions": mentioned_factions,
+            "npc_relationships": npc_relationships,
+            "recommended_conflict_type": conflict_type,
+            "potential_internal_faction_conflict": internal_faction_conflict,
+            "has_conflict_potential": conflict_intensity >= 4
+        }
+    except Exception as e:
+        logging.error(f"Error analyzing conflict potential: {e}")
+        return {
+            "conflict_intensity": 0,
+            "matched_keywords": [],
+            "mentioned_npcs": [],
+            "mentioned_factions": [],
+            "npc_relationships": [],
+            "recommended_conflict_type": "minor",
+            "potential_internal_faction_conflict": None,
+            "has_conflict_potential": False,
+            "error": str(e)
+        }
+
+@function_tool
+async def generate_conflict_from_analysis(ctx, analysis: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Generate a conflict based on analysis.
+    
+    Args:
+        analysis: Conflict potential analysis from analyze_conflict_potential
+        
+    Returns:
+        Generated conflict details
+    """
+    user_id = ctx.context["user_id"]
+    conversation_id = ctx.context["conversation_id"]
+    
+    try:
+        if not analysis.get("has_conflict_potential", False):
+            return {
+                "generated": False,
+                "reason": "Insufficient conflict potential",
+                "analysis": analysis
+            }
+        
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+        
+        # Generate the conflict
+        conflict_type = analysis.get("recommended_conflict_type", "standard")
+        conflict = await conflict_integration.generate_new_conflict(conflict_type)
+        
+        # If there's potential for internal faction conflict, generate it
+        internal_faction_conflict = None
+        if analysis.get("potential_internal_faction_conflict") and conflict.get("conflict_id"):
+            internal_data = analysis["potential_internal_faction_conflict"]
+            try:
+                internal_faction_conflict = await conflict_integration.initiate_faction_power_struggle(
+                    conflict["conflict_id"],
+                    internal_data["faction_id"],
+                    internal_data["challenger_npc_id"],
+                    internal_data["target_npc_id"],
+                    internal_data["prize"],
+                    internal_data["approach"],
+                    False  # Not public by default
+                )
+            except Exception as e:
+                logging.error(f"Error generating internal faction conflict: {e}")
+        
+        return {
+            "generated": True,
+            "conflict": conflict,
+            "internal_faction_conflict": internal_faction_conflict
+        }
+    except Exception as e:
+        logging.error(f"Error generating conflict from analysis: {e}")
+        return {
+            "generated": False,
+            "reason": f"Error: {str(e)}",
+            "analysis": analysis
+        }
+
+@function_tool
+async def analyze_npc_manipulation_potential(ctx, conflict_id: int, npc_id: int) -> Dict[str, Any]:
+    """
+    Analyze an NPC's potential to manipulate the player within a conflict.
+    
+    Args:
+        conflict_id: ID of the conflict
+        npc_id: ID of the NPC
+        
+    Returns:
+        Manipulation potential analysis
+    """
+    user_id = ctx.context["user_id"]
+    conversation_id = ctx.context["conversation_id"]
+    
+    try:
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+        
+        potential = await conflict_integration.analyze_manipulation_potential(npc_id)
+        
+        # Get conflict details for context
+        conflict = await conflict_integration.get_conflict_details(conflict_id)
+        
+        # Get player's involvement
+        involvement = None
+        if conflict and "player_involvement" in conflict:
+            involvement = conflict["player_involvement"]
+        
+        # Determine if manipulation makes sense based on current involvement
+        makes_sense = True
+        reason = "NPC could manipulate player"
+        
+        if involvement and involvement["involvement_level"] != "none":
+            if involvement["is_manipulated"]:
+                manipulator_id = involvement["manipulated_by"].get("npc_id")
+                if manipulator_id == npc_id:
+                    makes_sense = False
+                    reason = "NPC is already manipulating player"
+        
+        # Determine appropriate manipulation goal
+        goal = {"faction": "neutral", "involvement_level": "observing"}
+        if potential["femdom_compatible"]:
+            # Dominant female NPC would want more involvement
+            goal["involvement_level"] = "participating"
+            
+            # Determine faction based on NPC's faction
+            for stakeholder in conflict.get("stakeholders", []):
+                if stakeholder["npc_id"] == npc_id and stakeholder.get("faction_id"):
+                    # Find which faction this is in the conflict
+                    if conflict.get("faction_a_name") == stakeholder.get("faction_name"):
+                        goal["faction"] = "a"
+                    elif conflict.get("faction_b_name") == stakeholder.get("faction_name"):
+                        goal["faction"] = "b"
+                    break
+        
+        return {
+            "npc_id": npc_id,
+            "conflict_id": conflict_id,
+            "manipulation_potential": potential,
+            "makes_sense": makes_sense,
+            "reason": reason,
+            "recommended_goal": goal,
+            "current_involvement": involvement
+        }
+    except Exception as e:
+        logging.error(f"Error analyzing manipulation potential: {e}")
+        return {
+            "npc_id": npc_id,
+            "conflict_id": conflict_id,
+            "manipulation_potential": {},
+            "makes_sense": False,
+            "reason": f"Error: {str(e)}",
+            "recommended_goal": {},
+            "current_involvement": None
+        }
+
+@function_tool
+async def generate_manipulation_attempt(
+    ctx, 
+    conflict_id: int, 
+    npc_id: int, 
+    manipulation_type: str,
+    goal: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Generate a manipulation attempt by an NPC in a conflict.
+    
+    Args:
+        conflict_id: ID of the conflict
+        npc_id: ID of the NPC
+        manipulation_type: Type of manipulation (domination, blackmail, seduction, etc.)
+        goal: What the NPC wants the player to do
+        
+    Returns:
+        Generated manipulation attempt
+    """
+    user_id = ctx.context["user_id"]
+    conversation_id = ctx.context["conversation_id"]
+    
+    try:
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+        
+        # Get suggested content
+        suggestion = await conflict_integration.suggest_manipulation_content(
+            npc_id, conflict_id, manipulation_type, goal
+        )
+        
+        # Create the manipulation attempt
+        attempt = await conflict_integration.create_manipulation_attempt(
+            conflict_id,
+            npc_id,
+            manipulation_type,
+            suggestion["content"],
+            goal,
+            suggestion["leverage_used"],
+            suggestion["intimacy_level"]
+        )
+        
+        return {
+            "generated": True,
+            "attempt": attempt,
+            "npc_id": npc_id,
+            "npc_name": suggestion["npc_name"],
+            "manipulation_type": manipulation_type,
+            "content": suggestion["content"]
+        }
+    except Exception as e:
+        logging.error(f"Error generating manipulation attempt: {e}")
+        return {
+            "generated": False,
+            "reason": f"Error: {str(e)}",
+            "npc_id": npc_id,
+            "manipulation_type": manipulation_type
+        }
+
+@function_tool
+async def track_conflict_story_beat(
+    ctx,
+    conflict_id: int,
+    path_id: str,
+    beat_description: str,
+    involved_npcs: List[int],
+    progress_value: float = 5.0
+) -> Dict[str, Any]:
+    """
+    Track a story beat for a resolution path, advancing progress.
+    
+    Args:
+        conflict_id: ID of the conflict
+        path_id: ID of the resolution path
+        beat_description: Description of what happened
+        involved_npcs: List of NPC IDs involved
+        progress_value: Progress value (0-100)
+        
+    Returns:
+        Updated path information
+    """
+    user_id = ctx.context["user_id"]
+    conversation_id = ctx.context["conversation_id"]
+    
+    try:
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+        
+        result = await conflict_integration.track_story_beat(
+            conflict_id, path_id, beat_description, involved_npcs, progress_value
+        )
+        
+        return {
+            "tracked": True,
+            "result": result
+        }
+    except Exception as e:
+        logging.error(f"Error tracking story beat: {e}")
+        return {
+            "tracked": False,
+            "reason": f"Error: {str(e)}"
+        }
+
+@function_tool
+async def suggest_potential_manipulation(ctx, narrative_text: str) -> Dict[str, Any]:
+    """
+    Analyze narrative text and suggest potential NPC manipulation opportunities.
+    
+    Args:
+        narrative_text: The narrative text to analyze
+        
+    Returns:
+        Suggested manipulation opportunities
+    """
+    user_id = ctx.context["user_id"]
+    conversation_id = ctx.context["conversation_id"]
+    
+    try:
+        # Get active conflicts
+        from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+        conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+        
+        active_conflicts = await conflict_integration.get_active_conflicts()
+        
+        if not active_conflicts:
+            return {
+                "opportunities": [],
+                "reason": "No active conflicts"
+            }
+        
+        # Get NPCs mentioned in the narrative
+        from logic.conflict_system.conflict_manager import ConflictManager
+        conflict_manager = ConflictManager(user_id, conversation_id)
+        npcs = await conflict_manager._get_available_npcs()
+        
+        mentioned_npcs = []
+        for npc in npcs:
+            if npc["npc_name"] in narrative_text:
+                mentioned_npcs.append(npc)
+        
+        if not mentioned_npcs:
+            return {
+                "opportunities": [],
+                "reason": "No NPCs mentioned in narrative"
+            }
+        
+        # Find female NPCs with high dominance
+        opportunities = []
+        for conflict in active_conflicts:
+            conflict_id = conflict["conflict_id"]
+            
+            for npc in mentioned_npcs:
+                if npc.get("sex", "female") == "female" and npc.get("dominance", 0) > 60:
+                    # Check if this NPC is a stakeholder in this conflict
+                    is_stakeholder = False
+                    for stakeholder in conflict.get("stakeholders", []):
+                        if stakeholder["npc_id"] == npc["npc_id"]:
+                            is_stakeholder = True
+                            break
+                    
+                    if is_stakeholder:
+                        # Analyze manipulation potential
+                        potential = await conflict_integration.analyze_manipulation_potential(npc["npc_id"])
+                        
+                        if potential["overall_potential"] > 60:
+                            opportunities.append({
+                                "conflict_id": conflict_id,
+                                "conflict_name": conflict["conflict_name"],
+                                "npc_id": npc["npc_id"],
+                                "npc_name": npc["npc_name"],
+                                "dominance": npc["dominance"],
+                                "manipulation_type": potential["most_effective_type"],
+                                "potential": potential["overall_potential"]
+                            })
+        
+        return {
+            "opportunities": opportunities,
+            "total_opportunities": len(opportunities)
+        }
+    except Exception as e:
+        logging.error(f"Error suggesting potential manipulation: {e}")
+        return {
+            "opportunities": [],
+            "reason": f"Error: {str(e)}"
+        }
+
 # ----- Exports -----
 
 # Story state and metadata tools
