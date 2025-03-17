@@ -216,18 +216,17 @@ def create_all_tables():
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerInventory (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            player_name TEXT NOT NULL,
-            item_name TEXT NOT NULL,
+            item_id SERIAL PRIMARY KEY,
+            user_id INT NOT NULL,
+            conversation_id INT NOT NULL,
+            item_name VARCHAR(100) NOT NULL,
             item_description TEXT,
-            item_effect TEXT,
+            item_category VARCHAR(50) NOT NULL,
+            item_properties JSONB,
             quantity INT DEFAULT 1,
-            category TEXT,
-            UNIQUE (user_id, conversation_id, player_name, item_name),
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            equipped BOOLEAN DEFAULT FALSE,
+            date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id, conversation_id) REFERENCES conversations(user_id, id)
         );
     ''')
 
@@ -773,15 +772,16 @@ def create_all_tables():
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerPerks (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            player_name TEXT NOT NULL,
-            perk_name TEXT NOT NULL,
+            perk_id SERIAL PRIMARY KEY,
+            user_id INT NOT NULL,
+            conversation_id INT NOT NULL,
+            perk_name VARCHAR(100) NOT NULL,
             perk_description TEXT,
-            perk_effect TEXT,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            perk_category VARCHAR(50) NOT NULL,
+            perk_tier INT DEFAULT 1,
+            perk_properties JSONB,
+            date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id, conversation_id) REFERENCES conversations(user_id, id)
         );
     ''')
 
@@ -1225,8 +1225,8 @@ def create_all_tables():
         );
     ''')
 
-CREATE INDEX IF NOT EXISTS idx_joint_memory_edges_entity 
-ON JointMemoryEdges(entity_type, entity_id, user_id, conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_joint_memory_edges_entity 
+    ON JointMemoryEdges(entity_type, entity_id, user_id, conversation_id);
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxAgentDirectives (
@@ -1390,6 +1390,28 @@ ON JointMemoryEdges(entity_type, entity_id, user_id, conversation_id);
                 UNIQUE (user_id, conversation_id, agent_type, agent_id)
         );
     ''')
+
+    # Create PlayerSpecialRewards table if not exists
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS PlayerSpecialRewards (
+        reward_id SERIAL PRIMARY KEY,
+        user_id INT NOT NULL,
+        conversation_id INT NOT NULL,
+        reward_name VARCHAR(100) NOT NULL,
+        reward_description TEXT,
+        reward_effect TEXT,
+        reward_category VARCHAR(50) NOT NULL,
+        reward_properties JSONB,
+        used BOOLEAN DEFAULT FALSE,
+        date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id, conversation_id) REFERENCES conversations(user_id, id)
+    )
+    """)
+
+    # Create indexes for the reward tables
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_inventory_user ON PlayerInventory(user_id, conversation_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_perks_user ON PlayerPerks(user_id, conversation_id);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_special_rewards_user ON PlayerSpecialRewards(user_id, conversation_id);")
 
     # Done creating everything:
     conn.commit()
