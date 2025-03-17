@@ -275,27 +275,200 @@ def create_all_tables():
             conflict_id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL,
-            conflict_name VARCHAR(255) NOT NULL,
-            conflict_type VARCHAR(50) NOT NULL, 
-            parent_conflict_id INTEGER NULL,
+            conflict_name TEXT NOT NULL,
+            conflict_type TEXT NOT NULL,
+            description TEXT,
+            progress REAL DEFAULT 0.0,
+            phase TEXT DEFAULT 'brewing',
+            start_day INTEGER,
+            estimated_duration INTEGER,
+            success_rate REAL,
+            outcome TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TIMESTAMP
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ConflictStakeholders (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER REFERENCES Conflicts(conflict_id),
+            npc_id INTEGER NOT NULL,
+            faction_id INTEGER,
+            faction_name TEXT,
+            faction_position TEXT,
+            public_motivation TEXT,
+            private_motivation TEXT,
+            desired_outcome TEXT,
+            involvement_level INTEGER DEFAULT 5,
+            alliances JSONB DEFAULT '{}',
+            rivalries JSONB DEFAULT '{}',
+            leadership_ambition INTEGER,
+            faction_standing INTEGER,
+            willing_to_betray_faction BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ResolutionPaths (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER REFERENCES Conflicts(conflict_id),
+            path_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT,
+            approach_type TEXT,
+            difficulty INTEGER,
+            requirements JSONB DEFAULT '{}',
+            stakeholders_involved JSONB DEFAULT '[]',
+            key_challenges JSONB DEFAULT '[]',
+            progress REAL DEFAULT 0.0,
+            is_completed BOOLEAN DEFAULT FALSE,
+            completion_date TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PathStoryBeats (
+            beat_id SERIAL PRIMARY KEY,
+            conflict_id INTEGER REFERENCES Conflicts(conflict_id),
+            path_id TEXT NOT NULL,
             description TEXT NOT NULL,
-            brewing_description TEXT NOT NULL,
-            active_description TEXT NOT NULL,
-            climax_description TEXT NOT NULL,
-            resolution_description TEXT NOT NULL,
-            progress FLOAT NOT NULL DEFAULT 0,
-            phase VARCHAR(50) NOT NULL DEFAULT 'brewing',
-            start_day INTEGER NOT NULL,
-            estimated_duration INTEGER NOT NULL DEFAULT 7,
-            faction_a_name VARCHAR(255) NOT NULL,
-            faction_b_name VARCHAR(255) NOT NULL,
-            resources_required JSONB NOT NULL DEFAULT '{"money": 0, "supplies": 0, "influence": 0}'::jsonb,
-            success_rate FLOAT NOT NULL DEFAULT 0,
-            outcome VARCHAR(50) NOT NULL DEFAULT 'pending',
-            is_active BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (user_id, conversation_id, conflict_id)
+            involved_npcs JSONB DEFAULT '[]',
+            progress_value REAL DEFAULT 0.0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS StakeholderSecrets (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER REFERENCES Conflicts(conflict_id),
+            npc_id INTEGER NOT NULL,
+            secret_id TEXT NOT NULL,
+            secret_type TEXT,
+            content TEXT,
+            target_npc_id INTEGER,
+            is_revealed BOOLEAN DEFAULT FALSE,
+            revealed_to INTEGER,
+            is_public BOOLEAN DEFAULT FALSE,
+            revealed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerManipulationAttempts (
+            attempt_id SERIAL PRIMARY KEY,
+            conflict_id INTEGER REFERENCES Conflicts(conflict_id),
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            npc_id INTEGER NOT NULL,
+            manipulation_type TEXT NOT NULL,
+            content TEXT NOT NULL,
+            goal JSONB DEFAULT '{}',
+            success BOOLEAN DEFAULT FALSE,
+            player_response TEXT,
+            leverage_used JSONB DEFAULT '{}',
+            intimacy_level INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TIMESTAMP
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerConflictInvolvement (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER REFERENCES Conflicts(conflict_id),
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name TEXT NOT NULL,
+            involvement_level TEXT DEFAULT 'none',
+            faction TEXT DEFAULT 'neutral',
+            money_committed INTEGER DEFAULT 0,
+            supplies_committed INTEGER DEFAULT 0,
+            influence_committed INTEGER DEFAULT 0,
+            actions_taken JSONB DEFAULT '[]',
+            manipulated_by JSONB DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS InternalFactionConflicts (
+            struggle_id SERIAL PRIMARY KEY,
+            faction_id INTEGER NOT NULL,
+            conflict_name TEXT NOT NULL,
+            description TEXT,
+            primary_npc_id INTEGER NOT NULL,
+            target_npc_id INTEGER NOT NULL,
+            prize TEXT,
+            approach TEXT,
+            public_knowledge BOOLEAN DEFAULT FALSE,
+            current_phase TEXT DEFAULT 'brewing',
+            progress INTEGER DEFAULT 0,
+            parent_conflict_id INTEGER REFERENCES Conflicts(conflict_id),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TIMESTAMP
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS FactionStruggleMembers (
+            id SERIAL PRIMARY KEY,
+            struggle_id INTEGER REFERENCES InternalFactionConflicts(struggle_id),
+            npc_id INTEGER NOT NULL,
+            position TEXT,
+            side TEXT DEFAULT 'neutral',
+            standing INTEGER DEFAULT 50,
+            loyalty_strength INTEGER DEFAULT 50,
+            reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS FactionIdeologicalDifferences (
+            id SERIAL PRIMARY KEY,
+            struggle_id INTEGER REFERENCES InternalFactionConflicts(struggle_id),
+            issue TEXT NOT NULL,
+            incumbent_position TEXT,
+            challenger_position TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS FactionCoupAttempts (
+            id SERIAL PRIMARY KEY,
+            struggle_id INTEGER REFERENCES InternalFactionConflicts(struggle_id),
+            approach TEXT NOT NULL,
+            supporting_npcs JSONB DEFAULT '[]',
+            resources_committed JSONB DEFAULT '{}',
+            success BOOLEAN NOT NULL,
+            success_chance REAL NOT NULL,
+            result JSONB DEFAULT '{}',
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ConflictMemoryEvents (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER REFERENCES Conflicts(conflict_id),
+            memory_text TEXT NOT NULL,
+            significance INTEGER DEFAULT 5,
+            entity_type TEXT DEFAULT 'conflict',
+            entity_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     ''')
 
@@ -321,26 +494,6 @@ def create_all_tables():
             role VARCHAR(50) NOT NULL,
             influence_level INTEGER NOT NULL DEFAULT 50,
             PRIMARY KEY (conflict_id, npc_id),
-            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
-        );
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS PlayerConflictInvolvement (
-            id SERIAL PRIMARY KEY,
-            conflict_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            player_name VARCHAR(255) NOT NULL DEFAULT 'Chase',
-            involvement_level VARCHAR(50) NOT NULL DEFAULT 'none',
-            faction VARCHAR(10) NOT NULL DEFAULT 'neutral',
-            money_committed INTEGER NOT NULL DEFAULT 0,
-            supplies_committed INTEGER NOT NULL DEFAULT 0,
-            influence_committed INTEGER NOT NULL DEFAULT 0,
-            actions_taken JSONB NOT NULL DEFAULT '[]'::jsonb,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (conflict_id, user_id, conversation_id),
             FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
         );
     ''')
