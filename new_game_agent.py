@@ -6,6 +6,7 @@ import asyncio
 import os
 import asyncpg
 from datetime import datetime
+from typing import Dict, Any
 
 from agents import Agent, Runner, function_tool, GuardrailFunctionOutput, InputGuardrail
 from pydantic import BaseModel, Field
@@ -17,6 +18,7 @@ from routes.story_routes import build_aggregator_text
 from logic.npc_creation import spawn_multiple_npcs_enhanced, init_chase_schedule
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
+from lore.lore_system import LoreSystem
 
 # Import Nyx governance integration
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
@@ -117,13 +119,17 @@ class NewGameAgent:
             You are directing the creation of a new game world with subtle layers of femdom and intrigue,
             under the governance of Nyx.
             
-            Coordinate the creation of the environment, NPCs, and opening narrative.
+            Coordinate the creation of the environment, lore, NPCs, and opening narrative.
             
             The game world should have:
             1. A detailed environment with locations and events
-            2. Multiple NPCs with schedules, personalities, and subtle control dynamics
-            3. A player schedule that overlaps with NPCs
-            4. An immersive opening narrative
+            2. Rich lore including factions, cultural elements, and history
+            3. Multiple NPCs with schedules, personalities, and subtle control dynamics
+            4. A player schedule that overlaps with NPCs
+            5. An immersive opening narrative
+            
+            The lore should provide depth and context to the world, creating a rich backdrop for player interactions.
+            All NPCs should be integrated with the lore, so they have knowledge about the world appropriate to their role.
             
             Maintain a balance between mundane daily life and subtle power dynamics.
             
@@ -133,7 +139,8 @@ class NewGameAgent:
                 function_tool(self.generate_environment),
                 function_tool(self.create_npcs_and_schedules),
                 function_tool(self.create_opening_narrative),
-                function_tool(self.finalize_game_setup)
+                function_tool(self.finalize_game_setup),
+                function_tool(self.generate_lore)
             ]
         )
         
@@ -547,11 +554,11 @@ class NewGameAgent:
     @with_governance(
         agent_type=AgentType.UNIVERSAL_UPDATER,
         action_type="finalize_game_setup",
-        action_description="Finalized game setup including conflict, currency and image"
+        action_description="Finalized game setup including lore, conflict, currency and image"
     )
     async def finalize_game_setup(self, ctx, opening_narrative):
         """
-        Finalize game setup including conflict generation and image generation.
+        Finalize game setup including lore generation, conflict generation and image generation.
         
         Args:
             opening_narrative: The opening narrative
@@ -565,6 +572,22 @@ class NewGameAgent:
         # Mark conversation as ready
         conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
         try:
+            # Get the environment description for lore generation
+            row = await conn.fetchrow("""
+                SELECT value FROM CurrentRoleplay
+                WHERE user_id = $1 AND conversation_id = $2 AND key = 'EnvironmentDesc'
+            """, user_id, conversation_id)
+            
+            environment_desc = row["value"] if row else "A mysterious environment with hidden layers of complexity."
+            
+            # Get NPC IDs for lore integration
+            rows = await conn.fetch("""
+                SELECT npc_id FROM NPCStats
+                WHERE user_id = $1 AND conversation_id = $2
+            """, user_id, conversation_id)
+            
+            npc_ids = [row["npc_id"] for row in rows] if rows else []
+            
             await conn.execute("""
                 UPDATE conversations
                 SET status='ready'
@@ -572,7 +595,51 @@ class NewGameAgent:
             """, conversation_id, user_id)
         finally:
             await conn.close()
+            
+        # Initialize and generate lore
+        try:
+            # Get the lore system instance and initialize it
+            lore_system = LoreSystem.get_instance(user_id, conversation_id)
+            await lore_system.initialize()
+            
+            # Generate comprehensive lore based on the environment
+            logging.info(f"Generating lore for new game (user_id={user_id}, conversation_id={conversation_id})")
+            lore_result = await lore_system.generate_world_lore(environment_desc)
+            
+            # Integrate lore with NPCs if we have any
+            if npc_ids:
+                logging.info(f"Integrating lore with {len(npc_ids)} NPCs")
+                await lore_system.integrate_lore_with_npcs(npc_ids)
+                
+            lore_summary = f"Generated {len(lore_result.get('factions', []))} factions, {len(lore_result.get('cultural_elements', []))} cultural elements, and {len(lore_result.get('locations', []))} locations"
+            logging.info(f"Lore generation complete: {lore_summary}")
+        except Exception as e:
+            logging.error(f"Error generating lore: {e}", exc_info=True)
+            lore_summary = "Failed to generate lore"
         
+        # Generate initial conflict
+        try:
+            conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
+            initial_conflict = await conflict_integration.generate_conflict({
+                "conflict_type": "major",
+                "intensity": "medium",
+                "player_involvement": "indirect"
+            })
+            conflict_name = initial_conflict.get("conflict_details", {}).get("name", "Unnamed Conflict")
+        except Exception as e:
+            logging.error(f"Error generating initial conflict: {e}")
+            conflict_name = "Failed to generate conflict"
+        
+        # Generate currency system
+        try:
+            from logic.currency_generator import CurrencyGenerator
+            currency_gen = CurrencyGenerator(user_id, conversation_id)
+            currency_system = await currency_gen.get_currency_system()
+            currency_name = f"{currency_system['currency_name']} / {currency_system['currency_plural']}"
+        except Exception as e:
+            logging.error(f"Error generating currency system: {e}")
+            currency_name = "Standard currency"
+            
         # Generate welcome image
         scene_data = {
             "scene_data": {
@@ -616,28 +683,10 @@ class NewGameAgent:
             finally:
                 await conn.close()
         
-        # Generate initial conflict
-        try:
-            conflict_integration = ConflictSystemIntegration(user_id, conversation_id)
-            initial_conflict = await conflict_integration.generate_new_conflict("major")
-            conflict_name = initial_conflict.get("conflict_name", "Unnamed")
-        except Exception as e:
-            logging.error(f"Error generating initial conflict: {e}")
-            conflict_name = "Failed to generate conflict"
-        
-        # Generate currency system
-        try:
-            from logic.currency_generator import CurrencyGenerator
-            currency_gen = CurrencyGenerator(user_id, conversation_id)
-            currency_system = await currency_gen.get_currency_system()
-            currency_name = f"{currency_system['currency_name']} / {currency_system['currency_plural']}"
-        except Exception as e:
-            logging.error(f"Error generating currency system: {e}")
-            currency_name = "Standard currency"
-        
         return {
             "status": "ready",
             "welcome_image_url": welcome_image_url,
+            "lore_summary": lore_summary,
             "initial_conflict": conflict_name,
             "currency_system": currency_name
         }
@@ -766,13 +815,93 @@ class NewGameAgent:
         
         # Return success message and data
         return {
-            "message": f"New game started. environment={result.final_output.get('setting_name', 'Unknown')}, conversation_id={conversation_id}",
+            "message": f"New game started. environment={result.final_output.get('setting_name', 'Unknown')}, lore={result.final_output.get('lore_summary', 'Standard lore')}, conversation_id={conversation_id}",
             "scenario_name": result.final_output.get('scenario_name', 'New Game'),
             "environment_name": result.final_output.get('setting_name', 'Unknown Setting'),
             "environment_desc": result.final_output.get('environment_desc', ''),
+            "lore_summary": result.final_output.get('lore_summary', 'Standard lore generated'),
             "conversation_id": conversation_id,
             "welcome_image_url": result.final_output.get('welcome_image_url', None)
         }
+
+    @with_governance(
+        agent_type=AgentType.UNIVERSAL_UPDATER,
+        action_type="generate_lore",
+        action_description="Generated lore for new game environment"
+    )
+    async def generate_lore(self, ctx, environment_desc: str) -> Dict[str, Any]:
+        """
+        Generate comprehensive lore for the game environment.
+        
+        Args:
+            environment_desc: Description of the environment
+            
+        Returns:
+            Dictionary with generated lore data
+        """
+        user_id = ctx.context["user_id"]
+        conversation_id = ctx.context["conversation_id"]
+        
+        try:
+            # Get the lore system instance and initialize it
+            lore_system = LoreSystem.get_instance(user_id, conversation_id)
+            await lore_system.initialize()
+            
+            # Generate comprehensive lore based on the environment
+            logging.info(f"Generating lore for environment: {environment_desc[:100]}...")
+            lore_result = await lore_system.generate_world_lore(environment_desc)
+            
+            # Get NPC IDs for lore integration
+            conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
+            try:
+                rows = await conn.fetch("""
+                    SELECT npc_id FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                """, user_id, conversation_id)
+                
+                npc_ids = [row["npc_id"] for row in rows] if rows else []
+            finally:
+                await conn.close()
+                
+            # Integrate lore with NPCs if we have any
+            if npc_ids:
+                logging.info(f"Integrating lore with {len(npc_ids)} NPCs")
+                await lore_system.integrate_lore_with_npcs(npc_ids)
+            
+            # Create summary for easy reference
+            factions_count = len(lore_result.get('factions', []))
+            cultural_count = len(lore_result.get('cultural_elements', []))
+            locations_count = len(lore_result.get('locations', []))
+            events_count = len(lore_result.get('historical_events', []))
+            
+            lore_summary = f"Generated {factions_count} factions, {cultural_count} cultural elements, {locations_count} locations, and {events_count} historical events"
+            
+            # Store lore summary in the database
+            conn = await asyncpg.connect(dsn=ctx.context["db_dsn"])
+            try:
+                await conn.execute("""
+                    INSERT INTO CurrentRoleplay (user_id, conversation_id, key, value)
+                    VALUES($1, $2, 'LoreSummary', $3)
+                    ON CONFLICT (user_id, conversation_id, key)
+                    DO UPDATE SET value=EXCLUDED.value
+                """, user_id, conversation_id, lore_summary)
+            finally:
+                await conn.close()
+            
+            return {
+                "lore_summary": lore_summary,
+                "factions_count": factions_count,
+                "cultural_elements_count": cultural_count,
+                "locations_count": locations_count,
+                "historical_events_count": events_count
+            }
+            
+        except Exception as e:
+            logging.error(f"Error generating lore: {e}", exc_info=True)
+            return {
+                "error": f"Failed to generate lore: {str(e)}",
+                "lore_summary": "Failed to generate lore"
+            }
 
 # Register with governance system
 async def register_with_governance(user_id: int, conversation_id: int) -> None:

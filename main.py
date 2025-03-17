@@ -28,6 +28,7 @@ from logic.gpt_image_prompting import get_system_prompt_with_image_guidance
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from logic.nyx_enhancements_integration import initialize_nyx_memory_system, enhanced_background_chat_task
 from routes.nyx_agent_routes import nyx_agent_bp
+from routes.conflict_routes import conflict_bp
 
 # DB connection helper
 from db.connection import get_db_connection
@@ -37,6 +38,9 @@ socketio = None
 
 from logic.chatgpt_integration import get_chatgpt_response
 from db.connection import get_db_connection
+
+from nyx.integrate import get_central_governance
+from logic.conflict_system.conflict_integration import register_enhanced_integration
 
 asyncio.run(initialize_nyx_memory_system())
 
@@ -185,6 +189,11 @@ def create_flask_app():
     app.register_blueprint(nyx_agent_bp, url_prefix="/nyx")
     app.register_blueprint(universal_bp, url_prefix="/universal")
     app.register_blueprint(multiuser_bp, url_prefix="/multiuser")
+    app.register_blueprint(conflict_bp)
+    
+    # Register lore routes
+    from lore import register_lore_api_routes
+    register_lore_api_routes(app)
     
     init_image_routes(app)
     init_chat_routes(app)
@@ -297,6 +306,25 @@ def create_flask_app():
         except Exception as e:
             logging.error(f"Registration error: {str(e)}")
             return jsonify({"error": "Server error"}), 500
+    
+    @app.before_first_request
+    async def register_conflict_system():
+        """Register the conflict system with Nyx on application startup."""
+        try:
+            # Register for default user (adapt as needed for your multi-user setup)
+            user_id = 1
+            conversation_id = 1
+            
+            # Register the enhanced conflict system
+            result = await register_enhanced_integration(user_id, conversation_id)
+            
+            if result["success"]:
+                app.logger.info("Conflict system successfully registered with Nyx governance")
+            else:
+                app.logger.error(f"Failed to register conflict system: {result['message']}")
+                
+        except Exception as e:
+            app.logger.error(f"Error during conflict system registration: {str(e)}", exc_info=True)
     
     return app
 

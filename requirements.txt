@@ -7,7 +7,8 @@ openai
 openai-agents
 celery
 requests
-asyncpg
+asyncpg>=0.27.0  # Required for async database operations
+numpy>=1.23.0    # Required for vector operations in embedding
 uvicorn
 RabbitMQ
 httpx

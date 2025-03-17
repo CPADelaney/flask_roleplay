@@ -8,7 +8,7 @@ from celery_config import celery_app  # Import our dedicated Celery app
 # Import your helper functions and task logic
 from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
-from game_processing import async_process_new_game
+from new_game_agent import NewGameAgent
 
 @celery_app.task
 def test_task():
@@ -18,10 +18,14 @@ def test_task():
 def process_new_game_task(user_id, conversation_data):
     """
     Celery task to run heavy game startup processing.
-    This function runs the asynchronous helper using asyncio.run().
+    This function uses the NewGameAgent to create a new game with Nyx governance.
     """
     try:
-        result = asyncio.run(async_process_new_game(user_id, conversation_data))
+        # Create a NewGameAgent instance
+        agent = NewGameAgent()
+        
+        # Call the process_new_game method
+        result = asyncio.run(agent.process_new_game(user_id, conversation_data))
         logging.info("Completed processing new game for user_id=%s", user_id)
         return result
     except Exception as e:
