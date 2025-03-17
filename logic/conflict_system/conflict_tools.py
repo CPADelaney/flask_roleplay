@@ -3187,6 +3187,45 @@ def generate_conflict_consequences(
                         "confidence": 1
                     }
                 })
+            
+            # ADD REWARD ITEMS AND PERKS BASED ON RESOLUTION STYLE
+            # Determine resolution style from completed paths
+            resolution_styles = []
+            for path in completed_paths:
+                if "violence" in path.lower() or "force" in path.lower():
+                    resolution_styles.append("forceful")
+                elif "negotiation" in path.lower() or "diplomacy" in path.lower():
+                    resolution_styles.append("diplomatic")
+                elif "manipulation" in path.lower() or "deception" in path.lower():
+                    resolution_styles.append("manipulative")
+                elif "submission" in path.lower() or "obedience" in path.lower():
+                    resolution_styles.append("submissive")
+                else:
+                    resolution_styles.append("neutral")
+            
+            # Get primary resolution style
+            primary_style = max(set(resolution_styles), key=resolution_styles.count) if resolution_styles else "neutral"
+            
+            # Generate rewards based on resolution style, conflict type, and player involvement
+            rewards = []
+            
+            # Always give at least one item
+            item_reward = generate_item_reward(primary_style, conflict_type, impact_level)
+            rewards.append(item_reward)
+            
+            # For more significant conflicts or higher involvement, add perks
+            if impact_level >= 2 or player_involvement == "leading":
+                perk_reward = generate_perk_reward(primary_style, conflict_type, impact_level)
+                rewards.append(perk_reward)
+            
+            # For major/catastrophic conflicts, add a special reward
+            if impact_level >= 3:
+                special_reward = generate_special_reward(primary_style, conflict_type, impact_level)
+                rewards.append(special_reward)
+            
+            # Add rewards to consequences
+            for reward in rewards:
+                consequences.append(reward)
     else:
         # Unresolved conflict
         if player_involvement in ["participating", "leading"]:
@@ -3223,6 +3262,158 @@ def generate_conflict_consequences(
     consequences.extend(world_consequences)
     
     return consequences
+
+def generate_item_reward(resolution_style: str, conflict_type: str, impact_level: int) -> Dict[str, Any]:
+    """Generate an item reward based on the resolution style and conflict type."""
+    items = {
+        "forceful": [
+            {"name": "Leather Restraints", "description": "High-quality restraints that show dominance.", "rarity": "common"},
+            {"name": "Force Gauntlets", "description": "Gloves that enhance the wearer's grip strength.", "rarity": "uncommon"},
+            {"name": "Intimidation Collar", "description": "A collar that causes unease in those who see it.", "rarity": "rare"},
+            {"name": "Dominance Sigil", "description": "A symbol of authority that commands respect.", "rarity": "very rare"}
+        ],
+        "diplomatic": [
+            {"name": "Negotiator's Pin", "description": "A pin that subtly influences conversations.", "rarity": "common"},
+            {"name": "Treaty Document", "description": "A blank document that confers legitimacy to agreements.", "rarity": "uncommon"},
+            {"name": "Silver Tongue Amulet", "description": "Enhances persuasiveness in formal settings.", "rarity": "rare"},
+            {"name": "Oath Binding Ring", "description": "A ring that helps ensure promises are kept.", "rarity": "very rare"}
+        ],
+        "manipulative": [
+            {"name": "Gossip Brooch", "description": "Helps spread rumors more effectively.", "rarity": "common"},
+            {"name": "Secret Keeper's Locket", "description": "Stores overheard secrets for later use.", "rarity": "uncommon"},
+            {"name": "Mask of Facades", "description": "Helps the wearer present a false persona.", "rarity": "rare"},
+            {"name": "Heart's Desire Mirror", "description": "Reveals what others want most.", "rarity": "very rare"}
+        ],
+        "submissive": [
+            {"name": "Obedience Bracelet", "description": "A token that signifies willing submission.", "rarity": "common"},
+            {"name": "Loyalty Mark", "description": "A temporary mark that shows allegiance.", "rarity": "uncommon"},
+            {"name": "Devoted Servant's Pendant", "description": "Enhances the wearer's ability to please others.", "rarity": "rare"},
+            {"name": "Will Binding Circlet", "description": "Strengthens bonds of loyalty between wearer and owner.", "rarity": "very rare"}
+        ],
+        "neutral": [
+            {"name": "Balance Stone", "description": "A stone that brings clarity of purpose.", "rarity": "common"},
+            {"name": "Observer's Monocle", "description": "Helps see situations from multiple perspectives.", "rarity": "uncommon"},
+            {"name": "Impartial Judge's Scale", "description": "A small scale that helps make fair decisions.", "rarity": "rare"},
+            {"name": "Harmony Crystal", "description": "Creates an atmosphere of cooperation.", "rarity": "very rare"}
+        ]
+    }
+    
+    # Select item based on impact level (higher impact = better items)
+    item_index = min(impact_level - 1, 3)  # 0-3 index for the items
+    item_list = items.get(resolution_style, items["neutral"])
+    selected_item = item_list[item_index]
+    
+    return {
+        "type": "item_reward",
+        "description": f"You received {selected_item['name']} as a reward: {selected_item['description']}",
+        "affected_entity_type": "player",
+        "magnitude": impact_level,
+        "is_permanent": True,
+        "item": {
+            "name": selected_item["name"],
+            "description": selected_item["description"],
+            "rarity": selected_item["rarity"],
+            "category": "conflict_reward",
+            "resolution_style": resolution_style
+        }
+    }
+
+def generate_perk_reward(resolution_style: str, conflict_type: str, impact_level: int) -> Dict[str, Any]:
+    """Generate a perk reward based on the resolution style and conflict type."""
+    perks = {
+        "forceful": [
+            {"name": "Intimidating Presence", "description": "Your forceful approach causes weaker NPCs to back down more easily.", "tier": 1},
+            {"name": "Show of Strength", "description": "You can demonstrate your physical dominance to gain advantage in confrontations.", "tier": 2},
+            {"name": "Command Respect", "description": "Your history of forceful resolution makes dominant NPCs recognize your authority.", "tier": 3}
+        ],
+        "diplomatic": [
+            {"name": "Diplomatic Immunity", "description": "Minor social faux pas are more likely to be overlooked.", "tier": 1},
+            {"name": "Peace Broker", "description": "You have a reputation for fair solutions, giving you more options in negotiations.", "tier": 2},
+            {"name": "Alliance Network", "description": "Your diplomatic approach has created a network of allies willing to provide information.", "tier": 3}
+        ],
+        "manipulative": [
+            {"name": "Subtle Influence", "description": "You can plant suggestions more effectively in casual conversation.", "tier": 1},
+            {"name": "Blackmail Expert", "description": "You're better at identifying and leveraging others' secrets.", "tier": 2},
+            {"name": "Puppet Master", "description": "Your reputation for manipulation precedes you, making manipulative tactics more effective.", "tier": 3}
+        ],
+        "submissive": [
+            {"name": "Willing Servant", "description": "Dominant NPCs are more likely to protect you in exchange for loyalty.", "tier": 1},
+            {"name": "Trusted Confidant", "description": "Your submissive nature makes others more likely to share secrets with you.", "tier": 2},
+            {"name": "Perfect Obedience", "description": "Your reputation for submission gives you special privileges with powerful NPCs.", "tier": 3}
+        ],
+        "neutral": [
+            {"name": "Respected Neutral", "description": "Factions are more likely to accept your presence in their territory.", "tier": 1},
+            {"name": "Balanced Perspective", "description": "You gain additional insight when observing conflicts from the outside.", "tier": 2},
+            {"name": "Impartial Arbiter", "description": "You're sought out to mediate disputes, giving you access to valuable information.", "tier": 3}
+        ]
+    }
+    
+    # Select perk based on impact level (higher impact = better perks)
+    perk_index = min(impact_level - 1, 2)  # 0-2 index for the perks
+    perk_list = perks.get(resolution_style, perks["neutral"])
+    selected_perk = perk_list[perk_index]
+    
+    return {
+        "type": "perk_reward",
+        "description": f"You gained the '{selected_perk['name']}' perk: {selected_perk['description']}",
+        "affected_entity_type": "player",
+        "magnitude": impact_level,
+        "is_permanent": True,
+        "perk": {
+            "name": selected_perk["name"],
+            "description": selected_perk["description"],
+            "tier": selected_perk["tier"],
+            "category": "conflict_resolution",
+            "resolution_style": resolution_style
+        }
+    }
+
+def generate_special_reward(resolution_style: str, conflict_type: str, impact_level: int) -> Dict[str, Any]:
+    """Generate a special reward for major/catastrophic conflicts."""
+    specials = {
+        "forceful": {
+            "name": "Conquering Trophy",
+            "description": "A unique trophy from your forceful resolution that grants authority in related matters.",
+            "effect": "Can be presented to demonstrate your power in future conflicts of similar type."
+        },
+        "diplomatic": {
+            "name": "Alliance Charter",
+            "description": "A formal documentation of your diplomatic achievement that opens doors.",
+            "effect": "Grants access to restricted areas and information related to the resolved conflict."
+        },
+        "manipulative": {
+            "name": "Shadow Network",
+            "description": "A network of informants gained through your manipulative tactics.",
+            "effect": "Provides periodic information and rumors about hidden activities."
+        },
+        "submissive": {
+            "name": "Patron's Favor",
+            "description": "A token of appreciation from a powerful figure impressed by your submission.",
+            "effect": "Can be exchanged for a significant favor from your patron."
+        },
+        "neutral": {
+            "name": "Balance Keeper's Token",
+            "description": "A symbol of your role in maintaining equilibrium in a major conflict.",
+            "effect": "Allows you to call for temporary truces in heated situations."
+        }
+    }
+    
+    selected_special = specials.get(resolution_style, specials["neutral"])
+    
+    return {
+        "type": "special_reward",
+        "description": f"You earned a special reward: {selected_special['name']} - {selected_special['description']}",
+        "affected_entity_type": "player",
+        "magnitude": impact_level,
+        "is_permanent": True,
+        "special_reward": {
+            "name": selected_special["name"],
+            "description": selected_special["description"],
+            "effect": selected_special["effect"],
+            "category": "unique_conflict_reward",
+            "resolution_style": resolution_style
+        }
+    }
 
 # Governance System Integration (Added based on review)
 
