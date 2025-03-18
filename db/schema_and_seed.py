@@ -1371,8 +1371,11 @@ def create_all_tables():
             evolution_id INTEGER NOT NULL,
             relevance_change FLOAT NOT NULL,
             timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+        
+            -- The composite primary key is memory_id + evolution_id
             PRIMARY KEY (memory_id, evolution_id),
-            FOREIGN KEY (memory_id) REFERENCES Memory(memory_id),
+        
+            FOREIGN KEY (memory_id) REFERENCES unified_memories(id),
             FOREIGN KEY (evolution_id) REFERENCES ContextEvolution(evolution_id)
         );
     ''')
