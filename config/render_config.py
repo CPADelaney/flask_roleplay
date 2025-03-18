@@ -1,4 +1,4 @@
-# config.py
+# render_config.py
 
 """
 Centralized configuration for the application.
