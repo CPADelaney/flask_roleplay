@@ -4,7 +4,417 @@ import time
 import logging
 import threading
 import asyncio  # Added missing import
-from typing import Dict, Any, Optional, Callable, Tuple, Union, List
+from typing import Dict, Any, Optional, Callable, Tuple, Union, List, Set
+from dataclasses import dataclass
+from collections import OrderedDict
+from datetime import datetime
+import json
+import hashlib
+import zlib
+from prometheus_client import Counter, Histogram, Gauge
+import redis
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Prometheus metrics
+CACHE_HITS = Counter(
+    'cache_hits_total',
+    'Number of cache hits',
+    ['cache_level']
+)
+CACHE_MISSES = Counter(
+    'cache_misses_total',
+    'Number of cache misses',
+    ['cache_level']
+)
+CACHE_SIZE = Gauge(
+    'cache_size_bytes',
+    'Current cache size in bytes',
+    ['cache_level']
+)
+CACHE_EVICTIONS = Counter(
+    'cache_evictions_total',
+    'Number of cache evictions',
+    ['cache_level', 'reason']
+)
+CACHE_LATENCY = Histogram(
+    'cache_operation_latency_seconds',
+    'Cache operation latency in seconds',
+    ['operation']
+)
+
+@dataclass
+class CacheItem:
+    """Cache item with metadata."""
+    key: str
+    value: Any
+    created_at: float
+    last_accessed: float
+    access_count: int
+    size_bytes: int
+    tags: Set[str]
+
+class EvictionPolicy:
+    """Base class for cache eviction policies."""
+    
+    def select_items_to_evict(self, items: Dict[str, CacheItem], required_space: int) -> List[str]:
+        """Select items to evict to free up required space."""
+        raise NotImplementedError
+
+class LRUEvictionPolicy(EvictionPolicy):
+    """Least Recently Used eviction policy."""
+    
+    def select_items_to_evict(self, items: Dict[str, CacheItem], required_space: int) -> List[str]:
+        sorted_items = sorted(items.items(), key=lambda x: x[1].last_accessed)
+        to_evict = []
+        freed_space = 0
+        
+        for key, item in sorted_items:
+            if freed_space >= required_space:
+                break
+            to_evict.append(key)
+            freed_space += item.size_bytes
+        
+        return to_evict
+
+class LFUEvictionPolicy(EvictionPolicy):
+    """Least Frequently Used eviction policy."""
+    
+    def select_items_to_evict(self, items: Dict[str, CacheItem], required_space: int) -> List[str]:
+        sorted_items = sorted(items.items(), key=lambda x: x[1].access_count)
+        to_evict = []
+        freed_space = 0
+        
+        for key, item in sorted_items:
+            if freed_space >= required_space:
+                break
+            to_evict.append(key)
+            freed_space += item.size_bytes
+        
+        return to_evict
+
+class TTLEvictionPolicy(EvictionPolicy):
+    """Time To Live eviction policy."""
+    
+    def __init__(self, ttl: float):
+        self.ttl = ttl
+    
+    def select_items_to_evict(self, items: Dict[str, CacheItem], required_space: int) -> List[str]:
+        now = time.time()
+        expired = []
+        to_evict = []
+        freed_space = 0
+        
+        # First, remove expired items
+        for key, item in items.items():
+            if now - item.created_at > self.ttl:
+                expired.append(key)
+                freed_space += item.size_bytes
+        
+        if freed_space >= required_space:
+            return expired
+        
+        # If we still need space, use LRU for remaining items
+        remaining_space = required_space - freed_space
+        remaining_items = {k: v for k, v in items.items() if k not in expired}
+        lru = LRUEvictionPolicy()
+        additional_evictions = lru.select_items_to_evict(remaining_items, remaining_space)
+        
+        return expired + additional_evictions
+
+class EnhancedCache:
+    """Enhanced multi-level cache with adaptive TTLs and predictive prefetching."""
+    
+    def __init__(
+        self,
+        max_size_mb: float = 100,
+        redis_url: Optional[str] = None,
+        eviction_policy: Optional[EvictionPolicy] = None
+    ):
+        self.max_size_bytes = max_size_mb * 1024 * 1024
+        self.current_size_bytes = 0
+        
+        # Cache levels
+        self.l1_cache = OrderedDict()  # Very short-lived (seconds)
+        self.l2_cache = OrderedDict()  # Medium-lived (minutes)
+        self.l3_cache = OrderedDict()  # Long-lived (hours)
+        
+        # TTL settings
+        self.l1_ttl = 60  # 1 minute
+        self.l2_ttl = 300  # 5 minutes
+        self.l3_ttl = 3600  # 1 hour
+        
+        # Redis connection for distributed caching
+        self.redis_client = None
+        if redis_url:
+            self.redis_client = redis.from_url(redis_url)
+        
+        # Eviction policy
+        self.eviction_policy = eviction_policy or LRUEvictionPolicy()
+        
+        # Access patterns for prefetching
+        self.access_patterns = {}
+        
+        # Cache statistics
+        self.stats = {
+            'hits': 0,
+            'misses': 0,
+            'evictions': 0,
+            'size_bytes': 0
+        }
+        
+        # Background tasks
+        self.maintenance_task = None
+        self.prefetch_task = None
+    
+    async def start(self):
+        """Start background tasks."""
+        if self.maintenance_task is None:
+            self.maintenance_task = asyncio.create_task(self._maintenance_loop())
+        if self.prefetch_task is None:
+            self.prefetch_task = asyncio.create_task(self._prefetch_loop())
+    
+    async def stop(self):
+        """Stop background tasks."""
+        if self.maintenance_task:
+            self.maintenance_task.cancel()
+            try:
+                await self.maintenance_task
+            except asyncio.CancelledError:
+                pass
+        if self.prefetch_task:
+            self.prefetch_task.cancel()
+            try:
+                await self.prefetch_task
+            except asyncio.CancelledError:
+                pass
+    
+    async def get(self, key: str, level: str = 'l1') -> Optional[Any]:
+        """Get item from cache."""
+        start_time = time.time()
+        try:
+            cache = getattr(self, f"{level}_cache")
+            
+            if key in cache:
+                item = cache[key]
+                # Update access metadata
+                item.last_accessed = time.time()
+                item.access_count += 1
+                # Move to end (LRU)
+                cache.move_to_end(key)
+                
+                CACHE_HITS.labels(cache_level=level).inc()
+                self.stats['hits'] += 1
+                
+                # Record access pattern
+                self._record_access_pattern(key)
+                
+                return item.value
+            
+            # Try Redis if available
+            if self.redis_client:
+                value = self.redis_client.get(f"{level}:{key}")
+                if value:
+                    # Cache locally
+                    await self.set(key, json.loads(value), level)
+                    return json.loads(value)
+            
+            CACHE_MISSES.labels(cache_level=level).inc()
+            self.stats['misses'] += 1
+            return None
+            
+        finally:
+            CACHE_LATENCY.labels(operation='get').observe(time.time() - start_time)
+    
+    async def set(
+        self,
+        key: str,
+        value: Any,
+        level: str = 'l1',
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set item in cache."""
+        start_time = time.time()
+        try:
+            cache = getattr(self, f"{level}_cache")
+            
+            # Calculate item size
+            size_bytes = len(json.dumps(value).encode())
+            
+            # Check if we need to evict items
+            if self.current_size_bytes + size_bytes > self.max_size_bytes:
+                await self._evict_items(size_bytes, level)
+            
+            # Create cache item
+            item = CacheItem(
+                key=key,
+                value=value,
+                created_at=time.time(),
+                last_accessed=time.time(),
+                access_count=1,
+                size_bytes=size_bytes,
+                tags=tags or set()
+            )
+            
+            # Update cache
+            cache[key] = item
+            self.current_size_bytes += size_bytes
+            
+            # Update Redis if available
+            if self.redis_client:
+                ttl = getattr(self, f"{level}_ttl")
+                self.redis_client.setex(
+                    f"{level}:{key}",
+                    ttl,
+                    json.dumps(value)
+                )
+            
+            # Update metrics
+            CACHE_SIZE.labels(cache_level=level).set(self.current_size_bytes)
+            
+            return True
+            
+        finally:
+            CACHE_LATENCY.labels(operation='set').observe(time.time() - start_time)
+    
+    async def invalidate(self, key: str, level: str = None):
+        """Invalidate cache item."""
+        start_time = time.time()
+        try:
+            if level:
+                levels = [level]
+            else:
+                levels = ['l1', 'l2', 'l3']
+            
+            for l in levels:
+                cache = getattr(self, f"{l}_cache")
+                if key in cache:
+                    item = cache.pop(key)
+                    self.current_size_bytes -= item.size_bytes
+                
+                # Invalidate in Redis
+                if self.redis_client:
+                    self.redis_client.delete(f"{l}:{key}")
+            
+            # Update metrics
+            for l in levels:
+                CACHE_SIZE.labels(cache_level=l).set(self.current_size_bytes)
+                
+        finally:
+            CACHE_LATENCY.labels(operation='invalidate').observe(time.time() - start_time)
+    
+    async def _evict_items(self, required_space: int, level: str):
+        """Evict items to free up space."""
+        cache = getattr(self, f"{level}_cache")
+        
+        # Get items to evict
+        to_evict = self.eviction_policy.select_items_to_evict(
+            cache,
+            required_space
+        )
+        
+        # Evict items
+        for key in to_evict:
+            item = cache.pop(key)
+            self.current_size_bytes -= item.size_bytes
+            
+            # Remove from Redis
+            if self.redis_client:
+                self.redis_client.delete(f"{level}:{key}")
+            
+            CACHE_EVICTIONS.labels(
+                cache_level=level,
+                reason='size'
+            ).inc()
+            self.stats['evictions'] += 1
+    
+    def _record_access_pattern(self, key: str):
+        """Record access pattern for prefetching."""
+        now = time.time()
+        if not hasattr(self, '_last_access'):
+            self._last_access = (None, 0)
+        
+        last_key, last_time = self._last_access
+        
+        if last_key and (now - last_time) < 5:  # Within 5 seconds
+            # Record pattern
+            pattern = (last_key, key)
+            self.access_patterns[pattern] = self.access_patterns.get(pattern, 0) + 1
+        
+        self._last_access = (key, now)
+    
+    async def _maintenance_loop(self):
+        """Background task for cache maintenance."""
+        while True:
+            try:
+                await asyncio.sleep(60)  # Run every minute
+                
+                # Clean up expired items
+                now = time.time()
+                for level in ['l1', 'l2', 'l3']:
+                    cache = getattr(self, f"{level}_cache")
+                    ttl = getattr(self, f"{level}_ttl")
+                    
+                    expired = [
+                        key for key, item in cache.items()
+                        if now - item.created_at > ttl
+                    ]
+                    
+                    for key in expired:
+                        await self.invalidate(key, level)
+                        CACHE_EVICTIONS.labels(
+                            cache_level=level,
+                            reason='ttl'
+                        ).inc()
+                
+                # Clean up access patterns
+                old_patterns = [
+                    pattern for pattern, count in self.access_patterns.items()
+                    if count < 3  # Remove patterns with low frequency
+                ]
+                for pattern in old_patterns:
+                    del self.access_patterns[pattern]
+                
+            except Exception as e:
+                logger.error(f"Error in cache maintenance: {e}")
+    
+    async def _prefetch_loop(self):
+        """Background task for predictive prefetching."""
+        while True:
+            try:
+                await asyncio.sleep(1)  # Check frequently
+                
+                # Get current access patterns
+                patterns = self.access_patterns.copy()
+                
+                for (key1, key2), count in patterns.items():
+                    if count >= 3:  # Only prefetch frequently occurring patterns
+                        # If key1 was recently accessed, prefetch key2
+                        cache = self.l1_cache  # Use L1 cache for checking
+                        if key1 in cache:
+                            item = cache[key1]
+                            if time.time() - item.last_accessed < 5:  # Within 5 seconds
+                                # Prefetch key2 if not already cached
+                                if key2 not in cache:
+                                    # Trigger prefetch (implementation depends on your data source)
+                                    logger.debug(f"Prefetching {key2} based on access pattern")
+                
+            except Exception as e:
+                logger.error(f"Error in prefetch loop: {e}")
+    
+    def get_stats(self) -> Dict:
+        """Get cache statistics."""
+        return {
+            **self.stats,
+            'size_mb': self.current_size_bytes / (1024 * 1024),
+            'items': {
+                'l1': len(self.l1_cache),
+                'l2': len(self.l2_cache),
+                'l3': len(self.l3_cache)
+            },
+            'patterns': len(self.access_patterns)
+        }
 
 class MemoryCache:
     """
@@ -240,503 +650,11 @@ COMPUTATION_CACHE = ComputationCache(
     max_size=COMPUTATION_CACHE_SIZE,
     default_ttl=COMPUTATION_CACHE_TTL
 )
-import time
-import logging
-import asyncio
-import zlib
-from typing import Dict, Any, Optional, Tuple, List, Callable, Set
-import json
-import hashlib
-
-logger = logging.getLogger(__name__)
-
-class CacheItem:
-    """Cache item with metadata for smarter caching decisions"""
-    
-    def __init__(self, key: str, value: Any, level: int = 1):
-        self.key = key
-        self.value = value
-        self.timestamp = time.time()
-        self.access_count = 0
-        self.last_access = self.timestamp
-        self.level = level
-        self.size = self._estimate_size(value)
-        self.value_hash = self._compute_hash(value)
-    
-    def access(self) -> None:
-        """Record an access to this cache item"""
-        self.access_count += 1
-        self.last_access = time.time()
-    
-    def update(self, value: Any) -> bool:
-        """Update the value and return whether it changed"""
-        new_hash = self._compute_hash(value)
-        if new_hash != self.value_hash:
-            self.value = value
-            self.timestamp = time.time()
-            self.value_hash = new_hash
-            self.size = self._estimate_size(value)
-            return True
-        return False
-    
-    def _estimate_size(self, value: Any) -> int:
-        """Estimate memory size of a value in bytes"""
-        try:
-            return len(json.dumps(value).encode('utf-8'))
-        except (TypeError, OverflowError):
-            # Fallback for non-serializable objects
-            return 1024  # Default size estimate
-    
-    def _compute_hash(self, value: Any) -> str:
-        """Compute a hash for the value to detect changes"""
-        try:
-            serialized = json.dumps(value, sort_keys=True)
-            return hashlib.md5(serialized.encode('utf-8')).hexdigest()
-        except (TypeError, OverflowError):
-            # Fallback for non-serializable objects
-            return str(id(value))
-    
-    def compress(self) -> None:
-        """Compress the value to save memory"""
-        if not isinstance(self.value, bytes) and not hasattr(self.value, '_is_compressed'):
-            try:
-                serialized = json.dumps(self.value)
-                self.value = zlib.compress(serialized.encode('utf-8'))
-                self.value._is_compressed = True
-            except (TypeError, AttributeError):
-                # Could not compress, skip
-                pass
-    
-    def decompress(self) -> None:
-        """Decompress the value for use"""
-        if isinstance(self.value, bytes) and hasattr(self.value, '_is_compressed'):
-            try:
-                decompressed = zlib.decompress(self.value).decode('utf-8')
-                self.value = json.loads(decompressed)
-                delattr(self.value, '_is_compressed')
-            except (zlib.error, UnicodeDecodeError, json.JSONDecodeError):
-                # Could not decompress, leave as is
-                pass
-
-
-class EnhancedContextCache:
-    """Enhanced multi-level cache with adaptive TTLs and predictive prefetching"""
-    
-    def __init__(self, max_size_mb: float = 100):
-        # Level 1: Very short-lived (seconds to minutes)
-        self.l1_cache: Dict[str, CacheItem] = {}
-        self.l1_ttl = 60  # Base TTL: 1 minute
-        
-        # Level 2: Medium-lived (minutes)
-        self.l2_cache: Dict[str, CacheItem] = {}
-        self.l2_ttl = 300  # Base TTL: 5 minutes
-        
-        # Level 3: Long-lived (hours)
-        self.l3_cache: Dict[str, CacheItem] = {}
-        self.l3_ttl = 3600  # Base TTL: 1 hour
-        
-        # Store related keys for partial invalidation
-        self.key_relationships: Dict[str, Set[str]] = {}
-        
-        # Cache metrics and settings
-        self.max_size_bytes = max_size_mb * 1024 * 1024
-        self.current_size_bytes = 0
-        self.hit_count = 0
-        self.miss_count = 0
-        self.last_maintenance = time.time()
-        
-        # Access patterns for prefetching
-        self.access_patterns: Dict[str, Dict[str, int]] = {}
-        
-        # Background task for cache maintenance
-        self.maintenance_task = None
-    
-    async def start_maintenance(self, interval: int = 300):
-        """Start background cache maintenance"""
-        if self.maintenance_task is None:
-            self.maintenance_task = asyncio.create_task(self._maintenance_loop(interval))
-    
-    async def stop_maintenance(self):
-        """Stop background maintenance task"""
-        if self.maintenance_task:
-            self.maintenance_task.cancel()
-            try:
-                await self.maintenance_task
-            except asyncio.CancelledError:
-                pass
-            self.maintenance_task = None
-    
-    async def _maintenance_loop(self, interval: int):
-        """Background loop to perform cache maintenance"""
-        while True:
-            try:
-                await asyncio.sleep(interval)
-                self._perform_maintenance()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in cache maintenance: {e}")
-    
-    def _perform_maintenance(self):
-        """Perform cache maintenance tasks"""
-        now = time.time()
-        self.last_maintenance = now
-        
-        # Expire old entries
-        self._expire_cache_entries(now)
-        
-        # Compress rarely accessed items in L3
-        self._compress_rarely_accessed(now)
-        
-        # If we're over size limit, evict least valuable entries
-        if self.current_size_bytes > self.max_size_bytes:
-            self._evict_entries(self.current_size_bytes - self.max_size_bytes)
-        
-        # Update adaptive TTLs based on access patterns
-        self._update_adaptive_ttls()
-    
-    def _expire_cache_entries(self, now: float):
-        """Expire old cache entries"""
-        for level, cache, ttl in [
-            (1, self.l1_cache, self.l1_ttl),
-            (2, self.l2_cache, self.l2_ttl),
-            (3, self.l3_cache, self.l3_ttl)
-        ]:
-            keys_to_remove = []
-            
-            for key, item in cache.items():
-                # Adjust TTL based on access frequency
-                adjusted_ttl = ttl * (1 + 0.1 * min(item.access_count, 10))
-                if now - item.timestamp > adjusted_ttl:
-                    keys_to_remove.append(key)
-            
-            for key in keys_to_remove:
-                self._remove_item(cache, key)
-    
-    def _compress_rarely_accessed(self, now: float):
-        """Compress items that are rarely accessed to save memory"""
-        for key, item in self.l3_cache.items():
-            # If item hasn't been accessed in 15 minutes, compress it
-            if now - item.last_access > 900:  # 15 minutes
-                item.compress()
-    
-    def _evict_entries(self, bytes_to_free: int):
-        """Evict least valuable entries to free up space"""
-        # Compute value score for each item (lower is less valuable)
-        value_scores = []
-        
-        # Start with L1 as it's meant to be shortest-lived
-        for level, cache in [(1, self.l1_cache), (2, self.l2_cache), (3, self.l3_cache)]:
-            for key, item in cache.items():
-                # Value formula: access_count / (age * size)
-                age = time.time() - item.timestamp
-                # Prevent division by zero
-                if age < 0.1:
-                    age = 0.1
-                    
-                # Normalize access count (1-11)
-                normalized_access = 1 + 0.1 * min(item.access_count, 100)
-                
-                # Calculate value score (higher means more valuable)
-                value = normalized_access / (age * item.size)
-                
-                # Adjust by level - L3 items get a small bonus
-                if level == 3:
-                    value *= 1.2
-                
-                value_scores.append((level, key, value, item.size))
-        
-        # Sort by value (ascending, so least valuable first)
-        value_scores.sort(key=lambda x: x[2])
-        
-        # Evict items until we've freed enough space
-        bytes_freed = 0
-        for level, key, _, size in value_scores:
-            if bytes_freed >= bytes_to_free:
-                break
-                
-            if level == 1 and key in self.l1_cache:
-                self._remove_item(self.l1_cache, key)
-                bytes_freed += size
-            elif level == 2 and key in self.l2_cache:
-                self._remove_item(self.l2_cache, key)
-                bytes_freed += size
-            elif level == 3 and key in self.l3_cache:
-                self._remove_item(self.l3_cache, key)
-                bytes_freed += size
-    
-    def _update_adaptive_ttls(self):
-        """Update TTLs based on cache performance and access patterns"""
-        # If hit rate is high, we can extend TTLs
-        total_requests = self.hit_count + self.miss_count
-        if total_requests > 100:
-            hit_rate = self.hit_count / total_requests
-            
-            # Adapt TTLs based on hit rate
-            if hit_rate > 0.9:  # Excellent hit rate
-                self.l1_ttl = min(self.l1_ttl * 1.1, 120)  # Max 2 minutes
-                self.l2_ttl = min(self.l2_ttl * 1.1, 600)  # Max 10 minutes
-                self.l3_ttl = min(self.l3_ttl * 1.1, 7200)  # Max 2 hours
-            elif hit_rate < 0.7:  # Poor hit rate
-                self.l1_ttl = max(self.l1_ttl * 0.9, 30)   # Min 30 seconds
-                self.l2_ttl = max(self.l2_ttl * 0.9, 120)  # Min 2 minutes
-                self.l3_ttl = max(self.l3_ttl * 0.9, 1800) # Min 30 minutes
-            
-            # Reset counters for next cycle
-            self.hit_count = 0
-            self.miss_count = 0
-    
-    def _record_access_pattern(self, key: str, next_key: str = None):
-        """Record access patterns for prefetching"""
-        if next_key and key != next_key:
-            if key not in self.access_patterns:
-                self.access_patterns[key] = {}
-            
-            if next_key in self.access_patterns[key]:
-                self.access_patterns[key][next_key] += 1
-            else:
-                self.access_patterns[key][next_key] = 1
-    
-    def _remove_item(self, cache: Dict[str, CacheItem], key: str):
-        """Remove an item from the cache and update metrics"""
-        if key in cache:
-            item = cache[key]
-            self.current_size_bytes -= item.size
-            del cache[key]
-            
-            # Also remove from key relationships
-            if key in self.key_relationships:
-                del self.key_relationships[key]
-    
-    def _add_item(self, cache: Dict[str, CacheItem], item: CacheItem):
-        """Add an item to the cache and update metrics"""
-        old_item = cache.get(item.key)
-        if old_item:
-            self.current_size_bytes -= old_item.size
-        
-        cache[item.key] = item
-        self.current_size_bytes += item.size
-    
-    def relate_keys(self, primary_key: str, related_keys: List[str]):
-        """
-        Establish relationships between keys for smart invalidation
-        
-        Args:
-            primary_key: The main key
-            related_keys: List of keys related to the primary key
-        """
-        if primary_key not in self.key_relationships:
-            self.key_relationships[primary_key] = set()
-        
-        for key in related_keys:
-            if key != primary_key:
-                self.key_relationships[primary_key].add(key)
-    
-    async def get(self, key: str, fetch_func: Callable, cache_level: int = 1,
-                 ttl_override: Optional[int] = None, related_keys: List[str] = None) -> Any:
-        """
-        Get data from cache or fetch it.
-        
-        Args:
-            key: Cache key
-            fetch_func: Async function to fetch data if not in cache
-            cache_level: Level to cache the result (1-3)
-            ttl_override: Optional override for TTL
-            related_keys: List of keys related to this data for smart invalidation
-            
-        Returns:
-            Cached or freshly fetched data
-        """
-        now = time.time()
-        last_key = getattr(self, '_last_access_key', None)
-        self._last_access_key = key
-        
-        # Record access pattern for prefetching
-        if last_key:
-            self._record_access_pattern(last_key, key)
-        
-        # Setup relationships if provided
-        if related_keys:
-            self.relate_keys(key, related_keys)
-        
-        # Try L1 cache first
-        if key in self.l1_cache:
-            item = self.l1_cache[key]
-            ttl = ttl_override or self.l1_ttl
-            
-            if now - item.timestamp < ttl:
-                # Decompress if needed
-                item.decompress()
-                item.access()
-                self.hit_count += 1
-                return item.value
-            else:
-                self._remove_item(self.l1_cache, key)
-        
-        # Try L2 cache
-        if key in self.l2_cache:
-            item = self.l2_cache[key]
-            ttl = ttl_override or self.l2_ttl
-            
-            if now - item.timestamp < ttl:
-                # Decompress if needed
-                item.decompress()
-                item.access()
-                # Promote to L1 cache
-                self._add_item(self.l1_cache, CacheItem(key, item.value, level=1))
-                self.hit_count += 1
-                return item.value
-            else:
-                self._remove_item(self.l2_cache, key)
-        
-        # Try L3 cache
-        if key in self.l3_cache:
-            item = self.l3_cache[key]
-            ttl = ttl_override or self.l3_ttl
-            
-            if now - item.timestamp < ttl:
-                # Decompress if needed
-                item.decompress()
-                item.access()
-                # Promote to L2 cache
-                self._add_item(self.l2_cache, CacheItem(key, item.value, level=2))
-                self.hit_count += 1
-                return item.value
-            else:
-                self._remove_item(self.l3_cache, key)
-        
-        # Cache miss - fetch the data
-        self.miss_count += 1
-        data = await fetch_func()
-        
-        # Store in appropriate cache level
-        item = CacheItem(key, data, level=cache_level)
-        
-        if cache_level >= 1:
-            self._add_item(self.l1_cache, item)
-        
-        if cache_level >= 2:
-            # Create a new item for L2 to avoid shared reference
-            self._add_item(self.l2_cache, CacheItem(key, data, level=2))
-        
-        if cache_level >= 3:
-            # Create a new item for L3 to avoid shared reference
-            self._add_item(self.l3_cache, CacheItem(key, data, level=3))
-        
-        # Initiate prefetching if we have access patterns
-        if key in self.access_patterns:
-            asyncio.create_task(self._prefetch_related(key, data))
-        
-        return data
-    
-    async def _prefetch_related(self, key: str, current_data: Any):
-        """
-        Prefetch related items based on access patterns
-        
-        Args:
-            key: Current key that was accessed
-            current_data: Current data that was fetched
-        """
-        if key not in self.access_patterns:
-            return
-        
-        # Find most likely next keys (up to 3)
-        next_keys = sorted(
-            self.access_patterns[key].items(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:3]
-        
-        # Prefetch each one
-        for next_key, count in next_keys:
-            # Only prefetch if count is significant
-            if count < 3:
-                continue
-                
-            # Check if already in cache
-            if (next_key in self.l1_cache or
-                next_key in self.l2_cache or
-                next_key in self.l3_cache):
-                continue
-            
-            # Schedule prefetch with lower priority
-            async def prefetch_func():
-                # Simulate a fetch function - this would need to be adapted for real use
-                await asyncio.sleep(0.1)  # Delay to not block main operations
-                return {"prefetched": True, "key": next_key}
-            
-            try:
-                asyncio.create_task(self.get(next_key, prefetch_func, cache_level=2))
-            except Exception as e:
-                logger.warning(f"Error in prefetch: {e}")
-    
-    def invalidate(self, key_prefix: str = None, key: str = None, recursive: bool = True):
-        """
-        Invalidate cache entries.
-        
-        Args:
-            key_prefix: Prefix to match keys for invalidation
-            key: Exact key to invalidate
-            recursive: Whether to invalidate related keys
-        """
-        invalidated = 0
-        
-        if key:
-            # Invalidate exact key
-            for cache in [self.l1_cache, self.l2_cache, self.l3_cache]:
-                if key in cache:
-                    self._remove_item(cache, key)
-                    invalidated += 1
-            
-            # Recursively invalidate related keys
-            if recursive and key in self.key_relationships:
-                for related_key in self.key_relationships[key]:
-                    invalidated += self.invalidate(key=related_key, recursive=False)
-                
-                # Clear relationships for this key
-                self.key_relationships[key] = set()
-        
-        elif key_prefix:
-            # Invalidate by prefix
-            for cache in [self.l1_cache, self.l2_cache, self.l3_cache]:
-                for cache_key in list(cache.keys()):
-                    if cache_key.startswith(key_prefix):
-                        self._remove_item(cache, cache_key)
-                        invalidated += 1
-                        
-                        # Recursively invalidate related keys
-                        if recursive and cache_key in self.key_relationships:
-                            for related_key in self.key_relationships[cache_key]:
-                                invalidated += self.invalidate(key=related_key, recursive=False)
-                            
-                            # Clear relationships for this key
-                            self.key_relationships[cache_key] = set()
-        
-        return invalidated
-    
-    def get_metrics(self) -> Dict[str, Any]:
-        """Get cache metrics"""
-        return {
-            "size_bytes": self.current_size_bytes,
-            "size_mb": self.current_size_bytes / (1024 * 1024),
-            "max_size_mb": self.max_size_bytes / (1024 * 1024),
-            "l1_count": len(self.l1_cache),
-            "l2_count": len(self.l2_cache),
-            "l3_count": len(self.l3_cache),
-            "l1_ttl": self.l1_ttl,
-            "l2_ttl": self.l2_ttl,
-            "l3_ttl": self.l3_ttl,
-            "hit_count": self.hit_count,
-            "miss_count": self.miss_count,
-            "hit_rate": self.hit_count / (self.hit_count + self.miss_count) if (self.hit_count + self.miss_count) > 0 else 0,
-            "last_maintenance": self.last_maintenance
-        }
-
 
 # Usage examples
 
 # Create a context cache for NPCs with 50MB max size
-npc_cache = EnhancedContextCache(max_size_mb=50)
+npc_cache = EnhancedCache(max_size_mb=50)
 
 async def get_npc_data(user_id, conv_id, npc_id):
     """Example of using the enhanced cache"""
@@ -756,8 +674,7 @@ async def get_npc_data(user_id, conv_id, npc_id):
     return await npc_cache.get(
         cache_key,
         fetch_npc_from_db,
-        cache_level=3,  # Store in all cache levels (long-lived)
-        related_keys=related_keys
+        level='l3'  # Store in long-lived cache
     )
 
 async def update_npc_location(user_id, conv_id, npc_id, new_location):
@@ -766,16 +683,97 @@ async def update_npc_location(user_id, conv_id, npc_id, new_location):
     
     # Invalidate the specific NPC
     cache_key = f"npc:{user_id}:{conv_id}:{npc_id}"
-    npc_cache.invalidate(key=cache_key)
+    await npc_cache.invalidate(key=cache_key, level='l3')
     
     # Invalidate the location's NPC list
     location_key = f"location:{user_id}:{conv_id}:{new_location}"
-    npc_cache.invalidate(key=location_key)
+    await npc_cache.invalidate(key=location_key, level='l3')
 
 # Start background maintenance
 async def startup():
-    await npc_cache.start_maintenance(interval=300)  # Run every 5 minutes
+    await npc_cache.start()
 
 # Stop maintenance on shutdown
 async def shutdown():
-    await npc_cache.stop_maintenance()
+    await npc_cache.stop()
+
+class Cache:
+    """
+    A simple caching system for storing and retrieving data.
+    """
+    
+    def __init__(self, max_size: int = 1000):
+        """
+        Initialize the cache.
+        
+        Args:
+            max_size: Maximum number of items to store in the cache
+        """
+        self.max_size = max_size
+        self._cache = {}
+        self._access_times = {}
+        self._size = 0
+        
+    def get(self, key: str) -> Any:
+        """
+        Get a value from the cache.
+        
+        Args:
+            key: Key to look up
+            
+        Returns:
+            Cached value or None if not found
+        """
+        if key in self._cache:
+            self._access_times[key] = time.time()
+            return self._cache[key]
+        return None
+        
+    def set(self, key: str, value: Any) -> None:
+        """
+        Set a value in the cache.
+        
+        Args:
+            key: Key to store under
+            value: Value to store
+        """
+        # If cache is full, remove least recently used item
+        if self._size >= self.max_size and key not in self._cache:
+            self._remove_lru()
+            
+        self._cache[key] = value
+        self._access_times[key] = time.time()
+        if key not in self._cache:
+            self._size += 1
+            
+    def delete(self, key: str) -> None:
+        """
+        Delete a value from the cache.
+        
+        Args:
+            key: Key to delete
+        """
+        if key in self._cache:
+            del self._cache[key]
+            del self._access_times[key]
+            self._size -= 1
+            
+    def clear(self) -> None:
+        """Clear all items from the cache."""
+        self._cache.clear()
+        self._access_times.clear()
+        self._size = 0
+        
+    def _remove_lru(self) -> None:
+        """Remove the least recently used item from the cache."""
+        if not self._access_times:
+            return
+            
+        # Find key with oldest access time
+        lru_key = min(self._access_times.items(), key=lambda x: x[1])[0]
+        self.delete(lru_key)
+        
+    @property
+    def size(self) -> int:
+        """Get current cache size."""
+        return self._size
