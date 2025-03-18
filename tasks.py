@@ -6,7 +6,7 @@ import asyncio
 from celery_config import celery_app  # Import our dedicated Celery app
 
 # Import your helper functions and task logic
-from logic.npc_creation import spawn_multiple_npcs, spawn_single_npc
+from npcs.new_npc_creation import spawn_multiple_npcs, spawn_single_npc
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from new_game_agent import NewGameAgent
 
