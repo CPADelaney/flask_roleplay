@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from db.connection import get_db_connection
 from memory.wrapper import MemorySystem
 from logic.activities_logic import get_all_activities, filter_activities_for_npc
+from npcs.npc_learning_adaptation import NPCLearningAdaptation, NPCLearningManager
 
 # Configuration
 DB_DSN = os.getenv("DB_DSN")
@@ -49,6 +50,9 @@ class NPCHandler:
         """
         self.user_id = user_id
         self.conversation_id = conversation_id
+        
+        # Initialize the learning manager for handling multiple NPCs
+        self.learning_manager = NPCLearningManager(user_id, conversation_id)
         
         # Initialize agent for handling NPC interactions
         self.interaction_agent = Agent(
@@ -154,6 +158,15 @@ class NPCHandler:
         # Apply stat changes if any
         if response.stat_changes:
             await self._apply_stat_changes(npc_id, response.stat_changes)
+        
+        # INTEGRATION: Record interaction with the learning adaptation system
+        await self._record_interaction_for_learning(
+            npc_id,
+            interaction_type,
+            player_input,
+            response.response,
+            context
+        )
         
         return response.dict()
 
@@ -834,3 +847,240 @@ class NPCHandler:
                 """, self.user_id, self.conversation_id, "npc", npc1_id, "npc", npc2_id, link_type, link_level)
         finally:
             await conn.close()
+
+    async def _record_interaction_for_learning(
+        self, 
+        npc_id: int, 
+        interaction_type: str, 
+        player_input: str, 
+        npc_response: str,
+        context: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Record an interaction with the NPC learning adaptation system.
+        
+        Args:
+            npc_id: ID of the NPC
+            interaction_type: Type of interaction
+            player_input: Player's input
+            npc_response: NPC's response
+            context: Optional context information
+        """
+        try:
+            # Get or create a learning system for this NPC
+            learning_system = self.learning_manager.get_learning_system_for_npc(npc_id)
+            await learning_system.initialize()
+            
+            # Determine player response characteristics based on the input
+            # Enhanced version with more comprehensive analysis
+            player_input_lower = player_input.lower()
+            
+            # Initialize variables
+            compliance_level = 0
+            emotional_response = "neutral"
+            intensity_level = 0
+            respect_level = 0
+            fear_level = 0
+            
+            # ENHANCED: Structured emotion and response detection
+            emotion_patterns = {
+                # Compliance patterns
+                "strong_compliance": [
+                    "absolutely", "of course", "my pleasure", "happy to", "gladly",
+                    "at your service", "as you command", "without question", "immediately",
+                    "right away", "certainly", "with pleasure", "i'd be delighted"
+                ],
+                "compliance": [
+                    "yes", "okay", "sure", "fine", "will do", "as you wish", "alright",
+                    "i'll do it", "agreed", "very well", "i understand", "if you say so"
+                ],
+                "reluctant_compliance": [
+                    "i guess", "if i must", "if i have to", "suppose so", "whatever",
+                    "fine then", "sigh", "hesitantly", "reluctantly", "not like i have a choice"
+                ],
+                
+                # Defiance patterns
+                "strong_defiance": [
+                    "absolutely not", "never", "no way", "forget it", "i refuse",
+                    "not a chance", "hell no", "over my dead body", "i won't", "not happening"
+                ],
+                "defiance": [
+                    "no", "won't", "refuse", "not going to", "can't make me", "i don't think so",
+                    "nope", "not interested", "i decline", "not now", "i don't want to"
+                ],
+                "mild_defiance": [
+                    "maybe later", "not right now", "i'd rather not", "do i have to",
+                    "is this necessary", "can we do something else", "i don't feel like it"
+                ],
+                
+                # Emotional responses
+                "fear": [
+                    "afraid", "scared", "terrified", "fear", "worried", "nervous", "anxious",
+                    "frightened", "petrified", "dread", "panic", "horror", "trembling"
+                ],
+                "anger": [
+                    "angry", "mad", "furious", "outraged", "annoyed", "irritated", "enraged",
+                    "hostile", "resent", "hate", "despise", "contempt", "disgusted"
+                ],
+                "sadness": [
+                    "sad", "upset", "unhappy", "miserable", "depressed", "heartbroken",
+                    "devastated", "disappointed", "dejected", "hopeless", "grief", "sorrow"
+                ],
+                "joy": [
+                    "happy", "excited", "delighted", "pleased", "glad", "joyful", "thrilled",
+                    "ecstatic", "content", "satisfied", "elated", "jubilant", "overjoyed"
+                ],
+                "surprise": [
+                    "surprised", "shocked", "astonished", "amazed", "stunned", "startled",
+                    "bewildered", "confused", "taken aback", "unexpected", "wow", "oh"
+                ],
+                
+                # Respect and submission
+                "respect": [
+                    "respect", "admire", "look up to", "honor", "esteem", "regard highly",
+                    "value your", "appreciate your", "trust your", "your wisdom", "your guidance"
+                ],
+                "submission": [
+                    "submit", "yield", "surrender", "obey", "comply", "follow", "serve",
+                    "bow to", "defer to", "at your mercy", "under your control", "your command"
+                ]
+            }
+            
+            # Analyze for each emotional pattern
+            detected_patterns = {}
+            for category, patterns in emotion_patterns.items():
+                detected_patterns[category] = 0
+                for pattern in patterns:
+                    if pattern in player_input_lower:
+                        detected_patterns[category] += 1
+            
+            # Calculate strongest emotional response
+            strongest_emotion = "neutral"
+            strongest_value = 0
+            emotional_categories = ["fear", "anger", "sadness", "joy", "surprise"]
+            for emotion in emotional_categories:
+                if detected_patterns[emotion] > strongest_value:
+                    strongest_value = detected_patterns[emotion]
+                    strongest_emotion = emotion
+            
+            # Only set emotional response if we detected something
+            if strongest_value > 0:
+                emotional_response = strongest_emotion
+            
+            # Calculate compliance level
+            if detected_patterns["strong_compliance"] > 0:
+                compliance_level = 8
+            elif detected_patterns["compliance"] > 0:
+                compliance_level = 5
+            elif detected_patterns["reluctant_compliance"] > 0:
+                compliance_level = 2
+            elif detected_patterns["mild_defiance"] > 0:
+                compliance_level = -3
+            elif detected_patterns["defiance"] > 0:
+                compliance_level = -5
+            elif detected_patterns["strong_defiance"] > 0:
+                compliance_level = -8
+            
+            # Calculate respect level
+            respect_level = detected_patterns["respect"] * 2
+            
+            # Calculate submission level
+            submission_level = detected_patterns["submission"] * 2
+            
+            # Calculate fear level
+            fear_level = detected_patterns["fear"] * 2
+            
+            # Adjust compliance level based on fear (scared compliance is different)
+            if compliance_level > 0 and fear_level > 0:
+                # If complying out of fear, mark it differently
+                compliance_type = "fearful_compliance"
+            elif compliance_level > 0 and respect_level > 0:
+                # If complying out of respect, mark it differently
+                compliance_type = "respectful_compliance"
+            elif compliance_level > 0 and submission_level > 0:
+                # If complying out of submission, mark it differently
+                compliance_type = "submissive_compliance"
+            elif compliance_level > 0:
+                compliance_type = "willing_compliance"
+            elif compliance_level < 0:
+                compliance_type = "defiance"
+            else:
+                compliance_type = "neutral"
+            
+            # Calculate intensity based on the strength of the emotional response
+            intensity_level = max(
+                detected_patterns["strong_compliance"] * 2,
+                detected_patterns["strong_defiance"] * 2,
+                detected_patterns["fear"] * 2,
+                detected_patterns["anger"] * 2,
+                detected_patterns["submission"] * 2
+            )
+            
+            # Create a detailed analysis result
+            analysis_result = {
+                "compliance_level": compliance_level,
+                "compliance_type": compliance_type,
+                "emotional_response": emotional_response,
+                "intensity_level": intensity_level,
+                "respect_level": respect_level,
+                "fear_level": fear_level,
+                "submission_level": submission_level,
+                "pattern_matches": detected_patterns
+            }
+            
+            # Log detailed analysis for debugging
+            logging.debug(f"Player input analysis for NPC {npc_id}: {analysis_result}")
+            
+            # Record the learning interaction with enhanced analysis
+            await learning_system.record_player_interaction(
+                interaction_type=interaction_type,
+                player_input=player_input,
+                npc_response=npc_response,
+                compliance_level=compliance_level,
+                emotional_response=emotional_response,
+                context=context,
+                analysis_result=analysis_result
+            )
+            
+            # Log the learning interaction
+            logging.info(f"Recorded learning interaction for NPC {npc_id}: {interaction_type}")
+            
+        except Exception as e:
+            logging.error(f"Error recording interaction for learning: {e}", exc_info=True)
+
+    # Add a method to explicitly trigger memory-based learning
+    async def process_npc_learning_cycle(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Trigger a learning cycle for an NPC to process memories and adapt behavior.
+        
+        Args:
+            npc_id: ID of the NPC
+            
+        Returns:
+            Dictionary with learning results
+        """
+        try:
+            # Get learning system for this NPC
+            learning_system = self.learning_manager.get_learning_system_for_npc(npc_id)
+            await learning_system.initialize()
+            
+            # Process memories for learning
+            memory_result = await learning_system.process_recent_memories_for_learning()
+            
+            # Process relationship changes
+            relationship_result = await learning_system.adapt_to_relationship_changes()
+            
+            return {
+                "npc_id": npc_id,
+                "memory_learning": memory_result,
+                "relationship_adaptation": relationship_result,
+                "success": True
+            }
+            
+        except Exception as e:
+            logging.error(f"Error processing NPC learning cycle: {e}", exc_info=True)
+            return {
+                "npc_id": npc_id,
+                "success": False,
+                "error": str(e)
+            }

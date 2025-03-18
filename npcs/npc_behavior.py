@@ -13,6 +13,9 @@ from datetime import datetime, timedelta
 
 from memory.wrapper import MemorySystem
 from db.connection import get_db_connection
+from ..nyx.llm_integration import NyxLLM
+from ..nyx.integrate import get_nyx_client
+from ..memory.integrated import MemorySystem
 
 logger = logging.getLogger(__name__)
 
@@ -507,3 +510,168 @@ class BehaviorEvolution:
             }
         
         return None
+
+class NPCBehavior:
+    """Manages NPC behavior and decision-making."""
+    
+    def __init__(self, npc_id: int):
+        self.npc_id = npc_id
+        self.nyx_client = get_nyx_client()
+        self.memory_system = MemorySystem()
+        self._user_model = None
+    
+    async def get_user_model(self) -> Dict[str, Any]:
+        """Get or create the Nyx user model for this NPC."""
+        if self._user_model is None:
+            try:
+                # Get NPC data
+                async with self.nyx_client.get_connection() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("""
+                            SELECT name, personality, traits, background
+                            FROM NPCs
+                            WHERE id = %s
+                        """, (self.npc_id,))
+                        
+                        npc_data = await cur.fetchone()
+                        if not npc_data:
+                            raise ValueError(f"NPC {self.npc_id} not found")
+                        
+                        # Create user model from NPC data
+                        self._user_model = {
+                            'id': f"npc_{self.npc_id}",
+                            'name': npc_data[0],
+                            'personality': npc_data[1],
+                            'traits': npc_data[2],
+                            'background': npc_data[3],
+                            'type': 'npc',
+                            'created_at': datetime.now().isoformat()
+                        }
+                        
+                        # Register with Nyx
+                        await self.nyx_client.register_user(self._user_model)
+                        
+                        # Initialize memory system
+                        await self.memory_system.initialize(self._user_model['id'])
+            except Exception as e:
+                logger.error(f"Error creating user model for NPC {self.npc_id}: {e}")
+                raise
+        
+        return self._user_model
+    
+    async def make_decision(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Make a decision based on context and NPC's personality."""
+        try:
+            # Ensure user model exists
+            user_model = await self.get_user_model()
+            
+            # Get relevant memories
+            memories = await self.memory_system.get_relevant_memories(
+                context,
+                limit=5
+            )
+            
+            # Prepare decision context
+            decision_context = {
+                'npc': user_model,
+                'context': context,
+                'memories': memories,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Get decision from Nyx
+            decision = await self.nyx_client.get_decision(decision_context)
+            
+            # Store decision in memory
+            await self.memory_system.add_memory(
+                memory_text=f"Made decision: {decision['action']}",
+                memory_type="decision",
+                metadata={
+                    'action': decision['action'],
+                    'reasoning': decision['reasoning'],
+                    'context': context
+                }
+            )
+            
+            return decision
+        except Exception as e:
+            logger.error(f"Error making decision for NPC {self.npc_id}: {e}")
+            return {
+                'action': 'wait',
+                'reasoning': 'Error in decision making process',
+                'error': str(e)
+            }
+    
+    async def process_interaction(self, interaction: Dict[str, Any]) -> Dict[str, Any]:
+        """Process an interaction with the NPC."""
+        try:
+            # Ensure user model exists
+            user_model = await self.get_user_model()
+            
+            # Get relevant memories
+            memories = await self.memory_system.get_relevant_memories(
+                interaction,
+                limit=5
+            )
+            
+            # Prepare interaction context
+            interaction_context = {
+                'npc': user_model,
+                'interaction': interaction,
+                'memories': memories,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Get response from Nyx
+            response = await self.nyx_client.get_response(interaction_context)
+            
+            # Store interaction in memory
+            await self.memory_system.add_memory(
+                memory_text=f"Interaction: {interaction.get('type', 'unknown')}",
+                memory_type="interaction",
+                metadata={
+                    'interaction': interaction,
+                    'response': response,
+                    'context': interaction_context
+                }
+            )
+            
+            return response
+        except Exception as e:
+            logger.error(f"Error processing interaction for NPC {self.npc_id}: {e}")
+            return {
+                'response': "I'm not sure how to respond to that.",
+                'error': str(e)
+            }
+    
+    async def update_state(self, new_state: Dict[str, Any]) -> bool:
+        """Update the NPC's state."""
+        try:
+            # Ensure user model exists
+            user_model = await self.get_user_model()
+            
+            # Update state in database
+            async with self.nyx_client.get_connection() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("""
+                        UPDATE NPCs
+                        SET state = %s, updated_at = NOW()
+                        WHERE id = %s
+                    """, (new_state, self.npc_id))
+            
+            # Store state change in memory
+            await self.memory_system.add_memory(
+                memory_text="State updated",
+                memory_type="state_change",
+                metadata={
+                    'old_state': user_model.get('state', {}),
+                    'new_state': new_state
+                }
+            )
+            
+            # Update user model
+            user_model['state'] = new_state
+            return True
+        except Exception as e:
+            logger.error(f"Error updating state for NPC {self.npc_id}: {e}")
+            return False

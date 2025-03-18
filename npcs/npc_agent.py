@@ -21,6 +21,7 @@ from agents import Agent, Runner, RunContextWrapper, trace, function_tool, hando
 from agents.tracing import custom_span, generation_span, function_span
 from db.connection import get_db_connection
 from memory.wrapper import MemorySystem
+from .lore_context_manager import LoreContextManager
 
 logger = logging.getLogger(__name__)
 
@@ -758,17 +759,101 @@ class NPCAgent:
             "memory_operations": ResourcePool(max_concurrent=20, timeout=20.0)
         }
 
+        self.lore_system = None
+        self.conflict_system = None
+        self.story_context = None
+        self.lore_context_manager = LoreContextManager(user_id, conversation_id)
+        
     async def initialize(self):
-        """
-        Initialize the NPC agent by loading basic data.
-        """
+        """Initialize the NPC agent with all necessary systems."""
         # Load NPC stats
         await get_npc_stats(RunContextWrapper(self.context))
         
         # Initialize memory system
         await self.context.get_memory_system()
         
+        # Initialize lore system
+        self.lore_system = await get_lore_system(self.user_id, self.conversation_id)
+        
+        # Initialize conflict system
+        self.conflict_system = await get_conflict_system(self.user_id, self.conversation_id)
+        
+        # Get story context
+        self.story_context = await self._get_story_context()
+        
         return self
+        
+    async def _get_story_context(self) -> Dict[str, Any]:
+        """Get story context with enhanced lore integration."""
+        # Get basic story context
+        story_context = await super()._get_story_context()
+        
+        # Get enhanced lore context
+        lore_context = await self.lore_context_manager.get_lore_context(
+            self.npc_id, 
+            "story_context"
+        )
+        
+        # Merge contexts
+        story_context.update(lore_context)
+        return story_context
+        
+    async def _determine_npc_role(self) -> Dict[str, Any]:
+        """Determine NPC role with lore-aware analysis."""
+        # Get basic role determination
+        role = await super()._determine_npc_role()
+        
+        # Get lore context for role
+        lore_context = await self.lore_context_manager.get_lore_context(
+            self.npc_id,
+            "role_context"
+        )
+        
+        # Enhance role with lore context
+        role.update(lore_context)
+        return role
+        
+    async def _process_lore_change(self, lore_change: Dict[str, Any]) -> Dict[str, Any]:
+        """Process a lore change and update NPC state."""
+        # Get affected NPCs
+        affected_npcs = await self._get_affected_npcs(lore_change)
+        
+        # Handle lore change through context manager
+        result = await self.lore_context_manager.handle_lore_change(
+            lore_change,
+            self.npc_id,
+            affected_npcs
+        )
+        
+        # Update NPC state based on impact analysis
+        if result["impact_analysis"]["affected_npcs"]:
+            await self._update_state_from_impact(
+                result["impact_analysis"]["affected_npcs"][0]
+            )
+            
+        return result
+        
+    async def _get_affected_npcs(self, lore_change: Dict[str, Any]) -> List[int]:
+        """Get list of NPCs affected by a lore change."""
+        # Implementation would determine affected NPCs based on:
+        # - NPC relationships
+        # - NPC knowledge levels
+        # - Lore change scope
+        pass
+        
+    async def _update_state_from_impact(self, impact: Dict[str, Any]):
+        """Update NPC state based on lore impact analysis."""
+        # Update beliefs
+        if impact["belief_updates"]:
+            await self._update_beliefs(impact["belief_updates"])
+            
+        # Update relationships
+        if impact["relationship_impacts"]:
+            await self._update_relationships(impact["relationship_impacts"])
+            
+        # Update behavior
+        if impact["behavior_changes"]:
+            await self._update_behavior(impact["behavior_changes"])
 
     def _setup_memory_monitoring(self):
         """Schedule periodic memory monitoring."""
@@ -893,130 +978,6 @@ class NPCAgent:
         return result
 
     
-    async def make_decision(self, perception_context: Dict[str, Any] = None) -> NPCAction:
-        """
-        Make a decision about what action to take.
-        
-        Args:
-            perception_context: Optional perception context
-            
-        Returns:
-            NPCAction to perform
-        """
-        # ALWAYS check for Nyx directives first
-        nyx_directive = await self._get_current_nyx_directive()
-        
-        if nyx_directive:
-            logger.info(f"NPC {self.npc_id} following Nyx directive: {nyx_directive.get('description', 'unknown')}")
-            
-            # Extract action data from directive
-            action_type = nyx_directive.get("type", "observe")
-            description = nyx_directive.get("description", "follow Nyx's directive")
-            target = nyx_directive.get("target", "environment")
-            
-            # If this is an override directive with specific action details
-            if "override_action" in nyx_directive:
-                override = nyx_directive["override_action"]
-                action_type = override.get("type", action_type)
-                description = override.get("description", description)
-                target = override.get("target", target)
-            
-            # Create action from directive
-            return NPCAction(
-                type=action_type,
-                description=description,
-                target=target,
-                weight=1.0,
-                decision_metadata={"source": "nyx_directive", "directive_id": nyx_directive.get("id")}
-            )
-        
-        # Only proceed with normal decision-making if no directive exists
-        with trace(workflow_name=f"NPC {self.npc_id} Decision"):
-            perf_start = time.perf_counter()
-            
-            try:
-                # Use mental model to determine options
-                options = await self._generate_action_options(perception_context)
-                
-                # Filter options based on constraints
-                filtered_options = await self._filter_action_options(options, perception_context)
-                
-                if not filtered_options:
-                    # Fallback to safe default if no valid options
-                    logger.warning(f"No valid options for NPC {self.npc_id}, using default")
-                    return NPCAction(
-                        type="observe",
-                        description="observe surroundings quietly",
-                        target="environment",
-                        weight=0.5,
-                        decision_metadata={"source": "fallback_default"}
-                    )
-                
-                # Select best option
-                selected_action = await self._select_best_action(filtered_options, perception_context)
-                
-                # Record performance metrics
-                elapsed = time.perf_counter() - perf_start
-                self.context.perf_metrics['decision_time'].append(elapsed)
-                
-                return selected_action
-                
-            except Exception as e:
-                elapsed = time.perf_counter() - perf_start
-                logger.error(f"Decision error for NPC {self.npc_id} after {elapsed:.2f}s: {e}")
-                
-                # Return a default action if decision fails
-                return NPCAction(
-                    type="observe",
-                    description="observe quietly",
-                    target="environment",
-                    decision_metadata={"source": "error_fallback"}
-                )
-
-    async def _get_current_nyx_directive(self) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve current directive from Nyx for this NPC.
-        
-        Returns:
-            Directive data or None if no directive exists
-        """
-        try:
-            import asyncpg
-    
-            async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
-                async with pool.acquire() as conn:
-                    row = await conn.fetchrow(
-                        """
-                        SELECT directive FROM NyxNPCDirectives
-                        WHERE user_id = $1 AND conversation_id = $2 AND npc_id = $3
-                        AND expires_at > NOW()
-                        ORDER BY priority DESC LIMIT 1
-                        """,
-                        self.user_id, self.conversation_id, self.npc_id
-                    )
-                    
-                    if row and row["directive"]:
-                        directive_data = json.loads(row["directive"])
-                        logger.info(f"NPC {self.npc_id} found directive: {directive_data.get('type', 'unknown')}")
-                        return directive_data
-        
-            # Check cache for previously found directive
-            if hasattr(self.context, 'current_directive') and self.context.current_directive:
-                # Check if directive is still valid (not expired)
-                if 'expiry' in self.context.current_directive:
-                    expiry_time = datetime.fromisoformat(self.context.current_directive['expiry'])
-                    if datetime.now() < expiry_time:
-                        return self.context.current_directive
-                
-                # Clear expired directive
-                self.context.current_directive = None
-                
-            return None
-        except Exception as e:
-            logger.error(f"Error retrieving Nyx directive: {e}")
-            return None
-
-    
     async def perceive_environment(self, context: Dict[str, Any] = None) -> NPCPerception:
         """
         Perceive the environment and retrieve relevant memories.
@@ -1116,3 +1077,437 @@ class NPCAgent:
         for name, pool in self.resource_pools.items():
             stats[name] = pool.stats.copy()
         return stats
+
+    async def get_speech_patterns(self) -> Dict[str, Any]:
+        """Get NPC speech patterns with lore integration.
+        
+        Returns:
+            Dict[str, Any]: Dictionary containing speech patterns, dialects, and language preferences
+            for the NPC, integrated with the lore system.
+        """
+        try:
+            # Get lore system instance
+            lore_system = await get_lore_system(self.user_id, self.conversation_id)
+            
+            # Get base speech patterns
+            patterns = await lore_system.get_npc_speech_patterns(self.npc_id)
+            
+            # Enhance with NPC-specific traits
+            if self.traits:
+                for trait in self.traits:
+                    if trait.get('type') == 'speech':
+                        patterns['traits'].append(trait)
+            
+            # Add to memory for future reference
+            await self.memory_system.add_memory(
+                self.run_ctx,
+                f"Speech patterns for NPC {self.npc_id}",
+                patterns,
+                memory_type="npc_speech"
+            )
+            
+            return patterns
+            
+        except Exception as e:
+            logger.error(f"Error getting speech patterns for NPC {self.npc_id}: {e}", exc_info=True)
+            return {
+                'dialect': 'standard',
+                'language': 'common',
+                'traits': [],
+                'formality_level': 'neutral'
+            }
+
+    async def perform_scheduled_activity(self) -> Dict[str, Any]:
+        """
+        Perform the NPC's scheduled activity based on their schedule and current time.
+        
+        Returns:
+            Dictionary containing activity results
+        """
+        try:
+            # Get current schedule
+            schedule = await self._get_current_schedule()
+            if not schedule:
+                return None
+                
+            # Get current time and location
+            time_data = await self._get_current_time()
+            current_location = await self._get_current_location()
+            
+            # Create activity context
+            activity_context = {
+                "time_of_day": time_data["time_of_day"],
+                "location": current_location,
+                "schedule": schedule,
+                "npc_id": self.npc_id,
+                "npc_name": self.context.npc_name
+            }
+            
+            # Get relevant memories for this activity
+            memory_system = await self.context.get_memory_system()
+            relevant_memories = await memory_system.get_relevant_memories(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                context=activity_context,
+                limit=5
+            )
+            
+            # Add memories to context
+            activity_context["relevant_memories"] = relevant_memories
+            
+            # Get emotional state
+            emotional_state = await memory_system.get_npc_emotion(self.npc_id)
+            activity_context["emotional_state"] = emotional_state
+            
+            # Make decision about activity
+            decision_engine = await self._get_decision_engine()
+            action = await decision_engine.decide(activity_context)
+            
+            # Execute the action
+            result = await self._execute_action(action, activity_context)
+            
+            # Record the activity in memory
+            await self._record_activity(action, result, activity_context)
+            
+            return {
+                "action": action,
+                "result": result,
+                "context": activity_context
+            }
+            
+        except Exception as e:
+            logger.error(f"Error performing scheduled activity: {e}")
+            return None
+
+    async def _get_current_schedule(self) -> Dict[str, Any]:
+        """Get the NPC's current schedule."""
+        try:
+            async with self.context.db.pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT schedule
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                """, self.npc_id, self.user_id, self.conversation_id)
+                
+                if row and row["schedule"]:
+                    return row["schedule"]
+                return None
+        except Exception as e:
+            logger.error(f"Error getting NPC schedule: {e}")
+            return None
+
+    async def _get_current_time(self) -> Dict[str, Any]:
+        """Get current game time information."""
+        try:
+            async with self.context.db.pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT year, month, day, time_of_day
+                    FROM GameTime
+                    WHERE user_id = $1 AND conversation_id = $2
+                """, self.user_id, self.conversation_id)
+                
+                if row:
+                    return {
+                        "year": row["year"],
+                        "month": row["month"],
+                        "day": row["day"],
+                        "time_of_day": row["time_of_day"]
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"Error getting current time: {e}")
+            return None
+
+    async def _get_current_location(self) -> str:
+        """Get NPC's current location."""
+        try:
+            async with self.context.db.pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT current_location
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                """, self.npc_id, self.user_id, self.conversation_id)
+                
+                if row:
+                    return row["current_location"]
+                return "unknown"
+        except Exception as e:
+            logger.error(f"Error getting NPC location: {e}")
+            return "unknown"
+
+    async def _execute_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute an NPC action."""
+        try:
+            action_type = action.get("type")
+            
+            if action_type == "socialize":
+                return await self._execute_socialize_action(action, context)
+            elif action_type == "work":
+                return await self._execute_work_action(action, context)
+            elif action_type == "relax":
+                return await self._execute_relax_action(action, context)
+            elif action_type == "travel":
+                return await self._execute_travel_action(action, context)
+            else:
+                return {"status": "unknown_action", "action_type": action_type}
+                
+        except Exception as e:
+            logger.error(f"Error executing action: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def _execute_socialize_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a socialize action."""
+        try:
+            # Get nearby NPCs
+            nearby_npcs = await self._get_nearby_npcs(context["location"])
+            
+            if not nearby_npcs:
+                return {"status": "no_npcs", "message": "No NPCs to socialize with"}
+            
+            # Choose NPC to interact with
+            target_npc = self._choose_interaction_target(nearby_npcs, context)
+            
+            # Generate interaction
+            interaction = await self._generate_interaction(target_npc, context)
+            
+            # Update relationships
+            await self._update_relationships(target_npc, interaction)
+            
+            return {
+                "status": "success",
+                "interaction": interaction,
+                "target_npc": target_npc
+            }
+            
+        except Exception as e:
+            logger.error(f"Error executing socialize action: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def _execute_work_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a work action."""
+        try:
+            # Get work details
+            work_type = action.get("work_type", "general")
+            work_location = context["location"]
+            
+            # Generate work activity
+            work_activity = await self._generate_work_activity(work_type, work_location)
+            
+            # Update NPC stats
+            await self._update_work_stats(work_activity)
+            
+            return {
+                "status": "success",
+                "work_activity": work_activity,
+                "location": work_location
+            }
+            
+        except Exception as e:
+            logger.error(f"Error executing work action: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def _execute_relax_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a relax action."""
+        try:
+            # Get relaxation details
+            relax_type = action.get("relax_type", "general")
+            relax_location = context["location"]
+            
+            # Generate relaxation activity
+            relax_activity = await self._generate_relaxation_activity(relax_type, relax_location)
+            
+            # Update NPC stats
+            await self._update_relaxation_stats(relax_activity)
+            
+            return {
+                "status": "success",
+                "relax_activity": relax_activity,
+                "location": relax_location
+            }
+            
+        except Exception as e:
+            logger.error(f"Error executing relax action: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def _execute_travel_action(self, action: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a travel action."""
+        try:
+            # Get destination
+            destination = action.get("destination")
+            if not destination:
+                return {"status": "error", "message": "No destination specified"}
+            
+            # Update NPC location
+            await self._update_location(destination)
+            
+            return {
+                "status": "success",
+                "destination": destination,
+                "previous_location": context["location"]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error executing travel action: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def _get_nearby_npcs(self, location: str) -> List[Dict[str, Any]]:
+        """Get NPCs in the same location."""
+        try:
+            async with self.context.db.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT npc_id, npc_name, dominance, cruelty
+                    FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND current_location = $3
+                    AND npc_id != $4
+                """, self.user_id, self.conversation_id, location, self.npc_id)
+                
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Error getting nearby NPCs: {e}")
+            return []
+
+    def _choose_interaction_target(self, nearby_npcs: List[Dict[str, Any]], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Choose an NPC to interact with."""
+        try:
+            # Get NPC's traits
+            npc_traits = self.context.npc_traits
+            
+            # Calculate interaction scores
+            scores = []
+            for npc in nearby_npcs:
+                score = 0
+                
+                # Base score on relationship if exists
+                relationship = context.get("relationships", {}).get(str(npc["npc_id"]))
+                if relationship:
+                    score += relationship.get("trust", 0) * 2
+                
+                # Adjust based on personality compatibility
+                if npc_traits.get("dominance") > 60 and npc["dominance"] < 40:
+                    score += 1  # Prefer submissive NPCs
+                elif npc_traits.get("dominance") < 40 and npc["dominance"] > 60:
+                    score += 1  # Prefer dominant NPCs
+                
+                # Random factor
+                score += random.random()
+                
+                scores.append((score, npc))
+            
+            # Sort by score and choose top NPC
+            scores.sort(reverse=True)
+            return scores[0][1] if scores else None
+            
+        except Exception as e:
+            logger.error(f"Error choosing interaction target: {e}")
+            return None
+
+    async def _generate_interaction(self, target_npc: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate an interaction with another NPC."""
+        try:
+            # Get relationship history
+            relationship = await self._get_relationship(target_npc["npc_id"])
+            
+            # Generate interaction based on relationship and context
+            interaction_type = self._determine_interaction_type(relationship, context)
+            interaction_details = await self._generate_interaction_details(
+                interaction_type,
+                target_npc,
+                relationship,
+                context
+            )
+            
+            return {
+                "type": interaction_type,
+                "details": interaction_details,
+                "target_npc": target_npc["npc_name"],
+                "location": context["location"]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating interaction: {e}")
+            return None
+
+    async def _update_relationships(self, target_npc: Dict[str, Any], interaction: Dict[str, Any]) -> None:
+        """Update relationships based on interaction."""
+        try:
+            # Calculate relationship changes
+            changes = self._calculate_relationship_changes(interaction)
+            
+            # Update relationship in database
+            await self._update_relationship_in_db(target_npc["npc_id"], changes)
+            
+        except Exception as e:
+            logger.error(f"Error updating relationships: {e}")
+
+    async def _record_activity(self, action: Dict[str, Any], result: Dict[str, Any], context: Dict[str, Any]) -> None:
+        """Record an activity in memory."""
+        try:
+            memory_system = await self.context.get_memory_system()
+            
+            # Create memory text
+            memory_text = self._create_memory_text(action, result, context)
+            
+            # Store memory
+            await memory_system.remember(
+                entity_type="npc",
+                entity_id=self.npc_id,
+                memory_text=memory_text,
+                importance=self._calculate_memory_importance(action, result),
+                tags=["activity", action.get("type", "unknown")]
+            )
+            
+        except Exception as e:
+            logger.error(f"Error recording activity: {e}")
+
+    def _create_memory_text(self, action: Dict[str, Any], result: Dict[str, Any], context: Dict[str, Any]) -> str:
+        """Create text for a memory of an activity."""
+        try:
+            action_type = action.get("type")
+            location = context.get("location", "unknown location")
+            time = context.get("time_of_day", "unknown time")
+            
+            if action_type == "socialize":
+                target = result.get("target_npc", "someone")
+                interaction = result.get("interaction", {}).get("details", "had an interaction")
+                return f"At {time} in {location}, I {interaction} with {target}."
+            elif action_type == "work":
+                activity = result.get("work_activity", {}).get("description", "worked")
+                return f"At {time} in {location}, I {activity}."
+            elif action_type == "relax":
+                activity = result.get("relax_activity", {}).get("description", "relaxed")
+                return f"At {time} in {location}, I {activity}."
+            elif action_type == "travel":
+                destination = result.get("destination", "somewhere")
+                return f"At {time}, I traveled to {destination}."
+            else:
+                return f"At {time} in {location}, I performed an activity."
+                
+        except Exception as e:
+            logger.error(f"Error creating memory text: {e}")
+            return "Had an activity."
+
+    def _calculate_memory_importance(self, action: Dict[str, Any], result: Dict[str, Any]) -> float:
+        """Calculate importance of a memory."""
+        try:
+            importance = 0.5  # Base importance
+            
+            # Adjust based on action type
+            action_type = action.get("type")
+            if action_type == "socialize":
+                importance += 0.2  # Social interactions are more memorable
+            elif action_type == "work":
+                importance += 0.1  # Work activities are moderately memorable
+            elif action_type == "relax":
+                importance += 0.05  # Relaxation is less memorable
+            
+            # Adjust based on result
+            if result.get("status") == "success":
+                importance += 0.1  # Successful activities are more memorable
+            
+            # Cap at 1.0
+            return min(1.0, importance)
+            
+        except Exception as e:
+            logger.error(f"Error calculating memory importance: {e}")
+            return 0.5
