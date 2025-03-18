@@ -1627,6 +1627,133 @@ class MultiNPCInteractionManager:
             cursor.close()
             conn.close()
 
+    async def update_npc_group_dynamics(
+        self,
+        user_id: int,
+        conversation_id: int,
+        group_id: int,
+        dynamics_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Update NPC group dynamics and relationships within a group.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            group_id: Group ID
+            dynamics_data: Dictionary containing dynamics updates
+            
+        Returns:
+            Dictionary of updates applied
+        """
+        try:
+            conn = await asyncpg.connect(dsn=get_db_connection())
+            try:
+                updates_applied = []
+                
+                # Get group members
+                group = await self.get_npc_group(group_id=group_id)
+                
+                if not group or "members" not in group:
+                    return {"success": False, "error": "Group not found"}
+                
+                # Process each dynamic update
+                for dynamic, value in dynamics_data.items():
+                    if dynamic not in self.GROUP_DYNAMICS:
+                        continue
+                    
+                    # Update the dynamic in the database
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE NPCGroups
+                        SET dynamics = COALESCE(dynamics, '{}'::jsonb) || 
+                                     jsonb_build_object(%s, %s)
+                        WHERE group_id = %s AND user_id = %s AND conversation_id = %s
+                    """, (dynamic, value, group_id, user_id, conversation_id))
+                    
+                    # Update relationships between group members based on dynamics
+                    for member1 in group["members"]:
+                        for member2 in group["members"]:
+                            if member1["npc_id"] >= member2["npc_id"]:
+                                continue
+                            
+                            # Get current relationship between members
+                            member_link = await get_social_link(
+                                user_id,
+                                conversation_id,
+                                "npc",
+                                member1["npc_id"],
+                                "npc",
+                                member2["npc_id"]
+                            )
+                            
+                            if not member_link:
+                                continue
+                            
+                            # Calculate relationship changes based on dynamics
+                            level_change = 0
+                            new_type = None
+                            
+                            if dynamic == "hierarchy":
+                                # Hierarchy changes affect respect and control
+                                if value > 50:
+                                    level_change = 5
+                                else:
+                                    level_change = -5
+                            elif dynamic == "cohesion":
+                                # Cohesion affects trust and intimacy
+                                if value > 50:
+                                    level_change = 3
+                                else:
+                                    level_change = -3
+                            elif dynamic == "secrecy":
+                                # Secrecy affects trust and manipulation
+                                if value > 50:
+                                    level_change = 2
+                                else:
+                                    level_change = -2
+                            
+                            # Update the relationship
+                            update_result = await update_link_type_and_level(
+                                user_id,
+                                conversation_id,
+                                member_link["link_id"],
+                                new_type,
+                                level_change
+                            )
+                            
+                            if update_result:
+                                updates_applied.append({
+                                    "member1_id": member1["npc_id"],
+                                    "member2_id": member2["npc_id"],
+                                    "dynamic": dynamic,
+                                    "changes": update_result
+                                })
+                                
+                                # Add event to relationship history
+                                event_text = f"Group dynamic '{dynamic}' changed to {value}"
+                                await add_link_event(
+                                    user_id,
+                                    conversation_id,
+                                    member_link["link_id"],
+                                    event_text
+                                )
+                
+                conn.commit()
+                return {
+                    "success": True,
+                    "updates_applied": updates_applied
+                }
+                
+            finally:
+                await conn.close()
+        except Exception as e:
+            logging.error(f"Error updating NPC group dynamics: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 8) Tools (function_tool) that the agent can call
@@ -1779,6 +1906,186 @@ async def get_relationship_summary_tool(
     return summary
 
 
+@function_tool
+async def update_relationships_from_conflict(
+    ctx: RunContextWrapper,
+    user_id: int,
+    conversation_id: int,
+    conflict_id: int,
+    resolution_data: Dict[str, Any]
+) -> dict:
+    """
+    Update relationships based on conflict resolution outcomes.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        conflict_id: Conflict ID
+        resolution_data: Resolution data including outcomes and stakeholder impacts
+        
+    Returns:
+        Dictionary of relationship updates applied
+    """
+    try:
+        conn = await asyncpg.connect(dsn=get_db_connection())
+        try:
+            updates_applied = []
+            
+            # Get all stakeholders involved in the conflict
+            stakeholders = await get_conflict_stakeholders(
+                RunContextWrapper({"user_id": user_id, "conversation_id": conversation_id}),
+                conflict_id
+            )
+            
+            # Process each stakeholder's relationship changes
+            for stakeholder in stakeholders:
+                npc_id = stakeholder["npc_id"]
+                
+                # Get current relationship with player
+                player_link = await get_social_link(
+                    user_id,
+                    conversation_id,
+                    "player",
+                    0,  # Player ID
+                    "npc",
+                    npc_id
+                )
+                
+                if not player_link:
+                    continue
+                
+                # Calculate relationship changes based on resolution
+                level_change = 0
+                new_type = None
+                
+                # Apply changes based on resolution outcome
+                if resolution_data.get("success", False):
+                    if stakeholder.get("faction_position") == resolution_data.get("winning_faction"):
+                        level_change = 10  # Positive change for aligned stakeholders
+                    else:
+                        level_change = -5  # Slight negative for opposing stakeholders
+                else:
+                    if stakeholder.get("faction_position") == resolution_data.get("winning_faction"):
+                        level_change = -10  # Negative change for failed aligned stakeholders
+                    else:
+                        level_change = 5  # Slight positive for opposing stakeholders
+                
+                # Update the relationship
+                update_result = await update_link_type_and_level(
+                    user_id,
+                    conversation_id,
+                    player_link["link_id"],
+                    new_type,
+                    level_change
+                )
+                
+                if update_result:
+                    updates_applied.append({
+                        "npc_id": npc_id,
+                        "changes": update_result
+                    })
+                    
+                    # Add event to relationship history
+                    event_text = f"Relationship changed due to conflict resolution: {resolution_data.get('outcome', 'unknown')}"
+                    await add_link_event(
+                        user_id,
+                        conversation_id,
+                        player_link["link_id"],
+                        event_text
+                    )
+            
+            return {
+                "success": True,
+                "updates_applied": updates_applied
+            }
+            
+        finally:
+            await conn.close()
+    except Exception as e:
+        logging.error(f"Error updating relationships from conflict: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@function_tool
+async def update_relationship_context(
+    ctx: RunContextWrapper,
+    user_id: int,
+    conversation_id: int,
+    entity1_type: str,
+    entity1_id: int,
+    entity2_type: str,
+    entity2_id: int,
+    context_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Update relationship context with additional information.
+    
+    Args:
+        ctx: Run context wrapper
+        user_id: User ID
+        conversation_id: Conversation ID
+        entity1_type: Type of first entity
+        entity1_id: ID of first entity
+        entity2_type: Type of second entity
+        entity2_id: ID of second entity
+        context_data: Additional context data to store
+        
+    Returns:
+        Dictionary of updates applied
+    """
+    try:
+        conn = await asyncpg.connect(dsn=get_db_connection())
+        try:
+            # Get current relationship
+            relationship = await get_social_link(
+                user_id,
+                conversation_id,
+                entity1_type,
+                entity1_id,
+                entity2_type,
+                entity2_id
+            )
+            
+            if not relationship:
+                return {"success": False, "error": "Relationship not found"}
+            
+            # Update relationship context
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE SocialLinks
+                SET context = COALESCE(context, '{}'::jsonb) || %s::jsonb
+                WHERE link_id = %s AND user_id = %s AND conversation_id = %s
+            """, (json.dumps(context_data), relationship["link_id"], user_id, conversation_id))
+            
+            # Add event to relationship history
+            event_text = f"Relationship context updated: {json.dumps(context_data)}"
+            await add_link_event(
+                user_id,
+                conversation_id,
+                relationship["link_id"],
+                event_text
+            )
+            
+            conn.commit()
+            return {
+                "success": True,
+                "link_id": relationship["link_id"],
+                "context_updated": context_data
+            }
+            
+        finally:
+            await conn.close()
+    except Exception as e:
+        logging.error(f"Error updating relationship context: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 9) The Agent: "SocialLinksAgent"
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1795,7 +2102,8 @@ SocialLinksAgent = Agent(
         " - check_for_crossroads_tool(...)\n"
         " - apply_crossroads_choice_tool(...)\n"
         " - check_for_ritual_tool(...)\n"
-        " - get_relationship_summary_tool(...)\n\n"
+        " - get_relationship_summary_tool(...)\n"
+        " - update_relationships_from_conflict(...)\n\n"
         "Use these tools to retrieve or update relationship data, trigger or apply crossroads, or check for rituals. "
         "Return helpful final text or JSON summarizing your result."
     ),
@@ -1809,7 +2117,8 @@ SocialLinksAgent = Agent(
         check_for_crossroads_tool,
         apply_crossroads_choice_tool,
         check_for_ritual_tool,
-        get_relationship_summary_tool
+        get_relationship_summary_tool,
+        update_relationships_from_conflict
     ],
     output_type=None
 )

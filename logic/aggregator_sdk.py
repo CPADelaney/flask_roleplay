@@ -645,3 +645,148 @@ def apply_context_optimizations():
     
     logger.info("Applied context optimizations via monkey patching")
     return True
+
+async def update_context_with_universal_updates(
+    context: dict,
+    universal_updates: dict,
+    user_id: str,
+    conversation_id: str
+) -> dict:
+    """
+    Update context with universal updates while maintaining consistency.
+    
+    Args:
+        context: Current context dictionary
+        universal_updates: Dictionary of updates from universal updater
+        user_id: User ID
+        conversation_id: Conversation ID
+        
+    Returns:
+        Updated context dictionary
+    """
+    try:
+        # Create a copy of context to avoid modifying original
+        updated_context = context.copy()
+        
+        # Process NPC updates
+        if "npc_updates" in universal_updates:
+            for npc_update in universal_updates["npc_updates"]:
+                npc_id = npc_update.get("npc_id")
+                if not npc_id:
+                    continue
+                    
+                # Update NPC in context
+                if "npcs" not in updated_context:
+                    updated_context["npcs"] = {}
+                    
+                if npc_id not in updated_context["npcs"]:
+                    updated_context["npcs"][npc_id] = {}
+                    
+                # Update NPC stats
+                if "stats" in npc_update:
+                    updated_context["npcs"][npc_id]["stats"] = npc_update["stats"]
+                    
+                # Update NPC location
+                if "location" in npc_update:
+                    updated_context["npcs"][npc_id]["current_location"] = npc_update["location"]
+                    
+                # Update NPC memory
+                if "memory" in npc_update:
+                    if "memory" not in updated_context["npcs"][npc_id]:
+                        updated_context["npcs"][npc_id]["memory"] = []
+                    updated_context["npcs"][npc_id]["memory"].extend(npc_update["memory"])
+        
+        # Process relationship updates
+        if "social_links" in universal_updates:
+            if "relationships" not in updated_context:
+                updated_context["relationships"] = {}
+                
+            for link in universal_updates["social_links"]:
+                e1_type = link.get("entity1_type")
+                e1_id = link.get("entity1_id")
+                e2_type = link.get("entity2_type")
+                e2_id = link.get("entity2_id")
+                
+                if not all([e1_type, e1_id, e2_type, e2_id]):
+                    continue
+                    
+                link_key = f"{e1_type}_{e1_id}_{e2_type}_{e2_id}"
+                updated_context["relationships"][link_key] = {
+                    "type": link.get("link_type", "neutral"),
+                    "level": link.get("link_level", 0),
+                    "group_context": link.get("group_context", ""),
+                    "events": link.get("events", [])
+                }
+        
+        # Process quest updates
+        if "quest_updates" in universal_updates:
+            if "quests" not in updated_context:
+                updated_context["quests"] = {}
+                
+            for quest in universal_updates["quest_updates"]:
+                quest_id = quest.get("quest_id")
+                if not quest_id:
+                    continue
+                    
+                updated_context["quests"][quest_id] = {
+                    "status": quest.get("status", "In Progress"),
+                    "progress": quest.get("progress_detail", ""),
+                    "giver": quest.get("quest_giver", ""),
+                    "reward": quest.get("reward", "")
+                }
+        
+        # Process inventory updates
+        if "inventory_updates" in universal_updates:
+            if "inventory" not in updated_context:
+                updated_context["inventory"] = {
+                    "items": {},
+                    "removed_items": []
+                }
+                
+            # Process added items
+            for item in universal_updates["inventory_updates"].get("added_items", []):
+                if isinstance(item, str):
+                    item_name = item
+                    item_data = {"name": item_name}
+                else:
+                    item_name = item.get("name")
+                    item_data = item
+                    
+                if item_name:
+                    updated_context["inventory"]["items"][item_name] = item_data
+                    
+            # Process removed items
+            for item in universal_updates["inventory_updates"].get("removed_items", []):
+                if isinstance(item, str):
+                    item_name = item
+                else:
+                    item_name = item.get("name")
+                    
+                if item_name:
+                    if item_name in updated_context["inventory"]["items"]:
+                        del updated_context["inventory"]["items"][item_name]
+                    updated_context["inventory"]["removed_items"].append(item_name)
+        
+        # Process activity updates
+        if "activity_updates" in universal_updates:
+            if "activities" not in updated_context:
+                updated_context["activities"] = []
+                
+            for activity in universal_updates["activity_updates"]:
+                if "activity_name" in activity:
+                    updated_context["activities"].append({
+                        "name": activity["activity_name"],
+                        "purpose": activity.get("purpose", {}),
+                        "stats": activity.get("stat_integration", {}),
+                        "intensity": activity.get("intensity_tier", 0),
+                        "setting": activity.get("setting_variant", "")
+                    })
+        
+        # Update last modified timestamp
+        updated_context["last_modified"] = datetime.now().isoformat()
+        
+        return updated_context
+        
+    except Exception as e:
+        logging.error(f"Error updating context with universal updates: {e}")
+        return context  # Return original context on error

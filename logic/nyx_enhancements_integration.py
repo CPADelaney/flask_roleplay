@@ -15,6 +15,7 @@ from logic.universal_updater import apply_universal_updates_async
 from logic.nyx_memory import NyxMemoryManager, perform_memory_maintenance
 from nyx.nyx_memory_system import initialize_nyx_memory_tables
 from nyx.nyx_model_manager import initialize_user_model_tables
+from npcs.npc_learning_adaptation import NPCLearningManager
 
 async def initialize_nyx_memory_system():
     """
@@ -104,21 +105,31 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
         # Get user_id if not provided
         if user_id is None:
             from db.connection import get_db_connection
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT user_id FROM conversations WHERE id=%s", 
-                (conversation_id,)
-            )
-            row = cursor.fetchone()
-            if not row:
-                logging.error(f"No conversation found with id {conversation_id}")
-                return
-            user_id = row[0]
-            conn.close()
+            conn = None
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT user_id FROM conversations WHERE id=%s", 
+                    (conversation_id,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    logging.error(f"No conversation found with id {conversation_id}")
+                    return
+                user_id = row[0]
+            finally:
+                if conn:
+                    conn.close()
         
-        # Initialize Nyx agent
+        # Initialize Nyx agent and NPCLearningManager
         nyx_agent = NyxAgent(user_id, conversation_id)
+        learning_manager = NPCLearningManager(user_id, conversation_id)
+        try:
+            await learning_manager.initialize()
+        except Exception as e:
+            logging.error(f"Failed to initialize learning manager: {e}")
+            # Continue without learning - don't block the chat process
         
         # Get aggregated context
         player_name = "Chase"  # Default player name
@@ -134,25 +145,35 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
             import asyncpg
             dsn = os.getenv("DB_DSN")
             
-            # Apply updates with proper async context
-            async with asyncpg.create_pool(dsn=dsn) as pool:
-                async with pool.acquire() as conn:
-                    await apply_universal_updates_async(
-                        user_id, 
-                        conversation_id, 
-                        universal_update,
-                        conn
-                    )
-            
-            # Refresh context after updates
-            aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
+            try:
+                # Apply updates with proper async context
+                async with asyncpg.create_pool(dsn=dsn) as pool:
+                    async with pool.acquire() as conn:
+                        await apply_universal_updates_async(
+                            user_id, 
+                            conversation_id, 
+                            universal_update,
+                            conn
+                        )
+                
+                # Refresh context after updates
+                aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
+            except Exception as update_err:
+                logging.error(f"Error applying universal updates: {update_err}", exc_info=True)
+        
+        # Get list of NPCs in the scene for learning
+        npcs_in_scene = aggregator_data.get("npcsPresent", [])
+        npc_ids = []
+        for npc in npcs_in_scene:
+            if "id" in npc:
+                npc_ids.append(npc["id"])
         
         # Build context for Nyx
         context = {
             "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
             "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
             "player_name": player_name,
-            "npc_present": [],  # Could be enhanced to include nearby NPCs
+            "npc_present": npcs_in_scene,
             "aggregator_data": aggregator_data
         }
         
@@ -164,9 +185,62 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
         
         ai_response = response_data.get("text", "")
         
+        # Process the interaction for NPC learning if NPCs are present
+        if npc_ids:
+            try:
+                learning_result = await learning_manager.process_event_for_learning(
+                    event_text=user_input,
+                    event_type="player_conversation",
+                    npc_ids=npc_ids,
+                    player_response={
+                        "summary": "Player initiated conversation"
+                    }
+                )
+                logging.info(f"Processed learning for {len(npc_ids)} NPCs")
+            except Exception as learn_err:
+                logging.error(f"Error in NPC learning processing: {learn_err}", exc_info=True)
+        
+        # Store Nyx response in database with proper error handling
+        from db.connection import get_db_connection
+        conn = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                (conversation_id, "Nyx", ai_response)
+            )
+            conn.commit()
+            logging.info(f"Stored Nyx response in database for conversation {conversation_id}")
+        except Exception as db_error:
+            logging.error(f"Database error storing Nyx response: {str(db_error)}", exc_info=True)
+        finally:
+            if conn:
+                conn.close()
+        
+        # Emit response to client via SocketIO with proper error handling
+        from flask_socketio import emit
+        try:
+            # Stream the response token by token
+            for i in range(0, len(ai_response), 3):
+                token = ai_response[i:i+3]
+                emit('new_token', {'token': token}, room=conversation_id)
+                socketio.sleep(0.05)
+                
+            # Signal completion
+            emit('done', {'full_text': ai_response}, room=conversation_id)
+            logging.info(f"Completed streaming response for conversation {conversation_id}")
+        except Exception as socket_err:
+            logging.error(f"Error emitting response: {socket_err}", exc_info=True)
+            try:
+                emit('error', {'error': str(socket_err)}, room=conversation_id)
+            except:
+                pass
+        
         # Check if we should generate an image
         should_generate = response_data.get("generate_image", False)
         
+        # Image generation with proper error handling
         if should_generate:
             try:
                 # Generate image based on the response
@@ -186,125 +260,49 @@ async def enhanced_background_chat_task(conversation_id, user_input, universal_u
                 )
                 
                 # Emit image to the client via SocketIO
-                from flask_socketio import emit
                 if image_result and "image_urls" in image_result and image_result["image_urls"]:
                     emit('image', {
                         'image_url': image_result["image_urls"][0],
-                        'prompt_used': image_result.get('prompt_used', '')
+                        'prompt_used': image_result.get('prompt_used', ''),
+                        'reason': "Narrative moment"
                     }, room=conversation_id)
-            except Exception as e:
-                logging.error(f"Error generating image: {e}")
-        
-        # Store Nyx response in database
-        from db.connection import get_db_connection
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-            (conversation_id, "Nyx", ai_response)
-        )
-        conn.commit()
-        conn.close()
-        
-        # Emit response to client via SocketIO
-        from flask_socketio import emit
-        emit('response', {'data': ai_response}, room=conversation_id)
-        emit('done', {}, room=conversation_id)
-        
-    except Exception as e:
-        logging.error(f"Error in enhanced_background_chat_task: {str(e)}", exc_info=True)
-        from flask_socketio import emit
-        emit('error', {'error': str(e)}, room=conversation_id)
-        
-        # NEW: Store Nyx's response in memory
-        async def record_response_in_memory():
-            await nyx_memory.add_memory(
-                memory_text=f"I responded: {ai_response[:200]}...",  # Truncate long responses
-                memory_type="observation",
-                significance=4,
-                tags=["nyx_response"],
-                related_entities={"player": player_name},
-                context=context
-            )
-            
-            # Perform memory reconsolidation for memories referenced in this interaction
-            if memory_enhancement.get("referenced_memory_ids", []):
-                for mem_id in memory_enhancement["referenced_memory_ids"]:
-                    await nyx_memory.reconsolidate_memory(mem_id, context)
-                    
-            # Update narrative arcs if they exist
-            from logic.nyx_enhancements_integration import update_narrative_arcs_for_interaction
-            async_conn = await asyncpg.connect(dsn=os.getenv("DB_DSN"))
-            try:
-                await update_narrative_arcs_for_interaction(
-                    user_id, conversation_id, user_input, ai_response, async_conn
-                )
-            finally:
-                await async_conn.close()
+                    logging.info(f"Image emitted to client for conversation {conversation_id}")
+            except Exception as img_err:
+                logging.error(f"Error generating image: {img_err}", exc_info=True)
+                try:
+                    emit('error', {'error': f"Image generation failed: {str(img_err)}"}, room=conversation_id)
+                except:
+                    pass
                 
-        # Record the response asynchronously (don't wait for completion)
-        asyncio.create_task(record_response_in_memory())
-        
-        # Stream the response token by token (ORIGINAL CODE)
-        for i in range(0, len(ai_response), 3):
-            token = ai_response[i:i+3]
-            socketio.emit('new_token', {'token': token}, room=conversation_id)
-            socketio.sleep(0.05)
-        
-        # Store the complete GPT response in the database (ORIGINAL CODE)
+        # Store memory of the response (asynchronously)
         try:
-            conn = get_db_connection()
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-                        (conversation_id, "Nyx", ai_response)
-                    )
-                    conn.commit()
-            logging.info(f"GPT response stored in database for conversation {conversation_id}")
-        except Exception as db_error:
-            logging.error(f"Database error storing GPT response: {str(db_error)}")
-
-        # Check if we should generate an image (ORIGINAL CODE)
-        should_generate, reason = should_generate_image_for_response(
-            user_id, 
-            conversation_id, 
-            response_data["function_args"] if response_data["type"] == "function_call" else {}
-        )
-        
-        # Image generation code (ORIGINAL CODE)
-        image_result = None
-        if should_generate:
-            logging.info(f"Generating image for scene: {reason}")
-            from routes.ai_image_generator import generate_roleplay_image_from_gpt
-            image_result = generate_roleplay_image_from_gpt(
-                response_data["function_args"] if response_data["type"] == "function_call" else {}, 
-                user_id, 
-                conversation_id
+            nyx_memory = NyxMemoryManager(user_id, conversation_id)
+            
+            memory_task = asyncio.create_task(
+                nyx_memory.add_memory(
+                    memory_text=f"I responded: {ai_response[:200]}..." if len(ai_response) > 200 else f"I responded: {ai_response}",
+                    memory_type="observation",
+                    significance=4,
+                    tags=["nyx_response"],
+                    related_entities={"player": player_name},
+                    context=context
+                )
             )
             
-            # Emit image to the client
-            if image_result and "image_urls" in image_result and image_result["image_urls"]:
-                socketio.emit('image', {
-                    'image_url': image_result["image_urls"][0],
-                    'prompt_used': image_result.get('prompt_used', ''),
-                    'reason': reason
-                }, room=conversation_id)
-                logging.info(f"Image emitted to client: {image_result['image_urls'][0]}")
-        
-        # Stream the response token by token again (ORIGINAL CODE)
-        for i in range(0, len(ai_response), 3):
-            token = ai_response[i:i+3]
-            socketio.emit('new_token', {'token': token}, room=conversation_id)
-            socketio.sleep(0.05)
-        
-        # Emit the final 'done' event with the full text
-        socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
-        logging.info(f"Completed streaming GPT response for conversation {conversation_id}")
-    
+            # Don't wait for completion - let it run in background
+            logging.debug("Memory recording task created")
+        except Exception as mem_err:
+            logging.error(f"Error setting up memory recording: {mem_err}", exc_info=True)
+            # Non-critical, continue without failing the main task
+            
     except Exception as e:
-        logging.error(f"Error in enhanced_background_chat_task: {str(e)}")
-        socketio.emit('error', {'error': f"Server error: {str(e)}"}, room=conversation_id)
+        logging.error(f"Critical error in enhanced_background_chat_task: {str(e)}", exc_info=True)
+        # Attempt to notify the client about the error
+        try:
+            from flask_socketio import emit
+            emit('error', {'error': f"Server error: {str(e)}"}, room=conversation_id)
+        except Exception as notify_err:
+            logging.error(f"Failed to send error notification: {notify_err}")
 
 async def enhance_context_with_memories(
     user_id, conversation_id, user_input, context, nyx_memory
