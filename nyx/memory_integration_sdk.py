@@ -52,11 +52,11 @@ class MemoryAbstraction(BaseModel):
 # ===== Memory Context Object =====
 
 class MemoryContext:
-    """Context object for memory agents"""
     def __init__(self, user_id: int, conversation_id: int = None):
         self.user_id = user_id
         self.conversation_id = conversation_id
-        self.memory_system = NyxMemorySystem(user_id, conversation_id)
+        # Don't initialize memory_system here—just set to None
+        self.memory_system = None
         self.query_context = {}
 
 # ===== Function Tools =====
@@ -71,33 +71,52 @@ async def add_memory(
     tags: List[str] = None
 ) -> str:
     """
-    Add a new memory to the appropriate scope.
-    
-    Args:
-        memory_text: The content of the memory
-        memory_type: Type of memory (observation, reflection, abstraction)
-        memory_scope: Scope of memory (global, user, or game)
-        significance: Importance of memory (1-10)
-        tags: List of tags for categorization
+    Add a new memory to the appropriate scope (NEW version).
+    This version routes everything through Nyx governance (remember_through_nyx).
     """
+    from memory.memory_nyx_integration import remember_through_nyx
+
     tags = tags or []
+    user_id = ctx.context.user_id
+    conversation_id = ctx.context.conversation_id
+
+    # Decide how to interpret memory_scope => entity_type/entity_id
+    if memory_scope == "game":
+        entity_type = "nyx"   # or "global"
+        entity_id = 0
+    else:
+        entity_type = "player"
+        entity_id = user_id
     
-    memory_system = ctx.context.memory_system
-    
-    # Add timestamp to metadata
-    metadata = {"created_at": datetime.now().isoformat()}
-    
-    # Add memory
-    memory_id = await memory_system.add_memory(
+    # Map significance -> importance string for bridging calls
+    importance_map = {
+        range(1, 3):  "low",
+        range(3, 6):  "medium",
+        range(6, 9):  "high",
+        range(9, 11): "critical"
+    }
+    importance = "medium"
+    for rng, label in importance_map.items():
+        if significance in rng:
+            importance = label
+            break
+
+    # Now call the bridging function
+    result = await remember_through_nyx(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        entity_type=entity_type,
+        entity_id=entity_id,
         memory_text=memory_text,
-        memory_type=memory_type,
-        memory_scope=memory_scope,
-        significance=significance,
-        tags=tags,
-        metadata=metadata
+        importance=importance,
+        emotional=True,  # if you want emotional analysis
+        tags=tags
     )
-    
-    return f"Memory added with ID: {memory_id}"
+
+    # If governance denied the op, we get an error. Otherwise, success.
+    if "error" in result:
+        return f"Memory creation not approved: {result['error']}"
+    return f"Memory added with ID: {result.get('memory_id')}"
 
 @function_tool
 async def retrieve_memories(
