@@ -5,6 +5,7 @@ import logging
 import functools
 import time
 import openai
+from typing import Dict, Any
 from db.connection import get_db_connection
 from logic.prompts import SYSTEM_PROMPT, PRIVATE_REFLECTION_INSTRUCTIONS
 from logic.json_helpers import safe_json_loads
