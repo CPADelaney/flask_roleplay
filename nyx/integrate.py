@@ -53,7 +53,26 @@ from db.connection import get_db_connection
 # Caching utilities
 from utils.caching import CACHE_TTL, NPC_DIRECTIVE_CACHE, AGENT_DIRECTIVE_CACHE
 
+from lore.dynamic_lore_generator import DynamicLoreGenerator
+from lore.unified_validation import ValidationManager
+from lore.error_handler import ErrorHandler
+
+from .nyx_agent_sdk import NyxAgent
+from .nyx_enhanced_system import NyxEnhancedSystem
+from .response_filter import ResponseFilter
+from .nyx_planner import NyxPlanner
+from .nyx_governance import NyxGovernance
+from .nyx_task_integration import TaskIntegration
+from .memory_integration_sdk import MemoryIntegration
+from .scene_manager_sdk import SceneManager
+from .user_model_sdk import UserModel
+
 logger = logging.getLogger(__name__)
+
+# Initialize components
+lore_system = LoreSystem()
+lore_validator = LoreValidator()
+error_handler = ErrorHandler()
 
 async def generate_lore_with_governance(
     user_id: int,
@@ -309,1608 +328,894 @@ class GameEventManager:
         self.nyx_agent_sdk = self.get_nyx_agent(user_id, conversation_id)
         self.npc_coordinator = self.get_npc_coordinator(user_id, conversation_id)
     
-    def get_nyx_agent(self, user_id, conversation_id):
-        """Get Nyx agent for this context."""
-        # Placeholder implementation
-        return {"process_game_event": self.process_game_event}
-    
-    def get_npc_coordinator(self, user_id, conversation_id):
-        """Get NPC coordinator for this context."""
-        # Placeholder implementation
-        return {"batch_update_npcs": self.batch_update_npcs}
-    
-    async def process_game_event(self, event_type, event_data):
-        """Process a game event as Nyx."""
-        # Simple placeholder implementation
-        return {
-            "should_broadcast_to_npcs": True,
-            "event_type": event_type,
-            "event_data": event_data
-        }
-    
-    async def batch_update_npcs(self, npc_ids, update_type, update_data):
-        """Update multiple NPCs."""
-        # Placeholder implementation
-        return {
-            "updated_npcs": npc_ids,
-            "update_type": update_type
-        }
-    
-    async def _determine_aware_npcs(self, event_type, event_data):
-        """Determine which NPCs would be aware of this event."""
-        # Simplified placeholder implementation
-        return []
-    
-    async def broadcast_event(self, event_type: str, event_data: Dict[str, Any]) -> Dict[str, Any]:
+    def get_nyx_agent(self, user_id: int, conversation_id: int) -> Dict[str, Any]:
         """
-        Enhanced broadcast event with governance oversight.
-        """
-        logger.info(f"Broadcasting event {event_type} with governance oversight")
-        
-        # Check permission with governance system first
-        if self.governor:
-            permission = await self.governor.check_action_permission(
-                agent_type="nyx",
-                agent_id="system",
-                action_type="broadcast_event",
-                action_details={
-                    "event_type": event_type,
-                    "event_data": event_data
-                }
-            )
-            
-            if not permission["approved"]:
-                logger.warning(f"Event broadcast not approved: {permission['reasoning']}")
-                return {
-                    "event_type": event_type,
-                    "governance_approved": False,
-                    "reason": permission["reasoning"]
-                }
-        
-        # Tell Nyx about the event FIRST and get filtering instructions
-        nyx_response = await self.nyx_agent_sdk.process_game_event(event_type, event_data)
-        
-        # Check if Nyx wants to filter or modify this event
-        if not nyx_response.get("should_broadcast_to_npcs", True):
-            logger.info(f"Nyx has blocked broadcasting event {event_type} to NPCs: {nyx_response.get('reason', 'No reason provided')}")
-            
-            # Report the action if governor available
-            if self.governor:
-                await self.governor.process_agent_action_report(
-                    agent_type="nyx",
-                    agent_id="system",
-                    action={
-                        "type": "block_event",
-                        "description": f"Blocked event {event_type} from reaching NPCs"
-                    },
-                    result={
-                        "reason": nyx_response.get("reason", "No reason provided")
-                    }
-                )
-            
-            return {
-                "event_type": event_type,
-                "nyx_notified": True,
-                "npcs_notified": 0,
-                "blocked_by_nyx": True,
-                "reason": nyx_response.get("reason", "Blocked by Nyx")
-            }
-        
-        # Use Nyx's modifications if provided
-        if "modified_event_data" in nyx_response:
-            event_data = nyx_response["modified_event_data"]
-            
-            # Report modification if governor available
-            if self.governor:
-                await self.governor.process_agent_action_report(
-                    agent_type="nyx",
-                    agent_id="system",
-                    action={
-                        "type": "modify_event",
-                        "description": f"Modified event {event_type}"
-                    },
-                    result={
-                        "original_data": event_data,
-                        "modified_data": nyx_response["modified_event_data"]
-                    }
-                )
-        
-        # Let Nyx override which NPCs should be affected
-        affected_npcs = event_data.get("affected_npcs")
-        if "override_affected_npcs" in nyx_response:
-            affected_npcs = nyx_response["override_affected_npcs"]
-        
-        if not affected_npcs:
-            # If no specific NPCs mentioned, determine who would know
-            affected_npcs = await self._determine_aware_npcs(event_type, event_data)
-        
-        # Respect Nyx's filtering of aware NPCs
-        if "filtered_aware_npcs" in nyx_response:
-            affected_npcs = [npc_id for npc_id in affected_npcs if npc_id in nyx_response["filtered_aware_npcs"]]
-        
-        if affected_npcs:
-            await self.npc_coordinator.batch_update_npcs(
-                affected_npcs,
-                "event_update",
-                {"event_type": event_type, "event_data": event_data}
-            )
-            
-            # Issue directives to affected NPCs if needed and governor available
-            if self.governor and event_type in ["conflict_update", "critical_event", "emergency"]:
-                for npc_id in affected_npcs:
-                    await self.governor.issue_directive(
-                        agent_type=AgentType.NPC,
-                        agent_id=npc_id,
-                        directive_type=DirectiveType.ACTION,
-                        directive_data={
-                            "instruction": f"React to {event_type}",
-                            "event_data": event_data,
-                            "priority": "high"
-                        },
-                        priority=DirectivePriority.HIGH,
-                        duration_minutes=30
-                    )
-            
-            logger.info(f"Event {event_type} broadcast to {len(affected_npcs)} NPCs with governance oversight")
-        else:
-            logger.info(f"No NPCs affected by event {event_type}")
-            
-        return {
-            "event_type": event_type,
-            "nyx_notified": True,
-            "npcs_notified": len(affected_npcs) if affected_npcs else 0,
-            "aware_npcs": affected_npcs,
-            "nyx_modifications": "modified_event_data" in nyx_response,
-            "governance_approved": True
-        }
-
-
-class NyxNPCIntegrationManager:
-    """Enhanced NPC Integration Manager with governance integration."""
-    
-    def __init__(self, user_id: int, conversation_id: int, governor: NyxUnifiedGovernor = None):
-        """Initialize with governor access."""
-        # Initialize with original method
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.governor = governor
-        
-        # Initialize other components
-        self.nyx_agent_sdk = self.get_nyx_agent(user_id, conversation_id)
-        self.npc_coordinator = self.get_npc_coordinator(user_id, conversation_id)
-        self.npc_system = None  # Lazy-loaded
-    
-    def get_nyx_agent(self, user_id, conversation_id):
-        """Get Nyx agent for this context."""
-        # Placeholder implementation
-        return {"create_scene_narrative": self.create_scene_narrative}
-    
-    def get_npc_coordinator(self, user_id, conversation_id):
-        """Get NPC coordinator for this context."""
-        # Placeholder implementation
-        return {"batch_update_npcs": self.batch_update_npcs}
-    
-    async def create_scene_narrative(self, directive, responses, context):
-        """Create a coherent scene narrative as Nyx."""
-        # Simple placeholder implementation
-        return "A scene unfolds..."
-    
-    async def batch_update_npcs(self, npc_ids, update_type, update_data):
-        """Update multiple NPCs."""
-        # Placeholder implementation
-        return {
-            "updated_npcs": npc_ids,
-            "update_type": update_type
-        }
-    
-    async def _gather_scene_context(self, location, player_action, involved_npcs):
-        """Gather context for a scene."""
-        # Placeholder implementation
-        return {
-            "location": location,
-            "player_action": player_action,
-            "involved_npcs": involved_npcs or []
-        }
-    
-    async def make_scene_decision(self, context):
-        """Make a scene directive decision as Nyx."""
-        # Placeholder implementation
-        return {
-            "directive": "interact",
-            "style": "natural",
-            "focus": "player response"
-        }
-    
-    async def _execute_npc_directives(self, scene_directive):
-        """Have NPCs act according to directives."""
-        # Placeholder implementation
-        return []
-    
-    async def orchestrate_scene(
-        self,
-        location: str,
-        player_action: str = None,
-        involved_npcs: List[int] = None
-    ) -> Dict[str, Any]:
-        """
-        Enhanced scene orchestration with governance oversight.
-        """
-        # Check permission with governance system
-        if self.governor:
-            permission = await self.governor.check_action_permission(
-                agent_type="nyx",
-                agent_id="scene_manager",
-                action_type="orchestrate_scene",
-                action_details={
-                    "location": location,
-                    "player_action": player_action,
-                    "involved_npcs": involved_npcs
-                }
-            )
-            
-            if not permission["approved"]:
-                logger.warning(f"Scene orchestration not approved: {permission['reasoning']}")
-                return {
-                    "error": f"Scene orchestration not approved: {permission['reasoning']}",
-                    "approved": False,
-                    "location": location
-                }
-            
-            # If there's an override action, use that instead
-            if permission.get("override_action"):
-                logger.info("Using governance override for scene orchestration")
-                
-                # Extract overridden values if provided
-                override = permission["override_action"]
-                location = override.get("location", location)
-                player_action = override.get("player_action", player_action)
-                involved_npcs = override.get("involved_npcs", involved_npcs)
-        
-        # Proceed with original implementation
-        # Gather context for the scene
-        context = await self._gather_scene_context(location, player_action, involved_npcs)
-        
-        # Issue directives to NPCs if specified and governor available
-        if involved_npcs and self.governor:
-            for npc_id in involved_npcs:
-                await self.governor.issue_directive(
-                    agent_type=AgentType.NPC,
-                    agent_id=npc_id,
-                    directive_type=DirectiveType.SCENE,
-                    directive_data={
-                        "location": location,
-                        "context": context,
-                        "player_action": player_action
-                    },
-                    priority=DirectivePriority.MEDIUM,
-                    duration_minutes=60,
-                    scene_id=f"scene_{self.user_id}_{self.conversation_id}_{int(datetime.now().timestamp())}"
-                )
-        
-        # Get Nyx's scene directive
-        scene_directive = await self.make_scene_decision(context)
-        
-        # Have NPCs act according to the directive
-        npc_responses = await self._execute_npc_directives(scene_directive)
-        
-        # Create a coherent scene narrative
-        scene_narrative = await self.nyx_agent_sdk.create_scene_narrative(
-            scene_directive, npc_responses, context
-        )
-        
-        # Report the action if governor available
-        if self.governor:
-            await self.governor.process_agent_action_report(
-                agent_type="nyx",
-                agent_id="scene_manager",
-                action={
-                    "type": "orchestrate_scene",
-                    "description": f"Orchestrated scene at {location}"
-                },
-                result={
-                    "location": location,
-                    "npc_count": len(npc_responses),
-                    "narrative_length": len(scene_narrative) if scene_narrative else 0
-                }
-            )
-        
-        return {
-            "narrative": scene_narrative,
-            "npc_responses": npc_responses,
-            "location": location,
-            "governance_approved": True
-        }
-    
-    async def approve_group_interaction(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Enhanced group interaction approval with governance oversight.
-        """
-        # First use governor to check if this interaction is permitted
-        if self.governor:
-            permission = await self.governor.check_action_permission(
-                agent_type="nyx",
-                agent_id="interaction_manager",
-                action_type="group_interaction",
-                action_details=request
-            )
-            
-            if not permission["approved"]:
-                logger.warning(f"Group interaction not approved by governance: {permission['reasoning']}")
-                return {
-                    "approved": False,
-                    "reason": permission["reasoning"],
-                    "governance_blocked": True
-                }
-        
-        # If approved by governor or no governor, proceed with simple implementation
-        result = {
-            "approved": True,
-            "reason": "Approved by Nyx",
-            "governance_approved": self.governor is not None
-        }
-        
-        return result
-    
-    async def run_joint_memory_maintenance(self, user_id=None, conversation_id=None):
-        """
-        Run joint memory maintenance for Nyx and NPCs.
-        
-        Returns:
-            Maintenance results
-        """
-        user_id = user_id or self.user_id
-        conversation_id = conversation_id or self.conversation_id
-        
-        # Placeholder implementation
-        return {
-            "status": "maintenance_complete",
-            "npcs_processed": 0,
-            "memories_pruned": 0,
-            "memories_consolidated": 0
-        }
-
-
-class MemoryIntegration:
-    """
-    Integration for Memory Manager with governance oversight.
-    """
-    
-    def __init__(self, user_id: int, conversation_id: int, governor: NyxUnifiedGovernor):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.governor = governor
-        self.memory_bridge = None
-    
-    async def initialize(self):
-        """Initialize the memory integration."""
-        self.memory_bridge = await get_memory_nyx_bridge(self.user_id, self.conversation_id)
-        return self
-    
-    async def remember(
-        self,
-        entity_type: str,
-        entity_id: int,
-        memory_text: str,
-        importance: str = "medium",
-        emotional: bool = True,
-        tags: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
-        """
-        Create a memory with governance oversight.
-        
-        Args:
-            entity_type: Type of entity
-            entity_id: ID of the entity
-            memory_text: The memory text
-            importance: Importance level
-            emotional: Whether to analyze emotional content
-            tags: Optional tags
-        """
-        return await self.memory_bridge.remember(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            memory_text=memory_text,
-            importance=importance,
-            emotional=emotional,
-            tags=tags
-        )
-    
-    async def recall(
-        self,
-        entity_type: str,
-        entity_id: int,
-        query: Optional[str] = None,
-        context: Optional[str] = None,
-        limit: int = 5
-    ) -> Dict[str, Any]:
-        """
-        Recall memories with governance oversight.
-        
-        Args:
-            entity_type: Type of entity
-            entity_id: ID of the entity
-            query: Optional search query
-            context: Current context
-            limit: Maximum number of memories to return
-        """
-        return await self.memory_bridge.recall(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            query=query,
-            context=context,
-            limit=limit
-        )
-    
-    async def create_belief(
-        self,
-        entity_type: str,
-        entity_id: int,
-        belief_text: str,
-        confidence: float = 0.7
-    ) -> Dict[str, Any]:
-        """
-        Create a belief with governance oversight.
-        
-        Args:
-            entity_type: Type of entity
-            entity_id: ID of the entity
-            belief_text: The belief statement
-            confidence: Confidence in this belief
-        """
-        return await self.memory_bridge.create_belief(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            belief_text=belief_text,
-            confidence=confidence
-        )
-    
-    async def run_memory_maintenance(
-        self,
-        entity_type: str,
-        entity_id: int
-    ) -> Dict[str, Any]:
-        """
-        Run memory maintenance with governance oversight.
-        
-        Args:
-            entity_type: Type of entity
-            entity_id: ID of the entity
-        """
-        return await self.memory_bridge.run_maintenance(
-            entity_type=entity_type,
-            entity_id=entity_id
-        )
-    
-    async def issue_memory_directive(
-        self,
-        directive_data: Dict[str, Any],
-        priority: int = DirectivePriority.MEDIUM,
-        duration_minutes: int = 30
-    ) -> int:
-        """
-        Issue a directive to the memory manager.
-        
-        Args:
-            directive_data: Directive data
-            priority: Directive priority
-            duration_minutes: Duration in minutes
-            
-        Returns:
-            Directive ID
-        """
-        directive_id = await self.governor.issue_directive(
-            agent_type=AgentType.MEMORY_MANAGER,
-            agent_id="memory_manager",
-            directive_type=DirectiveType.ACTION,
-            directive_data=directive_data,
-            priority=priority,
-            duration_minutes=duration_minutes
-        )
-        
-        return directive_id
-    
-    async def process_memory_directive(
-        self,
-        directive_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Process a directive for the memory system.
-        
-        Args:
-            directive_data: The directive data
-            
-        Returns:
-            Results of processing the directive
-        """
-        return await self.memory_bridge.process_memory_directive(directive_data)
-
-
-class StoryIntegration:
-    """
-    Integration for Story Director and related components with governance oversight.
-    """
-    
-    def __init__(self, user_id: int, conversation_id: int, governor: NyxUnifiedGovernor):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.governor = governor
-    
-    async def generate_story_beat(self, context_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Generate a comprehensive story beat with governance oversight.
-        
-        Args:
-            context_data: Context data for the story beat
-            
-        Returns:
-            Generated story beat
-        """
-        # Check permission with governance system
-        permission = await self.governor.check_action_permission(
-            agent_type=AgentType.STORY_DIRECTOR,
-            agent_id="director",
-            action_type="generate_story_beat",
-            action_details=context_data
-        )
-        
-        if not permission["approved"]:
-            logger.warning(f"Story beat generation not approved: {permission['reasoning']}")
-            return {
-                "error": f"Story beat generation not approved: {permission['reasoning']}",
-                "approved": False
-            }
-        
-        # If approved, call the story beat generator
-        story_beat = await generate_comprehensive_story_beat(
-            self.user_id, self.conversation_id, context_data
-        )
-        
-        # Report the action
-        await self.governor.process_agent_action_report(
-            agent_type=AgentType.STORY_DIRECTOR,
-            agent_id="director",
-            action={
-                "type": "generate_story_beat",
-                "description": "Generated comprehensive story beat"
-            },
-            result={
-                "narrative_stage": story_beat.get("narrative_stage"),
-                "element_type": story_beat.get("element_type"),
-                "execution_time": story_beat.get("execution_time")
-            }
-        )
-        
-        # Add governance approval flag
-        story_beat["governance_approved"] = True
-        
-        return story_beat
-    
-    async def analyze_conflict(self, conflict_id: int) -> Dict[str, Any]:
-        """
-        Analyze a conflict with governance oversight.
-        
-        Args:
-            conflict_id: ID of the conflict to analyze
-            
-        Returns:
-            Conflict analysis
-        """
-        # Check permission
-        permission = await self.governor.check_action_permission(
-            agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id="analyst",
-            action_type="analyze_conflict",
-            action_details={"conflict_id": conflict_id}
-        )
-        
-        if not permission["approved"]:
-            logger.warning(f"Conflict analysis not approved: {permission['reasoning']}")
-            return {
-                "error": f"Conflict analysis not approved: {permission['reasoning']}",
-                "approved": False,
-                "conflict_id": conflict_id
-            }
-        
-        # If approved, analyze conflict
-        result = await orchestrate_conflict_analysis_and_narrative(
-            self.user_id, self.conversation_id, conflict_id
-        )
-        
-        # Report the action
-        await self.governor.process_agent_action_report(
-            agent_type=AgentType.CONFLICT_ANALYST,
-            agent_id="analyst",
-            action={
-                "type": "analyze_conflict",
-                "description": f"Analyzed conflict {conflict_id}"
-            },
-            result={
-                "conflict_id": conflict_id,
-                "execution_time": result.get("execution_time")
-            }
-        )
-        
-        # Add governance approval flag
-        result["governance_approved"] = True
-        
-        return result
-
-
-class NewGameIntegration:
-    """
-    Integration for New Game Agent with governance oversight.
-    """
-    
-    def __init__(self, user_id: int, conversation_id: int, governor: NyxUnifiedGovernor):
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        self.governor = governor
-        self.new_game_agent = NewGameAgent()
-    
-    async def create_new_game(self, conversation_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Create a new game with governance oversight.
-        
-        Args:
-            conversation_data: Initial conversation data
-            
-        Returns:
-            New game creation results
-        """
-        # Check permission with governance system
-        permission = await self.governor.check_action_permission(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="new_game",
-            action_type="create_new_game",
-            action_details=conversation_data
-        )
-        
-        if not permission["approved"]:
-            logger.warning(f"New game creation not approved: {permission['reasoning']}")
-            return {
-                "error": f"New game creation not approved: {permission['reasoning']}",
-                "approved": False
-            }
-        
-        # If approved, create new game
-        result = await self.new_game_agent.process_new_game(self.user_id, conversation_data)
-        
-        # If the conversation ID changed, update our reference
-        if "conversation_id" in result and result["conversation_id"] != self.conversation_id:
-            self.conversation_id = result["conversation_id"]
-        
-        # Issue directives for the new game
-        try:
-            # Directive for story director
-            await self.governor.issue_directive(
-                agent_type=AgentType.STORY_DIRECTOR,
-                agent_id="director",
-                directive_type=DirectiveType.ACTION,
-                directive_data={
-                    "instruction": "Initialize with new environment and NPCs",
-                    "environment": result.get("environment_name"),
-                    "scenario_name": result.get("scenario_name")
-                },
-                priority=DirectivePriority.HIGH,
-                duration_minutes=60
-            )
-            
-            # Directive for NPCs
-            # Get created NPCs
-            new_npcs = []
-            conn = await asyncpg.connect(dsn=get_db_connection())
-            try:
-                rows = await conn.fetch("""
-                    SELECT npc_id, npc_name
-                    FROM NPCStats
-                    WHERE user_id = $1 AND conversation_id = $2
-                """, self.user_id, self.conversation_id)
-                
-                for row in rows:
-                    new_npcs.append({
-                        "npc_id": row["npc_id"],
-                        "npc_name": row["npc_name"]
-                    })
-            finally:
-                await conn.close()
-            
-            # Issue directives for each NPC
-            for npc in new_npcs:
-                await self.governor.issue_directive(
-                    agent_type=AgentType.NPC,
-                    agent_id=npc["npc_id"],
-                    directive_type=DirectiveType.INITIALIZATION,
-                    directive_data={
-                        "environment": result.get("environment_name"),
-                        "npc_name": npc["npc_name"]
-                    },
-                    priority=DirectivePriority.MEDIUM,
-                    duration_minutes=24*60  # 24 hours
-                )
-        except Exception as e:
-            logger.error(f"Error issuing directives for new game: {e}")
-        
-        # Report the action
-        await self.governor.process_agent_action_report(
-            agent_type=AgentType.UNIVERSAL_UPDATER,
-            agent_id="new_game",
-            action={
-                "type": "create_new_game",
-                "description": f"Created new game: {result.get('scenario_name')}"
-            },
-            result={
-                "environment_name": result.get("environment_name"),
-                "conversation_id": result.get("conversation_id")
-            }
-        )
-        
-        # Add governance approval flag
-        result["governance_approved"] = True
-        
-        return result
-
-
-class NyxCentralGovernance:
-    """
-    Central governance system for Nyx to control all agents (NPCs and beyond).
-    
-    This class provides centralized control over story, new game creation, NPCs, and
-    all other agentic components in the system.
-    """
-    
-    def __init__(self, user_id: int, conversation_id: int):
-        """
-        Initialize the central governance system.
+        Get Nyx agent for this context.
         
         Args:
             user_id: User ID
             conversation_id: Conversation ID
+            
+        Returns:
+            Nyx agent interface
         """
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        
-        # Initialize the unified governor
-        self.governor = NyxUnifiedGovernor(user_id, conversation_id)
-        
-        # Initialize integration components with governor access
-        self.memory_graph = JointMemoryGraph(user_id, conversation_id)
-        self.event_manager = GameEventManager(user_id, conversation_id, self.governor)
-        self.npc_integration = NyxNPCIntegrationManager(user_id, conversation_id, self.governor)
-        
-        # Components for specialized areas
-        self.story_integration = None
-        self.new_game_integration = None
-        self.memory_integration = None
-        self.lore_integration = None
-        
-        # Used to track registered agents
-        self.registered_agents = {}
-        
-        # System status and configuration
-        self.initialization_time = None
-        self.system_status = {
-            "status": "uninitialized",
-            "components": {},
-            "active_agents": []
-        }
-        
-        # Configuration
-        self.config = {
-            "auto_update_user_model": True,
-            "enable_scene_triggers": True,
-            "auto_maintenance_interval": 24*60*60,  # 24 hours in seconds
-            "logging_level": "INFO",
-            "agent_max_retries": 3
+        return {
+            "process_game_event": self.process_game_event,
+            "analyze_event": self._analyze_event,
+            "determine_impact": self._determine_event_impact,
+            "get_event_context": self._get_event_context
         }
 
-    async def initialize(self):
-        """Initialize the governance system and ensure database tables exist."""
-        await self.governor.setup_database_tables()
+    def get_npc_coordinator(self, user_id: int, conversation_id: int) -> Dict[str, Any]:
+        """
+        Get NPC coordinator for this context.
         
-        # Register core system agents
-        await self._register_core_agents()
-        
-        # Initialize specialized components
-        self.story_integration = StoryIntegration(self.user_id, self.conversation_id, self.governor)
-        self.new_game_integration = NewGameIntegration(self.user_id, self.conversation_id, self.governor)
-        self.lore_integration = LoreIntegration(self.user_id, self.conversation_id, self.governor)
-        await self.lore_integration.initialize()
-    
-        # Update system status
-        self.system_status["components"]["lore_integration"] = True      
-        
-        # Initialize memory integration
-        self.memory_integration = MemoryIntegration(self.user_id, self.conversation_id, self.governor)
-        await self.memory_integration.initialize()
-        
-        # Track initialization time
-        self.initialization_time = datetime.now().isoformat()
-        
-        # Update system status
-        self.system_status = {
-            "status": "initialized",
-            "initialization_time": self.initialization_time,
-            "components": {
-                "memory_integration": True,
-                "story_integration": True,
-                "npc_integration": True,
-                "new_game_integration": True
-            },
-            "active_agents": list(self.registered_agents.keys())
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            
+        Returns:
+            NPC coordinator interface
+        """
+        return {
+            "batch_update_npcs": self.batch_update_npcs,
+            "update_npc": self._update_single_npc,
+            "get_npc_info": self._get_npc_info,
+            "execute_directive": self._execute_npc_directive
         }
-        
-        # Create a memory about initialization
-        memory_system = await self.memory_integration.memory_bridge.get_memory_system()
-        await memory_system.add_memory(
-            memory_text="The Nyx central governance system has been initialized.",
-            memory_type="system",
-            memory_scope="game",
-            significance=6,
-            tags=["system", "initialization", "governance"],
-            metadata={
-                "initialization_time": self.initialization_time,
-                "components": list(self.system_status["components"].keys())
-            }
-        )
-        
-        logger.info(f"NyxCentralGovernance initialized for user {self.user_id}, conversation {self.conversation_id}")
 
-    async def generate_lore(self, environment_desc: str) -> Dict[str, Any]:
+    async def process_game_event(self, event_type: str, event_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Generate comprehensive lore with governance oversight.
+        Process a game event as Nyx.
         
         Args:
-            environment_desc: Description of the environment
+            event_type: Type of event
+            event_data: Event data
             
         Returns:
-            Generated lore
-        """
-        return await self.lore_integration.generate_complete_lore(environment_desc)
-    
-    async def integrate_lore_with_npcs(self, npc_ids: List[int]) -> Dict[str, Any]:
-        """
-        Integrate lore with NPCs with governance oversight.
-        
-        Args:
-            npc_ids: List of NPC IDs to integrate lore with
-            
-        Returns:
-            Integration results
-        """
-        return await self.lore_integration.integrate_with_npcs(npc_ids)
-    
-    async def enhance_context_with_lore(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Enhance context with relevant lore.
-        
-        Args:
-            context: Current context dictionary
-            
-        Returns:
-            Enhanced context with lore
-        """
-        return await self.lore_integration.enhance_context_with_lore(context)
-    
-    async def generate_scene_with_lore(self, location: str) -> Dict[str, Any]:
-        """
-        Generate a scene description enhanced with lore.
-        
-        Args:
-            location: Location name
-            
-        Returns:
-            Enhanced scene description
-        """
-        return await self.lore_integration.generate_scene_description_with_lore(location)
-    
-    async def _register_core_agents(self):
-        """Register core system agents with the governor."""
-        # Initialize and register memory agent
-        try:
-            memory_context = MemorySystemContext(self.user_id, self.conversation_id)
-            memory_agent = create_memory_agent(self.user_id, self.conversation_id)
-            await self.governor.register_agent(AgentType.MEMORY_MANAGER, memory_agent)
-            
-            # Issue general directive for memory management
-            await self.governor.issue_directive(
-                agent_type=AgentType.MEMORY_MANAGER,
-                agent_id="memory_manager",
-                directive_type=DirectiveType.ACTION,
-                directive_data={
-                    "instruction": "Maintain entity memories and ensure proper consolidation.",
-                    "scope": "global"
-                },
-                priority=DirectivePriority.MEDIUM,
-                duration_minutes=24*60  # 24 hours
-            )
-            
-            # Store in local registry
-            self.registered_agents[AgentType.MEMORY_MANAGER] = memory_agent
-            
-            logger.info("Memory Manager registered with governance system")
-        except Exception as e:
-            logger.error(f"Error registering Memory Manager: {e}")
-        
-        # Initialize and register new game agent
-        try:
-            new_game_agent = NewGameAgent()
-            await self.governor.register_agent(AgentType.UNIVERSAL_UPDATER, new_game_agent)
-            
-            # Store in local registry
-            self.registered_agents[AgentType.UNIVERSAL_UPDATER] = new_game_agent
-            
-            logger.info("New Game Agent registered with governance system")
-        except Exception as e:
-            logger.error(f"Error registering New Game Agent: {e}")
-        
-        # Register additional core agents
-        try:
-            # Import agent instances for others we might need
-            from story_agent.story_director_agent import get_story_director
-            from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-            from logic.activity_analyzer import ActivityAnalyzer
-            
-            # Story Director
-            story_director = await get_story_director(self.user_id, self.conversation_id)
-            await self.governor.register_agent(AgentType.STORY_DIRECTOR, story_director)
-            self.registered_agents[AgentType.STORY_DIRECTOR] = story_director
-            
-            # Conflict System
-            conflict_system = ConflictSystemIntegration(self.user_id, self.conversation_id)
-            await self.governor.register_agent(AgentType.CONFLICT_ANALYST, conflict_system)
-            self.registered_agents[AgentType.CONFLICT_ANALYST] = conflict_system
-            
-            # Activity Analyzer
-            activity_analyzer = ActivityAnalyzer(self.user_id, self.conversation_id)
-            await self.governor.register_agent(AgentType.ACTIVITY_ANALYZER, activity_analyzer)
-            self.registered_agents[AgentType.ACTIVITY_ANALYZER] = activity_analyzer
-            
-            logger.info("Additional core agents registered with governance")
-        except Exception as e:
-            logger.error(f"Error registering additional core agents: {e}")
-    
-    async def register_agent(self, agent_type: str, agent_instance: Any, agent_id: str = "default"):
-        """
-        Register an agent with the governance system.
-        
-        Args:
-            agent_type: The type of agent (use AgentType constants)
-            agent_instance: The agent instance
-            agent_id: Identifier for this agent instance
-        """
-        await self.governor.register_agent(agent_type, agent_instance)
-        
-        # Store in local registry
-        if agent_type not in self.registered_agents:
-            self.registered_agents[agent_type] = {}
-        
-        self.registered_agents[agent_type][agent_id] = agent_instance
-        
-        logger.info(f"Registered agent of type {agent_type} with ID {agent_id}")
-    
-    async def process_user_message(
-        self, 
-        user_message: str, 
-        context_data: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
-        """
-        Process a user message through the complete Nyx system.
-        
-        This is a unified interface that handles:
-        1. User model updates
-        2. Memory operations
-        3. Response generation
-        4. Narrative progression
-        5. Scene management
-        
-        Args:
-            user_message: User's message text
-            context_data: Optional additional context
-            
-        Returns:
-            Complete response with all necessary data
-        """
-        context_data = context_data or {}
-        
-        # Create trace for monitoring
-        with trace(
-            workflow_name="Nyx Message Processing",
-            trace_id=f"nyx-msg-{self.conversation_id}-{int(datetime.now().timestamp())}",
-            group_id=f"user-{self.user_id}"
-        ):
-            # 1. Update user model
-            if self.config["auto_update_user_model"]:
-                user_model_updates = await process_user_input_for_model(
-                    self.user_id, 
-                    self.conversation_id, 
-                    user_message,
-                    context_data=context_data
-                )
-                
-                # Get response guidance based on updated model
-                response_guidance = await get_response_guidance_for_user(
-                    self.user_id,
-                    self.conversation_id,
-                    context_data
-                )
-                
-                # Update context with user model guidance
-                context_data["user_model_guidance"] = response_guidance
-            
-            # 2. Process memory operations - remember this interaction
-            memory_result = await process_memory_operation(
-                self.user_id,
-                self.conversation_id,
-                "create",
-                f"User message: {user_message}"
-            )
-            
-            # 3. Get relevant memories for response context
-            memory_recall = await process_memory_operation(
-                self.user_id,
-                self.conversation_id,
-                "retrieve",
-                user_message,
-                context_data
-            )
-            
-            if memory_recall and "memories" in memory_recall:
-                context_data["relevant_memories"] = memory_recall["memories"]
-            
-            # 4. Generate Nyx's response with governance oversight
-            response = await process_user_input(
-                self.user_id,
-                self.conversation_id,
-                user_message,
-                context_data
-            )
-            
-            # 5. Update narrative and scene if needed
-            scene_update = {}
-            if "time_advancement" in response and response["time_advancement"]:
-                # Update scene
-                scene_update = await process_scene_input(
-                    self.user_id,
-                    self.conversation_id,
-                    user_message,
-                    context_data
-                )
-                
-                # Process universal update for time advancement
-                from logic.universal_updater_sdk import process_universal_update
-                universal_result = await process_universal_update(
-                    self.user_id, 
-                    self.conversation_id,
-                    f"Time advances after: {user_message}",
-                    context_data
-                )
-                
-                if universal_result:
-                    response["universal_update"] = universal_result
-            
-            # 6. Post-processing: Remember Nyx's response in memory
-            await process_memory_operation(
-                self.user_id,
-                self.conversation_id,
-                "create",
-                f"Nyx response: {response['message']}"
-            )
-            
-            # 7. Broadcast event to NPCs if relevant
-            if "broadcast_to_npcs" in context_data and context_data["broadcast_to_npcs"]:
-                await broadcast_event_with_governance(
-                    self.user_id,
-                    self.conversation_id,
-                    "user_message",
-                    {
-                        "user_message": user_message,
-                        "nyx_response": response["message"]
-                    }
-                )
-            
-            # 8. Possibly generate a reflection if this is a significant interaction
-            reflection = None
-            if len(user_message) > 100 or any(word in user_message.lower() for word in ["think", "reflect", "understand", "feel"]):
-                reflection = await generate_reflection(
-                    self.user_id,
-                    self.conversation_id,
-                    "Recent interactions with the user"
-                )
-            
-            # Combine everything into the final response
-            full_response = {
-                "message": response["message"],
-                "memory_id": memory_result.get("memory_id"),
-                "scene_update": scene_update,
-                "generate_image": response.get("generate_image", False),
-                "image_prompt": response.get("image_prompt"),
-                "reflection": reflection["reflection"] if reflection else None,
-                "user_model_updates": user_model_updates if self.config["auto_update_user_model"] else None,
-                "time_advancement": response.get("time_advancement", False)
-            }
-            
-            return full_response
-    
-    async def run_maintenance(self) -> Dict[str, Any]:
-        """
-        Run system-wide maintenance on all components.
-        
-        This ensures optimal performance by:
-        1. Cleaning up memory systems
-        2. Consolidating user model
-        3. Optimizing relationships
-        4. Checking for narrative opportunities
-        
-        Returns:
-            Dictionary with maintenance results
-        """
-        # Create trace for monitoring
-        with trace(
-            workflow_name="Nyx Maintenance",
-            trace_id=f"nyx-maint-{self.conversation_id}-{int(datetime.now().timestamp())}",
-            group_id=f"user-{self.user_id}"
-        ):
-            results = {
-                "memory_maintenance": None,
-                "user_model_maintenance": None,
-                "narrative_maintenance": None,
-                "npc_maintenance": None
-            }
-            
-            # 1. Memory System Maintenance
-            memory_result = await perform_memory_maintenance(self.user_id, self.conversation_id)
-            results["memory_maintenance"] = memory_result
-            
-            # 2. Run joint memory maintenance for NPCs
-            try:
-                npc_memory_result = await self.npc_integration.run_joint_memory_maintenance()
-                results["npc_maintenance"] = npc_memory_result
-            except Exception as e:
-                logger.error(f"Error in NPC memory maintenance: {e}")
-                results["npc_maintenance"] = {"error": str(e)}
-            
-            # 3. Check narrative opportunities
-            try:
-                from story_agent.story_director_agent import check_narrative_opportunities
-                narrative_result = await check_narrative_opportunities(self.user_id, self.conversation_id)
-                results["narrative_maintenance"] = narrative_result
-            except Exception as e:
-                logger.error(f"Error checking narrative opportunities: {e}")
-                results["narrative_maintenance"] = {"error": str(e)}
-            
-            # 4. Process system reflections
-            try:
-                reflection = await generate_reflection(
-                    self.user_id,
-                    self.conversation_id,
-                    "System performance and optimization"
-                )
-                results["system_reflection"] = reflection
-            except Exception as e:
-                logger.error(f"Error generating system reflection: {e}")
-                results["system_reflection"] = {"error": str(e)}
-            
-            return results
-    
-    async def get_system_status(self) -> Dict[str, Any]:
-        """
-        Get the complete status of the Nyx system.
-        
-        Returns:
-            Dictionary with comprehensive system status
+            Processing results
         """
         try:
-            # Gather narrative status through governance
-            narrative_status = await self.governor.get_narrative_status()
+            # Analyze event
+            analysis = await self._analyze_event(event_type, event_data)
             
-            # Count active directives for each agent type
-            directive_counts = {}
-            for agent_type in [AgentType.NPC, AgentType.STORY_DIRECTOR, AgentType.CONFLICT_ANALYST,
-                             AgentType.NARRATIVE_CRAFTER, AgentType.RESOURCE_OPTIMIZER,
-                             AgentType.RELATIONSHIP_MANAGER, AgentType.UNIVERSAL_UPDATER]:
-                directives = await self.governor.get_agent_directives(agent_type, "all")
-                directive_counts[agent_type] = len(directives)
+            # Determine impact
+            impact = await self._determine_event_impact(analysis)
             
-            # Get memory statistics
-            memory_stats = await self.memory_integration.memory_bridge.get_memory_stats()
+            # Get context
+            context = await self._get_event_context(event_type, event_data)
             
-            # User model information
-            from nyx.nyx_model_manager import UserModelManager
-            user_model_manager = UserModelManager(self.user_id, self.conversation_id)
-            user_model = await user_model_manager.get_user_model()
+            # Determine which NPCs should be aware
+            aware_npcs = await self._determine_aware_npcs(event_type, event_data)
             
-            # Update system status
-            current_status = {
-                "timestamp": datetime.now().isoformat(),
-                "narrative_status": narrative_status,
-                "directive_counts": directive_counts,
-                "memory_stats": memory_stats,
-                "registered_agents": list(self.registered_agents.keys()),
-                "user_model_summary": {
-                    "kink_count": len(user_model.get("kink_profile", {})),
-                    "behavior_patterns": len(user_model.get("behavior_patterns", {})),
-                    "personality_assessment": user_model.get("personality_assessment", {})
-                },
-                "components": self.system_status["components"]
-            }
-            
-            return current_status
-        except Exception as e:
-            logger.error(f"Error getting system status: {e}")
             return {
-                "status": "error",
+                "should_broadcast_to_npcs": impact['should_broadcast'],
+                "event_type": event_type,
+                "event_data": event_data,
+                "analysis": analysis,
+                "impact": impact,
+                "context": context,
+                "aware_npcs": aware_npcs,
+                "status": "success"
+            }
+        except Exception as e:
+            logger.error(f"Error processing game event: {e}")
+            return {
                 "error": str(e),
-                "timestamp": datetime.now().isoformat()
+                "status": "failed"
             }
 
-    async def perform_coordinated_action(
-        self,
-        action_type: str,
-        primary_agent_type: str,
-        action_data: Dict[str, Any],
-        supporting_agents: List[str] = None
-    ) -> Dict[str, Any]:
+    async def _analyze_event(self, event_type: str, event_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Perform a complex action that requires coordination between multiple agents.
-        
-        This leverages the governor's coordination capabilities.
+        Analyze a game event.
         
         Args:
-            action_type: Type of action to perform
-            primary_agent_type: Primary agent responsible for action
-            action_data: Action details and parameters
-            supporting_agents: Other agents to support the action
+            event_type: Type of event
+            event_data: Event data
             
         Returns:
-            Coordination results
+            Event analysis
         """
-        return await self.governor.coordinate_agents(
-            action_type,
-            primary_agent_type,
-            action_data,
-            supporting_agents
-        )
-
-
-# Top-level functions for easy access
-
-async def get_central_governance(user_id: int, conversation_id: int) -> NyxCentralGovernance:
-    """
-    Get (or create) the central governance system for a user/conversation.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        
-    Returns:
-        The central governance system
-    """
-    # Use a cache to avoid recreating the governance system unnecessarily
-    cache_key = f"governance:{user_id}:{conversation_id}"
-    
-    # Check if it's already in global dict
-    if not hasattr(get_central_governance, "cache"):
-        get_central_governance.cache = {}
-    
-    if cache_key in get_central_governance.cache:
-        return get_central_governance.cache[cache_key]
-    
-    # Create new governance system
-    governance = NyxCentralGovernance(user_id, conversation_id)
-    await governance.initialize()
-    
-    # Cache it
-    get_central_governance.cache[cache_key] = governance
-    
-    return governance
-
-async def reset_governance(user_id: int, conversation_id: int) -> Dict[str, Any]:
-    """
-    Reset the governance system for a user/conversation and register all agents.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        
-    Returns:
-        Status of the operation
-    """
-    cache_key = f"governance:{user_id}:{conversation_id}"
-    
-    # Clear from cache if exists
-    if hasattr(get_central_governance, "cache") and cache_key in get_central_governance.cache:
-        del get_central_governance.cache[cache_key]
-    
-    # Create new governance system
-    governance = NyxCentralGovernance(user_id, conversation_id)
-    await governance.initialize()
-    
-    # Cache it
-    if not hasattr(get_central_governance, "cache"):
-        get_central_governance.cache = {}
-    get_central_governance.cache[cache_key] = governance
-    
-    # Initialize registry to track registration results
-    registration_results = {}
-    
-    # Register all agents using a standardized approach
-    await register_all_agents(governance, user_id, conversation_id, registration_results)
-    
-    return {
-        "status": "success",
-        "message": f"Reset governance for user {user_id}, conversation {conversation_id}",
-        "registrations": registration_results
-    }
-
-async def register_all_agents(
-    governance: NyxCentralGovernance, 
-    user_id: int, 
-    conversation_id: int,
-    registration_results: Dict[str, bool]
-) -> None:
-    """
-    Register all agents with the governance system in a standardized way.
-    
-    Args:
-        governance: The governance instance
-        user_id: User ID
-        conversation_id: Conversation ID
-        registration_results: Dictionary to track registration results
-    """
-    # Define agent registration configurations
-    agent_configs = [
-        {
-            "name": "universal_updater",
-            "register_func": "logic.universal_updater_sdk.register_with_governance",
-            "agent_type": AgentType.UNIVERSAL_UPDATER,
-            "agent_id": "universal_updater",
-            "priority": DirectivePriority.MEDIUM,
-            "directive": {
-                "instruction": "Process narrative updates and extract game state changes",
-                "scope": "game"
-            }
-        },
-        {
-            "name": "addiction_system",
-            "register_func": "logic.addiction_system_sdk.register_with_governance",
-            "agent_type": AgentType.UNIVERSAL_UPDATER,
-            "agent_id": "addiction_system",
-            "priority": DirectivePriority.MEDIUM,
-            "directive": {
-                "instruction": "Monitor player addictions and apply appropriate effects",
-                "scope": "game"
-            }
-        },
-        {
-            "name": "aggregator",
-            "register_func": "logic.aggregator_sdk.register_with_governance",
-            "agent_type": AgentType.UNIVERSAL_UPDATER,
-            "agent_id": "aggregator",
-            "priority": DirectivePriority.MEDIUM,
-            "directive": {
-                "instruction": "Aggregate game data to provide context for other systems",
-                "scope": "game"
-            }
-        },
-        {
-            "name": "inventory_system",
-            "register_func": "logic.inventory_system_sdk.register_with_governance",
-            "agent_type": AgentType.UNIVERSAL_UPDATER,
-            "agent_id": "inventory_system",
-            "priority": DirectivePriority.MEDIUM,
-            "directive": {
-                "instruction": "Manage player inventory with proper validation and tracking",
-                "scope": "game"
-            }
-        },
-        {
-            "name": "time_cycle",
-            "register_func": "logic.time_cycle.register_with_governance",
-            "agent_type": AgentType.UNIVERSAL_UPDATER,
-            "agent_id": "time_cycle",
-            "priority": DirectivePriority.MEDIUM,
-            "directive": {
-                "instruction": "Manage time advancement and associated events",
-                "scope": "game"
-            }
-        },
-        {
-            "name": "lore_agents",
-            "register_func": "lore.lore_agents.register_with_governance",
-            "agent_type": AgentType.NARRATIVE_CRAFTER,
-            "agent_id": "lore_generator",
-            "priority": DirectivePriority.MEDIUM,
-            "directive": {
-                "instruction": "Generate and maintain lore for the game world",
-                "scope": "narrative"
-            }
-        },
-        {
-            "name": "story_director",
-            "register_func": "story_agent.story_director_agent.register_with_governance",
-            "agent_type": AgentType.STORY_DIRECTOR,
-            "agent_id": "director",
-            "priority": DirectivePriority.HIGH,
-            "directive": {
-                "instruction": "Manage narrative progression and story elements",
-                "scope": "narrative"
-            }
-        },
-        {
-            "name": "storyteller",
-            "register_func": "story_agent.storyteller_agent.register_with_governance",
-            "agent_type": "storyteller",
-            "agent_id": f"storyteller_{conversation_id}",
-            "priority": DirectivePriority.HIGH,
-            "directive": {
-                "instruction": "Process narrative input and generate immersive responses",
-                "scope": "narrative"
-            }
-        },
-        {
-            "name": "conflict_system",
-            "register_func": "logic.conflict_system.conflict_integration.register_with_governance",
-            "agent_type": AgentType.CONFLICT_ANALYST,
-            "agent_id": "conflict_manager",
-            "priority": DirectivePriority.MEDIUM,
-            "directive": {
-                "instruction": "Manage conflicts and their progression in the game world",
-                "scope": "game"
-            }
-        },
-        {
-            "name": "memory_system",
-            "register_func": "memory.memory_agent_sdk.register_with_governance",
-            "agent_type": AgentType.MEMORY_MANAGER,
-            "agent_id": "memory_manager",
-            "priority": DirectivePriority.MEDIUM,
-            "directive": {
-                "instruction": "Manage entity memories and ensure proper consolidation",
-                "scope": "global"
-            }
-        },
-        {
-            "name": "new_game_system",
-            "agent_getter": "new_game_agent.NewGameAgent",
-            "agent_type": AgentType.UNIVERSAL_UPDATER,
-            "agent_id": "new_game",
-            "priority": DirectivePriority.HIGH,
-            "directive": {
-                "instruction": "Initialize new game environments and scenarios",
-                "scope": "initialization"
-            }
-        }
-    ]
-    
-    # Register each agent
-    for config in agent_configs:
-        name = config["name"]
-        registration_results[name] = False
-        
         try:
-            # If register_func is specified, import and call it
-            if "register_func" in config:
-                module_path, func_name = config["register_func"].rsplit('.', 1)
-                module = __import__(module_path, fromlist=[func_name])
-                register_func = getattr(module, func_name)
-                await register_func(user_id, conversation_id)
-                
-            # If agent_getter is specified, get instance and register directly
-            elif "agent_getter" in config:
-                module_path, class_name = config["agent_getter"].rsplit('.', 1)
-                module = __import__(module_path, fromlist=[class_name])
-                agent_class = getattr(module, class_name)
-                agent_instance = agent_class()
-                
-                await governance.register_agent(
-                    agent_type=config["agent_type"],
-                    agent_instance=agent_instance,
-                    agent_id=config["agent_id"]
-                )
+            # Build analysis prompt
+            prompt = {
+                "event_type": event_type,
+                "event_data": event_data,
+                "task": "event_analysis"
+            }
             
-            # Issue standard directive to the agent
-            if "directive" in config:
-                await governance.issue_directive(
-                    agent_type=config["agent_type"],
-                    agent_id=config["agent_id"],
-                    directive_type=DirectiveType.ACTION,
-                    directive_data=config["directive"],
-                    priority=config["priority"],
-                    duration_minutes=24*60  # 24 hours
-                )
+            # Generate analysis
+            analysis = await generate_text_completion(prompt=prompt)
             
-            # Mark as successful
-            registration_results[name] = True
-            logger.info(f"{name.title()} registered for user {user_id}, conversation {conversation_id}")
+            return {
+                "analysis": analysis,
+                "status": "success"
+            }
+        except Exception as e:
+            logger.error(f"Error analyzing event: {e}")
+            return {
+                "error": str(e),
+                "status": "failed"
+            }
+
+    async def _determine_event_impact(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Determine the impact of an event.
+        
+        Args:
+            analysis: Event analysis
+            
+        Returns:
+            Impact assessment
+        """
+        try:
+            # Extract key elements
+            event_type = analysis.get("event_type", "")
+            event_data = analysis.get("event_data", {})
+            
+            # Calculate impact scores
+            immediate_impact = await self._calculate_immediate_impact(event_data)
+            long_term_impact = await self._calculate_long_term_impact(event_data)
+            npc_impact = await self._calculate_npc_impact(event_data)
+            
+            # Determine broadcast threshold
+            should_broadcast = (
+                immediate_impact > 0.5 or
+                long_term_impact > 0.7 or
+                npc_impact > 0.3
+            )
+            
+            return {
+                "immediate_impact": immediate_impact,
+                "long_term_impact": long_term_impact,
+                "npc_impact": npc_impact,
+                "should_broadcast": should_broadcast,
+                "status": "success"
+            }
+        except Exception as e:
+            logger.error(f"Error determining event impact: {e}")
+            return {
+                "error": str(e),
+                "status": "failed"
+            }
+
+    async def _get_event_context(self, event_type: str, event_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Get context for an event.
+        
+        Args:
+            event_type: Type of event
+            event_data: Event data
+            
+        Returns:
+            Event context
+        """
+        try:
+            # Get location context
+            location = event_data.get("location", "")
+            location_info = await self.governor.get_location_info(location)
+            
+            # Get NPC context
+            npc_ids = event_data.get("npc_ids", [])
+            npc_info = []
+            for npc_id in npc_ids:
+                npc_data = await self.npc_coordinator.get_npc_info(npc_id)
+                npc_info.append(npc_data)
+                
+            # Get memory context
+            memory_manager = await self.governor.get_memory_manager()
+            memories = await memory_manager.recall(
+                entity_type="event",
+                entity_id=event_data.get("id", 0),
+                limit=5
+            )
+            
+            return {
+                "location": location_info,
+                "npcs": npc_info,
+                "memories": memories,
+                "timestamp": datetime.now().isoformat(),
+                "status": "success"
+            }
+        except Exception as e:
+            logger.error(f"Error getting event context: {e}")
+            return {
+                "error": str(e),
+                "status": "failed"
+            }
+
+    async def _determine_aware_npcs(self, event_type: str, event_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Determine which NPCs should be aware of the event based on various criteria.
+        
+        Args:
+            event_type: Type of event
+            event_data: Event data including location, involved NPCs, and impact
+            
+        Returns:
+            List of aware NPCs with their awareness context
+        """
+        try:
+            aware_npcs = []
+            event_magnitude = event_data.get("magnitude", 0.0)
+            event_location = event_data.get("location", "")
+            involved_npcs = event_data.get("npc_ids", [])
+            event_factions = event_data.get("factions", [])
+            event_interests = event_data.get("interests", [])
+            
+            # Get all NPCs in the game world
+            all_npcs = await self.npc_coordinator.get_all_npcs()
+            
+            for npc in all_npcs:
+                awareness_context = {
+                    "npc_id": npc["id"],
+                    "awareness_level": 0.0,
+                    "awareness_reasons": []
+                }
+                
+                # Check direct involvement
+                if npc["id"] in involved_npcs:
+                    awareness_context["awareness_level"] = 1.0
+                    awareness_context["awareness_reasons"].append("direct_involvement")
+                    aware_npcs.append(awareness_context)
+                    continue
+                    
+                # Check magnitude-based awareness (major events)
+                if event_magnitude >= 0.8:  # Major event threshold
+                    awareness_context["awareness_level"] = 0.9
+                    awareness_context["awareness_reasons"].append("major_event")
+                    aware_npcs.append(awareness_context)
+                    continue
+                    
+                # Check social connections
+                npc_connections = npc.get("social_connections", [])
+                for involved_npc_id in involved_npcs:
+                    if involved_npc_id in npc_connections:
+                        awareness_context["awareness_level"] = 0.8
+                        awareness_context["awareness_reasons"].append("social_connection")
+                        aware_npcs.append(awareness_context)
+                        break
+                        
+                # Check faction affiliations
+                npc_factions = npc.get("factions", [])
+                if any(faction in npc_factions for faction in event_factions):
+                    awareness_context["awareness_level"] = 0.7
+                    awareness_context["awareness_reasons"].append("faction_affiliation")
+                    aware_npcs.append(awareness_context)
+                    continue
+                    
+                # Check interests/hobbies
+                npc_interests = npc.get("interests", [])
+                if any(interest in npc_interests for interest in event_interests):
+                    awareness_context["awareness_level"] = 0.6
+                    awareness_context["awareness_reasons"].append("personal_interest")
+                    aware_npcs.append(awareness_context)
+                    continue
+                    
+                # Check location proximity
+                if event_location and npc.get("location") == event_location:
+                    awareness_context["awareness_level"] = 0.5
+                    awareness_context["awareness_reasons"].append("location_proximity")
+                    aware_npcs.append(awareness_context)
+                    
+            # Let Nyx make final determination
+            nyx_agent = await self.get_nyx_agent()
+            awareness_analysis = await nyx_agent.analyze_npc_awareness(
+                event_type=event_type,
+                event_data=event_data,
+                potential_aware_npcs=aware_npcs
+            )
+            
+            # Filter and adjust awareness based on Nyx's analysis
+            final_aware_npcs = []
+            for npc_context in aware_npcs:
+                nyx_decision = awareness_analysis.get(str(npc_context["npc_id"]), {})
+                if nyx_decision.get("should_be_aware", False):
+                    npc_context["awareness_level"] = nyx_decision.get("adjusted_awareness", npc_context["awareness_level"])
+                    final_aware_npcs.append(npc_context)
+                    
+            return final_aware_npcs
             
         except Exception as e:
-            logger.error(f"Error registering {name}: {e}")
-            registration_results[name] = False
+            logger.error(f"Error determining aware NPCs: {e}")
+            return []
 
-async def process_story_beat_with_governance(
-    user_id: int, 
-    conversation_id: int, 
-    context_data: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Process a story beat with governance oversight.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        context_data: Context data for the story beat
+    async def _calculate_immediate_impact(self, event_data: Dict[str, Any]) -> float:
+        """
+        Calculate the immediate impact of an event based on various factors.
         
-    Returns:
-        Processed story beat
-    """
-    governance = await get_central_governance(user_id, conversation_id)
-    return await governance.story_integration.generate_story_beat(context_data)
+        Args:
+            event_data: Event data including casualties, damage, and social disruption
+            
+        Returns:
+            Immediate impact score (0.0 to 1.0)
+        """
+        try:
+            # Get base impact factors
+            casualties = event_data.get("casualties", 0)
+            damage = event_data.get("damage", 0)
+            social_disruption = event_data.get("social_disruption", 0)
+            economic_impact = event_data.get("economic_impact", 0)
+            
+            # Calculate weighted impact
+            weights = {
+                "casualties": 0.4,
+                "damage": 0.3,
+                "social_disruption": 0.2,
+                "economic_impact": 0.1
+            }
+            
+            # Normalize each factor to 0-1 range
+            normalized_factors = {
+                "casualties": min(casualties / 100, 1.0),  # Assuming 100 casualties is max
+                "damage": min(damage / 1000, 1.0),  # Assuming 1000 damage units is max
+                "social_disruption": min(social_disruption / 10, 1.0),  # 0-10 scale
+                "economic_impact": min(economic_impact / 10000, 1.0)  # Assuming 10000 economic units is max
+            }
+            
+            # Calculate weighted sum
+            impact = sum(
+                normalized_factors[factor] * weight
+                for factor, weight in weights.items()
+            )
+            
+            # Let Nyx adjust the impact
+            nyx_agent = await self.get_nyx_agent()
+            nyx_adjustment = await nyx_agent.adjust_impact_calculation(
+                impact_type="immediate",
+                base_impact=impact,
+                event_data=event_data
+            )
+            
+            return min(max(impact * nyx_adjustment, 0.0), 1.0)
+            
+        except Exception as e:
+            logger.error(f"Error calculating immediate impact: {e}")
+            return 0.0
 
-async def create_new_game_with_governance(
-    user_id: int,
-    conversation_data: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Create a new game with governance oversight.
-    
-    Args:
-        user_id: User ID
-        conversation_data: Initial conversation data
+    async def _calculate_long_term_impact(self, event_data: Dict[str, Any]) -> float:
+        """
+        Calculate the long-term impact of an event based on various factors.
         
-    Returns:
-        New game creation results
-    """
-    # For new game, conversation_id might not exist yet
-    conversation_id = conversation_data.get("conversation_id", 0)
-    
-    governance = await get_central_governance(user_id, conversation_id)
-    return await governance.new_game_integration.create_new_game(conversation_data)
+        Args:
+            event_data: Event data including political, environmental, and social changes
+            
+        Returns:
+            Long-term impact score (0.0 to 1.0)
+        """
+        try:
+            # Get base impact factors
+            political_change = event_data.get("political_change", 0)
+            environmental_effect = event_data.get("environmental_effect", 0)
+            social_change = event_data.get("social_change", 0)
+            economic_change = event_data.get("economic_change", 0)
+            
+            # Calculate weighted impact
+            weights = {
+                "political_change": 0.3,
+                "environmental_effect": 0.2,
+                "social_change": 0.3,
+                "economic_change": 0.2
+            }
+            
+            # Normalize each factor to 0-1 range
+            normalized_factors = {
+                "political_change": min(political_change / 10, 1.0),  # 0-10 scale
+                "environmental_effect": min(environmental_effect / 10, 1.0),  # 0-10 scale
+                "social_change": min(social_change / 10, 1.0),  # 0-10 scale
+                "economic_change": min(economic_change / 10000, 1.0)  # Assuming 10000 economic units is max
+            }
+            
+            # Calculate weighted sum
+            impact = sum(
+                normalized_factors[factor] * weight
+                for factor, weight in weights.items()
+            )
+            
+            # Let Nyx adjust the impact
+            nyx_agent = await self.get_nyx_agent()
+            nyx_adjustment = await nyx_agent.adjust_impact_calculation(
+                impact_type="long_term",
+                base_impact=impact,
+                event_data=event_data
+            )
+            
+            return min(max(impact * nyx_adjustment, 0.0), 1.0)
+            
+        except Exception as e:
+            logger.error(f"Error calculating long-term impact: {e}")
+            return 0.0
 
-async def orchestrate_scene_with_governance(
-    user_id: int,
-    conversation_id: int,
-    location: str,
-    player_action: str = None,
-    involved_npcs: List[int] = None
-) -> Dict[str, Any]:
-    """
-    Orchestrate a scene with governance oversight.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        location: Scene location
-        player_action: Optional player action
-        involved_npcs: Optional list of involved NPC IDs
+    async def _calculate_npc_impact(self, event_data: Dict[str, Any]) -> float:
+        """
+        Calculate the NPC-specific impact of an event based on various factors.
         
-    Returns:
-        Orchestrated scene
-    """
-    governance = await get_central_governance(user_id, conversation_id)
-    return await governance.npc_integration.orchestrate_scene(
-        location, player_action, involved_npcs
-    )
+        Args:
+            event_data: Event data including NPC relationships, goals, and resources
+            
+        Returns:
+            NPC impact score (0.0 to 1.0)
+        """
+        try:
+            # Get base impact factors
+            relationship_impact = event_data.get("relationship_impact", 0)
+            goal_impact = event_data.get("goal_impact", 0)
+            resource_impact = event_data.get("resource_impact", 0)
+            influence_impact = event_data.get("influence_impact", 0)
+            
+            # Calculate weighted impact
+            weights = {
+                "relationship_impact": 0.3,
+                "goal_impact": 0.3,
+                "resource_impact": 0.2,
+                "influence_impact": 0.2
+            }
+            
+            # Normalize each factor to 0-1 range
+            normalized_factors = {
+                "relationship_impact": min(relationship_impact / 10, 1.0),  # 0-10 scale
+                "goal_impact": min(goal_impact / 10, 1.0),  # 0-10 scale
+                "resource_impact": min(resource_impact / 1000, 1.0),  # Assuming 1000 resource units is max
+                "influence_impact": min(influence_impact / 10, 1.0)  # 0-10 scale
+            }
+            
+            # Calculate weighted sum
+            impact = sum(
+                normalized_factors[factor] * weight
+                for factor, weight in weights.items()
+            )
+            
+            # Let Nyx adjust the impact
+            nyx_agent = await self.get_nyx_agent()
+            nyx_adjustment = await nyx_agent.adjust_impact_calculation(
+                impact_type="npc",
+                base_impact=impact,
+                event_data=event_data
+            )
+            
+            return min(max(impact * nyx_adjustment, 0.0), 1.0)
+            
+        except Exception as e:
+            logger.error(f"Error calculating NPC impact: {e}")
+            return 0.0
 
-async def broadcast_event_with_governance(
-    user_id: int,
-    conversation_id: int,
-    event_type: str,
-    event_data: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Broadcast an event with governance oversight.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        event_type: Type of event
-        event_data: Event data
+    async def _update_single_npc(self, npc_id: int, npc_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update a single NPC's state and information.
         
-    Returns:
-        Broadcast results
-    """
-    governance = await get_central_governance(user_id, conversation_id)
-    return await governance.event_manager.broadcast_event(event_type, event_data)
+        Args:
+            npc_id: NPC ID
+            npc_data: Updated NPC data including stats, relationships, location, etc.
+            
+        Returns:
+            Updated NPC data with validation results
+        """
+        try:
+            # Get current NPC data
+            current_data = await self._get_npc_info(npc_id)
+            if not current_data:
+                logger.error(f"NPC {npc_id} not found")
+                return {"error": "NPC not found", "status": "failed"}
+            
+            # Validate update data
+            validation_result = await self._validate_npc_update(npc_data)
+            if not validation_result["valid"]:
+                logger.warning(f"Invalid NPC update data: {validation_result['errors']}")
+                return {
+                    "error": "Invalid update data",
+                    "validation_errors": validation_result["errors"],
+                    "status": "failed"
+                }
+            
+            # Update NPC in database
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            try:
+                # Update basic info
+                cursor.execute("""
+                    UPDATE NPCs 
+                    SET name = %s, location = %s, status = %s,
+                        last_updated = NOW()
+                    WHERE npc_id = %s
+                """, (
+                    npc_data.get("name", current_data["name"]),
+                    npc_data.get("location", current_data["location"]),
+                    npc_data.get("status", current_data["status"]),
+                    npc_id
+                ))
+                
+                # Update stats
+                if "stats" in npc_data:
+                    cursor.execute("""
+                        UPDATE NPCStats 
+                        SET health = %s, energy = %s, influence = %s
+                        WHERE npc_id = %s
+                    """, (
+                        npc_data["stats"].get("health", current_data["stats"]["health"]),
+                        npc_data["stats"].get("energy", current_data["stats"]["energy"]),
+                        npc_data["stats"].get("influence", current_data["stats"]["influence"]),
+                        npc_id
+                    ))
+                
+                # Update relationships
+                if "relationships" in npc_data:
+                    # First remove old relationships
+                    cursor.execute("DELETE FROM NPCRelationships WHERE npc_id = %s", (npc_id,))
+                    
+                    # Insert new relationships
+                    for rel in npc_data["relationships"]:
+                        cursor.execute("""
+                            INSERT INTO NPCRelationships 
+                            (npc_id, related_npc_id, relationship_type, strength)
+                            VALUES (%s, %s, %s, %s)
+                        """, (
+                            npc_id,
+                            rel["related_npc_id"],
+                            rel["type"],
+                            rel["strength"]
+                        ))
+                
+                # Update schedule
+                if "schedule" in npc_data:
+                    cursor.execute("""
+                        UPDATE NPCSchedules 
+                        SET schedule_data = %s
+                        WHERE npc_id = %s
+                    """, (
+                        json.dumps(npc_data["schedule"]),
+                        npc_id
+                    ))
+                
+                conn.commit()
+                
+                # Get updated NPC data
+                updated_data = await self._get_npc_info(npc_id)
+                
+                # Let Nyx analyze the update
+                nyx_agent = await self.get_nyx_agent()
+                nyx_analysis = await nyx_agent.analyze_npc_update(
+                    npc_id=npc_id,
+                    old_data=current_data,
+                    new_data=updated_data
+                )
+                
+                return {
+                    "npc_data": updated_data,
+                    "nyx_analysis": nyx_analysis,
+                    "status": "success"
+                }
+                
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Database error updating NPC {npc_id}: {e}")
+                return {
+                    "error": f"Database error: {e}",
+                    "status": "failed"
+                }
+            finally:
+                cursor.close()
+                conn.close()
+            
+        except Exception as e:
+            logger.error(f"Error updating NPC {npc_id}: {e}")
+            return {
+                "error": str(e),
+                "status": "failed"
+            }
+
+    async def _get_npc_info(self, npc_id: int) -> Dict[str, Any]:
+        """
+        Get comprehensive information about a specific NPC.
+        
+        Args:
+            npc_id: NPC ID
+            
+        Returns:
+            NPC information including stats, relationships, schedule, etc.
+        """
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Get basic NPC info
+            cursor.execute("""
+                SELECT name, location, status, created_at, last_updated
+                FROM NPCs
+                WHERE npc_id = %s
+            """, (npc_id,))
+            
+            npc_row = cursor.fetchone()
+            if not npc_row:
+                return None
+            
+            # Get NPC stats
+            cursor.execute("""
+                SELECT health, energy, influence
+                FROM NPCStats
+                WHERE npc_id = %s
+            """, (npc_id,))
+            
+            stats_row = cursor.fetchone()
+            
+            # Get relationships
+            cursor.execute("""
+                SELECT related_npc_id, relationship_type, strength
+                FROM NPCRelationships
+                WHERE npc_id = %s
+            """, (npc_id,))
+            
+            relationships = []
+            for rel_row in cursor.fetchall():
+                relationships.append({
+                    "related_npc_id": rel_row[0],
+                    "type": rel_row[1],
+                    "strength": rel_row[2]
+                })
+            
+            # Get schedule
+            cursor.execute("""
+                SELECT schedule_data
+                FROM NPCSchedules
+                WHERE npc_id = %s
+            """, (npc_id,))
+            
+            schedule_row = cursor.fetchone()
+            
+            # Get recent memories
+            memory_manager = await self.governor.get_memory_manager()
+            memories = await memory_manager.recall(
+                entity_type="npc",
+                entity_id=npc_id,
+                limit=5
+            )
+            
+            return {
+                "id": npc_id,
+                "name": npc_row[0],
+                "location": npc_row[1],
+                "status": npc_row[2],
+                "created_at": npc_row[3].isoformat() if npc_row[3] else None,
+                "last_updated": npc_row[4].isoformat() if npc_row[4] else None,
+                "stats": {
+                    "health": stats_row[0] if stats_row else 100,
+                    "energy": stats_row[1] if stats_row else 100,
+                    "influence": stats_row[2] if stats_row else 0
+                },
+                "relationships": relationships,
+                "schedule": json.loads(schedule_row[0]) if schedule_row else {},
+                "recent_memories": memories
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting NPC info for {npc_id}: {e}")
+            return None
+        finally:
+            cursor.close()
+            conn.close()
+
+    async def _execute_npc_directive(self, npc_id: int, directive: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute a directive for a specific NPC.
+        
+        Args:
+            npc_id: NPC ID
+            directive: Directive to execute including type, parameters, and priority
+            
+        Returns:
+            Execution results including success status and any effects
+        """
+        try:
+            # Get current NPC state
+            npc_data = await self._get_npc_info(npc_id)
+            if not npc_data:
+                return {"error": "NPC not found", "status": "failed"}
+            
+            # Validate directive
+            validation_result = await self._validate_directive(directive)
+            if not validation_result["valid"]:
+                return {
+                    "error": "Invalid directive",
+                    "validation_errors": validation_result["errors"],
+                    "status": "failed"
+                }
+            
+            # Check if NPC can execute directive
+            can_execute = await self._check_directive_executability(npc_id, directive)
+            if not can_execute["can_execute"]:
+                return {
+                    "error": "Cannot execute directive",
+                    "reason": can_execute["reason"],
+                    "status": "failed"
+                }
+            
+            # Execute directive based on type
+            directive_type = directive.get("type", "")
+            execution_result = await self._execute_directive_by_type(
+                npc_id=npc_id,
+                directive_type=directive_type,
+                directive=directive,
+                npc_data=npc_data
+            )
+            
+            # Let Nyx analyze the execution
+            nyx_agent = await self.get_nyx_agent()
+            nyx_analysis = await nyx_agent.analyze_directive_execution(
+                npc_id=npc_id,
+                directive=directive,
+                result=execution_result
+            )
+            
+            return {
+                "execution_result": execution_result,
+                "nyx_analysis": nyx_analysis,
+                "status": "success"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error executing directive for NPC {npc_id}: {e}")
+            return {
+                "error": str(e),
+                "status": "failed"
+            }
+
+    async def batch_update_npcs(self, npcs_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Batch update multiple NPCs efficiently.
+        
+        Args:
+            npcs_data: List of NPC data dictionaries to update
+            
+        Returns:
+            List of update results for each NPC
+        """
+        try:
+            results = []
+            
+            # Group NPCs by update type for efficiency
+            basic_updates = []
+            stats_updates = []
+            relationship_updates = []
+            schedule_updates = []
+            
+            for npc_data in npcs_data:
+                npc_id = npc_data.get("id")
+                if not npc_id:
+                    results.append({
+                        "error": "Missing NPC ID",
+                        "status": "failed"
+                    })
+                    continue
+                
+                # Validate update data
+                validation_result = await self._validate_npc_update(npc_data)
+                if not validation_result["valid"]:
+                    results.append({
+                        "error": "Invalid update data",
+                        "validation_errors": validation_result["errors"],
+                        "status": "failed"
+                    })
+                    continue
+                
+                # Group updates
+                if "name" in npc_data or "location" in npc_data or "status" in npc_data:
+                    basic_updates.append(npc_data)
+                if "stats" in npc_data:
+                    stats_updates.append(npc_data)
+                if "relationships" in npc_data:
+                    relationship_updates.append(npc_data)
+                if "schedule" in npc_data:
+                    schedule_updates.append(npc_data)
+            
+            # Process updates in batches
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            try:
+                # Process basic updates
+                if basic_updates:
+                    for npc_data in basic_updates:
+                        cursor.execute("""
+                            UPDATE NPCs 
+                            SET name = %s, location = %s, status = %s,
+                                last_updated = NOW()
+                            WHERE npc_id = %s
+                        """, (
+                            npc_data.get("name"),
+                            npc_data.get("location"),
+                            npc_data.get("status"),
+                            npc_data["id"]
+                        ))
+                
+                # Process stats updates
+                if stats_updates:
+                    for npc_data in stats_updates:
+                        cursor.execute("""
+                            UPDATE NPCStats 
+                            SET health = %s, energy = %s, influence = %s
+                            WHERE npc_id = %s
+                        """, (
+                            npc_data["stats"].get("health"),
+                            npc_data["stats"].get("energy"),
+                            npc_data["stats"].get("influence"),
+                            npc_data["id"]
+                        ))
+                
+                # Process relationship updates
+                if relationship_updates:
+                    for npc_data in relationship_updates:
+                        # Remove old relationships
+                        cursor.execute("DELETE FROM NPCRelationships WHERE npc_id = %s", (npc_data["id"],))
+                        
+                        # Insert new relationships
+                        for rel in npc_data["relationships"]:
+                            cursor.execute("""
+                                INSERT INTO NPCRelationships 
+                                (npc_id, related_npc_id, relationship_type, strength)
+                                VALUES (%s, %s, %s, %s)
+                            """, (
+                                npc_data["id"],
+                                rel["related_npc_id"],
+                                rel["type"],
+                                rel["strength"]
+                            ))
+                
+                # Process schedule updates
+                if schedule_updates:
+                    for npc_data in schedule_updates:
+                        cursor.execute("""
+                            UPDATE NPCSchedules 
+                            SET schedule_data = %s
+                            WHERE npc_id = %s
+                        """, (
+                            json.dumps(npc_data["schedule"]),
+                            npc_data["id"]
+                        ))
+                
+                conn.commit()
+                
+                # Get updated data for all NPCs
+                for npc_data in npcs_data:
+                    updated_data = await self._get_npc_info(npc_data["id"])
+                    if updated_data:
+                        results.append({
+                            "npc_id": npc_data["id"],
+                            "npc_data": updated_data,
+                            "status": "success"
+                        })
+                    else:
+                        results.append({
+                            "npc_id": npc_data["id"],
+                            "error": "Failed to retrieve updated data",
+                            "status": "failed"
+                        })
+                
+                # Let Nyx analyze the batch update
+                nyx_agent = await self.get_nyx_agent()
+                nyx_analysis = await nyx_agent.analyze_batch_update(
+                    npcs_data=npcs_data,
+                    results=results
+                )
+                
+                return results
+                
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Database error in batch update: {e}")
+                return [{
+                    "error": f"Database error: {e}",
+                    "status": "failed"
+                } for _ in npcs_data]
+            finally:
+                cursor.close()
+                conn.close()
+            
+        except Exception as e:
+            logger.error(f"Error in batch update: {e}")
+            return [{
+                "error": str(e),
+                "status": "failed"
+            } for _ in npcs_data]
 
 async def process_universal_update_with_governance(
     user_id: int,
@@ -2312,3 +1617,283 @@ class LoreIntegration:
                     significance=6,
                     tags=["lore", "location", name]
                 )
+
+class NyxIntegration:
+    """Integrates all Nyx components into a unified system while preserving agent autonomy"""
+    
+    def __init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        
+        # Initialize all components
+        self.agent = NyxAgent(user_id, conversation_id)
+        self.planner = NyxPlanner(user_id, conversation_id)
+        self.governance = NyxGovernance(user_id, conversation_id)
+        self.task_integration = TaskIntegration(user_id, conversation_id)
+        self.memory_integration = MemoryIntegration(user_id, conversation_id)
+        self.scene_manager = SceneManager(user_id, conversation_id)
+        self.user_model = UserModel(user_id, conversation_id)
+        
+        # Add cross-system communication channels
+        self.event_bus = EventBus()
+        self.state_manager = StateManager()
+        self.performance_monitor = PerformanceMonitor()
+        
+        # Add executive decision tracking
+        self.decision_tracker = {
+            "memory": {"decisions": [], "overrides": []},
+            "npc": {"decisions": [], "overrides": []},
+            "lore": {"decisions": [], "overrides": []},
+            "scene": {"decisions": [], "overrides": []}
+        }
+        
+        self.initialized = False
+
+    async def initialize(self):
+        """Initialize all components and establish communication channels"""
+        if self.initialized:
+            return
+            
+        # Initialize each component
+        await self.agent.initialize()
+        await self.planner.initialize()
+        await self.governance.initialize()
+        await self.task_integration.initialize()
+        await self.memory_integration.initialize()
+        await self.scene_manager.initialize()
+        await self.user_model.initialize()
+        
+        # Set up event listeners
+        self._setup_event_listeners()
+        
+        # Initialize state tracking
+        await self.state_manager.initialize()
+        
+        # Start performance monitoring
+        self.performance_monitor.start()
+        
+        self.initialized = True
+        logger.info(f"Nyx integration initialized for user {self.user_id}, conversation {self.conversation_id}")
+
+    def _setup_event_listeners(self):
+        """Set up event listeners for cross-system communication"""
+        # Memory system events
+        self.event_bus.subscribe("memory.decision_made", self._handle_memory_decision)
+        self.event_bus.subscribe("memory.pattern_identified", self._handle_memory_pattern)
+        
+        # NPC system events
+        self.event_bus.subscribe("npc.decision_made", self._handle_npc_decision)
+        self.event_bus.subscribe("npc.behavior_changed", self._handle_npc_behavior_change)
+        
+        # Lore system events
+        self.event_bus.subscribe("lore.generation_decision", self._handle_lore_decision)
+        self.event_bus.subscribe("lore.pattern_emerged", self._handle_lore_pattern)
+        
+        # Scene system events
+        self.event_bus.subscribe("scene.state_changed", self._handle_scene_change)
+        self.event_bus.subscribe("scene.decision_made", self._handle_scene_decision)
+
+    async def _handle_memory_decision(self, decision: Dict[str, Any]):
+        """Handle autonomous memory system decisions"""
+        # Record the decision
+        self.decision_tracker["memory"]["decisions"].append(decision)
+        
+        # Check if executive override is needed
+        if await self._needs_executive_override(decision, "memory"):
+            override = await self._generate_executive_override(decision, "memory")
+            self.decision_tracker["memory"]["overrides"].append(override)
+            await self.event_bus.publish("memory.executive_override", override)
+        
+        # Update state
+        await self.state_manager.update_memory_state(decision)
+        
+        # Monitor performance impact
+        self.performance_monitor.track_decision_impact("memory", decision)
+
+    async def _handle_npc_decision(self, decision: Dict[str, Any]):
+        """Handle autonomous NPC system decisions"""
+        self.decision_tracker["npc"]["decisions"].append(decision)
+        
+        if await self._needs_executive_override(decision, "npc"):
+            override = await self._generate_executive_override(decision, "npc")
+            self.decision_tracker["npc"]["overrides"].append(override)
+            await self.event_bus.publish("npc.executive_override", override)
+        
+        await self.state_manager.update_npc_state(decision)
+        self.performance_monitor.track_decision_impact("npc", decision)
+
+    async def _handle_lore_decision(self, decision: Dict[str, Any]):
+        """Handle autonomous lore system decisions"""
+        self.decision_tracker["lore"]["decisions"].append(decision)
+        
+        if await self._needs_executive_override(decision, "lore"):
+            override = await self._generate_executive_override(decision, "lore")
+            self.decision_tracker["lore"]["overrides"].append(override)
+            await self.event_bus.publish("lore.executive_override", override)
+        
+        await self.state_manager.update_lore_state(decision)
+        self.performance_monitor.track_decision_impact("lore", decision)
+
+    async def _needs_executive_override(self, decision: Dict[str, Any], system: str) -> bool:
+        """Determine if a decision needs executive override"""
+        # Check for narrative consistency
+        narrative_impact = await self._evaluate_narrative_impact(decision, system)
+        if narrative_impact > 0.8:  # High impact threshold
+            return True
+            
+        # Check for cross-system conflicts
+        if await self._detect_cross_system_conflicts(decision, system):
+            return True
+            
+        # Check for user model alignment
+        user_alignment = await self._check_user_model_alignment(decision)
+        if user_alignment < 0.6:  # Low alignment threshold
+            return True
+            
+        # Check for performance impact
+        if self.performance_monitor.would_impact_performance(decision, system):
+            return True
+            
+        return False
+
+    async def _generate_executive_override(self, decision: Dict[str, Any], system: str) -> Dict[str, Any]:
+        """Generate an executive override for a decision"""
+        # Get current state
+        current_state = await self.state_manager.get_current_state()
+        
+        # Generate alternative decisions
+        alternatives = await self._generate_alternatives(decision, system)
+        
+        # Score alternatives
+        scored_alternatives = await self._score_alternatives(alternatives, current_state)
+        
+        # Select best alternative
+        best_alternative = max(scored_alternatives, key=lambda x: x["score"])
+        
+        return {
+            "original_decision": decision,
+            "override_decision": best_alternative["decision"],
+            "reasoning": best_alternative["reasoning"],
+            "score": best_alternative["score"],
+            "timestamp": datetime.now().isoformat()
+        }
+
+    async def _evaluate_narrative_impact(self, decision: Dict[str, Any], system: str) -> float:
+        """Evaluate the narrative impact of a decision"""
+        current_state = await self.state_manager.get_current_state()
+        
+        factors = {
+            "plot_coherence": self._calculate_plot_coherence(decision, current_state),
+            "character_consistency": self._check_character_consistency(decision, current_state),
+            "theme_alignment": self._evaluate_theme_alignment(decision, current_state),
+            "pacing_impact": self._calculate_pacing_impact(decision, current_state)
+        }
+        
+        weights = {
+            "plot_coherence": 0.4,
+            "character_consistency": 0.3,
+            "theme_alignment": 0.2,
+            "pacing_impact": 0.1
+        }
+        
+        return sum(score * weights[factor] for factor, score in factors.items())
+
+    async def _detect_cross_system_conflicts(self, decision: Dict[str, Any], system: str) -> bool:
+        """Detect conflicts between system decisions"""
+        other_systems = [s for s in self.decision_tracker.keys() if s != system]
+        
+        for other_system in other_systems:
+            recent_decisions = self.decision_tracker[other_system]["decisions"][-5:]
+            for other_decision in recent_decisions:
+                if self._decisions_conflict(decision, other_decision):
+                    return True
+        
+        return False
+
+    def _decisions_conflict(self, decision1: Dict[str, Any], decision2: Dict[str, Any]) -> bool:
+        """Check if two decisions conflict"""
+        # Check for direct conflicts
+        if decision1.get("target") == decision2.get("target"):
+            if decision1.get("action_type") != decision2.get("action_type"):
+                return True
+                
+        # Check for resource conflicts
+        if self._resources_conflict(decision1.get("resources"), decision2.get("resources")):
+            return True
+            
+        # Check for timing conflicts
+        if self._timing_conflicts(decision1.get("timing"), decision2.get("timing")):
+            return True
+            
+        return False
+
+    async def _check_user_model_alignment(self, decision: Dict[str, Any]) -> float:
+        """Check how well a decision aligns with the user model"""
+        user_model = await self.user_model.get_user_info()
+        
+        alignment_scores = {
+            "preference_match": self._calculate_preference_match(decision, user_model),
+            "engagement_impact": self._predict_engagement_impact(decision, user_model),
+            "boundary_respect": self._check_boundary_respect(decision, user_model),
+            "style_match": self._calculate_style_match(decision, user_model)
+        }
+        
+        weights = {
+            "preference_match": 0.4,
+            "engagement_impact": 0.3,
+            "boundary_respect": 0.2,
+            "style_match": 0.1
+        }
+        
+        return sum(score * weights[factor] for factor, score in alignment_scores.items())
+
+    async def reconcile_system_states(self):
+        """Reconcile states across all systems"""
+        # Get current states
+        memory_state = await self.memory_integration.get_state()
+        npc_state = await self.scene_manager.get_npc_states()
+        lore_state = await self.get_lore_state()
+        scene_state = await self.scene_manager.get_scene_info()
+        
+        # Detect inconsistencies
+        inconsistencies = self._detect_state_inconsistencies(
+            memory_state, npc_state, lore_state, scene_state
+        )
+        
+        # Generate reconciliation plan
+        if inconsistencies:
+            plan = await self._generate_reconciliation_plan(inconsistencies)
+            
+            # Execute reconciliation
+            await self._execute_reconciliation(plan)
+            
+            # Verify reconciliation
+            await self._verify_reconciliation()
+
+    def get_performance_metrics(self) -> Dict[str, Any]:
+        """Get performance metrics for all systems"""
+        return {
+            "decision_metrics": self.performance_monitor.get_decision_metrics(),
+            "state_metrics": self.state_manager.get_metrics(),
+            "override_rates": self._calculate_override_rates(),
+            "system_health": self._get_system_health_metrics()
+        }
+
+    def _calculate_override_rates(self) -> Dict[str, float]:
+        """Calculate override rates for each system"""
+        override_rates = {}
+        for system, data in self.decision_tracker.items():
+            total_decisions = len(data["decisions"])
+            total_overrides = len(data["overrides"])
+            rate = total_overrides / total_decisions if total_decisions > 0 else 0
+            override_rates[system] = rate
+        return override_rates
+
+    def _get_system_health_metrics(self) -> Dict[str, Any]:
+        """Get health metrics for all systems"""
+        return {
+            "memory": self.memory_integration.get_health_metrics(),
+            "npc": self.scene_manager.get_npc_health_metrics(),
+            "lore": self.get_lore_health_metrics(),
+            "scene": self.scene_manager.get_health_metrics()
+        }

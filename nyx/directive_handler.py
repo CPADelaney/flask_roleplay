@@ -148,3 +148,11 @@ class DirectiveHandler:
         # Start the background task
         task = asyncio.create_task(background_task())
         return task
+
+    def _should_check_directives(self) -> bool:
+        """Determine if enough time has passed to check directives again"""
+        if not self.last_check:
+            return True
+            
+        time_since_check = (datetime.now() - self.last_check).total_seconds()
+        return time_since_check >= self.check_interval

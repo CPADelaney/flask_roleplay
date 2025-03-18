@@ -504,28 +504,6 @@ async def track_conversation_response(
     return f"Tracked conversation response for user {user_id}"
 
 @function_tool
-async def calculate_suggested_intensity(ctx, user_model: Dict[str, Any]) -> str:
-    """Calculate suggested intensity level based on user model."""
-    # Start with base preference from personality assessment
-    base_intensity = user_model.get("personality_assessment", {}).get("intensity_preference", 50) / 100.0
-    
-    # Adjust based on behavior patterns
-    behavior = user_model.get("behavior_patterns", {})
-    
-    # If user has shown positive response to intensity, increase
-    aggression = behavior.get("aggression", {}).get("occurrences", 0)
-    submission = behavior.get("submission", {}).get("occurrences", 0)
-    
-    # More aggressive users might want slightly higher intensity
-    if aggression > submission:
-        base_intensity += 0.1
-    
-    # Cap between 0.2 and 0.9
-    intensity = max(0.2, min(0.9, base_intensity))
-    
-    return json.dumps({"suggested_intensity": intensity})
-
-@function_tool
 async def analyze_user_revelations(
     ctx,
     user_message: str,
@@ -676,3 +654,44 @@ async def initialize_user_model(user_id: int) -> Dict[str, Any]:
     user_model = await user_model_context.user_model_manager.get_user_model()
     
     return user_model
+
+def _process_user_interaction(self, interaction: Dict[str, Any]):
+    """Process a user interaction for model updates"""
+    try:
+        # Extract features
+        features = self._extract_interaction_features(interaction)
+        
+        # Update behavioral model
+        self._update_behavioral_model(features)
+        
+        # Update preference model
+        self._update_preference_model(features)
+        
+        # Update emotional model
+        self._update_emotional_model(features)
+        
+        # Save updates
+        self._save_model_updates()
+        
+    except Exception as e:
+        logger.error(f"Failed to process user interaction: {e}")
+        raise
+
+def _process_model_query(self, query: Dict[str, Any]) -> Dict[str, Any]:
+    """Process a query against the user model"""
+    try:
+        # Parse query
+        query_type = query.get("type", "general")
+        query_params = query.get("params", {})
+        
+        # Get relevant model components
+        components = self._get_relevant_components(query_type)
+        
+        # Generate response
+        response = self._generate_model_response(components, query_params)
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Failed to process model query: {e}")
+        raise

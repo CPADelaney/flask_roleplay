@@ -1467,3 +1467,84 @@ async def perform_memory_maintenance(ctx) -> str:
         "consolidation_performed": True,
         "memory_stats": [dict(row) for row in stats]
     })
+
+def _process_memory_chunk(self, chunk: Dict[str, Any]) -> Dict[str, Any]:
+    """Process a memory chunk for integration"""
+    processed = {
+        "content": chunk.get("content", ""),
+        "type": chunk.get("type", "general"),
+        "timestamp": chunk.get("timestamp", datetime.now()),
+        "metadata": {},
+        "connections": [],
+        "relevance": 0.0
+    }
+    
+    # Extract metadata
+    processed["metadata"] = self._extract_metadata(chunk)
+    
+    # Find connections
+    processed["connections"] = self._find_connections(chunk)
+    
+    # Calculate relevance
+    processed["relevance"] = self._calculate_relevance(chunk)
+    
+    return processed
+
+def _integrate_memory_chunk(self, chunk: Dict[str, Any]):
+    """Integrate a processed memory chunk into the system"""
+    try:
+        # Store the memory
+        memory_id = self._store_memory(chunk)
+        
+        # Update connections
+        self._update_connections(memory_id, chunk["connections"])
+        
+        # Update indices
+        self._update_indices(memory_id, chunk)
+        
+        # Trigger consolidation if needed
+        if self._should_consolidate():
+            self._consolidate_memories()
+            
+    except Exception as e:
+        logger.error(f"Failed to integrate memory chunk: {e}")
+        raise
+
+def _consolidate_memories(self):
+    """Consolidate and optimize memory storage"""
+    try:
+        # Get memories for consolidation
+        memories = self._get_consolidation_candidates()
+        
+        # Group related memories
+        groups = self._group_related_memories(memories)
+        
+        # Merge and optimize groups
+        for group in groups:
+            self._merge_memory_group(group)
+            
+        # Update indices
+        self._update_consolidated_indices()
+        
+    except Exception as e:
+        logger.error(f"Memory consolidation failed: {e}")
+        raise
+
+def _process_query(self, query: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Process a memory query"""
+    try:
+        # Parse query parameters
+        params = self._parse_query_params(query)
+        
+        # Find matching memories
+        matches = self._find_matching_memories(params)
+        
+        # Rank results
+        ranked_results = self._rank_results(matches, params)
+        
+        # Format response
+        return self._format_query_response(ranked_results)
+        
+    except Exception as e:
+        logger.error(f"Query processing failed: {e}")
+        raise
