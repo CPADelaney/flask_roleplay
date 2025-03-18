@@ -51,7 +51,7 @@ from context.unified_cache import context_cache
 # Import existing components
 from logic.aggregator_sdk import get_aggregated_roleplay_context, format_context_for_compatibility
 from routes.story_routes import build_aggregator_text
-from logic.universal_updater import apply_universal_updates_async
+from logic.universal_updater_agent import apply_universal_updates_async
 from logic.gpt_image_decision import should_generate_image_for_response
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from logic.time_cycle import get_current_time, should_advance_time, nightly_maintenance
