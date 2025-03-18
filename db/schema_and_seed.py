@@ -1387,10 +1387,10 @@ def create_all_tables():
             IF NOT EXISTS (
                 SELECT 1 
                 FROM information_schema.columns 
-                WHERE table_name = 'Memory' 
+                WHERE table_name = 'unified_memories' 
                 AND column_name = 'relevance_score'
             ) THEN
-                ALTER TABLE Memory ADD COLUMN relevance_score FLOAT DEFAULT 0.0;
+                ALTER TABLE unified_memories ADD COLUMN relevance_score FLOAT DEFAULT 0.0;
             END IF;
         END $$;
     ''')
@@ -1400,10 +1400,10 @@ def create_all_tables():
             IF NOT EXISTS (
                 SELECT 1 
                 FROM information_schema.columns 
-                WHERE table_name = 'Memory' 
+                WHERE table_name = 'unified_memories' 
                 AND column_name = 'last_context_update'
             ) THEN
-                ALTER TABLE Memory ADD COLUMN last_context_update TIMESTAMP;
+                ALTER TABLE unified_memories ADD COLUMN last_context_update TIMESTAMP;
             END IF;
         END $$;
     ''')
@@ -1422,10 +1422,10 @@ def create_all_tables():
         ON MemoryContextEvolution(evolution_id);
 
         CREATE INDEX IF NOT EXISTS idx_memory_relevance_score
-        ON Memory(relevance_score);
+        ON unified_memories(relevance_score);
 
         CREATE INDEX IF NOT EXISTS idx_memory_last_context_update
-        ON Memory(last_context_update);
+        ON unified_memories(last_context_update);
     """)
 
     conn.commit()
