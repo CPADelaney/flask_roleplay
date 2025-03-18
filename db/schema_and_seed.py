@@ -1477,7 +1477,6 @@ def seed_initial_data():
     create_and_seed_intensity_tiers()
     create_and_seed_plot_triggers()
     create_and_seed_interactions()
-    insert_default_player_stats_chase()
     print("All default data seeded successfully.")
 
 
