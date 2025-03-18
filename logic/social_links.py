@@ -22,7 +22,9 @@ from agents import (
     ModelSettings,
     Runner,
     function_tool,
-    RunContextWrapper
+    RunContextWrapper,
+    AsyncOpenAI, 
+    OpenAIResponsesModel
 )
 from agents.models.openai_responses import OpenAIResponsesModel
 
@@ -2107,7 +2109,7 @@ SocialLinksAgent = Agent(
         "Use these tools to retrieve or update relationship data, trigger or apply crossroads, or check for rituals. "
         "Return helpful final text or JSON summarizing your result."
     ),
-    model=OpenAIResponsesModel(model="gpt-4o"),  # or "gpt-4o", "gpt-3.5-turbo", etc.
+    model=OpenAIResponsesModel(model="gpt-4o", openai_client=AsyncOpenAI()),  # or "gpt-4o", "gpt-3.5-turbo", etc.
     model_settings=ModelSettings(temperature=0.5),
     tools=[
         get_social_link_tool,
