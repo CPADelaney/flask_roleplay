@@ -25,6 +25,7 @@ from memory.memory_agent_sdk import (
 )
 from nyx.nyx_governance import NyxUnifiedGovernor, AgentType, DirectiveType, DirectivePriority
 from memory.wrapper import MemorySystem
+from utils.caching import get_cache, set_cache, delete_cache
 
 logger = logging.getLogger(__name__)
 
@@ -53,40 +54,219 @@ class MemoryNyxBridge:
         self.memory_context = MemorySystemContext(user_id, conversation_id)
         self.memory_agent = None
         self.memory_system = None
-    
+        self.state_tracker = {
+            "last_operation": None,
+            "operation_count": 0,
+            "error_count": 0,
+            "last_error": None,
+            "active_transactions": 0
+        }
+        self.error_history = []
+        self.transaction_stack = []
+
+    def _track_error(self, operation: str, error: str):
+        """Track errors for analysis and recovery."""
+        self.error_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "operation": operation,
+            "error": error
+        })
+        self.state_tracker["error_count"] += 1
+        self.state_tracker["last_error"] = error
+
+    def _track_state_change(self, operation: str, details: Dict[str, Any]):
+        """Track state changes for consistency."""
+        self.state_tracker["last_operation"] = operation
+        self.state_tracker["operation_count"] += 1
+        self.state_tracker.update(details)
+
     async def initialize(self):
-        """Initialize the bridge."""
-        # Create the memory agent
-        self.memory_agent = create_memory_agent(self.user_id, self.conversation_id)
+        """Initialize the bridge with proper error handling."""
+        try:
+            # Create the memory agent
+            self.memory_agent = create_memory_agent(self.user_id, self.conversation_id)
+            
+            # Initialize memory system
+            self.memory_system = MemorySystem.get_instance(
+                self.user_id, self.conversation_id
+            )
+            self.memory_context.memory_system = self.memory_system
+            
+            # Register the memory agent with Nyx's governance
+            await self.governor.register_agent(
+                agent_type=AgentType.MEMORY_MANAGER,
+                agent_instance=self.memory_agent
+            )
+            
+            # Issue a general directive for memory management
+            await self.governor.issue_directive(
+                agent_type=AgentType.MEMORY_MANAGER,
+                agent_id="memory_manager",
+                directive_type=DirectiveType.ACTION,
+                directive_data={
+                    "instruction": "Maintain entity memories and ensure proper consolidation.",
+                    "scope": "global"
+                },
+                priority=DirectivePriority.MEDIUM,
+                duration_minutes=24*60  # 24 hours
+            )
+            
+            self._track_state_change("initialization", {"status": "success"})
+            logger.info("Memory agent registered with Nyx governance system")
+            return self
+            
+        except Exception as e:
+            self._track_error("initialization", str(e))
+            logger.error(f"Failed to initialize MemoryNyxBridge: {str(e)}")
+            raise
+
+    async def _process_significant_memory(self, memory: Memory) -> Dict[str, Any]:
+        """Process a significant memory with proper error handling and state tracking."""
+        try:
+            # Start transaction
+            self.transaction_stack.append({
+                "type": "memory_processing",
+                "memory_id": memory.id,
+                "start_time": datetime.now()
+            })
+            
+            # Validate memory
+            if not self._validate_memory(memory):
+                raise ValueError("Invalid memory format")
+            
+            # Process memory with emotional context
+            emotional_context = await self._get_emotional_context(memory)
+            
+            # Update memory with emotional context
+            memory.emotional_intensity = emotional_context.get("intensity", 0)
+            memory.metadata["emotional_context"] = emotional_context
+            
+            # Propagate memory to related systems
+            propagation_results = await self._propagate_memory(memory)
+            
+            # Track state change
+            self._track_state_change("memory_processing", {
+                "memory_id": memory.id,
+                "emotional_intensity": memory.emotional_intensity,
+                "propagation_success": bool(propagation_results)
+            })
+            
+            return {
+                "memory": memory.to_dict(),
+                "emotional_context": emotional_context,
+                "propagation_results": propagation_results
+            }
+            
+        except Exception as e:
+            self._track_error("memory_processing", str(e))
+            await self._rollback_transaction()
+            logger.error(f"Error processing significant memory: {str(e)}")
+            raise
+            
+        finally:
+            # Clean up transaction
+            if self.transaction_stack:
+                self.transaction_stack.pop()
+
+    def _validate_memory(self, memory: Memory) -> bool:
+        """Validate memory format and content."""
+        if not memory or not memory.text:
+            return False
+            
+        # Check required fields
+        required_fields = ["text", "memory_type", "significance"]
+        if not all(hasattr(memory, field) for field in required_fields):
+            return False
+            
+        # Validate memory type
+        if memory.memory_type not in [t.value for t in MemoryType]:
+            return False
+            
+        # Validate significance
+        if not 1 <= memory.significance <= 5:
+            return False
+            
+        return True
+
+    async def _get_emotional_context(self, memory: Memory) -> Dict[str, Any]:
+        """Get emotional context for memory with caching."""
+        try:
+            # Use cache if available
+            cache_key = f"emotional_context:{memory.id}"
+            cached_context = await get_cache(cache_key)
+            if cached_context:
+                return cached_context
+            
+            # Analyze emotional content
+            emotional_context = await self.emotional_manager.analyze_emotional_content(memory.text)
+            
+            # Cache results
+            await set_cache(cache_key, emotional_context, ttl=3600)  # 1 hour
+            
+            return emotional_context
+            
+        except Exception as e:
+            self._track_error("emotional_context", str(e))
+            logger.error(f"Error getting emotional context: {str(e)}")
+            return {"intensity": 0, "primary_emotion": "neutral"}
+
+    async def _propagate_memory(self, memory: Memory) -> Dict[str, Any]:
+        """Propagate memory to related systems with proper error handling."""
+        propagation_results = {}
         
-        # Initialize memory system
-        self.memory_system = MemorySystem.get_instance(
-            self.user_id, self.conversation_id
-        )
-        self.memory_context.memory_system = self.memory_system
-        
-        # Register the memory agent with Nyx's governance
-        await self.governor.register_agent(
-            agent_type=AgentType.MEMORY_MANAGER,
-            agent_instance=self.memory_agent
-        )
-        
-        # Issue a general directive for memory management
-        await self.governor.issue_directive(
-            agent_type=AgentType.MEMORY_MANAGER,
-            agent_id="memory_manager",
-            directive_type=DirectiveType.ACTION,
-            directive_data={
-                "instruction": "Maintain entity memories and ensure proper consolidation.",
-                "scope": "global"
-            },
-            priority=DirectivePriority.MEDIUM,
-            duration_minutes=24*60  # 24 hours
-        )
-        
-        logger.info("Memory agent registered with Nyx governance system")
-        return self
-    
+        try:
+            # Propagate to emotional system
+            emotional_result = await self.emotional_manager.process_memory(memory)
+            propagation_results["emotional"] = emotional_result
+            
+            # Propagate to semantic system
+            semantic_result = await self.semantic_manager.process_memory(memory)
+            propagation_results["semantic"] = semantic_result
+            
+            # Propagate to reconsolidation system
+            reconsolidation_result = await self.reconsolidation_manager.process_memory(memory)
+            propagation_results["reconsolidation"] = reconsolidation_result
+            
+            return propagation_results
+            
+        except Exception as e:
+            self._track_error("memory_propagation", str(e))
+            logger.error(f"Error propagating memory: {str(e)}")
+            return {}
+
+    async def _rollback_transaction(self):
+        """Rollback the current transaction."""
+        if not self.transaction_stack:
+            return
+            
+        current_transaction = self.transaction_stack[-1]
+        try:
+            # Rollback memory changes
+            if current_transaction["type"] == "memory_processing":
+                await self._rollback_memory_changes(current_transaction["memory_id"])
+            
+            # Remove from stack
+            self.transaction_stack.pop()
+            
+        except Exception as e:
+            logger.error(f"Error during rollback: {str(e)}")
+
+    async def _rollback_memory_changes(self, memory_id: int):
+        """Rollback changes to a specific memory."""
+        try:
+            # Restore memory from backup if available
+            backup_key = f"memory_backup:{memory_id}"
+            backup = await get_cache(backup_key)
+            if backup:
+                await self.memory_system.restore_memory(memory_id, backup)
+            
+            # Clear related caches
+            await delete_cache(f"emotional_context:{memory_id}")
+            await delete_cache(f"semantic_context:{memory_id}")
+            
+        except Exception as e:
+            logger.error(f"Error rolling back memory changes: {str(e)}")
+
     async def remember(
         self, 
         entity_type: str, 

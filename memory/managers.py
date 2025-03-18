@@ -2,7 +2,7 @@
 
 import logging
 import json
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple, Set
 from datetime import datetime, timedelta
 import asyncio
 import random
@@ -826,3 +826,788 @@ class PlayerMemoryManager(UnifiedMemoryManager):
         }
         
         return profile
+
+
+class ConflictMemoryManager(UnifiedMemoryManager):
+    """
+    Specialized memory manager for handling conflict-related memories and their impact on relationships.
+    """
+    def __init__(self, user_id: int, conversation_id: int):
+        super().__init__(
+            entity_type="conflict",
+            entity_id=0,  # Conflicts are managed at the conversation level
+            user_id=user_id,
+            conversation_id=conversation_id
+        )
+    
+    @with_transaction
+    async def record_conflict_resolution(self,
+                                       conflict_id: int,
+                                       resolution_data: Dict[str, Any],
+                                       stakeholders: List[Dict[str, Any]],
+                                       conn=None) -> Dict[str, Any]:
+        """
+        Record a conflict resolution and its impact on relationships.
+        
+        Args:
+            conflict_id: ID of the resolved conflict
+            resolution_data: Data about how the conflict was resolved
+            stakeholders: List of stakeholders involved in the conflict
+        """
+        # Record the resolution as a memory
+        resolution_memory = await self.add_memory(
+            memory=Memory(
+                text=f"Conflict {conflict_id} resolved: {resolution_data.get('resolution_type', 'unknown')}",
+                memory_type=MemoryType.CONFLICT_RESOLUTION,
+                significance=MemorySignificance.HIGH,
+                emotional_intensity=resolution_data.get('emotional_intensity', 0.5),
+                tags=["conflict", "resolution", resolution_data.get('resolution_type', 'unknown')],
+                timestamp=datetime.now()
+            ),
+            conn=conn
+        )
+        
+        # Update relationship memories for each stakeholder
+        relationship_updates = []
+        for stakeholder in stakeholders:
+            entity_type = stakeholder.get('entity_type')
+            entity_id = stakeholder.get('entity_id')
+            outcome = stakeholder.get('outcome')
+            
+            # Record stakeholder-specific memory
+            await self.add_memory(
+                memory=Memory(
+                    text=f"Stakeholder {entity_type} {entity_id} outcome: {outcome}",
+                    memory_type=MemoryType.CONFLICT_OUTCOME,
+                    significance=MemorySignificance.MEDIUM,
+                    emotional_intensity=outcome.get('emotional_impact', 0.3),
+                    tags=["conflict", "stakeholder", outcome.get('outcome_type', 'unknown')],
+                    timestamp=datetime.now()
+                ),
+                conn=conn
+            )
+            
+            # Update relationships with other stakeholders
+            for other_stakeholder in stakeholders:
+                if other_stakeholder['entity_id'] != entity_id:
+                    relationship_change = self._calculate_relationship_change(
+                        outcome,
+                        other_stakeholder.get('outcome', {}),
+                        resolution_data
+                    )
+                    
+                    relationship_updates.append({
+                        'entity1_type': entity_type,
+                        'entity1_id': entity_id,
+                        'entity2_type': other_stakeholder['entity_type'],
+                        'entity2_id': other_stakeholder['entity_id'],
+                        'change': relationship_change
+                    })
+        
+        return {
+            'resolution_memory_id': resolution_memory.get('memory_id'),
+            'relationship_updates': relationship_updates
+        }
+    
+    def _calculate_relationship_change(self,
+                                    outcome1: Dict[str, Any],
+                                    outcome2: Dict[str, Any],
+                                    resolution_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Calculate how a conflict resolution affects relationships between stakeholders.
+        """
+        change = {
+            'trust_change': 0,
+            'respect_change': 0,
+            'affinity_change': 0,
+            'rivalry_change': 0
+        }
+        
+        # Calculate changes based on outcomes
+        if outcome1.get('outcome_type') == 'victory' and outcome2.get('outcome_type') == 'defeat':
+            change['trust_change'] = -0.2
+            change['respect_change'] = 0.1
+            change['rivalry_change'] = 0.3
+        elif outcome1.get('outcome_type') == 'compromise':
+            change['trust_change'] = 0.1
+            change['respect_change'] = 0.2
+            change['affinity_change'] = 0.1
+        elif outcome1.get('outcome_type') == 'cooperation':
+            change['trust_change'] = 0.3
+            change['respect_change'] = 0.2
+            change['affinity_change'] = 0.2
+        
+        # Adjust based on resolution type
+        resolution_type = resolution_data.get('resolution_type')
+        if resolution_type == 'peaceful':
+            change['trust_change'] += 0.1
+            change['rivalry_change'] -= 0.1
+        elif resolution_type == 'violent':
+            change['trust_change'] -= 0.2
+            change['rivalry_change'] += 0.2
+        
+        return change
+
+
+class LoreMemoryManager(UnifiedMemoryManager):
+    """
+    Specialized memory manager for handling lore generation and relevance tracking.
+    """
+    def __init__(self, user_id: int, conversation_id: int):
+        super().__init__(
+            entity_type="lore",
+            entity_id=0,  # Lore is managed at the conversation level
+            user_id=user_id,
+            conversation_id=conversation_id
+        )
+        self.pattern_cache = {}
+        self.relevance_cache = {}
+    
+    @with_transaction
+    async def generate_lore_from_memories(self,
+                                        context: Dict[str, Any],
+                                        conn=None) -> Dict[str, Any]:
+        """
+        Generate new lore based on memory patterns and current context.
+        
+        Args:
+            context: Current game context
+        """
+        # Try to get from cache first
+        cache_key = f"lore_patterns:{self.user_id}:{self.conversation_id}"
+        cached_patterns = await get_cache(cache_key)
+        
+        if cached_patterns:
+            patterns = cached_patterns
+        else:
+            # Get relevant memories for lore generation
+            memories = await self.get_memories(
+                memory_types=[MemoryType.EVENT, MemoryType.RELATIONSHIP, MemoryType.CONFLICT],
+                limit=50,
+                conn=conn
+            )
+            
+            # Analyze memory patterns
+            patterns = self._analyze_memory_patterns(memories)
+            
+            # Cache the patterns
+            await set_cache(cache_key, patterns, ttl=300)  # Cache for 5 minutes
+        
+        # Generate lore based on patterns and context
+        lore = self._generate_lore_from_patterns(patterns, context)
+        
+        # Record the generated lore as a memory
+        lore_memory = await self.add_memory(
+            memory=Memory(
+                text=lore['text'],
+                memory_type=MemoryType.LORE,
+                significance=MemorySignificance.HIGH,
+                emotional_intensity=0.3,
+                tags=["lore", lore.get('category', 'general')] + lore.get('themes', []),
+                metadata={
+                    'patterns_used': patterns,
+                    'context_snapshot': context,
+                    'generation_timestamp': datetime.now().isoformat()
+                },
+                timestamp=datetime.now()
+            ),
+            conn=conn
+        )
+        
+        # Update lore relevance with caching
+        await self._update_lore_relevance(lore_memory.get('memory_id'), context, conn)
+        
+        return {
+            'lore_id': lore_memory.get('memory_id'),
+            'lore': lore,
+            'patterns_used': patterns
+        }
+    
+    def _analyze_memory_patterns(self, memories: List[Memory]) -> Dict[str, Any]:
+        """
+        Analyze patterns in memories that could form the basis for lore.
+        """
+        patterns = {
+            'themes': {},
+            'character_arcs': {},
+            'relationships': {},
+            'conflicts': {},
+            'locations': {},
+            'emotional_trends': {},
+            'recurring_elements': {},
+            'narrative_threads': []
+        }
+        
+        # Track recurring elements and their connections
+        element_connections = {}
+        
+        for memory in memories:
+            # Extract themes with emotional context
+            themes = self._extract_themes(memory.text)
+            for theme in themes:
+                if theme not in patterns['themes']:
+                    patterns['themes'][theme] = {
+                        'count': 0,
+                        'emotional_context': [],
+                        'related_elements': set()
+                    }
+                patterns['themes'][theme]['count'] += 1
+                patterns['themes'][theme]['emotional_context'].append(memory.emotional_intensity)
+            
+            # Extract character arcs with progression
+            if memory.memory_type == MemoryType.EVENT:
+                character_arcs = self._extract_character_arcs(memory)
+                for arc in character_arcs:
+                    if arc not in patterns['character_arcs']:
+                        patterns['character_arcs'][arc] = {
+                            'stages': [],
+                            'progression': 0,
+                            'key_events': []
+                        }
+                    arc_data = patterns['character_arcs'][arc]
+                    arc_data['stages'].append(memory.timestamp)
+                    arc_data['key_events'].append(memory.text)
+            
+            # Extract relationships with dynamics
+            if memory.memory_type == MemoryType.RELATIONSHIP:
+                relationship = self._extract_relationship(memory)
+                if relationship:
+                    if relationship not in patterns['relationships']:
+                        patterns['relationships'][relationship] = {
+                            'dynamics': [],
+                            'evolution': [],
+                            'key_interactions': []
+                        }
+                    rel_data = patterns['relationships'][relationship]
+                    rel_data['dynamics'].append(memory.metadata.get('relationship_dynamic', 'neutral'))
+                    rel_data['evolution'].append({
+                        'timestamp': memory.timestamp,
+                        'state': memory.text
+                    })
+            
+            # Track emotional trends
+            emotion = memory.metadata.get('primary_emotion', 'neutral')
+            if emotion not in patterns['emotional_trends']:
+                patterns['emotional_trends'][emotion] = {
+                    'count': 0,
+                    'intensity_sum': 0,
+                    'contexts': set()
+                }
+            patterns['emotional_trends'][emotion]['count'] += 1
+            patterns['emotional_trends'][emotion]['intensity_sum'] += memory.emotional_intensity
+            
+            # Extract and connect recurring elements
+            elements = self._extract_recurring_elements(memory.text)
+            for elem in elements:
+                if elem not in patterns['recurring_elements']:
+                    patterns['recurring_elements'][elem] = {
+                        'count': 0,
+                        'contexts': set(),
+                        'connections': set()
+                    }
+                patterns['recurring_elements'][elem]['count'] += 1
+                patterns['recurring_elements'][elem]['contexts'].add(memory.memory_type)
+                
+                # Track connections between elements
+                for other_elem in elements:
+                    if other_elem != elem:
+                        key = tuple(sorted([elem, other_elem]))
+                        element_connections[key] = element_connections.get(key, 0) + 1
+        
+        # Identify narrative threads from element connections
+        significant_connections = {k: v for k, v in element_connections.items() if v >= 2}
+        patterns['narrative_threads'] = self._identify_narrative_threads(significant_connections)
+        
+        return patterns
+    
+    def _identify_narrative_threads(self, connections: Dict[Tuple[str, str], int]) -> List[Dict[str, Any]]:
+        """Identify narrative threads from element connections."""
+        threads = []
+        visited = set()
+        
+        for (elem1, elem2), strength in sorted(connections.items(), key=lambda x: x[1], reverse=True):
+            if elem1 not in visited or elem2 not in visited:
+                thread = {
+                    'elements': [elem1, elem2],
+                    'strength': strength,
+                    'potential_narrative': f"Connection between {elem1} and {elem2}"
+                }
+                threads.append(thread)
+                visited.add(elem1)
+                visited.add(elem2)
+        
+        return threads
+    
+    def _extract_recurring_elements(self, text: str) -> Set[str]:
+        """Extract recurring elements from text."""
+        elements = set()
+        # Add implementation for extracting recurring elements
+        # This could include named entities, key phrases, etc.
+        return elements
+    
+    @with_transaction
+    async def _update_lore_relevance(self,
+                                   lore_id: int,
+                                   context: Dict[str, Any],
+                                   conn=None) -> None:
+        """
+        Update the relevance of lore based on current context with caching.
+        """
+        # Try to get from cache
+        cache_key = f"lore_relevance:{lore_id}:{hash(str(context))}"
+        cached_relevance = await get_cache(cache_key)
+        
+        if cached_relevance is not None:
+            relevance_score = cached_relevance
+        else:
+            # Get the lore memory
+            lore_memory = await self.get_memory(lore_id, conn=conn)
+            if not lore_memory:
+                return
+            
+            # Calculate relevance score
+            relevance_score = self._calculate_lore_relevance(lore_memory, context)
+            
+            # Cache the result
+            await set_cache(cache_key, relevance_score, ttl=300)  # Cache for 5 minutes
+        
+        # Update relevance in database
+        await conn.execute("""
+            UPDATE Memory
+            SET relevance_score = $1,
+                last_relevance_update = CURRENT_TIMESTAMP
+            WHERE memory_id = $2
+        """, relevance_score, lore_id)
+    
+    def _calculate_lore_relevance(self,
+                                lore_memory: Memory,
+                                context: Dict[str, Any]) -> float:
+        """
+        Calculate how relevant a piece of lore is to the current context.
+        """
+        relevance_score = 0.0
+        
+        # Check theme relevance
+        lore_themes = set(lore_memory.tags)
+        context_themes = set(context.get('themes', []))
+        theme_overlap = len(lore_themes.intersection(context_themes))
+        relevance_score += theme_overlap * 0.2
+        
+        # Check character relevance
+        lore_characters = set(self._extract_characters(lore_memory.text))
+        context_characters = set(context.get('characters', []))
+        character_overlap = len(lore_characters.intersection(context_characters))
+        relevance_score += character_overlap * 0.3
+        
+        # Check location relevance
+        lore_locations = set(self._extract_locations(lore_memory.text))
+        context_locations = set(context.get('locations', []))
+        location_overlap = len(lore_locations.intersection(context_locations))
+        relevance_score += location_overlap * 0.2
+        
+        # Check temporal relevance
+        if self._is_temporally_relevant(lore_memory, context):
+            relevance_score += 0.3
+        
+        return min(relevance_score, 1.0)
+
+    def _generate_lore_from_patterns(self,
+                                   patterns: Dict[str, Any],
+                                   context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate lore based on memory patterns and current context.
+        """
+        # Find dominant patterns with rich context
+        dominant_themes = self._get_dominant_themes(patterns['themes'])
+        dominant_arcs = self._get_dominant_arcs(patterns['character_arcs'])
+        dominant_relationships = self._get_dominant_relationships(patterns['relationships'])
+        emotional_trends = self._get_significant_emotional_trends(patterns['emotional_trends'])
+        narrative_threads = patterns['narrative_threads'][:3]  # Top 3 threads
+        
+        # Generate lore text based on patterns
+        lore_text = self._compose_lore_text(
+            dominant_themes,
+            dominant_arcs,
+            dominant_relationships,
+            emotional_trends,
+            narrative_threads,
+            context
+        )
+        
+        # Determine lore category and metadata
+        category = self._determine_lore_category(patterns, context)
+        
+        return {
+            'text': lore_text,
+            'category': category,
+            'themes': [theme['name'] for theme in dominant_themes],
+            'character_arcs': [arc['name'] for arc in dominant_arcs],
+            'relationships': [rel['name'] for rel in dominant_relationships],
+            'emotional_context': emotional_trends,
+            'narrative_threads': [thread['potential_narrative'] for thread in narrative_threads],
+            'metadata': {
+                'pattern_confidence': self._calculate_pattern_confidence(patterns),
+                'context_relevance': self._calculate_context_relevance(patterns, context),
+                'emotional_intensity': sum(trend['average_intensity'] for trend in emotional_trends) / len(emotional_trends) if emotional_trends else 0
+            }
+        }
+
+    def _get_dominant_themes(self, themes: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Get dominant themes with their context."""
+        theme_list = []
+        for name, data in themes.items():
+            avg_emotional_intensity = sum(data['emotional_context']) / len(data['emotional_context']) if data['emotional_context'] else 0
+            theme_list.append({
+                'name': name,
+                'count': data['count'],
+                'average_emotional_intensity': avg_emotional_intensity,
+                'related_elements': list(data['related_elements'])
+            })
+        
+        return sorted(theme_list, key=lambda x: (x['count'], x['average_emotional_intensity']), reverse=True)[:3]
+
+    def _get_dominant_arcs(self, arcs: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Get dominant character arcs with their progression."""
+        arc_list = []
+        for name, data in arcs.items():
+            progression = len(data['stages'])
+            arc_list.append({
+                'name': name,
+                'progression': progression,
+                'stages': len(data['stages']),
+                'key_events': data['key_events'][-3:]  # Last 3 key events
+            })
+        
+        return sorted(arc_list, key=lambda x: (x['progression'], x['stages']), reverse=True)[:2]
+
+    def _get_dominant_relationships(self, relationships: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Get dominant relationships with their dynamics."""
+        rel_list = []
+        for name, data in relationships.items():
+            rel_list.append({
+                'name': name,
+                'dynamics': data['dynamics'][-3:],  # Last 3 dynamics
+                'evolution': data['evolution'][-3:],  # Last 3 evolution points
+                'complexity': len(set(data['dynamics']))  # Unique dynamics count
+            })
+        
+        return sorted(rel_list, key=lambda x: x['complexity'], reverse=True)[:2]
+
+    def _get_significant_emotional_trends(self, trends: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Get significant emotional trends."""
+        trend_list = []
+        for emotion, data in trends.items():
+            if data['count'] >= 2:  # Only include trends with multiple occurrences
+                trend_list.append({
+                    'emotion': emotion,
+                    'frequency': data['count'],
+                    'average_intensity': data['intensity_sum'] / data['count'],
+                    'contexts': list(data['contexts'])
+                })
+        
+        return sorted(trend_list, key=lambda x: (x['frequency'], x['average_intensity']), reverse=True)[:3]
+
+    def _compose_lore_text(self,
+                          themes: List[Dict[str, Any]],
+                          arcs: List[Dict[str, Any]],
+                          relationships: List[Dict[str, Any]],
+                          emotional_trends: List[Dict[str, Any]],
+                          narrative_threads: List[Dict[str, Any]],
+                          context: Dict[str, Any]) -> str:
+        """
+        Compose lore text from patterns and context.
+        """
+        lore_components = []
+        
+        # Add thematic elements
+        if themes:
+            theme_text = "The narrative weaves together themes of " + \
+                        ", ".join(f"{t['name']} (with {t['average_emotional_intensity']:.1f} emotional intensity)" 
+                                for t in themes[:-1])
+            if len(themes) > 1:
+                theme_text += f" and {themes[-1]['name']}"
+            lore_components.append(theme_text)
+        
+        # Add character arc developments
+        if arcs:
+            for arc in arcs:
+                arc_text = f"The arc of {arc['name']} has progressed through {arc['stages']} stages"
+                if arc['key_events']:
+                    arc_text += f", most recently: {arc['key_events'][-1]}"
+                lore_components.append(arc_text)
+        
+        # Add relationship dynamics
+        if relationships:
+            for rel in relationships:
+                rel_text = f"The relationship between {rel['name']} shows "
+                if rel['dynamics']:
+                    rel_text += f"recent {', '.join(rel['dynamics'][-2:])} dynamics"
+                lore_components.append(rel_text)
+        
+        # Add emotional context
+        if emotional_trends:
+            emotion_text = "The emotional landscape is characterized by " + \
+                         ", ".join(f"{t['emotion']} (intensity: {t['average_intensity']:.1f})" 
+                                 for t in emotional_trends)
+            lore_components.append(emotion_text)
+        
+        # Add narrative threads
+        if narrative_threads:
+            thread_text = "Key narrative threads include: " + \
+                         "; ".join(thread['potential_narrative'] for thread in narrative_threads)
+            lore_components.append(thread_text)
+        
+        # Combine all components
+        return "\n\n".join(lore_components)
+
+    def _determine_lore_category(self, patterns: Dict[str, Any], context: Dict[str, Any]) -> str:
+        """Determine the category of the generated lore."""
+        # Count pattern types
+        pattern_counts = {
+            'character': len(patterns['character_arcs']),
+            'relationship': len(patterns['relationships']),
+            'location': len(patterns['locations']),
+            'emotional': len(patterns['emotional_trends']),
+            'narrative': len(patterns['narrative_threads'])
+        }
+        
+        # Get the dominant pattern type
+        dominant_type = max(pattern_counts.items(), key=lambda x: x[1])[0]
+        
+        # Map to lore categories
+        category_mapping = {
+            'character': 'character_development',
+            'relationship': 'social_dynamics',
+            'location': 'world_building',
+            'emotional': 'psychological_insight',
+            'narrative': 'plot_development'
+        }
+        
+        return category_mapping.get(dominant_type, 'general')
+
+    def _calculate_pattern_confidence(self, patterns: Dict[str, Any]) -> float:
+        """Calculate confidence in the identified patterns."""
+        confidence_scores = []
+        
+        # Theme confidence
+        if patterns['themes']:
+            max_theme_count = max(t['count'] for t in patterns['themes'].values())
+            confidence_scores.append(min(max_theme_count / 10, 1.0))
+        
+        # Character arc confidence
+        if patterns['character_arcs']:
+            max_arc_stages = max(len(arc['stages']) for arc in patterns['character_arcs'].values())
+            confidence_scores.append(min(max_arc_stages / 5, 1.0))
+        
+        # Relationship confidence
+        if patterns['relationships']:
+            max_rel_evolution = max(len(rel['evolution']) for rel in patterns['relationships'].values())
+            confidence_scores.append(min(max_rel_evolution / 5, 1.0))
+        
+        # Emotional trend confidence
+        if patterns['emotional_trends']:
+            max_emotion_count = max(trend['count'] for trend in patterns['emotional_trends'].values())
+            confidence_scores.append(min(max_emotion_count / 5, 1.0))
+        
+        return sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0.0
+
+    def _calculate_context_relevance(self, patterns: Dict[str, Any], context: Dict[str, Any]) -> float:
+        """Calculate how relevant the patterns are to the current context."""
+        relevance_scores = []
+        
+        # Theme relevance
+        context_themes = set(context.get('themes', []))
+        pattern_themes = set(patterns['themes'].keys())
+        theme_overlap = len(context_themes.intersection(pattern_themes))
+        if context_themes:
+            relevance_scores.append(theme_overlap / len(context_themes))
+        
+        # Character relevance
+        context_characters = set(context.get('characters', []))
+        pattern_characters = set(arc.split()[0] for arc in patterns['character_arcs'].keys())
+        character_overlap = len(context_characters.intersection(pattern_characters))
+        if context_characters:
+            relevance_scores.append(character_overlap / len(context_characters))
+        
+        # Location relevance
+        context_locations = set(context.get('locations', []))
+        pattern_locations = set(patterns['locations'].keys())
+        location_overlap = len(context_locations.intersection(pattern_locations))
+        if context_locations:
+            relevance_scores.append(location_overlap / len(context_locations))
+        
+        return sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
+
+
+class ContextEvolutionManager(UnifiedMemoryManager):
+    """
+    Specialized memory manager for handling long-term context persistence and evolution.
+    """
+    def __init__(self, user_id: int, conversation_id: int):
+        super().__init__(
+            entity_type="context",
+            entity_id=0,  # Context is managed at the conversation level
+            user_id=user_id,
+            conversation_id=conversation_id
+        )
+    
+    @with_transaction
+    async def update_context_evolution(self,
+                                     current_context: Dict[str, Any],
+                                     conn=None) -> Dict[str, Any]:
+        """
+        Update the evolution of context over time.
+        
+        Args:
+            current_context: Current game context
+        """
+        # Get the latest context evolution
+        latest_evolution = await self.get_latest_context_evolution(conn=conn)
+        
+        # Analyze changes in context
+        changes = self._analyze_context_changes(latest_evolution, current_context)
+        
+        # Update context evolution
+        evolution_id = await self._record_context_evolution(
+            current_context,
+            changes,
+            conn=conn
+        )
+        
+        # Update related memories
+        await self._update_related_memories(evolution_id, changes, conn=conn)
+        
+        return {
+            'evolution_id': evolution_id,
+            'changes': changes,
+            'context_snapshot': current_context
+        }
+    
+    @with_transaction
+    async def get_latest_context_evolution(self, conn=None) -> Dict[str, Any]:
+        """
+        Get the latest recorded context evolution.
+        """
+        result = await conn.fetchrow("""
+            SELECT context_data, timestamp
+            FROM ContextEvolution
+            WHERE user_id = $1 AND conversation_id = $2
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, self.user_id, self.conversation_id)
+        
+        if result:
+            return {
+                'context_data': result['context_data'],
+                'timestamp': result['timestamp']
+            }
+        return None
+    
+    def _analyze_context_changes(self,
+                               previous_context: Dict[str, Any],
+                               current_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze changes between previous and current context.
+        """
+        changes = {
+            'themes': self._analyze_theme_changes(previous_context, current_context),
+            'characters': self._analyze_character_changes(previous_context, current_context),
+            'locations': self._analyze_location_changes(previous_context, current_context),
+            'relationships': self._analyze_relationship_changes(previous_context, current_context),
+            'conflicts': self._analyze_conflict_changes(previous_context, current_context)
+        }
+        
+        # Calculate overall context shift
+        changes['context_shift'] = self._calculate_context_shift(changes)
+        
+        return changes
+    
+    @with_transaction
+    async def _record_context_evolution(self,
+                                      current_context: Dict[str, Any],
+                                      changes: Dict[str, Any],
+                                      conn=None) -> int:
+        """
+        Record a new context evolution.
+        """
+        result = await conn.fetchrow("""
+            INSERT INTO ContextEvolution (
+                user_id, conversation_id, context_data, changes,
+                context_shift, timestamp
+            )
+            VALUES ($1, $2, $3, $4, $5, NOW())
+            RETURNING evolution_id
+        """, self.user_id, self.conversation_id,
+            json.dumps(current_context),
+            json.dumps(changes),
+            changes['context_shift'])
+        
+        return result['evolution_id']
+    
+    @with_transaction
+    async def _update_related_memories(self,
+                                     evolution_id: int,
+                                     changes: Dict[str, Any],
+                                     conn=None) -> None:
+        """
+        Update memories related to the context changes.
+        """
+        # Get memories that might be affected by the context changes
+        affected_memories = await self._get_affected_memories(changes, conn=conn)
+        
+        for memory in affected_memories:
+            # Update memory relevance
+            new_relevance = self._calculate_new_memory_relevance(
+                memory,
+                changes
+            )
+            
+            # Update memory in database
+            await conn.execute("""
+                UPDATE Memory
+                SET relevance_score = $1,
+                    last_context_update = NOW()
+                WHERE memory_id = $2
+            """, new_relevance, memory['memory_id'])
+            
+            # Record context evolution impact
+            await conn.execute("""
+                INSERT INTO MemoryContextEvolution (
+                    memory_id, evolution_id, relevance_change
+                )
+                VALUES ($1, $2, $3)
+            """, memory['memory_id'], evolution_id,
+                new_relevance - memory.get('relevance_score', 0))
+    
+    def _calculate_context_shift(self, changes: Dict[str, Any]) -> float:
+        """
+        Calculate how significant the context shift is.
+        """
+        shift_score = 0.0
+        
+        # Theme changes
+        theme_changes = changes['themes']
+        shift_score += len(theme_changes.get('added', [])) * 0.2
+        shift_score += len(theme_changes.get('removed', [])) * 0.2
+        
+        # Character changes
+        character_changes = changes['characters']
+        shift_score += len(character_changes.get('added', [])) * 0.3
+        shift_score += len(character_changes.get('removed', [])) * 0.3
+        
+        # Location changes
+        location_changes = changes['locations']
+        shift_score += len(location_changes.get('added', [])) * 0.2
+        shift_score += len(location_changes.get('removed', [])) * 0.2
+        
+        # Relationship changes
+        relationship_changes = changes['relationships']
+        shift_score += len(relationship_changes.get('added', [])) * 0.3
+        shift_score += len(relationship_changes.get('removed', [])) * 0.3
+        
+        # Conflict changes
+        conflict_changes = changes['conflicts']
+        shift_score += len(conflict_changes.get('added', [])) * 0.4
+        shift_score += len(conflict_changes.get('resolved', [])) * 0.4
+        
+        return min(shift_score, 1.0)
