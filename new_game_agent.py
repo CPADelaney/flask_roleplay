@@ -13,9 +13,9 @@ from pydantic import BaseModel, Field
 
 # Import your existing modules
 from logic.calendar import update_calendar_names
-from logic.aggregator import get_aggregated_roleplay_context
+from logic.aggregator_sdk import get_aggregated_roleplay_context
 from routes.story_routes import build_aggregator_text
-from logic.npc_creation import spawn_multiple_npcs_enhanced, init_chase_schedule
+from npcs.new_npc_creation import spawn_multiple_npcs_enhanced, init_chase_schedule
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
 from lore.dynamic_lore_generator import DynamicLoreGenerator
