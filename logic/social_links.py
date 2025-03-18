@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union, Any
 
 # ~~~~~~~~~ Agents SDK imports ~~~~~~~~~
-from agents import (
+from openai import (
     Agent,
     ModelSettings,
     Runner,
