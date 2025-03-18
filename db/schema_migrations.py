@@ -1,268 +1,289 @@
 """
-Schema migration tracking for Nyx dynamic schema management.
-
-Tracks all schema changes to ensure consistency across environments and deployments.
+Database Schema Migration System - Manages database schema updates and versioning.
 """
 
 import logging
-import json
-import asyncpg
+import asyncio
+from typing import Dict, List, Any, Optional
 from datetime import datetime
-from typing import Dict, Any, List
-
-# Database connection helper
-from db.connection import get_db_connection
+from .connection import get_db_connection
+from .utils.migration_utils import MigrationError, MigrationStatus
 
 logger = logging.getLogger(__name__)
 
-async def initialize_migration_tracking():
-    """Set up the migration tracking tables if they don't exist."""
-    try:
-        async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
-            async with pool.acquire() as conn:
-                # Check if the migrations table exists
-                exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'schema_migrations'
-                    )
-                """)
-                
-                if not exists:
-                    # Create the migrations table
-                    await conn.execute("""
-                        CREATE TABLE schema_migrations (
-                            id SERIAL PRIMARY KEY,
-                            user_id INTEGER NOT NULL,
-                            conversation_id INTEGER,
-                            migration_type VARCHAR(50) NOT NULL,
-                            changes JSONB NOT NULL,
+class SchemaMigrationSystem:
+    """Manages database schema migrations and versioning."""
+    
+    def __init__(self):
+        self.migrations_table = 'schema_migrations'
+        self.current_version = 0
+        self.migrations: Dict[int, Dict[str, Any]] = {}
+        self._load_migrations()
+    
+    def _load_migrations(self):
+        """Load available migrations from the migrations directory."""
+        try:
+            import os
+            from importlib import import_module
+            
+            migrations_dir = os.path.join(os.path.dirname(__file__), 'migrations')
+            for filename in os.listdir(migrations_dir):
+                if filename.endswith('.py') and not filename.startswith('__'):
+                    version = int(filename.split('_')[0])
+                    module = import_module(f'.migrations.{filename[:-3]}', package='db')
+                    self.migrations[version] = {
+                        'module': module,
+                        'filename': filename,
+                        'description': getattr(module, 'description', ''),
+                        'timestamp': datetime.fromtimestamp(int(filename.split('_')[1]))
+                    }
+        except Exception as e:
+            logger.error(f"Error loading migrations: {e}")
+            raise
+    
+    async def initialize(self):
+        """Initialize the migration system."""
+        try:
+            async with get_db_connection() as conn:
+                async with conn.cursor() as cur:
+                    # Create migrations table if it doesn't exist
+                    await cur.execute("""
+                        CREATE TABLE IF NOT EXISTS schema_migrations (
+                            version INTEGER PRIMARY KEY,
                             applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                            environment VARCHAR(50) NOT NULL,
-                            
-                            CONSTRAINT schema_migrations_user_fk
-                                FOREIGN KEY (user_id)
-                                REFERENCES users(id)
-                                ON DELETE CASCADE
+                            description TEXT,
+                            status TEXT DEFAULT 'success',
+                            error_message TEXT
                         )
                     """)
                     
-                    # Create indexes
-                    await conn.execute("""
-                        CREATE INDEX idx_schema_migrations_user
-                        ON schema_migrations(user_id)
+                    # Get current version
+                    await cur.execute("""
+                        SELECT MAX(version) FROM schema_migrations
                     """)
-                    
-                    logger.info("Created schema_migrations tracking table")
-                    
-                # Check if the schema registry exists
-                registry_exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'dynamic_schema_registry'
-                    )
-                """)
-                
-                if not registry_exists:
-                    # Create the registry table
-                    await conn.execute("""
-                        CREATE TABLE dynamic_schema_registry (
-                            id SERIAL PRIMARY KEY,
-                            table_name VARCHAR(100) NOT NULL,
-                            is_active BOOLEAN DEFAULT TRUE,
-                            columns JSONB NOT NULL,
-                            creator_user_id INTEGER,
-                            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                            last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                            metadata JSONB,
-                            
-                            CONSTRAINT dynamic_schema_registry_table_key
-                                UNIQUE (table_name)
-                        )
+                    result = await cur.fetchone()
+                    self.current_version = result[0] if result[0] is not None else 0
+        except Exception as e:
+            logger.error(f"Error initializing migration system: {e}")
+            raise
+    
+    async def get_migration_status(self) -> Dict[str, Any]:
+        """Get current migration status."""
+        try:
+            async with get_db_connection() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("""
+                        SELECT version, applied_at, description, status, error_message
+                        FROM schema_migrations
+                        ORDER BY version DESC
                     """)
+                    rows = await cur.fetchall()
                     
-                    logger.info("Created dynamic_schema_registry table")
+                    return {
+                        'current_version': self.current_version,
+                        'latest_available': max(self.migrations.keys()) if self.migrations else 0,
+                        'migrations': [
+                            {
+                                'version': row[0],
+                                'applied_at': row[1],
+                                'description': row[2],
+                                'status': row[3],
+                                'error_message': row[4]
+                            }
+                            for row in rows
+                        ]
+                    }
+        except Exception as e:
+            logger.error(f"Error getting migration status: {e}")
+            return {
+                'error': str(e)
+            }
     
-    except Exception as e:
-        logger.error(f"Error initializing migration tracking: {e}")
-        raise
-
-async def register_schema_change(change_data: Dict[str, Any]) -> int:
-    """
-    Register a schema change for migration tracking.
-    
-    Args:
-        change_data: Dictionary with schema change information
+    async def migrate(self, target_version: Optional[int] = None) -> Dict[str, Any]:
+        """Run migrations up to the target version."""
+        if target_version is None:
+            target_version = max(self.migrations.keys())
         
-    Returns:
-        Migration ID
-    """
-    try:
-        # Get environment information
-        import os
-        environment = os.environ.get("NYX_ENVIRONMENT", "development")
+        if target_version <= self.current_version:
+            return {
+                'status': 'success',
+                'message': 'Already at target version',
+                'current_version': self.current_version
+            }
         
-        async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
-            async with pool.acquire() as conn:
-                # Insert migration record
-                migration_id = await conn.fetchval("""
-                    INSERT INTO schema_migrations (
-                        user_id, conversation_id, migration_type, 
-                        changes, applied_at, environment
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    RETURNING id
-                """,
-                change_data["user_id"],
-                change_data.get("conversation_id"),
-                "dynamic_schema",
-                json.dumps(change_data),
-                datetime.now(),
-                environment
-                )
-                
-                # Update registry for tables
-                for table_name in change_data.get("changes", {}).get("tables_created", []):
-                    if isinstance(table_name, dict) and "table_name" in table_name:
-                        table_info = table_name
-                        table_name = table_info["table_name"]
+        results = []
+        try:
+            async with get_db_connection() as conn:
+                async with conn.cursor() as cur:
+                    for version in range(self.current_version + 1, target_version + 1):
+                        if version not in self.migrations:
+                            continue
                         
-                        # Check if table already in registry
-                        exists = await conn.fetchval("""
-                            SELECT EXISTS (
-                                SELECT FROM dynamic_schema_registry
-                                WHERE table_name = $1
-                            )
-                        """, table_name)
-                        
-                        if not exists:
-                            # Add to registry
-                            await conn.execute("""
-                                INSERT INTO dynamic_schema_registry (
-                                    table_name, columns, creator_user_id, metadata
-                                )
-                                VALUES ($1, $2, $3, $4)
-                            """,
-                            table_name,
-                            json.dumps(table_info.get("columns", [])),
-                            change_data["user_id"],
-                            json.dumps({
-                                "description": table_info.get("description", ""),
-                                "created_from_migration": migration_id
-                            })
-                            )
-                        
-                # Update registry for extended tables
-                for table_info in change_data.get("changes", {}).get("tables_extended", []):
-                    if isinstance(table_info, dict) and "table_name" in table_info:
-                        table_name = table_info["table_name"]
-                        
-                        # Check if table in registry
-                        registry_record = await conn.fetchrow("""
-                            SELECT id, columns 
-                            FROM dynamic_schema_registry
-                            WHERE table_name = $1
-                        """, table_name)
-                        
-                        if registry_record:
-                            # Update existing record
-                            registry_id = registry_record["id"]
-                            current_columns = json.loads(registry_record["columns"])
+                        migration = self.migrations[version]
+                        try:
+                            # Run migration
+                            await migration['module'].upgrade(cur)
                             
-                            # Append new columns
-                            for col in table_info.get("columns_added", []):
-                                if col not in current_columns:
-                                    current_columns.append(col)
+                            # Record success
+                            await cur.execute("""
+                                INSERT INTO schema_migrations (version, description, status)
+                                VALUES (%s, %s, 'success')
+                            """, (version, migration['description']))
                             
-                            # Update registry
-                            await conn.execute("""
-                                UPDATE dynamic_schema_registry
-                                SET columns = $2,
-                                    last_updated = CURRENT_TIMESTAMP
-                                WHERE id = $1
-                            """,
-                            registry_id,
-                            json.dumps(current_columns)
-                            )
-                        else:
-                            # Add to registry
-                            await conn.execute("""
-                                INSERT INTO dynamic_schema_registry (
-                                    table_name, columns, creator_user_id, metadata
-                                )
-                                VALUES ($1, $2, $3, $4)
-                            """,
-                            table_name,
-                            json.dumps(table_info.get("columns_added", [])),
-                            change_data["user_id"],
-                            json.dumps({
-                                "extended_from_migration": migration_id
+                            results.append({
+                                'version': version,
+                                'status': 'success',
+                                'description': migration['description']
                             })
-                            )
-                
-                return migration_id
-                
-    except Exception as e:
-        logger.error(f"Error registering schema change: {e}")
-        return -1
-
-async def get_schema_migration_history(user_id: int = None, limit: int = 50) -> List[Dict[str, Any]]:
-    """
-    Get schema migration history.
+                        except Exception as e:
+                            # Record failure
+                            await cur.execute("""
+                                INSERT INTO schema_migrations (version, description, status, error_message)
+                                VALUES (%s, %s, 'failed', %s)
+                            """, (version, migration['description'], str(e)))
+                            
+                            results.append({
+                                'version': version,
+                                'status': 'failed',
+                                'description': migration['description'],
+                                'error': str(e)
+                            })
+                            
+                            # Rollback failed migration
+                            try:
+                                await migration['module'].downgrade(cur)
+                            except Exception as rollback_error:
+                                logger.error(f"Error rolling back migration {version}: {rollback_error}")
+                            
+                            raise MigrationError(f"Migration {version} failed: {str(e)}")
+            
+            self.current_version = target_version
+            return {
+                'status': 'success',
+                'message': 'Migrations completed successfully',
+                'results': results
+            }
+        except Exception as e:
+            logger.error(f"Error during migration: {e}")
+            return {
+                'status': 'error',
+                'message': str(e),
+                'results': results
+            }
     
-    Args:
-        user_id: Optional user ID to filter by
-        limit: Maximum number of records to return
+    async def rollback(self, target_version: int) -> Dict[str, Any]:
+        """Rollback migrations to the target version."""
+        if target_version >= self.current_version:
+            return {
+                'status': 'error',
+                'message': 'Cannot rollback to a version higher than current'
+            }
         
-    Returns:
-        List of migration records
-    """
-    try:
-        async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
-            async with pool.acquire() as conn:
-                if user_id:
-                    rows = await conn.fetch("""
-                        SELECT id, user_id, conversation_id, migration_type, 
-                               changes, applied_at, environment
-                        FROM schema_migrations
-                        WHERE user_id = $1
-                        ORDER BY applied_at DESC
-                        LIMIT $2
-                    """, user_id, limit)
-                else:
-                    rows = await conn.fetch("""
-                        SELECT id, user_id, conversation_id, migration_type, 
-                               changes, applied_at, environment
-                        FROM schema_migrations
-                        ORDER BY applied_at DESC
-                        LIMIT $1
-                    """, limit)
-                
-                return [dict(row) for row in rows]
-                
-    except Exception as e:
-        logger.error(f"Error getting migration history: {e}")
-        return []
-
-async def get_dynamic_tables_registry() -> List[Dict[str, Any]]:
-    """
-    Get the registry of dynamically created tables.
+        results = []
+        try:
+            async with get_db_connection() as conn:
+                async with conn.cursor() as cur:
+                    for version in range(self.current_version, target_version, -1):
+                        if version not in self.migrations:
+                            continue
+                        
+                        migration = self.migrations[version]
+                        try:
+                            # Run rollback
+                            await migration['module'].downgrade(cur)
+                            
+                            # Remove migration record
+                            await cur.execute("""
+                                DELETE FROM schema_migrations WHERE version = %s
+                            """, (version,))
+                            
+                            results.append({
+                                'version': version,
+                                'status': 'success',
+                                'description': f"Rolled back {migration['description']}"
+                            })
+                        except Exception as e:
+                            results.append({
+                                'version': version,
+                                'status': 'failed',
+                                'description': f"Failed to rollback {migration['description']}",
+                                'error': str(e)
+                            })
+                            raise MigrationError(f"Rollback of migration {version} failed: {str(e)}")
+            
+            self.current_version = target_version
+            return {
+                'status': 'success',
+                'message': 'Rollback completed successfully',
+                'results': results
+            }
+        except Exception as e:
+            logger.error(f"Error during rollback: {e}")
+            return {
+                'status': 'error',
+                'message': str(e),
+                'results': results
+            }
     
-    Returns:
-        List of registered tables
-    """
-    try:
-        async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
-            async with pool.acquire() as conn:
-                rows = await conn.fetch("""
-                    SELECT id, table_name, is_active, columns, 
-                           creator_user_id, created_at, last_updated, metadata
-                    FROM dynamic_schema_registry
-                    ORDER BY created_at DESC
-                """)
-                
-                return [dict(row) for row in rows]
-                
-    except Exception as e:
-        logger.error(f"Error getting dynamic tables registry: {e}")
-        return []
+    async def validate_schema(self) -> Dict[str, Any]:
+        """Validate current database schema against expected state."""
+        try:
+            async with get_db_connection() as conn:
+                async with conn.cursor() as cur:
+                    # Get all tables
+                    await cur.execute("""
+                        SELECT table_name 
+                        FROM information_schema.tables 
+                        WHERE table_schema = 'public'
+                    """)
+                    tables = [row[0] for row in await cur.fetchall()]
+                    
+                    # Check for missing tables
+                    missing_tables = []
+                    for version in range(1, self.current_version + 1):
+                        if version in self.migrations:
+                            migration = self.migrations[version]
+                            if hasattr(migration['module'], 'required_tables'):
+                                for table in migration['module'].required_tables:
+                                    if table not in tables:
+                                        missing_tables.append(table)
+                    
+                    # Check for missing columns
+                    missing_columns = []
+                    for table in tables:
+                        await cur.execute("""
+                            SELECT column_name, data_type
+                            FROM information_schema.columns
+                            WHERE table_name = %s
+                        """, (table,))
+                        columns = {row[0]: row[1] for row in await cur.fetchall()}
+                        
+                        # Check against expected schema
+                        for version in range(1, self.current_version + 1):
+                            if version in self.migrations:
+                                migration = self.migrations[version]
+                                if hasattr(migration['module'], 'required_columns'):
+                                    for col_name, col_type in migration['module'].required_columns.get(table, {}).items():
+                                        if col_name not in columns or columns[col_name] != col_type:
+                                            missing_columns.append({
+                                                'table': table,
+                                                'column': col_name,
+                                                'expected_type': col_type,
+                                                'actual_type': columns.get(col_name)
+                                            })
+                    
+                    return {
+                        'status': 'success',
+                        'valid': not (missing_tables or missing_columns),
+                        'missing_tables': missing_tables,
+                        'missing_columns': missing_columns
+                    }
+        except Exception as e:
+            logger.error(f"Error validating schema: {e}")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+
+# Create global instance
+schema_migration_system = SchemaMigrationSystem()

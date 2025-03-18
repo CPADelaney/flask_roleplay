@@ -14,6 +14,7 @@ from logic.stats_logic import (
     insert_or_update_game_rules,
     insert_default_player_stats_chase
 )
+import asyncpg
 
 
 def create_all_tables():
@@ -1412,6 +1413,84 @@ def create_all_tables():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_inventory_user ON PlayerInventory(user_id, conversation_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_perks_user ON PlayerPerks(user_id, conversation_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_special_rewards_user ON PlayerSpecialRewards(user_id, conversation_id);")
+
+    # Create ContextEvolution table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ContextEvolution (
+            evolution_id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            context_data JSONB NOT NULL,
+            changes JSONB NOT NULL,
+            context_shift FLOAT NOT NULL,
+            timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+            FOREIGN KEY (user_id, conversation_id) REFERENCES Conversations(user_id, conversation_id)
+        )
+    """)
+
+    # Create MemoryContextEvolution table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS MemoryContextEvolution (
+            memory_id INTEGER NOT NULL,
+            evolution_id INTEGER NOT NULL,
+            relevance_change FLOAT NOT NULL,
+            timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (memory_id, evolution_id),
+            FOREIGN KEY (memory_id) REFERENCES Memory(memory_id),
+            FOREIGN KEY (evolution_id) REFERENCES ContextEvolution(evolution_id)
+        )
+    """)
+
+    # Add relevance_score column to Memory table if it doesn't exist
+    cursor.execute("""
+        DO $$ 
+        BEGIN 
+            IF NOT EXISTS (
+                SELECT 1 
+                FROM information_schema.columns 
+                WHERE table_name = 'Memory' 
+                AND column_name = 'relevance_score'
+            ) THEN
+                ALTER TABLE Memory ADD COLUMN relevance_score FLOAT DEFAULT 0.0;
+            END IF;
+        END $$;
+    """)
+
+    # Add last_context_update column to Memory table if it doesn't exist
+    cursor.execute("""
+        DO $$ 
+        BEGIN 
+            IF NOT EXISTS (
+                SELECT 1 
+                FROM information_schema.columns 
+                WHERE table_name = 'Memory' 
+                AND column_name = 'last_context_update'
+            ) THEN
+                ALTER TABLE Memory ADD COLUMN last_context_update TIMESTAMP;
+            END IF;
+        END $$;
+    """)
+
+    # Create indexes for better query performance
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_context_evolution_user_conversation 
+        ON ContextEvolution(user_id, conversation_id);
+        
+        CREATE INDEX IF NOT EXISTS idx_context_evolution_timestamp 
+        ON ContextEvolution(timestamp);
+        
+        CREATE INDEX IF NOT EXISTS idx_memory_context_evolution_memory 
+        ON MemoryContextEvolution(memory_id);
+        
+        CREATE INDEX IF NOT EXISTS idx_memory_context_evolution_evolution 
+        ON MemoryContextEvolution(evolution_id);
+        
+        CREATE INDEX IF NOT EXISTS idx_memory_relevance_score 
+        ON Memory(relevance_score);
+        
+        CREATE INDEX IF NOT EXISTS idx_memory_last_context_update 
+        ON Memory(last_context_update);
+    """)
 
     # Done creating everything:
     conn.commit()
