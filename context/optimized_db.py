@@ -8,15 +8,19 @@ import numpy as np
 from datetime import datetime
 import hashlib
 import uuid
+import os
 
-# Try to import vector database client (only import one that you actually use)
+# Try to import vector database client
 try:
-    # Example: Using Qdrant (replace with your preferred database)
     import qdrant_client
     from qdrant_client.http import models as qmodels
+    from qdrant_client.http.exceptions import UnexpectedResponse
     HAVE_VECTOR_DB = True
 except ImportError:
     HAVE_VECTOR_DB = False
+
+# Import Render configuration
+from config.render_config import get_render_config, configure_render_vector_db
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -68,50 +72,118 @@ class VectorDatabase:
 # Keep only ONE external database implementation that you actually use
 # For example, if you use Qdrant:
 class QdrantDatabase(VectorDatabase):
-    """Qdrant vector database integration"""
+    """Qdrant vector database integration with Render optimizations"""
     
     def __init__(
         self, 
-        url: str = "http://localhost:6333", 
-        api_key: Optional[str] = None
+        url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None
     ):
         if not HAVE_VECTOR_DB:
             raise ImportError("qdrant_client is required for QdrantDatabase")
         
-        self.url = url
-        self.api_key = api_key
+        # Get Render configuration
+        self.render_config = config or configure_render_vector_db()
+        self.vector_config = self.render_config['vector_db']
+        
+        # Set connection parameters
+        self.url = url or self.vector_config['url']
+        self.api_key = api_key or self.vector_config['api_key']
         self.client = None
+        self.is_render = self.render_config['is_render']
+        
+        # Connection settings
+        self.connection_timeout = self.vector_config['connection_timeout']
+        self.operation_timeout = self.vector_config['operation_timeout']
+        self.max_retries = self.vector_config['max_retries']
+        self.retry_delay = self.vector_config['retry_delay']
     
     async def initialize(self) -> None:
-        """Initialize the Qdrant client"""
-        self.client = qdrant_client.QdrantClient(
-            url=self.url,
-            api_key=self.api_key
-        )
+        """Initialize the Qdrant client with Render optimizations"""
+        try:
+            # Configure client with optimized settings for Render
+            client_config = {
+                "url": self.url,
+                "api_key": self.api_key,
+                "prefer_grpc": self.vector_config.get('prefer_grpc', True),
+                "timeout": self.connection_timeout
+            }
+            
+            # Add Render-specific optimizations
+            if self.is_render:
+                client_config.update({
+                    "pool_size": self.vector_config['pool_size'],
+                    "max_connections": self.vector_config['max_connections']
+                })
+            
+            self.client = qdrant_client.QdrantClient(**client_config)
+            
+            # Test connection
+            self.client.get_collections()
+            logger.info("Successfully connected to Qdrant")
+            
+        except Exception as e:
+            logger.error(f"Error initializing Qdrant client: {e}")
+            raise
     
     async def close(self) -> None:
         """Close the Qdrant connection"""
-        self.client = None
+        if self.client:
+            await self.client.close()
+            self.client = None
+    
+    async def _retry_operation(self, operation, *args, **kwargs):
+        """Retry operation with exponential backoff"""
+        for attempt in range(self.max_retries):
+            try:
+                return await operation(*args, **kwargs)
+            except UnexpectedResponse as e:
+                if attempt == self.max_retries - 1:
+                    raise
+                wait_time = self.retry_delay * (2 ** attempt)
+                logger.warning(f"Retrying operation after error: {e}. Attempt {attempt + 1}/{self.max_retries}")
+                time.sleep(wait_time)
     
     async def create_collection(self, collection_name: str, dimension: int) -> bool:
-        """Create a new collection in Qdrant"""
+        """Create a new collection in Qdrant with optimized settings"""
         try:
-            # Check if collection already exists
-            collections = self.client.get_collections().collections
-            if collection_name in [c.name for c in collections]:
+            # Check if collection exists
+            collections = await self._retry_operation(self.client.get_collections)
+            if collection_name in [c.name for c in collections.collections]:
                 logger.info(f"Collection {collection_name} already exists")
                 return True
             
-            # Create collection with standard parameters
-            self.client.create_collection(
-                collection_name=collection_name,
-                vectors_config=qmodels.VectorParams(
-                    size=dimension, 
-                    distance=qmodels.Distance.COSINE
+            # Optimize collection settings for Render
+            vector_params = qmodels.VectorParams(
+                size=dimension,
+                distance=qmodels.Distance.COSINE
+            )
+            
+            # Add optimizations for Render
+            if self.is_render:
+                vector_params.on_disk = True  # Store vectors on disk to save memory
+                
+                # Configure optimized index
+                vector_params.hnsw_config = qmodels.HnswConfigDiff(
+                    m=16,  # Number of edges per node
+                    ef_construct=100,  # Size of the dynamic candidate list
+                    full_scan_threshold=10000  # When to switch to full scan
                 )
+            
+            # Create collection
+            await self._retry_operation(
+                self.client.create_collection,
+                collection_name=collection_name,
+                vectors_config=vector_params,
+                optimizers_config=qmodels.OptimizersConfigDiff(
+                    default_segment_number=2,
+                    memmap_threshold=10000
+                ) if self.is_render else None
             )
             
             return True
+            
         except Exception as e:
             logger.error(f"Error creating Qdrant collection: {e}")
             return False
@@ -123,7 +195,7 @@ class QdrantDatabase(VectorDatabase):
         vectors: List[List[float]],
         metadata: List[Dict[str, Any]]
     ) -> bool:
-        """Insert vectors into Qdrant"""
+        """Insert vectors into Qdrant with batching and retry logic"""
         try:
             # Convert string IDs to UUID
             uuid_ids = [uuid.uuid5(uuid.NAMESPACE_DNS, id) for id in ids]
@@ -139,16 +211,19 @@ class QdrantDatabase(VectorDatabase):
                     )
                 )
             
-            # Insert in batches of 100
-            batch_size = 100
+            # Insert in optimized batches
+            batch_size = 100 if self.is_render else 1000
             for i in range(0, len(points), batch_size):
                 batch = points[i:i+batch_size]
-                self.client.upsert(
+                await self._retry_operation(
+                    self.client.upsert,
                     collection_name=collection_name,
-                    points=batch
+                    points=batch,
+                    wait=True
                 )
             
             return True
+            
         except Exception as e:
             logger.error(f"Error inserting vectors into Qdrant: {e}")
             return False
@@ -160,7 +235,7 @@ class QdrantDatabase(VectorDatabase):
         top_k: int = 10,
         filter_dict: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
-        """Search for similar vectors in Qdrant"""
+        """Search for similar vectors in Qdrant with optimized settings"""
         try:
             # Convert filter dictionary to Qdrant filter
             filter_obj = None
@@ -168,7 +243,6 @@ class QdrantDatabase(VectorDatabase):
                 filter_conditions = []
                 for key, value in filter_dict.items():
                     if isinstance(value, list):
-                        # For arrays/lists, use the 'any' match operator
                         filter_conditions.append(
                             qmodels.FieldCondition(
                                 key=key,
@@ -176,7 +250,6 @@ class QdrantDatabase(VectorDatabase):
                             )
                         )
                     else:
-                        # For scalar values, use the 'match' operator
                         filter_conditions.append(
                             qmodels.FieldCondition(
                                 key=key,
@@ -185,16 +258,24 @@ class QdrantDatabase(VectorDatabase):
                         )
                 
                 if filter_conditions:
-                    filter_obj = qmodels.Filter(
-                        must=filter_conditions
-                    )
+                    filter_obj = qmodels.Filter(must=filter_conditions)
             
-            # Perform search
-            results = self.client.search(
+            # Optimize search parameters for Render
+            search_params = {}
+            if self.is_render:
+                search_params.update({
+                    "exact": False,  # Use approximate search
+                    "hnsw_ef": 128,  # Higher values = more accurate but slower
+                })
+            
+            # Perform search with retry
+            results = await self._retry_operation(
+                self.client.search,
                 collection_name=collection_name,
                 query_vector=query_vector,
                 limit=top_k,
-                query_filter=filter_obj
+                query_filter=filter_obj,
+                **search_params
             )
             
             # Format results
@@ -208,6 +289,7 @@ class QdrantDatabase(VectorDatabase):
                 formatted_results.append(item)
             
             return formatted_results
+            
         except Exception as e:
             logger.error(f"Error searching vectors in Qdrant: {e}")
             return []
@@ -405,12 +487,16 @@ class InMemoryVectorDatabase(VectorDatabase):
 
 def create_vector_database(config: Dict[str, Any]) -> VectorDatabase:
     """Create a vector database instance based on configuration"""
+    # Get Render configuration
+    render_config = get_render_config()
+    
     db_type = config.get("db_type", "in_memory").lower()
     
     if db_type == "qdrant" and HAVE_VECTOR_DB:
         return QdrantDatabase(
-            url=config.get("url", "http://localhost:6333"),
-            api_key=config.get("api_key")
+            url=config.get("url"),
+            api_key=config.get("api_key"),
+            config=render_config
         )
     else:
         # Fallback to in-memory

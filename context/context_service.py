@@ -1129,6 +1129,590 @@ class ContextService:
         
         return results
 
+    async def _get_direct_relationships(self, npc_id: int) -> Dict[str, Any]:
+        """Get direct relationships for an NPC."""
+        try:
+            from db.connection import get_db_connection
+            import asyncpg
+            
+            conn = await asyncpg.connect(dsn=get_db_connection())
+            try:
+                rows = await conn.fetch("""
+                    SELECT r.*, n.name as npc_name, n.role as npc_role
+                    FROM NPCRelationships r
+                    JOIN NPCs n ON r.related_npc_id = n.id
+                    WHERE r.npc_id = $1 AND r.user_id = $2 AND r.conversation_id = $3
+                """, npc_id, self.user_id, self.conversation_id)
+                
+                return [dict(row) for row in rows]
+            finally:
+                await conn.close()
+        except Exception as e:
+            logger.error(f"Error getting direct relationships: {e}")
+            return []
+
+    async def _get_relationship_history(self, npc_id: int) -> List[Dict[str, Any]]:
+        """Get relationship history for an NPC."""
+        try:
+            from db.connection import get_db_connection
+            import asyncpg
+            
+            conn = await asyncpg.connect(dsn=get_db_connection())
+            try:
+                rows = await conn.fetch("""
+                    SELECT rh.*, n.name as npc_name
+                    FROM RelationshipHistory rh
+                    JOIN NPCs n ON rh.related_npc_id = n.id
+                    WHERE rh.npc_id = $1 AND rh.user_id = $2 AND rh.conversation_id = $3
+                    ORDER BY rh.timestamp DESC
+                    LIMIT 10
+                """, npc_id, self.user_id, self.conversation_id)
+                
+                return [dict(row) for row in rows]
+            finally:
+                await conn.close()
+        except Exception as e:
+            logger.error(f"Error getting relationship history: {e}")
+            return []
+
+    async def _get_shared_memories(self, npc_id: int) -> List[Dict[str, Any]]:
+        """Get shared memories with an NPC."""
+        try:
+            # Get memories from memory manager
+            memories = await self.memory_manager.get_memories_by_npc(npc_id)
+            
+            # Filter and sort by importance
+            shared_memories = sorted(
+                [m for m in memories if m.metadata.get("npc_id") == npc_id],
+                key=lambda x: x.importance,
+                reverse=True
+            )[:5]
+            
+            return [m.to_dict() for m in shared_memories]
+        except Exception as e:
+            logger.error(f"Error getting shared memories: {e}")
+            return []
+
+    async def _analyze_relationship_dynamics(self, npc_id: int) -> Dict[str, Any]:
+        """Analyze relationship dynamics for an NPC."""
+        try:
+            # Get relationship history
+            history = await self._get_relationship_history(npc_id)
+            
+            # Calculate relationship trends
+            trends = {
+                "overall_trend": 0,
+                "recent_changes": [],
+                "key_events": []
+            }
+            
+            if history:
+                # Calculate overall trend
+                trend_values = [h["relationship_change"] for h in history]
+                trends["overall_trend"] = sum(trend_values) / len(trend_values)
+                
+                # Get recent changes
+                trends["recent_changes"] = history[:3]
+                
+                # Identify key events
+                key_events = [h for h in history if abs(h["relationship_change"]) > 0.5]
+                trends["key_events"] = key_events[:3]
+            
+            return trends
+        except Exception as e:
+            logger.error(f"Error analyzing relationship dynamics: {e}")
+            return {}
+
+    async def _get_relationship_context(self, npc_id: int) -> Dict[str, Any]:
+        """Get comprehensive relationship context for an NPC."""
+        try:
+            # Get direct relationships
+            relationships = await self._get_direct_relationships(npc_id)
+            
+            # Get relationship history
+            history = await self._get_relationship_history(npc_id)
+            
+            # Get shared memories
+            shared_memories = await self._get_shared_memories(npc_id)
+            
+            # Get relationship dynamics
+            dynamics = await self._analyze_relationship_dynamics(npc_id)
+            
+            return {
+                "relationships": relationships,
+                "history": history,
+                "shared_memories": shared_memories,
+                "dynamics": dynamics
+            }
+        except Exception as e:
+            logger.error(f"Error getting relationship context: {e}")
+            return {}
+
+    async def _get_narrative_state(self) -> Dict[str, Any]:
+        """Get current narrative state."""
+        try:
+            from db.connection import get_db_connection
+            import asyncpg
+            
+            conn = await asyncpg.connect(dsn=get_db_connection())
+            try:
+                # Get active narrative threads
+                threads = await conn.fetch("""
+                    SELECT * FROM NarrativeThreads
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND is_active = true
+                """, self.user_id, self.conversation_id)
+                
+                # Get narrative metadata
+                metadata = await conn.fetchrow("""
+                    SELECT * FROM NarrativeMetadata
+                    WHERE user_id = $1 AND conversation_id = $2
+                """, self.user_id, self.conversation_id)
+                
+                return {
+                    "threads": [dict(t) for t in threads],
+                    "metadata": dict(metadata) if metadata else {}
+                }
+            finally:
+                await conn.close()
+        except Exception as e:
+            logger.error(f"Error getting narrative state: {e}")
+            return {"threads": [], "metadata": {}}
+
+    async def _check_narrative_inconsistencies(self, context: Dict[str, Any], narrative_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Check for narrative inconsistencies in the context."""
+        inconsistencies = []
+        
+        try:
+            # Check NPC consistency
+            npc_ids = set(npc["id"] for npc in context.get("npcs", []))
+            thread_npc_ids = set(npc_id for thread in narrative_state["threads"] 
+                               for npc_id in thread.get("involved_npcs", []))
+            
+            # Find NPCs in threads but not in context
+            missing_npcs = thread_npc_ids - npc_ids
+            if missing_npcs:
+                inconsistencies.append({
+                    "type": "missing_npcs",
+                    "details": list(missing_npcs),
+                    "severity": "medium"
+                })
+            
+            # Check location consistency
+            current_location = context.get("location_details", {}).get("name")
+            thread_locations = set(loc for thread in narrative_state["threads"] 
+                                 for loc in thread.get("locations", []))
+            
+            if current_location and current_location not in thread_locations:
+                inconsistencies.append({
+                    "type": "location_mismatch",
+                    "details": {"current": current_location, "expected": list(thread_locations)},
+                    "severity": "low"
+                })
+            
+            # Check quest consistency
+            active_quests = set(q["id"] for q in context.get("quests", []))
+            thread_quests = set(q_id for thread in narrative_state["threads"] 
+                              for q_id in thread.get("related_quests", []))
+            
+            # Find quests in threads but not in context
+            missing_quests = thread_quests - active_quests
+            if missing_quests:
+                inconsistencies.append({
+                    "type": "missing_quests",
+                    "details": list(missing_quests),
+                    "severity": "high"
+                })
+            
+            return inconsistencies
+        except Exception as e:
+            logger.error(f"Error checking narrative inconsistencies: {e}")
+            return []
+
+    async def _resolve_narrative_inconsistencies(self, context: Dict[str, Any], inconsistencies: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Resolve narrative inconsistencies in the context."""
+        try:
+            resolved_context = context.copy()
+            
+            for inconsistency in inconsistencies:
+                if inconsistency["type"] == "missing_npcs":
+                    # Fetch missing NPCs
+                    missing_npcs = await self._fetch_npcs(inconsistency["details"])
+                    resolved_context["npcs"].extend(missing_npcs)
+                
+                elif inconsistency["type"] == "location_mismatch":
+                    # Update location context
+                    location_context = await self._get_location_context(inconsistency["details"]["expected"][0])
+                    resolved_context["location_details"] = location_context
+                
+                elif inconsistency["type"] == "missing_quests":
+                    # Fetch missing quests
+                    missing_quests = await self._fetch_quests(inconsistency["details"])
+                    resolved_context["quests"].extend(missing_quests)
+            
+            return resolved_context
+        except Exception as e:
+            logger.error(f"Error resolving narrative inconsistencies: {e}")
+            return context
+
+    async def _calculate_coherence_score(self, context: Dict[str, Any]) -> float:
+        """Calculate narrative coherence score."""
+        try:
+            score = 1.0
+            
+            # Check NPC presence
+            npc_count = len(context.get("npcs", []))
+            if npc_count < 3:
+                score *= 0.9
+            
+            # Check quest consistency
+            quest_count = len(context.get("quests", []))
+            if quest_count < 2:
+                score *= 0.9
+            
+            # Check memory relevance
+            memories = context.get("memories", [])
+            if not memories:
+                score *= 0.8
+            else:
+                # Check memory recency
+                recent_memories = [m for m in memories 
+                                 if (datetime.now() - m["created_at"]).days < 7]
+                if len(recent_memories) < 3:
+                    score *= 0.9
+            
+            # Check relationship consistency
+            relationships = context.get("relationships", {})
+            if not relationships:
+                score *= 0.9
+            else:
+                # Check relationship depth
+                deep_relationships = [r for r in relationships.values() 
+                                   if r.get("depth", 0) > 0.5]
+                if len(deep_relationships) < 2:
+                    score *= 0.9
+            
+            return round(score, 2)
+        except Exception as e:
+            logger.error(f"Error calculating coherence score: {e}")
+            return 0.5
+
+    async def _get_active_narrative_threads(self) -> List[Dict[str, Any]]:
+        """Get active narrative threads."""
+        try:
+            from db.connection import get_db_connection
+            import asyncpg
+            
+            conn = await asyncpg.connect(dsn=get_db_connection())
+            try:
+                rows = await conn.fetch("""
+                    SELECT * FROM NarrativeThreads
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND is_active = true
+                    ORDER BY importance DESC, last_updated DESC
+                    LIMIT 5
+                """, self.user_id, self.conversation_id)
+                
+                return [dict(row) for row in rows]
+            finally:
+                await conn.close()
+        except Exception as e:
+            logger.error(f"Error getting active narrative threads: {e}")
+            return []
+
+    async def _ensure_narrative_coherence(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensure narrative coherence across context."""
+        try:
+            # Get current narrative state
+            narrative_state = await self._get_narrative_state()
+            
+            # Check for narrative inconsistencies
+            inconsistencies = await self._check_narrative_inconsistencies(context, narrative_state)
+            
+            # Resolve inconsistencies
+            if inconsistencies:
+                context = await self._resolve_narrative_inconsistencies(context, inconsistencies)
+            
+            # Add narrative metadata
+            context["narrative_metadata"] = {
+                "state": narrative_state,
+                "coherence_score": await self._calculate_coherence_score(context),
+                "narrative_threads": await self._get_active_narrative_threads()
+            }
+            
+            return context
+        except Exception as e:
+            logger.error(f"Error ensuring narrative coherence: {e}")
+            return context
+
+    async def initialize(self, user_id: int, conversation_id: int):
+        """Initialize the context service."""
+        try:
+            # Initialize core components
+            self.context_manager = ContextManager()
+            self.memory_manager = MemoryManager()
+            self.vector_service = VectorService()
+            
+            # Initialize Nyx integration
+            await self.context_manager.initialize_nyx_integration(user_id, conversation_id)
+            
+            # Load initial context
+            await self._load_initial_context(user_id, conversation_id)
+            
+            logger.info("Context service initialized successfully")
+        except Exception as e:
+            logger.error(f"Error initializing context service: {e}")
+            raise
+
+    async def get_context(self, user_id: int, conversation_id: int, 
+                         context_type: str = "full") -> Dict[str, Any]:
+        """Get optimized context for interactions."""
+        try:
+            # Get base context
+            context = await self._get_base_context(user_id, conversation_id)
+            
+            # Apply Nyx directives
+            context = await self._apply_nyx_directives(context)
+            
+            # Get narrative state
+            narrative_state = await self._get_narrative_state(user_id, conversation_id)
+            
+            # Get active conflicts
+            conflicts = await self._get_active_conflicts(user_id, conversation_id)
+            
+            # Get relevant NPCs
+            npcs = await self._get_relevant_npcs(user_id, conversation_id)
+            
+            # Get story progression
+            story_progress = await self._get_story_progression(user_id, conversation_id)
+            
+            # Combine all context
+            full_context = {
+                "base_context": context,
+                "narrative_state": narrative_state,
+                "active_conflicts": conflicts,
+                "relevant_npcs": npcs,
+                "story_progress": story_progress,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Apply context type filtering
+            if context_type == "condensed":
+                return await self._condense_context(full_context)
+            elif context_type == "summary":
+                return await self._summarize_context(full_context)
+            else:
+                return full_context
+                
+        except Exception as e:
+            logger.error(f"Error getting context: {e}")
+            return {}
+
+    async def _apply_nyx_directives(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply Nyx directives to context."""
+        try:
+            # Get active directives
+            directives = await self.context_manager.get_active_directives()
+            
+            # Apply each directive
+            for directive in directives:
+                if directive["type"] == "override":
+                    context = await self._apply_override_directive(context, directive)
+                elif directive["type"] == "prohibition":
+                    context = await self._apply_prohibition_directive(context, directive)
+                elif directive["type"] == "action":
+                    context = await self._apply_action_directive(context, directive)
+            
+            return context
+        except Exception as e:
+            logger.error(f"Error applying Nyx directives: {e}")
+            return context
+
+    async def _apply_override_directive(self, context: Dict[str, Any], 
+                                     directive: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply an override directive to context."""
+        try:
+            override_action = directive.get("override_action", {})
+            applies_to = directive.get("applies_to", [])
+            
+            # Apply override to specified paths
+            for path in applies_to:
+                if path in context:
+                    context[path] = override_action.get(path, context[path])
+            
+            return context
+        except Exception as e:
+            logger.error(f"Error applying override directive: {e}")
+            return context
+
+    async def _apply_prohibition_directive(self, context: Dict[str, Any], 
+                                        directive: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply a prohibition directive to context."""
+        try:
+            prohibited_actions = directive.get("prohibited_actions", [])
+            
+            # Remove prohibited actions from context
+            for action in prohibited_actions:
+                if action in context:
+                    del context[action]
+            
+            return context
+        except Exception as e:
+            logger.error(f"Error applying prohibition directive: {e}")
+            return context
+
+    async def _apply_action_directive(self, context: Dict[str, Any], 
+                                   directive: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply an action directive to context."""
+        try:
+            instruction = directive.get("instruction", "")
+            params = directive.get("parameters", {})
+            
+            if "prioritize" in instruction.lower():
+                # Apply prioritization rules
+                priority_rules = params.get("priority_rules", {})
+                context = await self._prioritize_context(context, priority_rules)
+            
+            elif "consolidate" in instruction.lower():
+                # Apply consolidation rules
+                consolidation_rules = params.get("consolidation_rules", {})
+                context = await self._consolidate_context(context, consolidation_rules)
+            
+            elif "filter" in instruction.lower():
+                # Apply filtering rules
+                filter_rules = params.get("filter_rules", {})
+                context = await self._filter_context(context, filter_rules)
+            
+            return context
+        except Exception as e:
+            logger.error(f"Error applying action directive: {e}")
+            return context
+
+    async def _prioritize_context(self, context: Dict[str, Any], 
+                                rules: Dict[str, Any]) -> Dict[str, Any]:
+        """Prioritize context based on rules."""
+        try:
+            prioritized = {}
+            
+            # Calculate priority scores
+            for key, value in context.items():
+                score = 0.0
+                
+                # Apply type-based scoring
+                if key in rules.get("type_scores", {}):
+                    score += rules["type_scores"][key]
+                
+                # Apply relationship-based scoring
+                if key in rules.get("relationship_weights", {}):
+                    score += rules["relationship_weights"][key]
+                
+                # Apply recency-based scoring
+                if isinstance(value, dict) and "timestamp" in value:
+                    age = (datetime.now() - datetime.fromisoformat(value["timestamp"])).total_seconds()
+                    score += max(0, 1 - (age / rules.get("recency_threshold", 86400)))
+                
+                prioritized[key] = {"value": value, "score": score}
+            
+            # Sort by priority score
+            sorted_items = sorted(
+                prioritized.items(),
+                key=lambda x: x[1]["score"],
+                reverse=True
+            )
+            
+            # Return prioritized context
+            return {k: v["value"] for k, v in sorted_items}
+        except Exception as e:
+            logger.error(f"Error prioritizing context: {e}")
+            return context
+
+    async def _consolidate_context(self, context: Dict[str, Any], 
+                                 rules: Dict[str, Any]) -> Dict[str, Any]:
+        """Consolidate context based on rules."""
+        try:
+            consolidated = context.copy()
+            
+            # Apply grouping rules
+            if "group_by" in rules:
+                for group_key in rules["group_by"]:
+                    if group_key in consolidated:
+                        consolidated[group_key] = await self._consolidate_group(
+                            consolidated[group_key],
+                            rules.get("group_rules", {}).get(group_key, {})
+                        )
+            
+            # Apply memory consolidation
+            if "consolidate_memories" in rules and "memories" in consolidated:
+                consolidated["memories"] = await self._consolidate_memories(
+                    consolidated["memories"],
+                    rules["consolidate_memories"]
+                )
+            
+            # Apply relationship consolidation
+            if "consolidate_relationships" in rules and "relationships" in consolidated:
+                consolidated["relationships"] = await self._consolidate_relationships(
+                    consolidated["relationships"],
+                    rules["consolidate_relationships"]
+                )
+            
+            return consolidated
+        except Exception as e:
+            logger.error(f"Error consolidating context: {e}")
+            return context
+
+    async def _filter_context(self, context: Dict[str, Any], 
+                            rules: Dict[str, Any]) -> Dict[str, Any]:
+        """Filter context based on rules."""
+        try:
+            filtered = context.copy()
+            
+            # Apply inclusion rules
+            if "include_only" in rules:
+                filtered = {
+                    k: v for k, v in filtered.items()
+                    if k in rules["include_only"]
+                }
+            
+            # Apply exclusion rules
+            if "exclude" in rules:
+                for key in rules["exclude"]:
+                    filtered.pop(key, None)
+            
+            # Apply importance threshold
+            if "importance_threshold" in rules:
+                filtered = {
+                    k: v for k, v in filtered.items()
+                    if self._calculate_importance(v) >= rules["importance_threshold"]
+                }
+            
+            return filtered
+        except Exception as e:
+            logger.error(f"Error filtering context: {e}")
+            return context
+
+    def _calculate_importance(self, value: Any) -> float:
+        """Calculate importance score for a context value."""
+        try:
+            importance = 0.0
+            
+            # Base importance by type
+            if isinstance(value, dict):
+                importance += 1.0
+                # Add importance based on key presence
+                if "error" in value or "critical" in value:
+                    importance += 2.0
+                if "player" in value or "npc" in value:
+                    importance += 1.5
+            elif isinstance(value, list):
+                importance += 0.5
+                # Add importance based on list length
+                importance += min(1.0, len(value) * 0.1)
+            
+            return importance
+        except Exception as e:
+            logger.error(f"Error calculating importance: {e}")
+            return 0.0
+
 
 # Global service registry
 _context_services = {}

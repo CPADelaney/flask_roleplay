@@ -63,6 +63,15 @@ class ContextManager:
         # Initialize the processing task
         self.batch_task = None
         self.batch_interval = 0.5  # seconds
+        
+        # NEW: Nyx directive handling
+        self.nyx_directives = {}
+        self.nyx_overrides = {}
+        self.nyx_prohibitions = {}
+        
+        # NEW: Nyx governance integration
+        self.governance = None
+        self.directive_handler = None
     
     def _hash_context(self, context: Dict[str, Any]) -> str:
         """Create a hash representation of context to detect changes"""
@@ -455,6 +464,359 @@ class ContextManager:
                 self.change_subscriptions[path].remove(callback)
                 return True
         return False
+
+    def _prioritize_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Prioritize context elements based on relevance and importance."""
+        try:
+            # Calculate priority scores
+            priority_scores = {}
+            for key, value in context.items():
+                score = 0
+                
+                # Base score by type
+                type_scores = {
+                    "npcs": 8,
+                    "memories": 7,
+                    "quests": 6,
+                    "location": 5,
+                    "relationships": 7,
+                    "narrative": 8,
+                    "conflicts": 7,
+                    "lore": 6,
+                    "events": 5,
+                    "items": 4
+                }
+                score += type_scores.get(key, 3)
+                
+                # Adjust for recency
+                if hasattr(value, "timestamp"):
+                    age = time.time() - value.timestamp
+                    recency = max(0, 1 - (age / 86400))  # 24-hour decay
+                    score *= (1 + recency)
+                
+                # Adjust for relevance
+                if hasattr(value, "relevance_score"):
+                    score *= (1 + value.relevance_score)
+                
+                # Adjust for complexity
+                if isinstance(value, dict):
+                    # More complex dictionaries get higher priority
+                    if any(k in value for k in ["error", "critical", "important"]):
+                        score += 3
+                    elif any(k in value for k in ["player", "npc", "quest"]):
+                        score += 2
+                    elif len(value) > 5:
+                        score += 1
+                elif isinstance(value, list):
+                    # Longer lists get higher priority
+                    if len(value) > 10:
+                        score += 2
+                    elif len(value) > 5:
+                        score += 1
+                
+                # Adjust for relationships
+                if key == "relationships" and isinstance(value, dict):
+                    # More complex relationships get higher priority
+                    relationship_count = len(value)
+                    if relationship_count > 5:
+                        score += 2
+                    elif relationship_count > 2:
+                        score += 1
+                
+                # Adjust for narrative importance
+                if key == "narrative_metadata":
+                    if value.get("coherence_score", 0) > 0.8:
+                        score += 2
+                    elif value.get("coherence_score", 0) > 0.6:
+                        score += 1
+                
+                priority_scores[key] = score
+            
+            # Sort by priority
+            sorted_items = sorted(
+                context.items(),
+                key=lambda x: priority_scores.get(x[0], 0),
+                reverse=True
+            )
+            
+            # Create prioritized context
+            prioritized_context = dict(sorted_items)
+            
+            # Add priority metadata
+            prioritized_context["_priority_metadata"] = {
+                "scores": priority_scores,
+                "timestamp": time.time()
+            }
+            
+            return prioritized_context
+        except Exception as e:
+            logger.error(f"Error prioritizing context: {e}")
+            return context
+
+    async def initialize_nyx_integration(self, user_id: int, conversation_id: int):
+        """Initialize Nyx governance integration."""
+        try:
+            from nyx.integrate import get_central_governance
+            from nyx.directive_handler import DirectiveHandler
+            from nyx.nyx_governance import AgentType
+            
+            # Get governance system
+            self.governance = await get_central_governance(user_id, conversation_id)
+            
+            # Initialize directive handler
+            self.directive_handler = DirectiveHandler(
+                user_id,
+                conversation_id,
+                AgentType.CONTEXT_MANAGER,
+                self.component_id
+            )
+            
+            # Register handlers
+            self.directive_handler.register_handler("action", self._handle_action_directive)
+            self.directive_handler.register_handler("override", self._handle_override_directive)
+            self.directive_handler.register_handler("prohibition", self._handle_prohibition_directive)
+            
+            logger.info(f"Initialized Nyx integration for context manager {self.component_id}")
+        except Exception as e:
+            logger.error(f"Error initializing Nyx integration: {e}")
+
+    async def _handle_action_directive(self, directive: dict) -> dict:
+        """Handle an action directive from Nyx."""
+        instruction = directive.get("instruction", "")
+        logging.info(f"[ContextManager] Processing action directive: {instruction}")
+        
+        if "prioritize_context" in instruction.lower():
+            # Apply context prioritization
+            params = directive.get("parameters", {})
+            priority_rules = params.get("priority_rules", {})
+            
+            # Update priority rules
+            self._update_priority_rules(priority_rules)
+            
+            # Re-prioritize current context
+            self.context = self._prioritize_context(self.context)
+            
+            return {"result": "context_prioritized"}
+            
+        elif "consolidate_context" in instruction.lower():
+            # Consolidate context based on rules
+            params = directive.get("parameters", {})
+            consolidation_rules = params.get("consolidation_rules", {})
+            
+            # Apply consolidation
+            self.context = await self._consolidate_context(consolidation_rules)
+            
+            return {"result": "context_consolidated"}
+            
+        elif "track_changes" in instruction.lower():
+            # Enable/disable change tracking
+            params = directive.get("parameters", {})
+            enabled = params.get("enabled", True)
+            
+            self.change_tracking_enabled = enabled
+            return {"result": "change_tracking_updated", "enabled": enabled}
+        
+        return {"result": "action_not_recognized"}
+
+    async def _handle_override_directive(self, directive: dict) -> dict:
+        """Handle an override directive from Nyx."""
+        logging.info(f"[ContextManager] Processing override directive")
+        
+        # Extract override details
+        override_action = directive.get("override_action", {})
+        applies_to = directive.get("applies_to", [])
+        
+        # Store override
+        directive_id = directive.get("id")
+        if directive_id:
+            self.nyx_overrides[directive_id] = {
+                "action": override_action,
+                "applies_to": applies_to
+            }
+        
+        return {"result": "override_stored"}
+
+    async def _handle_prohibition_directive(self, directive: dict) -> dict:
+        """Handle a prohibition directive from Nyx."""
+        logging.info(f"[ContextManager] Processing prohibition directive")
+        
+        # Extract prohibition details
+        prohibited_actions = directive.get("prohibited_actions", [])
+        reason = directive.get("reason", "No reason provided")
+        
+        # Store prohibition
+        directive_id = directive.get("id")
+        if directive_id:
+            self.nyx_prohibitions[directive_id] = {
+                "prohibited_actions": prohibited_actions,
+                "reason": reason
+            }
+        
+        return {"result": "prohibition_stored"}
+
+    def _update_priority_rules(self, rules: Dict[str, Any]) -> None:
+        """Update priority rules based on Nyx directive."""
+        try:
+            # Update type scores
+            if "type_scores" in rules:
+                self.type_scores.update(rules["type_scores"])
+            
+            # Update priority adjustments
+            if "priority_adjustments" in rules:
+                self.priority_adjustments.update(rules["priority_adjustments"])
+            
+            # Update relationship weights
+            if "relationship_weights" in rules:
+                self.relationship_weights.update(rules["relationship_weights"])
+            
+            logger.info("Updated priority rules from Nyx directive")
+        except Exception as e:
+            logger.error(f"Error updating priority rules: {e}")
+
+    async def _consolidate_context(self, rules: Dict[str, Any]) -> Dict[str, Any]:
+        """Consolidate context based on Nyx rules."""
+        try:
+            consolidated = self.context.copy()
+            
+            # Apply consolidation rules
+            if "group_by" in rules:
+                for group_key in rules["group_by"]:
+                    if group_key in consolidated:
+                        consolidated[group_key] = self._consolidate_group(
+                            consolidated[group_key],
+                            rules.get("group_rules", {}).get(group_key, {})
+                        )
+            
+            # Apply memory consolidation
+            if "consolidate_memories" in rules and "memories" in consolidated:
+                consolidated["memories"] = await self._consolidate_memories(
+                    consolidated["memories"],
+                    rules["consolidate_memories"]
+                )
+            
+            # Apply relationship consolidation
+            if "consolidate_relationships" in rules and "relationships" in consolidated:
+                consolidated["relationships"] = await self._consolidate_relationships(
+                    consolidated["relationships"],
+                    rules["consolidate_relationships"]
+                )
+            
+            return consolidated
+        except Exception as e:
+            logger.error(f"Error consolidating context: {e}")
+            return self.context
+
+    def _consolidate_group(self, group: Any, rules: Dict[str, Any]) -> Any:
+        """Consolidate a group of items based on rules."""
+        try:
+            if isinstance(group, list):
+                # Apply list consolidation rules
+                if "max_items" in rules:
+                    group = group[:rules["max_items"]]
+                if "group_by" in rules:
+                    # Group items by specified key
+                    grouped = defaultdict(list)
+                    for item in group:
+                        key = item.get(rules["group_by"])
+                        if key:
+                            grouped[key].append(item)
+                    # Convert back to list with summaries
+                    group = [
+                        self._summarize_group(items, rules.get("summary_rules", {}))
+                        for items in grouped.values()
+                    ]
+            elif isinstance(group, dict):
+                # Apply dictionary consolidation rules
+                if "max_keys" in rules:
+                    # Keep only top N keys by importance
+                    sorted_keys = sorted(
+                        group.keys(),
+                        key=lambda k: self._calculate_key_importance(k, group[k]),
+                        reverse=True
+                    )[:rules["max_keys"]]
+                    group = {k: group[k] for k in sorted_keys}
+            
+            return group
+        except Exception as e:
+            logger.error(f"Error consolidating group: {e}")
+            return group
+
+    def _summarize_group(self, items: List[Any], rules: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a summary of a group of items."""
+        try:
+            summary = {
+                "count": len(items),
+                "items": items[:rules.get("max_summary_items", 3)],
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Add additional summary fields based on rules
+            if "include_stats" in rules:
+                summary["stats"] = self._calculate_group_stats(items, rules["include_stats"])
+            
+            return summary
+        except Exception as e:
+            logger.error(f"Error summarizing group: {e}")
+            return {"count": len(items), "items": items[:3]}
+
+    def _calculate_key_importance(self, key: str, value: Any) -> float:
+        """Calculate importance of a dictionary key."""
+        try:
+            importance = 0.0
+            
+            # Base importance by key name
+            if key in ["error", "critical", "important"]:
+                importance += 3.0
+            elif key in ["player", "npc", "quest"]:
+                importance += 2.0
+            
+            # Adjust by value type and size
+            if isinstance(value, dict):
+                importance += min(2.0, len(value) * 0.2)
+            elif isinstance(value, list):
+                importance += min(2.0, len(value) * 0.1)
+            
+            return importance
+        except Exception as e:
+            logger.error(f"Error calculating key importance: {e}")
+            return 0.0
+
+    def _calculate_group_stats(self, items: List[Any], stat_types: List[str]) -> Dict[str, Any]:
+        """Calculate statistics for a group of items."""
+        try:
+            stats = {}
+            
+            for stat_type in stat_types:
+                if stat_type == "count":
+                    stats["count"] = len(items)
+                elif stat_type == "importance":
+                    # Calculate average importance
+                    importance_values = [
+                        item.get("importance", 0.5)
+                        for item in items
+                        if isinstance(item, dict)
+                    ]
+                    if importance_values:
+                        stats["avg_importance"] = sum(importance_values) / len(importance_values)
+                elif stat_type == "recency":
+                    # Calculate average recency
+                    timestamps = [
+                        datetime.fromisoformat(item["timestamp"])
+                        for item in items
+                        if isinstance(item, dict) and "timestamp" in item
+                    ]
+                    if timestamps:
+                        now = datetime.now()
+                        avg_age = sum(
+                            (now - ts).total_seconds()
+                            for ts in timestamps
+                        ) / len(timestamps)
+                        stats["avg_age_seconds"] = avg_age
+            
+            return stats
+        except Exception as e:
+            logger.error(f"Error calculating group stats: {e}")
+            return {}
 
 
 # Global instance
