@@ -2,12 +2,203 @@
 
 import logging
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
+from datetime import datetime
+from .base_manager import BaseManager
+from .resource_manager import resource_manager
 
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType, DirectivePriority
+from .lore_system import LoreSystem
+from .lore_validation import LoreValidator
+from .error_handler import ErrorHandler
+from .dynamic_lore_generator import DynamicLoreGenerator
+from .unified_validation import ValidationManager
 
 logger = logging.getLogger(__name__)
+
+# Initialize components
+lore_system = DynamicLoreGenerator()
+lore_validator = ValidationManager()
+error_handler = ErrorHandler()
+
+class GovernanceRegistration(BaseManager):
+    """Manager for governance registration with resource management support."""
+    
+    def __init__(
+        self,
+        user_id: int,
+        conversation_id: int,
+        max_size_mb: float = 100,
+        redis_url: Optional[str] = None
+    ):
+        super().__init__(user_id, conversation_id, max_size_mb, redis_url)
+        self.registration_data = {}
+        self.resource_manager = resource_manager
+    
+    async def start(self):
+        """Start the governance registration manager and resource management."""
+        await super().start()
+        await self.resource_manager.start()
+    
+    async def stop(self):
+        """Stop the governance registration manager and cleanup resources."""
+        await super().stop()
+        await self.resource_manager.stop()
+    
+    async def get_registration_data(
+        self,
+        registration_id: str,
+        fetch_func: Optional[callable] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Get registration data from cache or fetch if not available."""
+        try:
+            # Check resource availability before fetching
+            if fetch_func:
+                await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.get_cached_data('registration', registration_id, fetch_func)
+        except Exception as e:
+            logger.error(f"Error getting registration data: {e}")
+            return None
+    
+    async def set_registration_data(
+        self,
+        registration_id: str,
+        data: Dict[str, Any],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set registration data in cache."""
+        try:
+            # Check resource availability before setting
+            await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.set_cached_data('registration', registration_id, data, tags)
+        except Exception as e:
+            logger.error(f"Error setting registration data: {e}")
+            return False
+    
+    async def invalidate_registration_data(
+        self,
+        registration_id: Optional[str] = None,
+        recursive: bool = True
+    ) -> None:
+        """Invalidate registration data cache."""
+        try:
+            await self.invalidate_cached_data('registration', registration_id, recursive)
+        except Exception as e:
+            logger.error(f"Error invalidating registration data: {e}")
+    
+    async def get_registration_history(
+        self,
+        registration_id: str,
+        fetch_func: Optional[callable] = None
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Get registration history from cache or fetch if not available."""
+        try:
+            # Check resource availability before fetching
+            if fetch_func:
+                await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.get_cached_data('registration_history', registration_id, fetch_func)
+        except Exception as e:
+            logger.error(f"Error getting registration history: {e}")
+            return None
+    
+    async def set_registration_history(
+        self,
+        registration_id: str,
+        history: List[Dict[str, Any]],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set registration history in cache."""
+        try:
+            # Check resource availability before setting
+            await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.set_cached_data('registration_history', registration_id, history, tags)
+        except Exception as e:
+            logger.error(f"Error setting registration history: {e}")
+            return False
+    
+    async def invalidate_registration_history(
+        self,
+        registration_id: Optional[str] = None,
+        recursive: bool = True
+    ) -> None:
+        """Invalidate registration history cache."""
+        try:
+            await self.invalidate_cached_data('registration_history', registration_id, recursive)
+        except Exception as e:
+            logger.error(f"Error invalidating registration history: {e}")
+    
+    async def get_registration_metadata(
+        self,
+        registration_id: str,
+        fetch_func: Optional[callable] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Get registration metadata from cache or fetch if not available."""
+        try:
+            # Check resource availability before fetching
+            if fetch_func:
+                await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.get_cached_data('registration_metadata', registration_id, fetch_func)
+        except Exception as e:
+            logger.error(f"Error getting registration metadata: {e}")
+            return None
+    
+    async def set_registration_metadata(
+        self,
+        registration_id: str,
+        metadata: Dict[str, Any],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set registration metadata in cache."""
+        try:
+            # Check resource availability before setting
+            await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.set_cached_data('registration_metadata', registration_id, metadata, tags)
+        except Exception as e:
+            logger.error(f"Error setting registration metadata: {e}")
+            return False
+    
+    async def invalidate_registration_metadata(
+        self,
+        registration_id: Optional[str] = None,
+        recursive: bool = True
+    ) -> None:
+        """Invalidate registration metadata cache."""
+        try:
+            await self.invalidate_cached_data('registration_metadata', registration_id, recursive)
+        except Exception as e:
+            logger.error(f"Error invalidating registration metadata: {e}")
+    
+    async def get_resource_stats(self) -> Dict[str, Any]:
+        """Get resource usage statistics."""
+        try:
+            return await self.resource_manager.get_resource_stats()
+        except Exception as e:
+            logger.error(f"Error getting resource stats: {e}")
+            return {}
+    
+    async def optimize_resources(self):
+        """Optimize resource usage."""
+        try:
+            await self.resource_manager._optimize_resource_usage('memory')
+        except Exception as e:
+            logger.error(f"Error optimizing resources: {e}")
+    
+    async def cleanup_resources(self):
+        """Clean up unused resources."""
+        try:
+            await self.resource_manager._cleanup_all_resources()
+        except Exception as e:
+            logger.error(f"Error cleaning up resources: {e}")
+
+# Create a singleton instance for easy access
+governance_registration = GovernanceRegistration()
 
 async def register_all_lore_modules_with_governance(user_id: int, conversation_id: int) -> Dict[str, bool]:
     """
@@ -230,37 +421,110 @@ async def register_lore_module_with_governance(
 
 # Individual registration functions
 
-async def register_lore_agents(user_id, conversation_id, governance, agent_id):
-    """Register lore agents with governance."""
-    from lore.lore_agents import register_with_governance
-    await register_with_governance(user_id, conversation_id)
+async def register_lore_agents(
+    user_id: int,
+    conversation_id: int,
+    governance: Any,
+    agent_id: str = "lore_agents"
+) -> bool:
+    """Register lore agents with governance"""
+    try:
+        await governance.register_agent(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id=agent_id,
+            agent_instance=None  # Will be instantiated when needed
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error registering lore agents: {e}")
+        return False
 
-async def register_lore_manager(user_id, conversation_id, governance, agent_id):
-    """Register lore manager with governance."""
-    from lore.lore_manager import LoreManager
-    lore_manager = LoreManager(user_id, conversation_id)
-    await lore_manager.register_with_governance()
+async def register_lore_manager(
+    user_id: int,
+    conversation_id: int,
+    governance: Any,
+    agent_id: str = "lore_manager"
+) -> bool:
+    """Register lore manager with governance"""
+    try:
+        await governance.register_agent(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id=agent_id,
+            agent_instance=None  # Will be instantiated when needed
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error registering lore manager: {e}")
+        return False
 
-async def register_lore_generator(user_id, conversation_id, governance, agent_id):
-    """Register dynamic lore generator with governance."""
-    from lore.dynamic_lore_generator import DynamicLoreGenerator
-    lore_generator = DynamicLoreGenerator(user_id, conversation_id)
-    await lore_generator.initialize_governance()
+async def register_lore_generator(
+    user_id: int,
+    conversation_id: int,
+    governance: Any,
+    agent_id: str = "lore_generator"
+) -> bool:
+    """Register lore generator with governance"""
+    try:
+        await governance.register_agent(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id=agent_id,
+            agent_instance=None  # Will be instantiated when needed
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error registering lore generator: {e}")
+        return False
 
-async def register_setting_analyzer(user_id, conversation_id, governance, agent_id):
-    """Register setting analyzer with governance."""
-    from lore.setting_analyzer import SettingAnalyzer
-    analyzer = SettingAnalyzer(user_id, conversation_id)
-    await analyzer.register_with_governance()
+async def register_setting_analyzer(
+    user_id: int,
+    conversation_id: int,
+    governance: Any,
+    agent_id: str = "setting_analyzer"
+) -> bool:
+    """Register setting analyzer with governance"""
+    try:
+        await governance.register_agent(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id=agent_id,
+            agent_instance=None  # Will be instantiated when needed
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error registering setting analyzer: {e}")
+        return False
 
-async def register_lore_integration(user_id, conversation_id, governance, agent_id):
-    """Register lore integration system with governance."""
-    from lore.lore_integration import LoreIntegrationSystem
-    integration_system = LoreIntegrationSystem(user_id, conversation_id)
-    await integration_system.initialize_governance()
+async def register_lore_integration(
+    user_id: int,
+    conversation_id: int,
+    governance: Any,
+    agent_id: str = "lore_integration"
+) -> bool:
+    """Register lore integration with governance"""
+    try:
+        await governance.register_agent(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id=agent_id,
+            agent_instance=None  # Will be instantiated when needed
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error registering lore integration: {e}")
+        return False
 
-async def register_npc_lore_integration(user_id, conversation_id, governance, agent_id):
-    """Register NPC lore integration with governance."""
-    from lore.npc_lore_integration import NPCLoreIntegration
-    npc_lore = NPCLoreIntegration(user_id, conversation_id)
-    await npc_lore.register_with_nyx_governance()
+async def register_npc_lore_integration(
+    user_id: int,
+    conversation_id: int,
+    governance: Any,
+    agent_id: str = "npc_lore_integration"
+) -> bool:
+    """Register NPC lore integration with governance"""
+    try:
+        await governance.register_agent(
+            agent_type=AgentType.NARRATIVE_CRAFTER,
+            agent_id=agent_id,
+            agent_instance=None  # Will be instantiated when needed
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Error registering NPC lore integration: {e}")
+        return False

@@ -7,8 +7,18 @@ from typing import Dict, List, Any, Optional, Callable, Union
 from nyx.integrate import get_central_governance
 from nyx.nyx_governance import AgentType, DirectiveType
 from nyx.directive_handler import DirectiveHandler
+from .lore_system import LoreSystem
+from .lore_validation import LoreValidator
+from .error_handler import ErrorHandler
+from .dynamic_lore_generator import DynamicLoreGenerator
+from .unified_validation import ValidationManager
 
 logger = logging.getLogger(__name__)
+
+# Initialize components
+lore_system = DynamicLoreGenerator()
+lore_validator = ValidationManager()
+error_handler = ErrorHandler()
 
 class LoreDirectiveHandler:
     """
@@ -81,7 +91,6 @@ class LoreDirectiveHandler:
             environment_desc = directive.get("environment_desc", "")
             if environment_desc:
                 # Import here to avoid circular imports
-                from lore.dynamic_lore_generator import DynamicLoreGenerator
                 lore_generator = DynamicLoreGenerator(self.user_id, self.conversation_id)
                 result = await lore_generator.generate_complete_lore(environment_desc)
                 return {

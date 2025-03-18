@@ -22,7 +22,7 @@ from lore.lore_agents import (
 )
 
 # Import schemas
-from lore.lore_schemas import (
+from lore.unified_schemas import (
     FoundationLoreOutput,
     FactionsOutput,
     CulturalElementsOutput,

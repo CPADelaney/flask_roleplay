@@ -3,8 +3,11 @@
 import logging
 import json
 import asyncio
-from typing import Dict, List, Any, Optional, Tuple, Union
+from typing import Dict, List, Any, Optional, Tuple, Union, Set
 import asyncpg
+import os
+from datetime import datetime
+import time
 
 from db.connection import get_db_connection
 from embedding.vector_store import generate_embedding, vector_similarity 
@@ -16,957 +19,1649 @@ from nyx.nyx_governance import AgentType, DirectiveType
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
 from nyx.directive_handler import DirectiveHandler
 
-# Initialize cache for lore items
-LORE_CACHE = LoreCache(max_size=500, ttl=3600)  # 1 hour TTL
+# Import the new cache manager
+from .lore_cache_manager import LoreCacheManager
 
-class LoreManager:
+logger = logging.getLogger(__name__)
+
+from .unified_validation import ValidationManager, LoreError, ErrorType
+from .error_handler import ErrorHandler
+from .monitoring import metrics
+from .lore_agents import get_agents
+from .base_manager import BaseManager
+from .resource_manager import resource_manager
+
+class LoreManager(BaseManager):
     """
-    Core manager for lore system, handling storage, retrieval, and integration
-    with other game systems with full Nyx governance integration.
+    Manages all database operations for lore-related data with Nyx governance oversight.
+    
+    This class handles all database interactions for lore data, including:
+    - World lore storage and retrieval
+    - NPC knowledge management
+    - Quest and narrative data
+    - Location and environment descriptions
+    
+    Example:
+        ```python
+        lore_manager = LoreManager(user_id=123, conversation_id=456)
+        await lore_manager.initialize()
+        world_lore = await lore_manager.get_world_lore()
+        ```
     """
     
-    def __init__(self, user_id: Optional[int] = None, conversation_id: Optional[int] = None):
-        """
-        Initialize the lore manager.
-        
-        Args:
-            user_id: Optional user ID for user-specific lore (for campaign variations)
-            conversation_id: Optional conversation ID for conversation-specific lore
-        """
-        self.user_id = user_id
-        self.conversation_id = conversation_id
+    def __init__(
+        self,
+        user_id: int,
+        conversation_id: int,
+        max_size_mb: float = 100,
+        redis_url: Optional[str] = None
+    ):
+        super().__init__(user_id, conversation_id, max_size_mb, redis_url)
+        self.lore_data = {}
+        self.resource_manager = resource_manager
         self.governor = None
+        self.initialized = False
         self.directive_handler = None
-        
-    async def initialize_governance(self):
-        """Initialize governance connections and directive handler"""
-        if not self.governor:
-            self.governor = await get_central_governance(self.user_id, self.conversation_id)
-            
-        # Initialize directive handler if needed
-        if not self.directive_handler:
-            self.directive_handler = DirectiveHandler(
-                self.user_id, 
-                self.conversation_id, 
-                AgentType.NARRATIVE_CRAFTER,
-                "lore_manager"
-            )
-            
-            # Register handlers for different directive types
-            self.directive_handler.register_handler(DirectiveType.ACTION, self._handle_action_directive)
-            self.directive_handler.register_handler(DirectiveType.PROHIBITION, self._handle_prohibition_directive)
-            
-            # Start background processing of directives
-            await self.directive_handler.start_background_processing()
-    
-    async def _handle_action_directive(self, directive):
-        """Handle action directives from Nyx"""
-        instruction = directive.get("instruction", "")
-        
-        if "purge_lore" in instruction.lower():
-            category = directive.get("category", "all")
-            return await self._purge_lore_category(category)
-            
-        elif "update_lore_significance" in instruction.lower():
-            lore_type = directive.get("lore_type")
-            lore_id = directive.get("lore_id")
-            new_significance = directive.get("significance")
-            
-            if lore_type and lore_id and new_significance is not None:
-                return await self._update_lore_significance(lore_type, lore_id, new_significance)
-        
-        return {"status": "unknown_directive", "instruction": instruction}
-    
-    async def _handle_prohibition_directive(self, directive):
-        """Handle prohibition directives from Nyx"""
-        # Mark certain lore operations as prohibited
-        prohibited = directive.get("prohibited_actions", [])
-        
-        # Store these in context for later checking
-        self.prohibited_lore_actions = prohibited
-        
-        return {"status": "prohibition_registered", "prohibited": prohibited}
-    
-    async def _purge_lore_category(self, category: str) -> Dict[str, Any]:
-        """Purge a category of lore from the database"""
-        if category == "all":
-            # Dangerous operation, should have governance permission
-            tables = ["WorldLore", "Factions", "CulturalElements", "HistoricalEvents", 
-                     "GeographicRegions", "LocationLore"]
-            
-            purged_counts = {}
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    for table in tables:
-                        result = await conn.execute(f"DELETE FROM {table}")
-                        purged_counts[table] = result
-                        
-            # Invalidate all cache
-            LORE_CACHE.clear()
-            
-            return {"status": "purged_all", "counts": purged_counts}
-        else:
-            # Map category to table
-            table_map = {
-                "world": "WorldLore",
-                "factions": "Factions",
-                "cultural": "CulturalElements",
-                "historical": "HistoricalEvents",
-                "geographic": "GeographicRegions",
-                "locations": "LocationLore"
-            }
-            
-            if category not in table_map:
-                return {"status": "error", "message": f"Unknown category: {category}"}
-            
-            table = table_map[category]
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    result = await conn.execute(f"DELETE FROM {table}")
-            
-            # Invalidate specific cache
-            LORE_CACHE.invalidate_pattern(category)
-            
-            return {"status": f"purged_{category}", "count": result}
-    
-    async def _update_lore_significance(self, lore_type: str, lore_id: int, significance: int) -> Dict[str, Any]:
-        """Update significance of a lore item"""
-        # Map lore_type to table
-        table_map = {
-            'WorldLore': 'WorldLore',
-            'Factions': 'Factions',
-            'CulturalElements': 'CulturalElements',
-            'HistoricalEvents': 'HistoricalEvents',
-            'GeographicRegions': 'GeographicRegions',
-            'LocationLore': 'LocationLore'
+        self.db_path = "lore_data"
+        self._ensure_db_directory()
+        self._component_counts = {}
+        self.prohibited_actions = []
+        self.state = {
+            'initialized': False,
+            'governance_initialized': False,
+            'last_governance_check': None,
+            'last_prohibition_update': None,
+            'last_purge': None,
+            'error_states': {},
+            'recovery_strategies': {}
         }
+        self.validation_manager = ValidationManager()
+        self.error_handler = ErrorHandler()
+        self._cleanup_task = None
+        self.agents = None
         
-        table = table_map.get(lore_type)
-        if not table:
-            return {"status": "error", "message": f"Unknown lore type: {lore_type}"}
+        # Initialize the new cache manager
+        self.cache_manager = LoreCacheManager(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            max_size_mb=500  # 500MB cache size
+        )
         
-        # Ensure significance is within bounds
-        significance = max(1, min(10, significance))
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                await conn.execute(f"""
-                    UPDATE {table}
-                    SET significance = $1
-                    WHERE id = $2
-                """, significance, lore_id)
-        
-        # Invalidate cache
-        LORE_CACHE.invalidate_pattern(f"{lore_type}_{lore_id}")
-        
-        return {
-            "status": "updated",
-            "lore_type": lore_type,
-            "lore_id": lore_id,
-            "new_significance": significance
-        }
+    def _ensure_db_directory(self):
+        """Ensure the database directory exists"""
+        if not os.path.exists(self.db_path):
+            os.makedirs(self.db_path)
     
-    async def get_connection_pool(self) -> asyncpg.Pool:
-        """Get a connection pool for database operations."""
-        return await asyncpg.create_pool(dsn=get_db_connection())
+    def _get_component_path(self, component_id: str) -> str:
+        """Get the file path for a component"""
+        return os.path.join(self.db_path, f"{component_id}.json")
     
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_world_lore",
-        action_description="Adding world lore: {name}",
-        id_from_context=lambda ctx: "lore_manager"
-    )
-    async def add_world_lore(self, name: str, category: str, description: str, 
-                           significance: int = 5, tags: List[str] = None) -> int:
-        """
-        Add a piece of world lore to the database with governance oversight.
-        
-        Args:
-            name: Name of the lore element
-            category: Category (creation_myth, cosmology, etc.)
-            description: Full description of the lore
-            significance: Importance from 1-10
-            tags: List of tags for categorization
-            
-        Returns:
-            ID of the created lore
-        """
-        # Check for prohibited actions through directive handler
-        if hasattr(self, 'prohibited_lore_actions') and "add_world_lore" in self.prohibited_lore_actions:
-            logging.warning("Adding world lore prohibited by directive")
-            return -1
-            
-        tags = tags or []
-        
-        # Generate embedding for semantic search
-        embedding = await generate_embedding(f"{name} {category} {description}")
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                lore_id = await conn.fetchval("""
-                    INSERT INTO WorldLore (name, category, description, significance, embedding, tags)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    RETURNING id
-                """, name, category, description, significance, embedding, tags)
-                
-                # Clear the relevant cache
-                LORE_CACHE.invalidate_pattern("world_lore")
-                
-                # Log the creation to memory system through governance
-                if self.governor:
-                    memory_system = await self.governor.get_memory_system()
-                    await memory_system.add_memory(
-                        memory_text=f"Added world lore: {name} - Category: {category}",
-                        memory_type="lore",
-                        memory_scope="game",
-                        significance=min(significance + 1, 10),  # Slightly more significant as a creation event
-                        tags=["lore_creation", "world_lore", category] + tags
-                    )
-                
-                return lore_id
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_faction",
-        action_description="Adding faction: {name}",
-        id_from_context=lambda ctx: "lore_manager"
-    )
-    async def add_faction(self, name: str, faction_type: str, description: str, 
-                         values: List[str], goals: List[str], **kwargs) -> int:
-        """
-        Add a faction to the database with governance oversight.
-        
-        Args:
-            name: Name of the faction
-            faction_type: Type of faction (political, religious, etc.)
-            description: Description of the faction
-            values: Core values of the faction
-            goals: Goals of the faction
-            **kwargs: Additional faction attributes
-            
-        Returns:
-            ID of the created faction
-        """
-        # Check for prohibited actions through directive handler
-        if hasattr(self, 'prohibited_lore_actions') and "add_faction" in self.prohibited_lore_actions:
-            logging.warning("Adding faction prohibited by directive")
-            return -1
-            
-        # Generate embedding for semantic search
-        embedding = await generate_embedding(f"{name} {faction_type} {description} {' '.join(values)} {' '.join(goals)}")
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Prepare the values dictionary with required fields
-                insert_values = {
-                    'name': name,
-                    'type': faction_type,
-                    'description': description,
-                    'values': values,
-                    'goals': goals,
-                    'embedding': embedding
-                }
-                
-                # Add optional fields if provided
-                optional_fields = [
-                    'headquarters', 'founding_story', 'rivals', 'allies', 'territory',
-                    'resources', 'hierarchy_type', 'secret_knowledge', 'public_reputation',
-                    'color_scheme', 'symbol_description'
-                ]
-                
-                for field in optional_fields:
-                    if field in kwargs:
-                        insert_values[field] = kwargs[field]
-                
-                # Construct column names and placeholders for dynamic query
-                columns = ', '.join(insert_values.keys())
-                placeholders = ', '.join(f'${i+1}' for i in range(len(insert_values)))
-                
-                # Execute the insertion query
-                faction_id = await conn.fetchval(f"""
-                    INSERT INTO Factions ({columns})
-                    VALUES ({placeholders})
-                    RETURNING id
-                """, *insert_values.values())
-                
-                # Clear the relevant cache
-                LORE_CACHE.invalidate_pattern("faction")
-                
-                # Log the creation to memory system through governance
-                if self.governor:
-                    memory_system = await self.governor.get_memory_system()
-                    await memory_system.add_memory(
-                        memory_text=f"Added faction: {name} ({faction_type})",
-                        memory_type="lore",
-                        memory_scope="game",
-                        significance=6,
-                        tags=["lore_creation", "faction", faction_type]
-                    )
-                
-                return faction_id
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_cultural_element",
-        action_description="Adding cultural element: {name}",
-        id_from_context=lambda ctx: "lore_manager"
-    )
-    async def add_cultural_element(self, name: str, element_type: str, description: str,
-                                 practiced_by: List[str], significance: int = 5, **kwargs) -> int:
-        """
-        Add a cultural element to the database with governance oversight.
-        
-        Args:
-            name: Name of the cultural element
-            element_type: Type of element (tradition, custom, taboo, etc.)
-            description: Description of the element
-            practiced_by: List of factions/regions that practice this
-            significance: Importance from 1-10
-            **kwargs: Additional attributes
-            
-        Returns:
-            ID of the created cultural element
-        """
-        # Check for prohibited actions through directive handler
-        if hasattr(self, 'prohibited_lore_actions') and "add_cultural_element" in self.prohibited_lore_actions:
-            logging.warning("Adding cultural element prohibited by directive")
-            return -1
-            
-        # Generate embedding for semantic search
-        embedding = await generate_embedding(f"{name} {element_type} {description} {' '.join(practiced_by)}")
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Required fields
-                insert_values = {
-                    'name': name,
-                    'type': element_type,
-                    'description': description,
-                    'practiced_by': practiced_by,
-                    'significance': significance,
-                    'embedding': embedding
-                }
-                
-                # Optional fields
-                optional_fields = ['historical_origin', 'related_elements']
-                
-                for field in optional_fields:
-                    if field in kwargs:
-                        insert_values[field] = kwargs[field]
-                
-                # Construct dynamic query
-                columns = ', '.join(insert_values.keys())
-                placeholders = ', '.join(f'${i+1}' for i in range(len(insert_values)))
-                
-                # Execute query
-                element_id = await conn.fetchval(f"""
-                    INSERT INTO CulturalElements ({columns})
-                    VALUES ({placeholders})
-                    RETURNING id
-                """, *insert_values.values())
-                
-                # Clear the relevant cache
-                LORE_CACHE.invalidate_pattern("cultural")
-                
-                # Log the creation to memory system through governance
-                if self.governor:
-                    memory_system = await self.governor.get_memory_system()
-                    await memory_system.add_memory(
-                        memory_text=f"Added cultural element: {name} ({element_type})",
-                        memory_type="lore",
-                        memory_scope="game",
-                        significance=significance,
-                        tags=["lore_creation", "cultural", element_type]
-                    )
-                
-                return element_id
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_historical_event",
-        action_description="Adding historical event: {name}",
-        id_from_context=lambda ctx: "lore_manager"
-    )
-    async def add_historical_event(self, name: str, description: str,
-                                 date_description: str, significance: int = 5, **kwargs) -> int:
-        """
-        Add a historical event to the database with governance oversight.
-        
-        Args:
-            name: Name of the historical event
-            description: Description of what happened
-            date_description: When it happened (textual description)
-            significance: Importance from 1-10
-            **kwargs: Additional attributes
-            
-        Returns:
-            ID of the created historical event
-        """
-        # Check for prohibited actions through directive handler
-        if hasattr(self, 'prohibited_lore_actions') and "add_historical_event" in self.prohibited_lore_actions:
-            logging.warning("Adding historical event prohibited by directive")
-            return -1
-            
-        # Generate embedding for semantic search
-        embedding = await generate_embedding(f"{name} {date_description} {description}")
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Required fields
-                insert_values = {
-                    'name': name,
-                    'description': description,
-                    'date_description': date_description,
-                    'significance': significance,
-                    'embedding': embedding
-                }
-                
-                # Optional fields
-                optional_fields = [
-                    'participating_factions', 'affected_locations', 'consequences',
-                    'historical_figures', 'commemorated_by'
-                ]
-                
-                for field in optional_fields:
-                    if field in kwargs:
-                        insert_values[field] = kwargs[field]
-                
-                # Construct dynamic query
-                columns = ', '.join(insert_values.keys())
-                placeholders = ', '.join(f'${i+1}' for i in range(len(insert_values)))
-                
-                # Execute query
-                event_id = await conn.fetchval(f"""
-                    INSERT INTO HistoricalEvents ({columns})
-                    VALUES ({placeholders})
-                    RETURNING id
-                """, *insert_values.values())
-                
-                # Clear the relevant cache
-                LORE_CACHE.invalidate_pattern("historical")
-                
-                # Log the creation to memory system through governance
-                if self.governor:
-                    memory_system = await self.governor.get_memory_system()
-                    await memory_system.add_memory(
-                        memory_text=f"Added historical event: {name} ({date_description})",
-                        memory_type="lore",
-                        memory_scope="game",
-                        significance=significance,
-                        tags=["lore_creation", "historical_event", "history"]
-                    )
-                
-                return event_id
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="get_relevant_lore",
-        action_description="Retrieving relevant lore for: {query_text}",
-        id_from_context=lambda ctx: "lore_manager"
-    )
-    async def get_relevant_lore(self, query_text: str, lore_types: List[str] = None,
-                              min_relevance: float = 0.7, limit: int = 10) -> List[Dict[str, Any]]:
-        """
-        Get lore relevant to a given query using vector similarity search with governance oversight.
-        
-        Args:
-            query_text: Text to search for
-            lore_types: List of lore types to search in (or None for all)
-            min_relevance: Minimum relevance score (0-1)
-            limit: Maximum number of results
-            
-        Returns:
-            List of relevant lore items with relevance scores
-        """
-        # Generate embedding for the query
-        query_embedding = await generate_embedding(query_text)
-        
-        # Define which tables to search
-        all_tables = ['WorldLore', 'Factions', 'CulturalElements', 
-                      'HistoricalEvents', 'GeographicRegions', 'LocationLore']
-        tables_to_search = lore_types or all_tables
-        
-        # Check for prohibited actions through directive handler
-        if hasattr(self, 'prohibited_lore_actions'):
-            for table in list(tables_to_search):
-                # Check if this specific table is prohibited
-                if f"search_{table.lower()}" in self.prohibited_lore_actions:
-                    tables_to_search.remove(table)
-                    logging.warning(f"Search in {table} prohibited by directive")
-            
-            # Check if all search is prohibited
-            if "search_all" in self.prohibited_lore_actions:
-                logging.warning("All lore search prohibited by directive")
-                return []
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                all_results = []
-                
-                # Search each table for relevant items
-                for table in tables_to_search:
-                    id_field = 'id'
-                    if table == 'LocationLore':
-                        id_field = 'location_id'
-                    
-                    # Perform vector similarity search
-                    rows = await conn.fetch(f"""
-                        SELECT {id_field} as id, '{table}' as lore_type, *,
-                               1 - (embedding <=> $1) as relevance
-                        FROM {table}
-                        WHERE 1 - (embedding <=> $1) > $2
-                        ORDER BY relevance DESC
-                        LIMIT $3
-                    """, query_embedding, min_relevance, limit)
-                    
-                    for row in rows:
-                        result = dict(row)
-                        # Remove embedding
-                        if 'embedding' in result:
-                            del result['embedding']
-                        all_results.append(result)
-                
-                # Sort all results by relevance
-                all_results.sort(key=lambda x: x.get('relevance', 0), reverse=True)
-                
-                # Return top results
-                return all_results[:limit]
-    
-    @with_governance(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="discover_lore",
-        action_description="Recording lore discovery for {entity_type} {entity_id}",
-        id_from_context=lambda ctx: "lore_manager"
-    )
-    async def discover_lore(self, lore_type: str, lore_id: int, entity_type: str, entity_id: int,
-                          knowledge_level: int = 5) -> bool:
-        """
-        Record that an entity has discovered a piece of lore with governance oversight.
-        
-        Args:
-            lore_type: Type of lore (WorldLore, Factions, etc.)
-            lore_id: ID of lore
-            entity_type: Type of entity (npc, player, faction)
-            entity_id: ID of entity
-            knowledge_level: How much they know (1-10)
-            
-        Returns:
-            Success status
-        """
-        # Check for prohibited actions through directive handler
-        if hasattr(self, 'prohibited_lore_actions') and "discover_lore" in self.prohibited_lore_actions:
-            logging.warning("Lore discovery prohibited by directive")
-            return False
-            
+    async def get_component(self, component_id: str) -> Optional[Dict[str, Any]]:
+        """Get a lore component by ID"""
         try:
-            # Add to LoreKnowledge
-            await self.add_lore_knowledge(
-                entity_type, entity_id,
-                lore_type, lore_id,
-                knowledge_level
-            )
+            # First try to get from cache
+            cached_value = await self.cache_manager.get_lore('component', component_id)
+            if cached_value is not None:
+                return cached_value
             
-            # If there's a discovery opportunity, mark it as discovered
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    await conn.execute("""
-                        UPDATE LoreDiscoveryOpportunities
-                        SET discovered = TRUE
-                        WHERE lore_type = $1 AND lore_id = $2
-                    """, lore_type, lore_id)
+            # If not in cache, try to get from file
+            file_path = self._get_component_path(component_id)
+            if not os.path.exists(file_path):
+                return None
             
-            # Add memory of the discovery through governance
-            if self.governor:
-                # Get entity name
-                entity_name = await self._get_entity_name(entity_type, entity_id)
+            with open(file_path, 'r', encoding='utf-8') as f:
+                component = json.load(f)
                 
-                # Get lore name
-                lore_data = await self.get_lore_by_id(lore_type, lore_id)
-                lore_name = lore_data.get("name", f"Unknown {lore_type}")
+                # Cache the component for future use
+                await self.cache_manager.set_lore('component', component_id, component)
                 
-                # Add memory
-                memory_system = await self.governor.get_memory_system()
-                await memory_system.add_memory(
-                    memory_text=f"{entity_name} discovered lore: {lore_name}",
-                    memory_type="observation",
-                    memory_scope="game",
-                    significance=knowledge_level,
-                    tags=["lore_discovery", lore_type.lower(), entity_type],
-                    metadata={
-                        "lore_type": lore_type,
-                        "lore_id": lore_id,
-                        "entity_type": entity_type,
-                        "entity_id": entity_id,
-                        "knowledge_level": knowledge_level
-                    }
-                )
+                return component
+        except Exception as e:
+            logger.error(f"Error reading component {component_id}: {str(e)}")
+            return None
+    
+    async def save_component(self, component_id: str, component: Dict[str, Any]) -> bool:
+        """Save a lore component"""
+        try:
+            file_path = self._get_component_path(component_id)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(component, f, indent=2, ensure_ascii=False)
+            
+            # Update component counts
+            component_type = component.get("type", "unknown")
+            self._component_counts[component_type] = self._component_counts.get(component_type, 0) + 1
+            
+            # Update cache
+            await self.cache_manager.set_lore('component', component_id, component)
             
             return True
         except Exception as e:
-            logging.error(f"Error recording lore discovery: {e}")
+            logger.error(f"Error saving component {component_id}: {str(e)}")
             return False
     
-    async def _get_entity_name(self, entity_type: str, entity_id: int) -> str:
-        """Get the name of an entity for memory creation"""
-        if entity_type == "npc":
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    row = await conn.fetchrow("""
-                        SELECT npc_name FROM NPCStats
-                        WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
-                    """, entity_id, self.user_id, self.conversation_id)
-                    
-                    if row:
-                        return row["npc_name"]
-                    return f"NPC {entity_id}"
-        elif entity_type == "player":
-            return "Player"
-        elif entity_type == "faction":
-            async with self.get_connection_pool() as pool:
-                async with pool.acquire() as conn:
-                    row = await conn.fetchrow("""
-                        SELECT name FROM Factions
-                        WHERE id = $1
-                    """, entity_id)
-                    
-                    if row:
-                        return row["name"]
-                    return f"Faction {entity_id}"
-        else:
-            return f"{entity_type.capitalize()} {entity_id}"
-
-    @with_governance_permission(
-        agent_type=AgentType.NARRATIVE_CRAFTER,
-        action_type="add_lore_knowledge",
-        id_from_context=lambda ctx: "lore_manager"
-    )
-    async def add_lore_knowledge(self, entity_type: str, entity_id: int,
-                               lore_type: str, lore_id: int,
-                               knowledge_level: int = 5, is_secret: bool = False) -> int:
-        """
-        Record that an entity knows about a piece of lore with governance permission.
-        
-        Args:
-            entity_type: Type of entity (npc, player, faction)
-            entity_id: ID of entity
-            lore_type: Type of lore (WorldLore, Factions, etc.)
-            lore_id: ID of lore
-            knowledge_level: How much they know (1-10)
-            is_secret: Whether this is secret knowledge
+    async def update_component(self, component_id: str, updates: Dict[str, Any]) -> bool:
+        """Update a lore component"""
+        try:
+            component = await self.get_component(component_id)
+            if not component:
+                return False
             
-        Returns:
-            ID of the created knowledge entry
-        """
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
+            # Update the component
+            component.update(updates)
+            component["updated_at"] = datetime.utcnow().isoformat()
+            
+            # Save and update cache
+            success = await self.save_component(component_id, component)
+            if success:
+                # Invalidate related components in cache
+                await self.cache_manager.invalidate_lore('component', component_id)
+            
+            return success
+        except Exception as e:
+            logger.error(f"Error updating component {component_id}: {str(e)}")
+            return False
+    
+    async def delete_component(self, component_id: str) -> bool:
+        """Delete a lore component"""
+        try:
+            file_path = self._get_component_path(component_id)
+            if not os.path.exists(file_path):
+                return False
+            
+            # Get component type for updating counts
+            component = await self.get_component(component_id)
+            if component:
+                component_type = component.get("type", "unknown")
+                self._component_counts[component_type] = max(0, self._component_counts.get(component_type, 0) - 1)
+            
+            os.remove(file_path)
+            
+            # Invalidate cache
+            await self.cache_manager.invalidate_lore('component', component_id)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting component {component_id}: {str(e)}")
+            return False
+    
+    async def search_components(self, query: str, component_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Search for lore components"""
+        try:
+            # Try to get from cache first
+            cache_key = f"search:{query}:{component_type or 'all'}"
+            cached_results = await self.cache_manager.get_lore('search', cache_key)
+            if cached_results is not None:
+                return cached_results
+            
+            results = []
+            query = query.lower()
+            
+            for filename in os.listdir(self.db_path):
+                if not filename.endswith('.json'):
+                    continue
+                
+                component_id = filename[:-5]  # Remove .json extension
+                component = await self.get_component(component_id)
+                
+                if not component:
+                    continue
+                
+                # Filter by component type if specified
+                if component_type and component.get("type") != component_type:
+                    continue
+                
+                # Search in component fields
+                if self._component_matches_query(component, query):
+                    results.append(component)
+            
+            # Cache the search results
+            await self.cache_manager.set_lore('search', cache_key, results)
+            
+            return results
+        except Exception as e:
+            logger.error(f"Error searching components: {str(e)}")
+            return []
+    
+    def _component_matches_query(self, component: Dict[str, Any], query: str) -> bool:
+        """Check if a component matches the search query"""
+        searchable_fields = ["name", "description", "type"]
+        
+        for field in searchable_fields:
+            if field in component and isinstance(component[field], str):
+                if query in component[field].lower():
+                    return True
+        
+        return False
+    
+    def get_component_counts(self) -> Dict[str, int]:
+        """Get counts of components by type"""
+        return self._component_counts.copy()
+    
+    async def get_all_components(self, component_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all components, optionally filtered by type"""
+        try:
+            # Try to get from cache first
+            cache_key = f"all:{component_type or 'all'}"
+            cached_results = await self.cache_manager.get_lore('all', cache_key)
+            if cached_results is not None:
+                return cached_results
+            
+            components = []
+            for filename in os.listdir(self.db_path):
+                if not filename.endswith('.json'):
+                    continue
+                
+                component_id = filename[:-5]  # Remove .json extension
+                component = await self.get_component(component_id)
+                
+                if not component:
+                    continue
+                
+                if component_type and component.get("type") != component_type:
+                    continue
+                
+                components.append(component)
+            
+            # Cache the results
+            await self.cache_manager.set_lore('all', cache_key, components)
+            
+            return components
+        except Exception as e:
+            logger.error(f"Error getting all components: {str(e)}")
+            return []
+    
+    async def initialize(self) -> bool:
+        """Initialize the LoreManager with governance and database connections."""
+        try:
+            # Initialize governance
+            self.governor = await get_central_governance(self.user_id, self.conversation_id)
+            
+            # Initialize directive handler
+            self.directive_handler = DirectiveHandler(self.governor)
+            
+            # Check for restrictions
+            restrictions = await self.governor.get_restrictions(
+                agent_type=AgentType.NARRATIVE_CRAFTER,
+                agent_id="lore_manager"
+            )
+            
+            if restrictions:
+                self.prohibited_actions = restrictions.get("prohibited_actions", [])
+            
+            # Initialize database connection
+            self.db = await get_db_connection()
+            
+            # Initialize component counts
+            await self._update_component_counts()
+            
+            # Initialize agents
+            self.agents = await get_agents(self)
+            
+            # Initialize cache manager
+            await self.cache_manager.start()
+            
+            # Set state
+            self.state['initialized'] = True
+            self.state['governance_initialized'] = True
+            self.state['last_governance_check'] = datetime.utcnow().isoformat()
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error initializing LoreManager: {e}")
+            return False
+    
+    async def cleanup(self):
+        """Clean up resources."""
+        try:
+            # Stop cache manager
+            await self.cache_manager.stop()
+            
+            # Close database connection
+            if hasattr(self, 'db'):
+                await self.db.close()
+            
+            # Cancel cleanup task if it exists
+            if self._cleanup_task:
+                self._cleanup_task.cancel()
                 try:
-                    knowledge_id = await conn.fetchval("""
-                        INSERT INTO LoreKnowledge (
-                            entity_type, entity_id, lore_type, lore_id,
-                            knowledge_level, is_secret
-                        ) VALUES ($1, $2, $3, $4, $5, $6)
-                        ON CONFLICT (entity_type, entity_id, lore_type, lore_id)
-                        DO UPDATE SET knowledge_level = $5, is_secret = $6
-                        RETURNING id
-                    """, entity_type, entity_id, lore_type, lore_id,
-                        knowledge_level, is_secret)
-                    
-                    # Clear relevant caches
-                    LORE_CACHE.invalidate_pattern(f"knowledge_{entity_type}_{entity_id}")
-                    
-                    return knowledge_id
-                except Exception as e:
-                    logging.error(f"Error adding lore knowledge: {e}")
-                    return None
+                    await self._cleanup_task
+                except asyncio.CancelledError:
+                    pass
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+    
+    async def _update_component_counts(self):
+        """Update component counts from the database."""
+        try:
+            components = await self.get_all_components()
+            self._component_counts = {}
+            
+            for component in components:
+                component_type = component.get("type", "unknown")
+                self._component_counts[component_type] = self._component_counts.get(component_type, 0) + 1
+        except Exception as e:
+            logger.error(f"Error updating component counts: {e}")
+    
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        return self.cache_manager.get_cache_stats()
 
-    
-    async def add_lore_discovery_opportunity(self, lore_type: str, lore_id: int,
-                                         discovery_method: str, difficulty: int = 5,
-                                         **kwargs) -> int:
-        """
-        Add an opportunity for players to discover lore.
-        
-        Args:
-            lore_type: Type of lore (WorldLore, Factions, etc.)
-            lore_id: ID of lore
-            discovery_method: How it can be discovered
-            difficulty: How difficult to discover (1-10)
-            **kwargs: Additional attributes including location_id, event_id, or npc_id
+    async def _handle_action_directive(self, directive: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle action directives from the governance system."""
+        try:
+            directive_type = directive.get("type")
+            action = directive.get("action")
             
-        Returns:
-            ID of the created discovery opportunity
-        """
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Required fields
-                insert_values = {
-                    'lore_type': lore_type,
-                    'lore_id': lore_id,
-                    'discovery_method': discovery_method,
-                    'difficulty': difficulty
+            if directive_type == DirectiveType.ACTION:
+                if action == "purge_lore":
+                    return await self._purge_lore_category(directive.get("category"))
+                elif action == "modify_lore":
+                    return await self._modify_lore(directive.get("lore_id"), directive.get("modifications"))
+                elif action == "validate_lore":
+                    return await self._validate_lore(directive.get("lore_id"))
+                elif action == "archive_lore":
+                    return await self._archive_lore(directive.get("lore_id"))
+            
+            return {
+                "status": "unknown_directive",
+                "directive_type": directive_type,
+                "action": action
+            }
+            
+        except Exception as e:
+            logger.error(f"Error handling action directive: {e}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
+    async def _handle_prohibition_directive(self, directive: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle prohibition directives from the governance system."""
+        try:
+            prohibited_actions = directive.get("prohibited_actions", [])
+            action_modifications = directive.get("action_modifications", {})
+            
+            # Update prohibited actions
+            self.prohibited_actions = prohibited_actions
+            
+            # Update action modifications
+            self.action_modifications = action_modifications
+            
+            # Update state
+            self.state['last_prohibition_update'] = datetime.now()
+            
+            return {
+                "status": "success",
+                "prohibited_actions_updated": len(prohibited_actions),
+                "modifications_updated": len(action_modifications)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error handling prohibition directive: {e}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
+    async def _purge_lore_category(self, category: str) -> Dict[str, Any]:
+        """Safely purge lore from a specific category."""
+        try:
+            # Check if category exists
+            if category not in self._component_counts:
+                return {
+                    "status": "error",
+                    "message": f"Category {category} not found"
                 }
-                
-                # Must include exactly one of location_id, event_id, or npc_id
-                if 'location_id' in kwargs:
-                    insert_values['location_id'] = kwargs['location_id']
-                elif 'event_id' in kwargs:
-                    insert_values['event_id'] = kwargs['event_id']
-                elif 'npc_id' in kwargs:
-                    insert_values['npc_id'] = kwargs['npc_id']
-                else:
-                    raise ValueError("Must provide exactly one of location_id, event_id, or npc_id")
-                
-                # Optional prerequisites
-                if 'prerequisites' in kwargs:
-                    insert_values['prerequisites'] = json.dumps(kwargs['prerequisites'])
-                
-                # Construct dynamic query
-                columns = ', '.join(insert_values.keys())
-                placeholders = ', '.join(f'${i+1}' for i in range(len(insert_values)))
-                
-                # Execute query
-                opportunity_id = await conn.fetchval(f"""
-                    INSERT INTO LoreDiscoveryOpportunities ({columns})
-                    VALUES ({placeholders})
-                    RETURNING id
-                """, *insert_values.values())
-                
-                return opportunity_id
-    
-    async def get_lore_by_id(self, lore_type: str, lore_id: int) -> Dict[str, Any]:
-        """
-        Get a specific lore item by its ID and type.
-        
-        Args:
-            lore_type: Type of lore (WorldLore, Factions, etc.)
-            lore_id: ID of the lore
             
-        Returns:
-            Dictionary with lore data
-        """
-        # Check cache first
-        cache_key = f"{lore_type}_{lore_id}"
-        cached_lore = LORE_CACHE.get(cache_key)
-        if cached_lore:
-            return cached_lore
-        
-        # Map lore_type to table name
-        table_map = {
-            'WorldLore': 'WorldLore',
-            'Factions': 'Factions',
-            'CulturalElements': 'CulturalElements',
-            'HistoricalEvents': 'HistoricalEvents',
-            'GeographicRegions': 'GeographicRegions',
-            'LocationLore': 'LocationLore'
-        }
-        
-        table_name = table_map.get(lore_type)
-        if not table_name:
+            # Get all components of this category
+            query = """
+                SELECT id, component_type
+                FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = $3
+            """
+            components = await self.db.fetch(query, self.user_id, self.conversation_id, category)
+            
+            # Archive components before deletion
+            for component in components:
+                await self._archive_lore(component['id'])
+            
+            # Delete components
+            delete_query = """
+                DELETE FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = $3
+            """
+            await self.db.execute(delete_query, self.user_id, self.conversation_id, category)
+            
+            # Update component counts
+            await self._update_component_counts()
+            
+            # Update state
+            self.state['last_purge'] = datetime.now()
+            
+            return {
+                "status": "success",
+                "category": category,
+                "components_purged": len(components)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error purging lore category {category}: {e}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
+    async def _modify_lore(
+        self,
+        lore_id: int,
+        modifications: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Modify existing lore with agentic framework integration."""
+        try:
+            # Create task context
+            task_context = {
+                'lore_id': lore_id,
+                'modifications': modifications
+            }
+            
+            # Create version branch
+            branch = await self.version_control.create_branch(
+                'lore_modification',
+                task_context
+            )
+            
+            # Get current lore
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE id = $1 AND user_id = $2 AND conversation_id = $3
+            """
+            lore = await self.db.fetchrow(query, lore_id, self.user_id, self.conversation_id)
+            
+            if not lore:
+                return {
+                    "status": "error",
+                    "message": f"Lore with ID {lore_id} not found"
+                }
+            
+            # Create task dependencies
+            task_deps = {
+                'validate_modifications': [],
+                'check_conflicts': ['validate_modifications'],
+                'apply_modifications': ['check_conflicts'],
+                'validate_consistency': ['apply_modifications'],
+                'update_metadata': ['validate_consistency'],
+                'integrate': [
+                    'validate_modifications',
+                    'check_conflicts',
+                    'apply_modifications',
+                    'validate_consistency',
+                    'update_metadata'
+                ]
+            }
+            
+            # Execute tasks with distributed executor
+            results = await self.distributed_executor.execute_tasks(
+                task_deps,
+                priority=TaskPriority.HIGH
+            )
+            
+            # Process results
+            modified_lore = await self._process_modification_results(results, lore)
+            
+            # Validate and enhance
+            enhanced_lore = await self._enhance_modified_lore(
+                modified_lore,
+                lore,
+                modifications
+            )
+            
+            # Update version branch
+            await branch.update(enhanced_lore, 'completed')
+            
+            # Update lore in database
+            update_query = """
+                UPDATE LoreComponents
+                SET content = $1,
+                    metadata = $2,
+                    last_modified = NOW()
+                WHERE id = $3
+            """
+            await self.db.execute(
+                update_query,
+                json.dumps(enhanced_lore['content']),
+                json.dumps(enhanced_lore['metadata']),
+                lore_id
+            )
+            
+            # Cache the result
+            cache_key = f"lore_{lore_id}"
+            await self.cache_manager.set(cache_key, enhanced_lore)
+            
+            # Update validation stats
+            self.state['validation_stats']['successful'] += 1
+            
+            return {
+                "status": "success",
+                "lore_id": lore_id,
+                "modified_fields": list(modifications.keys())
+            }
+            
+        except Exception as e:
+            logger.error(f"Error modifying lore {lore_id}: {e}")
+            self.state['validation_stats']['failed'] += 1
+            
+            # Try to recover from error
+            try:
+                recovered_lore = await self._recover_from_modification_error(e, lore_id, modifications)
+                if recovered_lore:
+                    return recovered_lore
+            except Exception as recovery_error:
+                logger.error(f"Failed to recover from modification error: {str(recovery_error)}")
+            
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
+    async def _integrate_lore(
+        self,
+        lore_parts: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Integrate different parts of lore with agentic framework integration."""
+        try:
+            # Create task context
+            task_context = {
+                'lore_parts': lore_parts
+            }
+            
+            # Create version branch
+            branch = await self.version_control.create_branch(
+                'lore_integration',
+                task_context
+            )
+            
+            # Create task dependencies
+            task_deps = {
+                'analyze_components': [],
+                'validate_consistency': ['analyze_components'],
+                'resolve_conflicts': ['validate_consistency'],
+                'merge_components': ['resolve_conflicts'],
+                'validate_integration': ['merge_components'],
+                'update_metadata': ['validate_integration'],
+                'integrate': [
+                    'analyze_components',
+                    'validate_consistency',
+                    'resolve_conflicts',
+                    'merge_components',
+                    'validate_integration',
+                    'update_metadata'
+                ]
+            }
+            
+            # Execute tasks with distributed executor
+            results = await self.distributed_executor.execute_tasks(
+                task_deps,
+                priority=TaskPriority.HIGH
+            )
+            
+            # Process results
+            integrated_lore = await self._process_integration_results(results)
+            
+            # Validate and enhance
+            enhanced_lore = await self._enhance_integrated_lore(
+                integrated_lore,
+                lore_parts
+            )
+            
+            # Update version branch
+            await branch.update(enhanced_lore, 'completed')
+            
+            # Store integrated lore
+            await self.save_component(
+                'integrated_lore',
+                enhanced_lore
+            )
+            
+            # Cache the result
+            cache_key = f"integrated_lore_{hash(json.dumps(lore_parts))}"
+            await self.cache_manager.set(cache_key, enhanced_lore)
+            
+            # Update validation stats
+            self.state['validation_stats']['successful'] += 1
+            
+            return enhanced_lore
+            
+        except Exception as e:
+            logger.error(f"Error integrating lore: {e}")
+            self.state['validation_stats']['failed'] += 1
+            
+            # Try to recover from error
+            try:
+                recovered_lore = await self._recover_from_integration_error(e, lore_parts)
+                if recovered_lore:
+                    return recovered_lore
+            except Exception as recovery_error:
+                logger.error(f"Failed to recover from integration error: {str(recovery_error)}")
+            
+            return {}
+
+    async def _validate_lore(self, lore_id: int) -> Dict[str, Any]:
+        """Validate lore against governance rules and constraints."""
+        try:
+            # Get lore
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE id = $1 AND user_id = $2 AND conversation_id = $3
+            """
+            lore = await self.db.fetchrow(query, lore_id, self.user_id, self.conversation_id)
+            
+            if not lore:
+                return {
+                    "status": "error",
+                    "message": f"Lore with ID {lore_id} not found"
+                }
+            
+            # Check against prohibited content
+            validation_results = {
+                "prohibited_content": [],
+                "constraint_violations": [],
+                "metadata_issues": []
+            }
+            
+            # Check content against prohibited terms
+            content = lore['content']
+            for term in self.prohibited_actions:
+                if term.lower() in content.lower():
+                    validation_results["prohibited_content"].append(term)
+            
+            # Check metadata constraints
+            metadata = lore['metadata']
+            if not metadata.get('version'):
+                validation_results["metadata_issues"].append("Missing version")
+            
+            # Check content constraints
+            if len(content) < 10:
+                validation_results["constraint_violations"].append("Content too short")
+            
+            # Update validation status
+            update_query = """
+                UPDATE LoreComponents
+                SET validation_status = $1,
+                    validation_errors = $2,
+                    last_validated = NOW()
+                WHERE id = $3
+            """
+            await self.db.execute(
+                update_query,
+                "valid" if not any(validation_results.values()) else "invalid",
+                json.dumps(validation_results),
+                lore_id
+            )
+            
+            return {
+                "status": "success",
+                "lore_id": lore_id,
+                "validation_results": validation_results
+            }
+            
+        except Exception as e:
+            logger.error(f"Error validating lore {lore_id}: {e}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
+    async def _archive_lore(self, lore_id: int) -> Dict[str, Any]:
+        """Archive lore for historical record keeping."""
+        try:
+            # Get lore
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE id = $1 AND user_id = $2 AND conversation_id = $3
+            """
+            lore = await self.db.fetchrow(query, lore_id, self.user_id, self.conversation_id)
+            
+            if not lore:
+                return {
+                    "status": "error",
+                    "message": f"Lore with ID {lore_id} not found"
+                }
+            
+            # Create archive record
+            archive_query = """
+                INSERT INTO LoreArchives (
+                    user_id, conversation_id, original_id,
+                    content, metadata, archived_at
+                ) VALUES ($1, $2, $3, $4, $5, NOW())
+            """
+            await self.db.execute(
+                archive_query,
+                self.user_id,
+                self.conversation_id,
+                lore_id,
+                lore['content'],
+                lore['metadata']
+            )
+            
+            return {
+                "status": "success",
+                "lore_id": lore_id,
+                "archived": True
+            }
+            
+        except Exception as e:
+            logger.error(f"Error archiving lore {lore_id}: {e}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
+    async def get_world_lore(self) -> List[Dict[str, Any]]:
+        """Get all world lore components."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'world_lore'
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting world lore: {e}")
+            return []
+
+    async def get_location_lore(self, location_id: int) -> List[Dict[str, Any]]:
+        """Get lore specific to a location."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'location_lore'
+                AND metadata->>'location_id' = $3
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, location_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting location lore: {e}")
+            return []
+
+    async def get_faction_lore(self) -> List[Dict[str, Any]]:
+        """Get all faction-related lore."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'faction_lore'
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting faction lore: {e}")
+            return []
+
+    async def get_npc_relationships(self, npc_id: int) -> List[Dict[str, Any]]:
+        """Get relationships for a specific NPC."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'npc_relationship'
+                AND metadata->>'npc_id' = $3
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, npc_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting NPC relationships: {e}")
+            return []
+
+    async def get_npc_beliefs(self, npc_id: int) -> List[Dict[str, Any]]:
+        """Get beliefs for a specific NPC."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'npc_belief'
+                AND metadata->>'npc_id' = $3
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, npc_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting NPC beliefs: {e}")
+            return []
+
+    async def update_npc_knowledge(self, npc_id: int, knowledge_updates: List[Dict[str, Any]]) -> bool:
+        """Update NPC knowledge with new information."""
+        try:
+            for update in knowledge_updates:
+                query = """
+                    INSERT INTO LoreComponents (
+                        user_id, conversation_id, component_type,
+                        content, metadata, created_at
+                    ) VALUES ($1, $2, 'npc_knowledge', $3, $4, NOW())
+                """
+                await self.db.execute(
+                    query,
+                    self.user_id,
+                    self.conversation_id,
+                    json.dumps(update['content']),
+                    json.dumps({
+                        'npc_id': npc_id,
+                        'type': update['type'],
+                        'relevance_score': update.get('relevance_score', 0.5)
+                    })
+                )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating NPC knowledge: {e}")
+            return False
+
+    async def update_npc_beliefs(self, npc_id: int, belief_updates: List[Dict[str, Any]]) -> bool:
+        """Update NPC beliefs with new information."""
+        try:
+            for update in belief_updates:
+                query = """
+                    INSERT INTO LoreComponents (
+                        user_id, conversation_id, component_type,
+                        content, metadata, created_at
+                    ) VALUES ($1, $2, 'npc_belief', $3, $4, NOW())
+                """
+                await self.db.execute(
+                    query,
+                    self.user_id,
+                    self.conversation_id,
+                    json.dumps(update['content']),
+                    json.dumps({
+                        'npc_id': npc_id,
+                        'belief_id': update['belief_id'],
+                        'strengthened_themes': update.get('strengthened_themes', []),
+                        'new_evidence': update.get('new_evidence', '')
+                    })
+                )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating NPC beliefs: {e}")
+            return False
+
+    async def update_npc_relationships(self, npc_id: int, relationship_updates: List[Dict[str, Any]]) -> bool:
+        """Update NPC relationships with new information."""
+        try:
+            for update in relationship_updates:
+                query = """
+                    INSERT INTO LoreComponents (
+                        user_id, conversation_id, component_type,
+                        content, metadata, created_at
+                    ) VALUES ($1, $2, 'npc_relationship', $3, $4, NOW())
+                """
+                await self.db.execute(
+                    query,
+                    self.user_id,
+                    self.conversation_id,
+                    json.dumps(update['content']),
+                    json.dumps({
+                        'npc_id': npc_id,
+                        'related_npc_id': update['npc_id'],
+                        'type': update['type'],
+                        'strength': update.get('strength', 0.5),
+                        'context': update.get('context', '')
+                    })
+                )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating NPC relationships: {e}")
+            return False
+
+    async def add_npc_memories(self, npc_id: int, memories: List[Dict[str, Any]]) -> bool:
+        """Add new memories for an NPC."""
+        try:
+            for memory in memories:
+                query = """
+                    INSERT INTO LoreComponents (
+                        user_id, conversation_id, component_type,
+                        content, metadata, created_at
+                    ) VALUES ($1, $2, 'npc_memory', $3, $4, NOW())
+                """
+                await self.db.execute(
+                    query,
+                    self.user_id,
+                    self.conversation_id,
+                    json.dumps(memory['content']),
+                    json.dumps({
+                        'npc_id': npc_id,
+                        'type': memory['type'],
+                        'emotional_impact': memory.get('emotional_impact', 0),
+                        'timestamp': memory.get('timestamp', datetime.now().isoformat())
+                    })
+                )
+            return True
+        except Exception as e:
+            logger.error(f"Error adding NPC memories: {e}")
+            return False
+
+    async def get_environment_state(self, location_id: int) -> Dict[str, Any]:
+        """Get current environment state for a location."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'environment_state'
+                AND metadata->>'location_id' = $3
+                ORDER BY created_at DESC
+                LIMIT 1
+            """
+            result = await self.db.fetchrow(query, self.user_id, self.conversation_id, location_id)
+            return dict(result) if result else {}
+        except Exception as e:
+            logger.error(f"Error getting environment state: {e}")
+            return {}
+
+    async def get_environmental_conditions(self, location_id: int) -> Dict[str, Any]:
+        """Get environmental conditions for a location."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'environmental_conditions'
+                AND metadata->>'location_id' = $3
+                ORDER BY created_at DESC
+                LIMIT 1
+            """
+            result = await self.db.fetchrow(query, self.user_id, self.conversation_id, location_id)
+            return dict(result) if result else {}
+        except Exception as e:
+            logger.error(f"Error getting environmental conditions: {e}")
+            return {}
+
+    async def get_location_events(self, location_id: int) -> List[Dict[str, Any]]:
+        """Get active events for a location."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'location_event'
+                AND metadata->>'location_id' = $3
+                AND metadata->>'status' = 'active'
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, location_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting location events: {e}")
+            return []
+
+    async def get_upcoming_events(self, location_id: int) -> List[Dict[str, Any]]:
+        """Get upcoming events for a location."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'location_event'
+                AND metadata->>'location_id' = $3
+                AND metadata->>'status' = 'scheduled'
+                AND metadata->>'start_time' > NOW()
+                ORDER BY metadata->>'start_time'
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, location_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting upcoming events: {e}")
+            return []
+
+    async def get_location_resources(self, location_id: int) -> List[Dict[str, Any]]:
+        """Get available resources for a location."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'location_resource'
+                AND metadata->>'location_id' = $3
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, location_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting location resources: {e}")
+            return []
+
+    async def get_resource_scarcity(self, location_id: int) -> Dict[str, float]:
+        """Get resource scarcity levels for a location."""
+        try:
+            query = """
+                SELECT metadata->>'resource_type' as type,
+                       metadata->>'scarcity_level' as level
+                FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'resource_scarcity'
+                AND metadata->>'location_id' = $3
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, location_id)
+            return {row['type']: float(row['level']) for row in results}
+        except Exception as e:
+            logger.error(f"Error getting resource scarcity: {e}")
+            return {}
+
+    async def get_adjacent_locations(self, location_id: int) -> List[Dict[str, Any]]:
+        """Get adjacent locations for a location."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'location_connection'
+                AND metadata->>'source_location_id' = $3
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, location_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting adjacent locations: {e}")
+            return []
+
+    async def get_travel_routes(self, location_id: int) -> List[Dict[str, Any]]:
+        """Get travel routes from a location."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'travel_route'
+                AND metadata->>'source_location_id' = $3
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, location_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting travel routes: {e}")
+            return []
+
+    async def get_location_factions(self, location_id: int) -> List[Dict[str, Any]]:
+        """Get factions present in a location."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'faction_presence'
+                AND metadata->>'location_id' = $3
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, location_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting location factions: {e}")
+            return []
+
+    async def _get_current_time(self) -> Dict[str, Any]:
+        """Get current game time."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'game_time'
+                ORDER BY created_at DESC
+                LIMIT 1
+            """
+            result = await self.db.fetchrow(query, self.user_id, self.conversation_id)
+            return dict(result) if result else {}
+        except Exception as e:
+            logger.error(f"Error getting current time: {e}")
+            return {}
+
+    async def _get_nearby_npcs(self, location_id: int) -> List[Dict[str, Any]]:
+        """Get NPCs currently in a location."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'npc_location'
+                AND metadata->>'location_id' = $3
+                AND metadata->>'status' = 'present'
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, location_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting nearby NPCs: {e}")
+            return []
+
+    def get_system_stats(self) -> Dict[str, Any]:
+        """Get system statistics and metrics."""
+        try:
+            return {
+                'metrics': metrics.get_metrics_snapshot(),
+                'errors': self.validation_manager.get_error_stats(),
+                'component_counts': self._component_counts,
+                'cache_stats': self.get_cache_stats(),
+                'state': self.state
+            }
+        except Exception as e:
+            logger.error(f"Error getting system stats: {e}")
+            return {}
+
+    async def _validate_component(self, component: Dict[str, Any]) -> bool:
+        """Validate a lore component before saving."""
+        try:
+            # Validate against schema
+            self.validation_manager.validate_entity(
+                component.get('type', 'unknown'),
+                component
+            )
+            
+            # Check against prohibited content
+            content = component.get('content', '')
+            for term in self.prohibited_actions:
+                if term.lower() in content.lower():
+                    raise LoreError(
+                        f"Prohibited content found: {term}",
+                        ErrorType.VALIDATION
+                    )
+            
+            return True
+        except Exception as e:
+            self.error_handler.handle_error(e)
+            return False
+
+    async def get_quest_lore(self, quest_id: int) -> List[Dict[str, Any]]:
+        """Get lore specific to a quest."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'quest_lore'
+                AND metadata->>'quest_id' = $3
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, quest_id)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting quest lore: {e}")
+            return []
+
+    async def get_narrative_data(self, narrative_id: int) -> Dict[str, Any]:
+        """Get narrative data including progression and stages."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'narrative_data'
+                AND metadata->>'narrative_id' = $3
+            """
+            result = await self.db.fetchrow(query, self.user_id, self.conversation_id, narrative_id)
+            return dict(result) if result else {}
+        except Exception as e:
+            logger.error(f"Error getting narrative data: {e}")
+            return {}
+
+    async def update_narrative_progression(self, narrative_id: int, stage: str, data: Dict[str, Any]) -> bool:
+        """Update narrative progression data."""
+        try:
+            query = """
+                UPDATE LoreComponents
+                SET content = $1,
+                    metadata = jsonb_set(
+                        metadata,
+                        '{stages}',
+                        $2::jsonb
+                    ),
+                    last_modified = NOW()
+                WHERE user_id = $3 
+                AND conversation_id = $4
+                AND component_type = 'narrative_data'
+                AND metadata->>'narrative_id' = $5
+            """
+            await self.db.execute(
+                query,
+                json.dumps(data),
+                json.dumps({stage: data}),
+                self.user_id,
+                self.conversation_id,
+                narrative_id
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating narrative progression: {e}")
+            return False
+
+    async def get_social_links(self, entity_id: int, entity_type: str) -> List[Dict[str, Any]]:
+        """Get social links for an entity."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'social_link'
+                AND metadata->>'entity_id' = $3
+                AND metadata->>'entity_type' = $4
+            """
+            results = await self.db.fetch(query, self.user_id, self.conversation_id, entity_id, entity_type)
+            return [dict(row) for row in results]
+        except Exception as e:
+            logger.error(f"Error getting social links: {e}")
+            return []
+
+    async def update_social_links(self, entity_id: int, entity_type: str, links: List[Dict[str, Any]]) -> bool:
+        """Update social links for an entity."""
+        try:
+            for link in links:
+                query = """
+                    INSERT INTO LoreComponents (
+                        user_id, conversation_id, component_type,
+                        content, metadata, created_at
+                    ) VALUES ($1, $2, 'social_link', $3, $4, NOW())
+                """
+                await self.db.execute(
+                    query,
+                    self.user_id,
+                    self.conversation_id,
+                    json.dumps(link['content']),
+                    json.dumps({
+                        'entity_id': entity_id,
+                        'entity_type': entity_type,
+                        'link_type': link['type'],
+                        'strength': link.get('strength', 0.5)
+                    })
+                )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating social links: {e}")
+            return False
+
+    async def get_quest_progression(self, quest_id: int) -> Dict[str, Any]:
+        """Get quest progression data."""
+        try:
+            query = """
+                SELECT * FROM LoreComponents
+                WHERE user_id = $1 
+                AND conversation_id = $2
+                AND component_type = 'quest_progression'
+                AND metadata->>'quest_id' = $3
+                ORDER BY created_at DESC
+                LIMIT 1
+            """
+            result = await self.db.fetchrow(query, self.user_id, self.conversation_id, quest_id)
+            return dict(result) if result else {}
+        except Exception as e:
+            logger.error(f"Error getting quest progression: {e}")
+            return {}
+
+    async def update_quest_progression(self, quest_id: int, stage: str, data: Dict[str, Any]) -> bool:
+        """Update quest progression data."""
+        try:
+            query = """
+                INSERT INTO LoreComponents (
+                    user_id, conversation_id, component_type,
+                    content, metadata, created_at
+                ) VALUES ($1, $2, 'quest_progression', $3, $4, NOW())
+            """
+            await self.db.execute(
+                query,
+                self.user_id,
+                self.conversation_id,
+                json.dumps(data),
+                json.dumps({
+                    'quest_id': quest_id,
+                    'stage': stage,
+                    'timestamp': datetime.now().isoformat()
+                })
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating quest progression: {e}")
+            return False
+
+    async def get_quest_context(self, quest_id: int) -> Dict[str, Any]:
+        """Get comprehensive quest context using the QuestAgent."""
+        if not self.agents:
+            return {}
+        quest_agent, _, _, _ = self.agents
+        return await quest_agent.get_quest_context(quest_id)
+
+    async def update_quest_stage(self, quest_id: int, stage: str, data: Dict[str, Any]) -> bool:
+        """Update quest stage using the QuestAgent."""
+        if not self.agents:
+            return False
+        quest_agent, _, _, _ = self.agents
+        return await quest_agent.update_quest_stage(quest_id, stage, data)
+
+    async def get_narrative_context(self, narrative_id: int) -> Dict[str, Any]:
+        """Get comprehensive narrative context using the NarrativeAgent."""
+        if not self.agents:
+            return {}
+        _, narrative_agent, _, _ = self.agents
+        return await narrative_agent.get_narrative_context(narrative_id)
+
+    async def update_narrative_stage(self, narrative_id: int, stage: str, data: Dict[str, Any]) -> bool:
+        """Update narrative stage using the NarrativeAgent."""
+        if not self.agents:
+            return False
+        _, narrative_agent, _, _ = self.agents
+        return await narrative_agent.update_narrative_stage(narrative_id, stage, data)
+
+    async def get_social_context(self, entity_id: int, entity_type: str) -> Dict[str, Any]:
+        """Get comprehensive social context using the SocialAgent."""
+        if not self.agents:
+            return {}
+        _, _, social_agent, _ = self.agents
+        return await social_agent.get_social_context(entity_id, entity_type)
+
+    async def update_relationships(self, entity_id: int, entity_type: str, links: List[Dict[str, Any]]) -> bool:
+        """Update social relationships using the SocialAgent."""
+        if not self.agents:
+            return False
+        _, _, social_agent, _ = self.agents
+        return await social_agent.update_relationships(entity_id, entity_type, links)
+
+    async def get_environment_context(self, location_id: int) -> Dict[str, Any]:
+        """Get comprehensive environment context using the EnvironmentAgent."""
+        if not self.agents:
+            return {}
+        _, _, _, environment_agent = self.agents
+        return await environment_agent.get_environment_context(location_id)
+
+    async def update_environment_state(self, location_id: int, updates: Dict[str, Any]) -> bool:
+        """Update environment state using the EnvironmentAgent."""
+        if not self.agents:
+            return False
+        _, _, _, environment_agent = self.agents
+        return await environment_agent.update_environment_state(location_id, updates)
+
+    async def get_conflict_lore(self, conflict_id: int) -> List[Dict[str, Any]]:
+        """Get lore specific to a conflict."""
+        _, _, _, _, conflict_agent, _, _ = await get_agents(self)
+        return await conflict_agent.get_conflict_lore(conflict_id)
+
+    async def update_conflict_state(self, conflict_id: int, state: str, data: Dict[str, Any]) -> bool:
+        """Update conflict state and related data."""
+        _, _, _, _, conflict_agent, _, _ = await get_agents(self)
+        return await conflict_agent.update_conflict_state(conflict_id, state, data)
+
+    async def get_artifact_lore(self, artifact_id: int) -> Dict[str, Any]:
+        """Get lore specific to an artifact."""
+        _, _, _, _, _, artifact_agent, _ = await get_agents(self)
+        return await artifact_agent.get_artifact_lore(artifact_id)
+
+    async def update_artifact_state(self, artifact_id: int, state: str, data: Dict[str, Any]) -> bool:
+        """Update artifact state and related data."""
+        _, _, _, _, _, artifact_agent, _ = await get_agents(self)
+        return await artifact_agent.update_artifact_state(artifact_id, state, data)
+
+    async def update_game_time(self, time_data: Dict[str, Any]) -> bool:
+        """Update game time and related events."""
+        _, _, _, environment_agent, _, _, _ = await get_agents(self)
+        return await environment_agent.update_game_time(time_data)
+
+    async def create_event(self, event_data: Dict[str, Any]) -> bool:
+        """Create a new event in the game world."""
+        _, _, _, _, _, _, event_agent = await get_agents(self)
+        return await event_agent.create_event(event_data)
+
+    async def update_event_status(self, event_id: int, status: str, data: Dict[str, Any]) -> bool:
+        """Update event status and related data."""
+        _, _, _, _, _, _, event_agent = await get_agents(self)
+        return await event_agent.update_event_status(event_id, status, data)
+
+    async def update_resource_levels(self, location_id: int, resources: Dict[str, float]) -> bool:
+        """Update resource levels for a location."""
+        _, _, _, environment_agent, _, _, _ = await get_agents(self)
+        return await environment_agent.update_resource_levels(location_id, resources)
+
+    async def start(self):
+        """Start the lore manager and resource management."""
+        await super().start()
+        await self.resource_manager.start()
+    
+    async def stop(self):
+        """Stop the lore manager and cleanup resources."""
+        await super().stop()
+        await self.resource_manager.stop()
+    
+    async def get_lore_data(
+        self,
+        lore_id: str,
+        fetch_func: Optional[callable] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Get lore data from cache or fetch if not available."""
+        try:
+            # Check resource availability before fetching
+            if fetch_func:
+                await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.get_cached_data('lore', lore_id, fetch_func)
+        except Exception as e:
+            logger.error(f"Error getting lore data: {e}")
             return None
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get the lore item
-                query = f"SELECT * FROM {table_name} WHERE id = $1"
-                if lore_type == 'LocationLore':
-                    query = f"SELECT * FROM {table_name} WHERE location_id = $1"
-                
-                row = await conn.fetchrow(query, lore_id)
-                
-                if not row:
-                    return None
-                
-                # Convert to dictionary
-                lore_data = dict(row)
-                
-                # Remove embedding as it's not JSON serializable
-                if 'embedding' in lore_data:
-                    del lore_data['embedding']
-                
-                # Get connections to/from this lore item
-                connections = await conn.fetch("""
-                    SELECT * FROM LoreConnections
-                    WHERE (source_type = $1 AND source_id = $2)
-                       OR (target_type = $1 AND target_id = $2)
-                """, lore_type, lore_id)
-                
-                lore_data['connections'] = [dict(conn) for conn in connections]
-                
-                # Cache the result
-                LORE_CACHE.set(cache_key, lore_data)
-                
-                return lore_data
     
-    async def get_entity_lore_knowledge(self, entity_type: str, entity_id: int) -> List[Dict[str, Any]]:
-        """
-        Get all lore known by a specific entity.
-        
-        Args:
-            entity_type: Type of entity (npc, player, faction)
-            entity_id: ID of entity
+    async def set_lore_data(
+        self,
+        lore_id: str,
+        data: Dict[str, Any],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set lore data in cache."""
+        try:
+            # Check resource availability before setting
+            await self.resource_manager._check_resource_availability('memory')
             
-        Returns:
-            List of lore items with knowledge levels
-        """
-        # Check cache first
-        cache_key = f"knowledge_{entity_type}_{entity_id}"
-        cached_knowledge = LORE_CACHE.get(cache_key)
-        if cached_knowledge:
-            return cached_knowledge
-        
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # Get all knowledge entries for this entity
-                rows = await conn.fetch("""
-                    SELECT lk.lore_type, lk.lore_id, lk.knowledge_level, lk.is_secret
-                    FROM LoreKnowledge lk
-                    WHERE entity_type = $1 AND entity_id = $2
-                """, entity_type, entity_id)
-                
-                if not rows:
-                    return []
-                
-                # Create list to hold complete lore items
-                knowledge_items = []
-                
-                # For each knowledge entry, get the referenced lore
-                for row in rows:
-                    lore_item = await self.get_lore_by_id(row['lore_type'], row['lore_id'])
-                    
-                    if lore_item:
-                        # Add knowledge information
-                        lore_item['knowledge_level'] = row['knowledge_level']
-                        lore_item['is_secret'] = row['is_secret']
-                        knowledge_items.append(lore_item)
-                
-                # Cache the result
-                LORE_CACHE.set(cache_key, knowledge_items)
-                
-                return knowledge_items
+            return await self.set_cached_data('lore', lore_id, data, tags)
+        except Exception as e:
+            logger.error(f"Error setting lore data: {e}")
+            return False
     
-    async def get_related_entities(
-        self, 
-        entity_type: str, 
-        entity_name: str, 
-        relation_type: str, 
-        target_type: str,
-        limit: int = 10
-    ) -> List[Dict[str, Any]]:
-        """
-        Get entities related to a specific entity through a particular relation.
-        
-        Args:
-            entity_type: Type of the source entity
-            entity_name: Name of the source entity
-            relation_type: Type of relation to search for
-            target_type: Type of target entities to retrieve
-            limit: Maximum number of entities to return
+    async def invalidate_lore_data(
+        self,
+        lore_id: Optional[str] = None,
+        recursive: bool = True
+    ) -> None:
+        """Invalidate lore data cache."""
+        try:
+            await self.invalidate_cached_data('lore', lore_id, recursive)
+        except Exception as e:
+            logger.error(f"Error invalidating lore data: {e}")
+    
+    async def get_lore_metadata(
+        self,
+        lore_id: str,
+        fetch_func: Optional[callable] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Get lore metadata from cache or fetch if not available."""
+        try:
+            # Check resource availability before fetching
+            if fetch_func:
+                await self.resource_manager._check_resource_availability('memory')
             
-        Returns:
-            List of related entities
-        """
-        async with self.get_connection_pool() as pool:
-            async with pool.acquire() as conn:
-                # First get the entity ID
-                entity_table = self._get_table_for_entity_type(entity_type)
-                name_column = self._get_name_column_for_entity_type(entity_type)
-                
-                entity_id = await conn.fetchval(f"""
-                    SELECT id FROM {entity_table}
-                    WHERE {name_column} = $1 
-                    AND user_id = $2 AND conversation_id = $3
-                    LIMIT 1
-                """, entity_name, self.user_id, self.conversation_id)
-                
-                if not entity_id:
-                    # Entity not found
-                    return []
-                
-                # Find related entities through LoreConnections
-                target_table = self._get_table_for_entity_type(target_type)
-                target_name_column = self._get_name_column_for_entity_type(target_type)
-                
-                # Get all related entities
-                rows = await conn.fetch(f"""
-                    SELECT t.*, lc.connection_type, lc.strength, lc.description as relation_description
-                    FROM LoreConnections lc
-                    JOIN {target_table} t ON lc.target_id = t.id
-                    WHERE lc.source_type = $1 AND lc.source_id = $2
-                    AND lc.target_type = $3 AND lc.connection_type = $4
-                    AND t.user_id = $5 AND t.conversation_id = $6
-                    LIMIT $7
-                """, entity_type, entity_id, target_type, relation_type, 
-                    self.user_id, self.conversation_id, limit)
-                
-                # Also check for reverse connections
-                reverse_rows = await conn.fetch(f"""
-                    SELECT t.*, lc.connection_type, lc.strength, lc.description as relation_description
-                    FROM LoreConnections lc
-                    JOIN {target_table} t ON lc.source_id = t.id
-                    WHERE lc.target_type = $1 AND lc.target_id = $2
-                    AND lc.source_type = $3 AND lc.connection_type = $4
-                    AND t.user_id = $5 AND t.conversation_id = $6
-                    LIMIT $7
-                """, entity_type, entity_id, target_type, relation_type, 
-                    self.user_id, self.conversation_id, limit)
-                
-                # Format all results
-                results = []
-                for row in rows:
-                    results.append(dict(row))
-                
-                for row in reverse_rows:
-                    results.append(dict(row))
-                
-                # Limit final results
-                return results[:limit]
+            return await self.get_cached_data('lore_metadata', lore_id, fetch_func)
+        except Exception as e:
+            logger.error(f"Error getting lore metadata: {e}")
+            return None
     
-    def _get_table_for_entity_type(self, entity_type: str) -> str:
-        """Get the database table name for an entity type."""
-        entity_type = entity_type.lower()
-        if entity_type == "faction":
-            return "Factions"
-        elif entity_type == "cultural_element":
-            return "CulturalElements"
-        elif entity_type == "historical_event":
-            return "HistoricalEvents"
-        elif entity_type == "location":
-            return "Locations"
-        else:
-            return entity_type.capitalize()
+    async def set_lore_metadata(
+        self,
+        lore_id: str,
+        metadata: Dict[str, Any],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set lore metadata in cache."""
+        try:
+            # Check resource availability before setting
+            await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.set_cached_data('lore_metadata', lore_id, metadata, tags)
+        except Exception as e:
+            logger.error(f"Error setting lore metadata: {e}")
+            return False
     
-    def _get_name_column_for_entity_type(self, entity_type: str) -> str:
-        """Get the name column for an entity type."""
-        entity_type = entity_type.lower()
-        if entity_type == "location":
-            return "location_name"
-        elif entity_type == "npc":
-            return "npc_name"
-        else:
-            return "name"
+    async def invalidate_lore_metadata(
+        self,
+        lore_id: Optional[str] = None,
+        recursive: bool = True
+    ) -> None:
+        """Invalidate lore metadata cache."""
+        try:
+            await self.invalidate_cached_data('lore_metadata', lore_id, recursive)
+        except Exception as e:
+            logger.error(f"Error invalidating lore metadata: {e}")
     
-    async def register_with_governance(self):
-        """Register with Nyx governance system"""
-        await self.initialize_governance()
-        
-        # Register this manager with governance
-        await self.governor.register_agent(
-            agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="lore_manager",
-            agent_instance=self
-        )
-        
-        # Issue a general directive for lore maintenance
-        await self.governor.issue_directive(
-            agent_type=AgentType.NARRATIVE_CRAFTER,
-            agent_id="lore_manager",
-            directive_type=DirectiveType.ACTION,
-            directive_data={
-                "instruction": "Maintain world lore consistency and handle knowledge appropriately.",
-                "scope": "global"
-            },
-            priority=3,  # Medium-low priority
-            duration_minutes=24*60  # 24 hours
-        )
-        
-        logging.info(f"LoreManager registered with Nyx governance system for user {self.user_id}, conversation {self.conversation_id}")
+    async def get_lore_relationships(
+        self,
+        lore_id: str,
+        fetch_func: Optional[callable] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Get lore relationships from cache or fetch if not available."""
+        try:
+            # Check resource availability before fetching
+            if fetch_func:
+                await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.get_cached_data('lore_relationships', lore_id, fetch_func)
+        except Exception as e:
+            logger.error(f"Error getting lore relationships: {e}")
+            return None
+    
+    async def set_lore_relationships(
+        self,
+        lore_id: str,
+        relationships: Dict[str, Any],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set lore relationships in cache."""
+        try:
+            # Check resource availability before setting
+            await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.set_cached_data('lore_relationships', lore_id, relationships, tags)
+        except Exception as e:
+            logger.error(f"Error setting lore relationships: {e}")
+            return False
+    
+    async def invalidate_lore_relationships(
+        self,
+        lore_id: Optional[str] = None,
+        recursive: bool = True
+    ) -> None:
+        """Invalidate lore relationships cache."""
+        try:
+            await self.invalidate_cached_data('lore_relationships', lore_id, recursive)
+        except Exception as e:
+            logger.error(f"Error invalidating lore relationships: {e}")
+    
+    async def get_lore_history(
+        self,
+        lore_id: str,
+        fetch_func: Optional[callable] = None
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Get lore history from cache or fetch if not available."""
+        try:
+            # Check resource availability before fetching
+            if fetch_func:
+                await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.get_cached_data('lore_history', lore_id, fetch_func)
+        except Exception as e:
+            logger.error(f"Error getting lore history: {e}")
+            return None
+    
+    async def set_lore_history(
+        self,
+        lore_id: str,
+        history: List[Dict[str, Any]],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set lore history in cache."""
+        try:
+            # Check resource availability before setting
+            await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.set_cached_data('lore_history', lore_id, history, tags)
+        except Exception as e:
+            logger.error(f"Error setting lore history: {e}")
+            return False
+    
+    async def invalidate_lore_history(
+        self,
+        lore_id: Optional[str] = None,
+        recursive: bool = True
+    ) -> None:
+        """Invalidate lore history cache."""
+        try:
+            await self.invalidate_cached_data('lore_history', lore_id, recursive)
+        except Exception as e:
+            logger.error(f"Error invalidating lore history: {e}")
+    
+    async def get_lore_validation(
+        self,
+        lore_id: str,
+        fetch_func: Optional[callable] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Get lore validation from cache or fetch if not available."""
+        try:
+            # Check resource availability before fetching
+            if fetch_func:
+                await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.get_cached_data('lore_validation', lore_id, fetch_func)
+        except Exception as e:
+            logger.error(f"Error getting lore validation: {e}")
+            return None
+    
+    async def set_lore_validation(
+        self,
+        lore_id: str,
+        validation: Dict[str, Any],
+        tags: Optional[Set[str]] = None
+    ) -> bool:
+        """Set lore validation in cache."""
+        try:
+            # Check resource availability before setting
+            await self.resource_manager._check_resource_availability('memory')
+            
+            return await self.set_cached_data('lore_validation', lore_id, validation, tags)
+        except Exception as e:
+            logger.error(f"Error setting lore validation: {e}")
+            return False
+    
+    async def invalidate_lore_validation(
+        self,
+        lore_id: Optional[str] = None,
+        recursive: bool = True
+    ) -> None:
+        """Invalidate lore validation cache."""
+        try:
+            await self.invalidate_cached_data('lore_validation', lore_id, recursive)
+        except Exception as e:
+            logger.error(f"Error invalidating lore validation: {e}")
+    
+    async def get_resource_stats(self) -> Dict[str, Any]:
+        """Get resource usage statistics."""
+        try:
+            return await self.resource_manager.get_resource_stats()
+        except Exception as e:
+            logger.error(f"Error getting resource stats: {e}")
+            return {}
+    
+    async def optimize_resources(self):
+        """Optimize resource usage."""
+        try:
+            await self.resource_manager._optimize_resource_usage('memory')
+        except Exception as e:
+            logger.error(f"Error optimizing resources: {e}")
+    
+    async def cleanup_resources(self):
+        """Clean up unused resources."""
+        try:
+            await self.resource_manager._cleanup_all_resources()
+        except Exception as e:
+            logger.error(f"Error cleaning up resources: {e}")
+
+# Create a singleton instance for easy access
+lore_manager = LoreManager()
