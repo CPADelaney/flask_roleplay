@@ -321,6 +321,12 @@
     
     socket.on("disconnect", (reason) => {
       console.log("Socket.IO disconnected:", reason);
+      // Show reconnection message
+      const disconnectMsg = {
+        sender: "system",
+        content: "Connection lost. Attempting to reconnect..."
+      };
+      appendMessage(disconnectMsg, true);
     });
     
     socket.on("connect_error", (error) => {
@@ -330,6 +336,12 @@
     // Room events
     socket.on("joined", (data) => {
       console.log("Joined room:", data.room);
+      // Show joined message
+      const joinMsg = {
+        sender: "system",
+        content: "Connected to game session"
+      };
+      appendMessage(joinMsg, true);
     });
     
     // Message streaming events
@@ -358,22 +370,37 @@
       appendMessage(messageObj, true);
     });
     
-    // NEW: Image event listener
+    // Image event listener
     socket.on("image", function(payload) {
       console.log("Received image:", payload);
       appendImageToChat(payload.image_url, payload.reason);
     });
     
-    // Add storybeat-specific listeners
+    // Processing indicator
     socket.on("processing", function(data) {
-      console.log("Server is processing the storybeat:", data.message);
-      // Optionally show a loading indicator here
+      console.log("Server is processing:", data.message);
       const chatWindow = document.getElementById("chatWindow");
       const processingDiv = document.createElement("div");
       processingDiv.id = "processingIndicator";
       processingDiv.innerHTML = '<div style="text-align: center; padding: 10px; font-style: italic; color: #888;">Processing your request...</div>';
       chatWindow.appendChild(processingDiv);
       chatWindow.scrollTop = chatWindow.scrollHeight;
+    });
+    
+    // Game state updates
+    socket.on("game_state_update", function(data) {
+      console.log("Game state updated:", data);
+      // Handle different types of game state updates
+      if (data.type === "npc_update") {
+        // Update NPC information in the UI
+        updateNPCInfo(data.npc_data);
+      } else if (data.type === "location_update") {
+        // Update location information
+        updateLocationInfo(data.location_data);
+      } else if (data.type === "quest_update") {
+        // Update quest information
+        updateQuestInfo(data.quest_data);
+      }
     });
   }
 
@@ -553,27 +580,65 @@
 
   async function startNewGame() {
     try {
+      // Show loading state
+      const loadingDiv = document.createElement("div");
+      loadingDiv.id = "loadingIndicator";
+      loadingDiv.innerHTML = '<div style="text-align: center; padding: 20px; font-style: italic; color: #888;">Initializing new game world...</div>';
+      document.getElementById("chatWindow").appendChild(loadingDiv);
+      
+      // Start new game
       const res = await fetch("/start_new_game", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({})
       });
+      
       const data = await res.json();
-  
+      
       if (!res.ok) {
-        alert("Error starting new game: " + (data.error || res.status));
-        return;
+        throw new Error(data.error || "Failed to start new game");
       }
-  
+      
       currentConvId = data.conversation_id;
-      alert("New game started! conversation_id=" + currentConvId);
-  
+      
+      // Remove loading indicator
+      loadingDiv.remove();
+      
+      // Join the conversation room
+      if (socket && socket.connected) {
+        socket.emit('join', { conversation_id: currentConvId });
+      }
+      
+      // Load messages for this conversation
+      await loadMessages(currentConvId, true);
+      
+      // Check for welcome image
+      await checkForWelcomeImage(currentConvId);
+      
+      // Update conversation list
       await loadConversations();
-      selectConversation(currentConvId);
+      
+      // Show success message
+      const successMsg = {
+        sender: "system",
+        content: `New game started successfully! Welcome to ${data.game_name || "your new world"}.`
+      };
+      appendMessage(successMsg, true);
+      
     } catch (err) {
       console.error("startNewGame error:", err);
-      alert("Failed to start new game!");
+      const errorMsg = {
+        sender: "system",
+        content: `Error starting new game: ${err.message}`
+      };
+      appendMessage(errorMsg, true);
+      
+      // Remove loading indicator if it exists
+      const loadingDiv = document.getElementById("loadingIndicator");
+      if (loadingDiv) {
+        loadingDiv.remove();
+      }
     }
   }
 
