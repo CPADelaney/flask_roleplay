@@ -15,6 +15,7 @@ from logic.stats_logic import (
     insert_default_player_stats_chase
 )
 import asyncpg
+import psycopg2
 
 
 def create_all_tables():
