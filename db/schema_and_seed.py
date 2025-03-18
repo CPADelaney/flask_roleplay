@@ -999,7 +999,7 @@ def create_all_tables():
         CREATE TABLE IF NOT EXISTS ImageFeedback (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
-            conversation_id TEXT NOT NULL,
+            conversation_id INTEGER NOT NULL,
             image_path TEXT NOT NULL,
             original_prompt TEXT NOT NULL,
             npc_names JSONB NOT NULL,
@@ -1035,7 +1035,7 @@ def create_all_tables():
             id SERIAL PRIMARY KEY,
             npc_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
-            conversation_id TEXT NOT NULL,
+            conversation_id INTEGER NOT NULL,
             event_type TEXT CHECK (event_type IN ('outfit_change','appearance_change','location_change','mood_change')),
             event_description TEXT,
             previous_state JSONB,
