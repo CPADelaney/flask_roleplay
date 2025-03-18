@@ -18,7 +18,7 @@ from routes.story_routes import build_aggregator_text
 from logic.npc_creation import spawn_multiple_npcs_enhanced, init_chase_schedule
 from routes.ai_image_generator import generate_roleplay_image_from_gpt
 from logic.conflict_system.conflict_integration import ConflictSystemIntegration
-from lore.lore_system import LoreSystem
+from lore.dynamic_lore_generator import DynamicLoreGenerator
 
 # Import Nyx governance integration
 from nyx.governance_helpers import with_governance, with_governance_permission, with_action_reporting
@@ -599,7 +599,7 @@ class NewGameAgent:
         # Initialize and generate lore
         try:
             # Get the lore system instance and initialize it
-            lore_system = LoreSystem.get_instance(user_id, conversation_id)
+            lore_system = DynamicLoreGenerator.get_instance(user_id, conversation_id)
             await lore_system.initialize()
             
             # Generate comprehensive lore based on the environment
@@ -844,7 +844,7 @@ class NewGameAgent:
         
         try:
             # Get the lore system instance and initialize it
-            lore_system = LoreSystem.get_instance(user_id, conversation_id)
+            lore_system = DynamicLoreGenerator.get_instance(user_id, conversation_id)
             await lore_system.initialize()
             
             # Generate comprehensive lore based on the environment

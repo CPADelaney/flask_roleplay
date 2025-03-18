@@ -1,106 +1,195 @@
 # config.py
 
 """
-Centralized configuration system for NPC agents and related systems.
-Uses environment variables with sensible defaults.
+Centralized configuration for the application.
+
+This module loads configuration from environment variables with sensible defaults.
+It centralizes all configuration to avoid hardcoding values throughout the codebase.
 """
 
 import os
+import secrets
 import logging
-from typing import Dict, Any
+from datetime import timedelta
 
-class Config:
-    """Configuration management with environment and file-based configuration."""
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Environment detection
+ENVIRONMENT = os.getenv("FLASK_ENV", "development")
+IS_PRODUCTION = ENVIRONMENT == "production"
+IS_DEVELOPMENT = ENVIRONMENT == "development"
+IS_TESTING = ENVIRONMENT == "testing"
+
+# Database configuration
+DB_CONFIG = {
+    "dsn": os.getenv("DB_DSN", "postgresql://postgres:postgres@localhost:5432/roleplay"),
+    "min_connections": int(os.getenv("DB_MIN_CONNECTIONS", 5)),
+    "max_connections": int(os.getenv("DB_MAX_CONNECTIONS", 20)),
+    "connection_timeout": int(os.getenv("DB_CONNECTION_TIMEOUT", 30)),
+    "pool_recycle": int(os.getenv("DB_POOL_RECYCLE", 300)),  # 5 minutes
+    "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", 30)),
+    "max_retries": int(os.getenv("DB_MAX_RETRIES", 3)),
+    "retry_delay": float(os.getenv("DB_RETRY_DELAY", 0.5)),
+}
+
+# Security settings
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    if IS_PRODUCTION:
+        logger.warning("SECRET_KEY not set in production environment. Generating a temporary one.")
+    SECRET_KEY = secrets.token_hex(32)
+
+SECURITY_CONFIG = {
+    "secret_key": SECRET_KEY,
+    "session_cookie_secure": IS_PRODUCTION,
+    "session_cookie_httponly": True,
+    "session_cookie_samesite": "Lax",
+    "permanent_session_lifetime": int(os.getenv("SESSION_LIFETIME", 86400)),  # 24 hours
+    "bcrypt_log_rounds": 12 if IS_PRODUCTION else 4,
+    "cors_allowed_origins": os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if os.getenv("CORS_ALLOWED_ORIGINS") else ["*"],
     
-    def __init__(self):
-        """Initialize configuration from environment variables."""
-        # NPC Configuration
-        self.NPC_BATCH_SIZE = int(os.getenv("NPC_BATCH_SIZE", "3"))
-        self.NPC_DAILY_ACTIVITY_LIMIT = int(os.getenv("NPC_DAILY_ACTIVITY_LIMIT", "5"))
-        self.NPC_MEMORY_LIMIT = int(os.getenv("NPC_MEMORY_LIMIT", "50"))
-        self.NPC_MASK_SLIP_THRESHOLD = float(os.getenv("NPC_MASK_SLIP_THRESHOLD", "0.15"))
-        
-        # Memory Configuration
-        self.MEMORY_LIFECYCLE_DAYS = int(os.getenv("MEMORY_LIFECYCLE_DAYS", "14"))
-        self.MEMORY_SIGNIFICANCE_THRESHOLD = int(os.getenv("MEMORY_SIGNIFICANCE_THRESHOLD", "3"))
-        self.MEMORY_DECAY_RATE = float(os.getenv("MEMORY_DECAY_RATE", "0.2"))
-        self.MEMORY_CONSOLIDATION_THRESHOLD = int(os.getenv("MEMORY_CONSOLIDATION_THRESHOLD", "3"))
-        self.MEMORY_CONSOLIDATION_DAYS = int(os.getenv("MEMORY_CONSOLIDATION_DAYS", "7"))
-        self.MEMORY_ARCHIVE_DAYS = int(os.getenv("MEMORY_ARCHIVE_DAYS", "60"))
-        
-        # Relationship Configuration
-        self.RELATIONSHIP_CROSSROADS_THRESHOLD = int(os.getenv("RELATIONSHIP_CROSSROADS_THRESHOLD", "40"))
-        self.RELATIONSHIP_RITUAL_THRESHOLD = int(os.getenv("RELATIONSHIP_RITUAL_THRESHOLD", "60"))
-        
-        # Cache Configuration
-        self.NPC_CACHE_SIZE = int(os.getenv("NPC_CACHE_SIZE", "50"))
-        self.NPC_CACHE_TTL = int(os.getenv("NPC_CACHE_TTL", "30"))
-        self.LOCATION_CACHE_SIZE = int(os.getenv("LOCATION_CACHE_SIZE", "20"))
-        self.LOCATION_CACHE_TTL = int(os.getenv("LOCATION_CACHE_TTL", "120"))
-        self.AGGREGATOR_CACHE_SIZE = int(os.getenv("AGGREGATOR_CACHE_SIZE", "10"))
-        self.AGGREGATOR_CACHE_TTL = int(os.getenv("AGGREGATOR_CACHE_TTL", "15"))
-        self.TIME_CACHE_SIZE = int(os.getenv("TIME_CACHE_SIZE", "5"))
-        self.TIME_CACHE_TTL = int(os.getenv("TIME_CACHE_TTL", "10"))
-        
-        # Database Configuration
-        self.DB_MIN_CONN = int(os.getenv("DB_MIN_CONN", "5"))
-        self.DB_MAX_CONN = int(os.getenv("DB_MAX_CONN", "20"))
-        self.DB_COMMAND_TIMEOUT = int(os.getenv("DB_COMMAND_TIMEOUT", "60"))
-        self.DB_STATEMENT_TIMEOUT = int(os.getenv("DB_STATEMENT_TIMEOUT", "60"))
-        self.DB_INACTIVE_CONN_LIFETIME = int(os.getenv("DB_INACTIVE_CONN_LIFETIME", "300"))
-        
-        # Performance Configuration
-        self.PERF_SLOW_QUERY_THRESHOLD_MS = int(os.getenv("PERF_SLOW_QUERY_THRESHOLD_MS", "500"))
-        self.PERF_MEMORY_CHECK_INTERVAL = int(os.getenv("PERF_MEMORY_CHECK_INTERVAL", "60"))
-        self.PERF_HIGH_MEMORY_THRESHOLD = float(os.getenv("PERF_HIGH_MEMORY_THRESHOLD", "70.0"))
-        
-        # Logging
-        self.LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-        
-        # Initialize logging configuration
-        self._configure_logging()
-        
-        # Log config initialization
-        logging.info("Configuration initialized")
+    # Enhanced security settings
+    "password_history_size": int(os.getenv("PASSWORD_HISTORY_SIZE", 5)),
+    "max_login_attempts": int(os.getenv("MAX_LOGIN_ATTEMPTS", 5)),
+    "lockout_duration": int(os.getenv("LOCKOUT_DURATION", 300)),  # 5 minutes
+    "password_min_length": int(os.getenv("PASSWORD_MIN_LENGTH", 12)),
+    "password_complexity": {
+        "min_uppercase": 1,
+        "min_lowercase": 1,
+        "min_numbers": 1,
+        "min_special": 1
+    },
+    "session_max_concurrent": int(os.getenv("SESSION_MAX_CONCURRENT", 3)),
+    "require_mfa": IS_PRODUCTION,
+    "mfa_issuer": "NPC Roleplay",
+    "jwt_expiration": int(os.getenv("JWT_EXPIRATION", 3600)),  # 1 hour
+    "jwt_refresh_expiration": int(os.getenv("JWT_REFRESH_EXPIRATION", 2592000)),  # 30 days
+    "api_rate_limits": {
+        "default": "100/hour",
+        "login": "5/minute",
+        "register": "3/hour"
+    },
+    "content_security_policy": {
+        "default-src": ["'self'"],
+        "script-src": ["'self'", "'unsafe-inline'"],
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "img-src": ["'self'", "data:", "https:"],
+        "connect-src": ["'self'"],
+        "frame-ancestors": ["'none'"],
+        "form-action": ["'self'"]
+    },
+    "security_headers": {
+        "X-Frame-Options": "DENY",
+        "X-Content-Type-Options": "nosniff",
+        "X-XSS-Protection": "1; mode=block",
+        "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "geolocation=(), microphone=(), camera=()"
+    }
+}
+
+# Rate limiting settings
+RATE_LIMIT_CONFIG = {
+    "default_limit": int(os.getenv("RATE_LIMIT_DEFAULT", 100)),
+    "default_period": int(os.getenv("RATE_LIMIT_PERIOD", 60)),
+    "login_limit": int(os.getenv("RATE_LIMIT_LOGIN", 5)),
+    "login_period": int(os.getenv("RATE_LIMIT_LOGIN_PERIOD", 60)),
+    "register_limit": int(os.getenv("RATE_LIMIT_REGISTER", 3)),
+    "register_period": int(os.getenv("RATE_LIMIT_REGISTER_PERIOD", 300)),
+    "api_limit": int(os.getenv("RATE_LIMIT_API", 20)),
+    "api_period": int(os.getenv("RATE_LIMIT_API_PERIOD", 60)),
+}
+
+# Logging configuration
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_FORMAT = os.getenv("LOG_FORMAT", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+LOGGING_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": LOG_FORMAT
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "level": LOG_LEVEL,
+            "formatter": "standard",
+            "stream": "ext://sys.stdout"
+        },
+        "file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": LOG_LEVEL,
+            "formatter": "standard",
+            "filename": os.getenv("LOG_FILE", "app.log"),
+            "maxBytes": 10485760,  # 10MB
+            "backupCount": 10,
+            "encoding": "utf8"
+        },
+    },
+    "loggers": {
+        "": {  # root logger
+            "handlers": ["console", "file"] if IS_PRODUCTION else ["console"],
+            "level": LOG_LEVEL,
+            "propagate": True
+        },
+        "werkzeug": {
+            "level": "WARNING" if IS_PRODUCTION else "INFO",
+            "propagate": True
+        },
+    }
+}
+
+# NPC learning configuration
+NPC_LEARNING_CONFIG = {
+    "learning_cycle_interval": int(os.getenv("NPC_LEARNING_CYCLE_INTERVAL", 3600)),  # 1 hour
+    "max_npcs_per_batch": int(os.getenv("NPC_MAX_BATCH_SIZE", 50)),
+    "max_npcs_per_event": int(os.getenv("NPC_MAX_EVENT_SIZE", 10)),
+    "memory_limit": int(os.getenv("NPC_MEMORY_LIMIT", 100)),
+}
+
+# Nyx agent configuration
+NYX_CONFIG = {
+    "memory_limit": int(os.getenv("NYX_MEMORY_LIMIT", 1000)),
+    "maintain_interval": int(os.getenv("NYX_MAINTAIN_INTERVAL", 86400)),  # 24 hours
+    "memory_retention_days": int(os.getenv("NYX_MEMORY_RETENTION_DAYS", 30)),
+}
+
+# Helper function to get configuration
+def get_config(section=None):
+    """
+    Get configuration values.
     
-    def _configure_logging(self):
-        """Configure logging based on settings."""
-        log_levels = {
-            "DEBUG": logging.DEBUG,
-            "INFO": logging.INFO,
-            "WARNING": logging.WARNING,
-            "ERROR": logging.ERROR,
-            "CRITICAL": logging.CRITICAL
+    Args:
+        section (str, optional): Configuration section to return
+        
+    Returns:
+        dict: Configuration values
+    """
+    if section == "db":
+        return DB_CONFIG
+    elif section == "security":
+        return SECURITY_CONFIG
+    elif section == "rate_limit":
+        return RATE_LIMIT_CONFIG
+    elif section == "logging":
+        return LOGGING_CONFIG
+    elif section == "npc_learning":
+        return NPC_LEARNING_CONFIG
+    elif section == "nyx":
+        return NYX_CONFIG
+    else:
+        # Return all config if no section specified
+        return {
+            "environment": ENVIRONMENT,
+            "is_production": IS_PRODUCTION,
+            "db": DB_CONFIG,
+            "security": SECURITY_CONFIG,
+            "rate_limit": RATE_LIMIT_CONFIG,
+            "logging": LOGGING_CONFIG,
+            "npc_learning": NPC_LEARNING_CONFIG,
+            "nyx": NYX_CONFIG,
         }
-        
-        log_level = log_levels.get(self.LOG_LEVEL.upper(), logging.INFO)
-        
-        logging.basicConfig(
-            level=log_level,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert configuration to dictionary."""
-        return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
-    
-    def __str__(self) -> str:
-        """String representation of configuration."""
-        return str(self.to_dict())
-    
-    def get(self, key, default=None):
-        """Get configuration value with optional default."""
-        return getattr(self, key, default)
-
-# Create global instance
-CONFIG = Config()
-
-# Helper functions
-def get_config():
-    """Get the global configuration instance."""
-    return CONFIG
-
-def get(key, default=None):
-    """Get configuration value with fallback."""
-    return CONFIG.get(key, default)
