@@ -377,6 +377,25 @@ def create_all_tables():
         );
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerConflictInvolvement (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER REFERENCES Conflicts(conflict_id),
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL,
+            player_name TEXT NOT NULL,
+            involvement_level TEXT DEFAULT 'none',
+            faction TEXT DEFAULT 'neutral',
+            money_committed INTEGER DEFAULT 0,
+            supplies_committed INTEGER DEFAULT 0,
+            influence_committed INTEGER DEFAULT 0,
+            actions_taken JSONB DEFAULT '[]',
+            manipulated_by JSONB DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
     # ---------- INTERNAL FACTION CONFLICTS ----------
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS InternalFactionConflicts (
@@ -447,6 +466,33 @@ def create_all_tables():
             entity_type VARCHAR(50) NOT NULL,
             entity_id INTEGER NULL,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
+        );
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ConflictConsequences (
+            id SERIAL PRIMARY KEY,
+            conflict_id INTEGER NOT NULL,
+            consequence_type VARCHAR(50) NOT NULL,
+            entity_type VARCHAR(50) NOT NULL,
+            entity_id INTEGER NULL,
+            description TEXT NOT NULL,
+            applied BOOLEAN NOT NULL DEFAULT FALSE,
+            applied_at TIMESTAMP NULL,
+            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
+        );
+    ''')
+
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ConflictNPCs (
+            conflict_id INTEGER NOT NULL,
+            npc_id INTEGER NOT NULL,
+            faction VARCHAR(10) NOT NULL,
+            role VARCHAR(50) NOT NULL,
+            influence_level INTEGER NOT NULL DEFAULT 50,
+            PRIMARY KEY (conflict_id, npc_id),
             FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
         );
     ''')
