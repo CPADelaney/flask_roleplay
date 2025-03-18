@@ -589,7 +589,6 @@ def create_all_tables():
             npc_id INT NOT NULL,
             memory_text TEXT NOT NULL,
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            status TEXT NOT NULL,
 
             tags TEXT[],
             emotional_intensity INT DEFAULT 0,   -- 0..100
