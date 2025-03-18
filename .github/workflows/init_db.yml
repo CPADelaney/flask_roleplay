@@ -8,6 +8,10 @@ on:
 jobs:
   init-db:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -23,7 +27,5 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run Database Initialization Script
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           python init_db_script.py
