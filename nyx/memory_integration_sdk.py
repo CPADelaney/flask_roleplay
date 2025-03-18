@@ -4,7 +4,7 @@ import logging
 import json
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union
 import asyncpg
 
 from agents import Agent, function_tool, Runner, trace
@@ -12,7 +12,7 @@ from agents import ModelSettings, RunConfig
 from pydantic import BaseModel, Field
 
 from db.connection import get_db_connection
-from nyx.nyx_memory_system import NyxMemorySystem
+from memory.memory_nyx_integration import MemoryNyxBridge
 from logic.npc_agents.agent_coordinator import NPCAgentCoordinator
 from utils.caching import MEMORY_CACHE
 
@@ -1548,3 +1548,27 @@ def _process_query(self, query: Dict[str, Any]) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Query processing failed: {e}")
         raise
+
+class MemoryIntegrationSDK:
+    def__init__(self, user_id: int, conversation_id: int):
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+        self.memory_bridge = MemoryNyxBridge(user_id, conversation_id)
+        self.initialized = False
+
+    async def initialize(self):
+        """Initialize the memory integration SDK"""
+        if self.initialized:
+            return
+    
+        await self.memory_bridge.initialize()
+        self.initialized = True
+        logger.info(f"Memory integratioNSDK initialized for user {self.user_id}")
+
+    async def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        """Get a specific memory by ID"""
+        return await self.memory_bridge.get_memory(memory_id)
+
+    async def query_memories(self, query: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Query memories based on criteria"""
+        return await self.memory_bridge.query_memories(query)
