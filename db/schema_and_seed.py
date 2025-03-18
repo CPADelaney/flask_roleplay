@@ -1226,8 +1226,11 @@ def create_all_tables():
         );
     ''')
 
-    CREATE INDEX IF NOT EXISTS idx_joint_memory_edges_entity 
-    ON JointMemoryEdges(entity_type, entity_id, user_id, conversation_id);
+    # Wrap this CREATE INDEX in cursor.execute():
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_joint_memory_edges_entity
+        ON JointMemoryEdges(entity_type, entity_id, user_id, conversation_id);
+    ''')
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxAgentDirectives (
@@ -1248,12 +1251,14 @@ def create_all_tables():
                 ON DELETE CASCADE
         );
     ''')
-        
-        -- Index for agent directives
+
+    # Index for agent directives
+    cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_agent_directives_agent
         ON NyxAgentDirectives(user_id, conversation_id, agent_type, agent_id);
-        
-        -- Action Tracking Table
+    ''')
+
+    # Action Tracking Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxActionTracking (
             id SERIAL PRIMARY KEY,
@@ -1273,12 +1278,14 @@ def create_all_tables():
                 ON DELETE CASCADE
         );
     ''')
-        
-        -- Index for action tracking
+
+    # Index for action tracking
+    cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_action_tracking_agent
         ON NyxActionTracking(user_id, conversation_id, agent_type, agent_id);
-        
-        -- Agent Communication Table
+    ''')
+
+    # Agent Communication Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxAgentCommunication (
             id SERIAL PRIMARY KEY,
@@ -1300,15 +1307,20 @@ def create_all_tables():
                 ON DELETE CASCADE
         );
     ''')
-        
-        -- Index for agent communication
+
+    # Index for agent communication (sender)
+    cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_agent_communication_sender
         ON NyxAgentCommunication(user_id, conversation_id, sender_type, sender_id);
-        
+    ''')
+
+    # Index for agent communication (recipient)
+    cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_agent_communication_recipient
         ON NyxAgentCommunication(user_id, conversation_id, recipient_type, recipient_id);
-        
-        -- Joint Memory Graph Table
+    ''')
+
+    # Joint Memory Graph Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxJointMemoryGraph (
             id SERIAL PRIMARY KEY,
@@ -1327,10 +1339,10 @@ def create_all_tables():
                 FOREIGN KEY (user_id, conversation_id)
                 REFERENCES conversations(user_id, id)
                 ON DELETE CASCADE
-         );
+        );
     ''')
-        
-        -- Joint Memory Access Table
+
+    # Joint Memory Access Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxJointMemoryAccess (
             id SERIAL PRIMARY KEY,
@@ -1346,8 +1358,8 @@ def create_all_tables():
                 ON DELETE CASCADE
         );
     ''')
-        
-        -- Narrative Governance Table
+
+    # Narrative Governance Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxNarrativeGovernance (
             id SERIAL PRIMARY KEY,
@@ -1367,8 +1379,8 @@ def create_all_tables():
                 ON DELETE CASCADE
         );
     ''')
-        
-        -- Agent Registration Table
+
+    # Agent Registration Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxAgentRegistry (
             id SERIAL PRIMARY KEY,
@@ -1473,22 +1485,22 @@ def create_all_tables():
 
     # Create indexes for better query performance
     cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_context_evolution_user_conversation 
+        CREATE INDEX IF NOT EXISTS idx_context_evolution_user_conversation
         ON ContextEvolution(user_id, conversation_id);
-        
-        CREATE INDEX IF NOT EXISTS idx_context_evolution_timestamp 
+
+        CREATE INDEX IF NOT EXISTS idx_context_evolution_timestamp
         ON ContextEvolution(timestamp);
-        
-        CREATE INDEX IF NOT EXISTS idx_memory_context_evolution_memory 
+
+        CREATE INDEX IF NOT EXISTS idx_memory_context_evolution_memory
         ON MemoryContextEvolution(memory_id);
-        
-        CREATE INDEX IF NOT EXISTS idx_memory_context_evolution_evolution 
+
+        CREATE INDEX IF NOT EXISTS idx_memory_context_evolution_evolution
         ON MemoryContextEvolution(evolution_id);
-        
-        CREATE INDEX IF NOT EXISTS idx_memory_relevance_score 
+
+        CREATE INDEX IF NOT EXISTS idx_memory_relevance_score
         ON Memory(relevance_score);
-        
-        CREATE INDEX IF NOT EXISTS idx_memory_last_context_update 
+
+        CREATE INDEX IF NOT EXISTS idx_memory_last_context_update
         ON Memory(last_context_update);
     """)
 
@@ -1528,11 +1540,13 @@ def seed_initial_vitals():
     finally:
         conn.close()
 
+
 def initialize_conflict_system():
     """Initialize the conflict system by seeding initial data."""
     # We don't need to create tables again as they're already created in create_all_tables()
     seed_initial_vitals()
     logging.info("Conflict system initialized.")
+
 
 def seed_initial_data():
     """
@@ -1550,6 +1564,7 @@ def seed_initial_data():
     create_and_seed_interactions()
     insert_default_player_stats_chase()
     print("All default data seeded successfully.")
+
 
 def seed_initial_resources():
     """Seed initial player resources."""
@@ -1580,6 +1595,7 @@ def seed_initial_resources():
     finally:
         conn.close()
 
+
 def initialize_all_data():
     """
     Convenience function to create tables + seed initial data 
@@ -1588,7 +1604,7 @@ def initialize_all_data():
     create_all_tables()
     seed_initial_data()
     seed_initial_vitals()
-    seed_initial_resources()  # Add this line
+    seed_initial_resources()
     initialize_conflict_system()
     print("All tables created & default data seeded successfully!")
 
