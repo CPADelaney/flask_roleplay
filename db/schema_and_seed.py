@@ -588,6 +588,7 @@ def create_all_tables():
             npc_id INT NOT NULL,
             memory_text TEXT NOT NULL,
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            status TEXT NOT NULL,
 
             tags TEXT[],
             emotional_intensity INT DEFAULT 0,   -- 0..100
@@ -605,10 +606,12 @@ def create_all_tables():
             FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
         );
     ''')
+    
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_mem_npcid_status_ts
             ON NPCMemories (npc_id, status, timestamp);
     ''')
+    
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS npc_memory_embedding_hnsw_idx
             ON NPCMemories 
