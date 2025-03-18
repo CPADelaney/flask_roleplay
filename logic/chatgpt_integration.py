@@ -722,3 +722,25 @@ def _ensure_default_scene_data(parsed_args: dict) -> None:
             "reason": ""
         }
 
+from agents import (
+    Agent,
+    ModelSettings,
+    Runner,
+    function_tool,
+    RunContextWrapper,
+    AsyncOpenAI,
+    OpenAIResponsesModel
+)
+
+def get_agents_openai_model() -> OpenAIResponsesModel:
+    """
+    Return a new Agents SDK Model instance for agent-based workflows.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not found in environment")
+    
+    return OpenAIResponsesModel(
+        model="gpt-4o",
+        openai_client=AsyncOpenAI(api_key=api_key)
+    )
