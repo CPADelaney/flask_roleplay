@@ -229,7 +229,8 @@ def create_all_tables():
             quantity INT DEFAULT 1,
             equipped BOOLEAN DEFAULT FALSE,
             date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id, conversation_id) REFERENCES conversations(user_id, id)
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
