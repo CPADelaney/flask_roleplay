@@ -714,19 +714,8 @@ class NewGameAgent:
         action_description="Processed complete new game creation workflow"
     )
     async def process_new_game(self, user_id, conversation_data):
-        """
-        Orchestrate the complete new game creation process.
-        
-        Args:
-            user_id: User ID
-            conversation_data: Initial conversation data
-            
-        Returns:
-            Dictionary with the game creation results
-        """
         provided_convo_id = conversation_data.get("conversation_id")
-        
-        # Create or validate conversation
+    
         conn = await asyncpg.connect(dsn=DB_DSN, statement_cache_size=0)
         try:
             if not provided_convo_id:
@@ -743,7 +732,23 @@ class NewGameAgent:
                 """, conversation_id, user_id)
                 if not row:
                     raise Exception(f"Conversation {conversation_id} not found or unauthorized")
-            
+    
+            # Clear old data, etc...
+            tables = ["Events", "PlannedEvents", "PlayerInventory", "Quests", 
+                      "NPCStats", "Locations", "SocialLinks", "CurrentRoleplay"]
+            for t in tables:
+                await conn.execute(f"DELETE FROM {t} WHERE user_id=$1 AND conversation_id=$2",
+                                   user_id, conversation_id)
+        finally:
+            await conn.close()
+    
+        # NOW we have conversation_id, so let's insert default "Chase" stats
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            functools.partial(insert_default_player_stats_chase, user_id, conversation_id)
+        )
+
             # Clear old data
             tables = [
                 "Events", "PlannedEvents", "PlayerInventory", "Quests",
