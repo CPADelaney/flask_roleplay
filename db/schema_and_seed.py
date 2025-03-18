@@ -787,7 +787,8 @@ def create_all_tables():
             perk_tier INT DEFAULT 1,
             perk_properties JSONB,
             date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id, conversation_id) REFERENCES conversations(user_id, id)
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
