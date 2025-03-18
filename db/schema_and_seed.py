@@ -16,6 +16,7 @@ from logic.stats_logic import (
 )
 import asyncpg
 import psycopg2
+from typing import Dict, Any
 
 
 def create_all_tables():
