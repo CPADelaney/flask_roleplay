@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union, Any
 
 # ~~~~~~~~~ Agents SDK imports ~~~~~~~~~
-from openai import (
+from agents import (
     Agent,
     ModelSettings,
     Runner,
@@ -2107,7 +2107,7 @@ SocialLinksAgent = Agent(
         "Use these tools to retrieve or update relationship data, trigger or apply crossroads, or check for rituals. "
         "Return helpful final text or JSON summarizing your result."
     ),
-    model=OpenAIResponsesModel(model="o3-mini"),  # or "gpt-4o", "gpt-3.5-turbo", etc.
+    model=OpenAIResponsesModel(model="gpt-4o"),  # or "gpt-4o", "gpt-3.5-turbo", etc.
     model_settings=ModelSettings(temperature=0.5),
     tools=[
         get_social_link_tool,
