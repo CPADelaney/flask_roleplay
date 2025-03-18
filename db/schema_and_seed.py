@@ -1,5 +1,3 @@
-# db/schema_and_seed.py
-
 import json
 import logging
 from db.connection import get_db_connection
@@ -21,21 +19,17 @@ from typing import Dict, Any
 
 def create_all_tables():
     """
-    Creates all your database tables in one go. 
-    Includes both old memory tables (NPCMemories, NyxMemories) 
-    and the new 'unified_memories' plus 'memory_telemetry'.
+    Creates all database tables in one go.
+    Includes both legacy tables (e.g. NPCMemories, NyxMemories)
+    and the new unified_memories, memory_telemetry, etc.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1) Ensure vector extension is available before any tables use vector columns
+    # Ensure vector extension is available
     cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
-    # 2) Create or ensure existence of all tables:
-
-    #
     # ---------- GLOBAL / CORE TABLES ----------
-    #
     cursor.execute('''    
         CREATE TABLE IF NOT EXISTS StateUpdates (
             user_id INTEGER NOT NULL,
@@ -135,9 +129,7 @@ def create_all_tables():
         );
     ''')
 
-    #
     # ---------- PER-USER / CONVERSATION TABLES ----------
-    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCStats (
             npc_id SERIAL PRIMARY KEY,
@@ -249,8 +241,8 @@ def create_all_tables():
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
-    
-    # 2. Add ResourceHistoryLog table for auditing resource changes
+
+    # ---------- RESOURCE HISTORY ----------
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ResourceHistoryLog (
             id SERIAL PRIMARY KEY,
@@ -269,10 +261,7 @@ def create_all_tables():
         );
     ''')
 
-
-    #
     # ---------- CONFLICT SYSTEM TABLES ----------
-    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Conflicts (
             conflict_id SERIAL PRIMARY KEY,
@@ -290,7 +279,9 @@ def create_all_tables():
             is_active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            resolved_at TIMESTAMP
+            resolved_at TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
@@ -380,29 +371,13 @@ def create_all_tables():
             leverage_used JSONB DEFAULT '{}',
             intimacy_level INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            resolved_at TIMESTAMP
+            resolved_at TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS PlayerConflictInvolvement (
-            id SERIAL PRIMARY KEY,
-            conflict_id INTEGER REFERENCES Conflicts(conflict_id),
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            player_name TEXT NOT NULL,
-            involvement_level TEXT DEFAULT 'none',
-            faction TEXT DEFAULT 'neutral',
-            money_committed INTEGER DEFAULT 0,
-            supplies_committed INTEGER DEFAULT 0,
-            influence_committed INTEGER DEFAULT 0,
-            actions_taken JSONB DEFAULT '[]',
-            manipulated_by JSONB DEFAULT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    ''')
-
+    # ---------- INTERNAL FACTION CONFLICTS ----------
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS InternalFactionConflicts (
             struggle_id SERIAL PRIMARY KEY,
@@ -418,7 +393,8 @@ def create_all_tables():
             progress INTEGER DEFAULT 0,
             parent_conflict_id INTEGER REFERENCES Conflicts(conflict_id),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            resolved_at TIMESTAMP
+            resolved_at TIMESTAMP,
+            FOREIGN KEY (parent_conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
         );
     ''')
 
@@ -461,46 +437,7 @@ def create_all_tables():
         );
     ''')
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ConflictMemoryEvents (
-            id SERIAL PRIMARY KEY,
-            conflict_id INTEGER REFERENCES Conflicts(conflict_id),
-            memory_text TEXT NOT NULL,
-            significance INTEGER DEFAULT 5,
-            entity_type TEXT DEFAULT 'conflict',
-            entity_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            conversation_id INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ConflictConsequences (
-            id SERIAL PRIMARY KEY,
-            conflict_id INTEGER NOT NULL,
-            consequence_type VARCHAR(50) NOT NULL,
-            entity_type VARCHAR(50) NOT NULL,
-            entity_id INTEGER NULL,
-            description TEXT NOT NULL,
-            applied BOOLEAN NOT NULL DEFAULT FALSE,
-            applied_at TIMESTAMP NULL,
-            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
-        );
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ConflictNPCs (
-            conflict_id INTEGER NOT NULL,
-            npc_id INTEGER NOT NULL,
-            faction VARCHAR(10) NOT NULL,
-            role VARCHAR(50) NOT NULL,
-            influence_level INTEGER NOT NULL DEFAULT 50,
-            PRIMARY KEY (conflict_id, npc_id),
-            FOREIGN KEY (conflict_id) REFERENCES Conflicts(conflict_id) ON DELETE CASCADE
-        );
-    ''')
-
+    # ---------- CONFLICT MEMORY EVENTS ----------
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ConflictMemoryEvents (
             id SERIAL PRIMARY KEY,
@@ -553,74 +490,71 @@ def create_all_tables():
             change_amount INTEGER NOT NULL,
             cause TEXT NOT NULL,
             conflict_id INTEGER REFERENCES Conflicts(conflict_id),
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    # Create conflict system indexes
+    # ---------- CONFLICT SYSTEM INDEXES ----------
     cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_conflicts_user_conv ON Conflicts(user_id, conversation_id);
+        CREATE INDEX IF NOT EXISTS idx_conflicts_user_conv
+        ON Conflicts(user_id, conversation_id);
     ''')
     cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_conflict_npcs ON ConflictNPCs(conflict_id);
+        CREATE INDEX IF NOT EXISTS idx_conflict_npcs
+        ON ConflictNPCs(conflict_id);
     ''')
     cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_player_involvement ON PlayerConflictInvolvement(conflict_id, user_id, conversation_id);
+        CREATE INDEX IF NOT EXISTS idx_active_conflicts
+        ON Conflicts(is_active) WHERE is_active = TRUE;
     ''')
     cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_active_conflicts ON Conflicts(is_active) WHERE is_active = TRUE;
+        CREATE INDEX IF NOT EXISTS idx_conflict_history
+        ON ConflictHistory(user_id, conversation_id);
     ''')
     cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_conflict_history ON ConflictHistory(user_id, conversation_id);
+        CREATE INDEX IF NOT EXISTS idx_grudge_level
+        ON ConflictHistory(grudge_level) WHERE grudge_level > 50;
     ''')
     cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_grudge_level ON ConflictHistory(grudge_level) WHERE grudge_level > 50;
-    ''')
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_faction_power_shifts ON FactionPowerShifts(user_id, conversation_id);
+        CREATE INDEX IF NOT EXISTS idx_faction_power_shifts
+        ON FactionPowerShifts(user_id, conversation_id);
     ''')
 
-    #
     # ---------- LEGACY "NPCMemories" TABLE (OPTIONAL) ----------
-    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCMemories (
             id SERIAL PRIMARY KEY,
             npc_id INT NOT NULL,
             memory_text TEXT NOT NULL,
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
             tags TEXT[],
-            emotional_intensity INT DEFAULT 0,   -- 0..100
+            emotional_intensity INT DEFAULT 0,
             times_recalled INT DEFAULT 0,
             last_recalled TIMESTAMP,
             embedding VECTOR(1536),
-
             memory_type TEXT DEFAULT 'observation',
             associated_entities JSONB DEFAULT '{}'::jsonb,
             is_consolidated BOOLEAN NOT NULL DEFAULT FALSE,
-
             significance INT NOT NULL DEFAULT 3,
             status VARCHAR(20) NOT NULL DEFAULT 'active',
-
             FOREIGN KEY (npc_id) REFERENCES NPCStats(npc_id) ON DELETE CASCADE
         );
     ''')
     
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_mem_npcid_status_ts
-            ON NPCMemories (npc_id, status, timestamp);
+        ON NPCMemories (npc_id, status, timestamp);
     ''')
     
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS npc_memory_embedding_hnsw_idx
-            ON NPCMemories 
-            USING hnsw (embedding vector_cosine_ops);
+        ON NPCMemories 
+        USING hnsw (embedding vector_cosine_ops);
     ''')
 
-    #
     # ---------- NEW "unified_memories" TABLE ----------
-    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS unified_memories (
             id SERIAL PRIMARY KEY,
@@ -628,7 +562,6 @@ def create_all_tables():
             entity_id INTEGER NOT NULL,     
             user_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL,
-
             memory_text TEXT NOT NULL,
             memory_type TEXT NOT NULL DEFAULT 'observation',
             significance INTEGER NOT NULL DEFAULT 3,
@@ -636,36 +569,32 @@ def create_all_tables():
             tags TEXT[] DEFAULT '{}',
             embedding VECTOR(1536),
             metadata JSONB,
-
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             times_recalled INTEGER NOT NULL DEFAULT 0,
             last_recalled TIMESTAMP,
-
             status TEXT NOT NULL DEFAULT 'active',
             is_consolidated BOOLEAN NOT NULL DEFAULT FALSE
         );
     ''')
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_unified_memories_entity
-            ON unified_memories(entity_type, entity_id);
+        ON unified_memories(entity_type, entity_id);
     ''')
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_unified_memories_user_conv
-            ON unified_memories(user_id, conversation_id);
+        ON unified_memories(user_id, conversation_id);
     ''')
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_unified_memories_timestamp
-            ON unified_memories(timestamp);
+        ON unified_memories(timestamp);
     ''')
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_unified_memories_embedding_hnsw
-            ON unified_memories
-            USING hnsw (embedding vector_cosine_ops);
+        ON unified_memories
+        USING hnsw (embedding vector_cosine_ops);
     ''')
 
-    #
     # ---------- MORE TABLES ----------
-    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Locations (
             id SERIAL PRIMARY KEY,
@@ -684,19 +613,17 @@ def create_all_tables():
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL,
-            activity_name TEXT NOT NULL,                   -- General activity type (eating, working, etc.)
-            activity_details TEXT,                         -- Specific details (burger, hotdog, coffee, etc.)
-            setting_context TEXT,                          -- The setting where this effect applies
-            effects JSONB NOT NULL,                        -- Effects on resources (hunger, energy, money, etc.)
-            description TEXT,                              -- Description of the effects
-            flags JSONB,                                   -- Special flags (temporary_effect, stacking, etc.)
+            activity_name TEXT NOT NULL,
+            activity_details TEXT,
+            setting_context TEXT,
+            effects JSONB NOT NULL,
+            description TEXT,
+            flags JSONB,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (user_id, conversation_id, activity_name, activity_details)
         );
     ''')
-
-    # Index for quick lookups
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_activity_effects_lookup 
         ON ActivityEffects(user_id, conversation_id, activity_name, activity_details);
@@ -832,9 +759,7 @@ def create_all_tables():
         );
     ''')
 
-    #
     # ---------- ENHANCED SYSTEMS ----------
-    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS PlayerJournal (
             id SERIAL PRIMARY KEY,
@@ -898,9 +823,7 @@ def create_all_tables():
         );
     ''')
 
-    #
     # ---------- TELEMETRY TABLE ----------
-    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS memory_telemetry (
             id SERIAL PRIMARY KEY,
@@ -915,20 +838,18 @@ def create_all_tables():
     ''')
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_memory_telemetry_timestamp
-            ON memory_telemetry(timestamp);
+        ON memory_telemetry(timestamp);
     ''')
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_memory_telemetry_operation
-            ON memory_telemetry(operation);
+        ON memory_telemetry(operation);
     ''')
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_memory_telemetry_success
-            ON memory_telemetry(success);
+        ON memory_telemetry(success);
     ''')
 
-    #
     # ---------- KINK DATA ----------
-    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS UserKinkProfile (
             id SERIAL PRIMARY KEY,
@@ -963,9 +884,7 @@ def create_all_tables():
         );
     ''')
 
-    #
     # ---------- IMAGE GENERATION TABLES ----------
-    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCVisualAttributes (
             id SERIAL PRIMARY KEY,
@@ -1016,15 +935,15 @@ def create_all_tables():
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL,
-            currency_name TEXT NOT NULL,                    -- Primary currency name (e.g., "credits", "gold")
-            currency_plural TEXT NOT NULL,                  -- Plural form (e.g., "credits", "gold pieces")
-            minor_currency_name TEXT,                       -- Secondary denomination if any (e.g., "cents", "silver")
-            minor_currency_plural TEXT,                     -- Plural form of minor currency
-            exchange_rate INTEGER DEFAULT 100,              -- How many minor units = 1 major unit (e.g., 100 cents = 1 dollar)
-            currency_symbol TEXT,                           -- Symbol if any (e.g., "$", "₢", "£")
-            format_template TEXT DEFAULT '{{amount}} {{currency}}', -- How to format currency strings
-            description TEXT,                               -- Brief description of the currency system
-            setting_context TEXT,                           -- The setting this currency belongs to
+            currency_name TEXT NOT NULL,
+            currency_plural TEXT NOT NULL,
+            minor_currency_name TEXT,
+            minor_currency_plural TEXT,
+            exchange_rate INTEGER DEFAULT 100,
+            currency_symbol TEXT,
+            format_template TEXT DEFAULT '{{amount}} {{currency}}',
+            description TEXT,
+            setting_context TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (user_id, conversation_id)
         );
@@ -1062,13 +981,10 @@ def create_all_tables():
         WHERE 
             rating >= 4
         GROUP BY 
-            user_id, npc_name
-        ;
+            user_id, npc_name;
     ''')
 
-    #
-    # ---------- (OPTIONAL) Additional NPCMemory Associations ----------
-    #
+    # ---------- ADDITIONAL NPCMemory ASSOCIATIONS ----------
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NPCMemoryAssociations (
             id SERIAL PRIMARY KEY,
@@ -1096,9 +1012,7 @@ def create_all_tables():
         );
     ''')
 
-    #
     # ---------- "NyxMemories" LEGACY TABLE (OPTIONAL) ----------
-    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxMemories (
             id SERIAL PRIMARY KEY,
@@ -1106,23 +1020,18 @@ def create_all_tables():
             conversation_id INTEGER NOT NULL,
             memory_text TEXT NOT NULL,
             timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
             embedding VECTOR(1536),
-
             significance INT NOT NULL DEFAULT 3,
             times_recalled INT NOT NULL DEFAULT 0,
             last_recalled TIMESTAMP,
             memory_type TEXT DEFAULT 'reflection',
             is_archived BOOLEAN DEFAULT FALSE,
-
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    #
     # ---------- "NyxAgentState" FOR DM LOGIC ----------
-    #
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxAgentState (
             user_id INT NOT NULL,
@@ -1211,7 +1120,7 @@ def create_all_tables():
             user_id INTEGER NOT NULL,
             conversation_id INTEGER NOT NULL,
             memory_text TEXT NOT NULL,
-            source_type VARCHAR(50) NOT NULL,  -- nyx, npc, player, system
+            source_type VARCHAR(50) NOT NULL,
             source_id INTEGER NOT NULL,
             significance INTEGER DEFAULT 5,
             tags JSONB DEFAULT '[]'::jsonb,
@@ -1232,7 +1141,6 @@ def create_all_tables():
         );
     ''')
 
-    # Wrap this CREATE INDEX in cursor.execute():
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_joint_memory_edges_entity
         ON JointMemoryEdges(entity_type, entity_id, user_id, conversation_id);
@@ -1250,21 +1158,16 @@ def create_all_tables():
             expires_at TIMESTAMP WITH TIME ZONE,
             scene_id VARCHAR(50),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            
-            CONSTRAINT agent_directives_user_conversation_fk
-                FOREIGN KEY (user_id, conversation_id)
-                REFERENCES conversations(user_id, id)
-                ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    # Index for agent directives
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_agent_directives_agent
         ON NyxAgentDirectives(user_id, conversation_id, agent_type, agent_id);
     ''')
 
-    # Action Tracking Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxActionTracking (
             id SERIAL PRIMARY KEY,
@@ -1277,21 +1180,16 @@ def create_all_tables():
             result_data JSONB,
             status VARCHAR(20),
             timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            
-            CONSTRAINT action_tracking_user_conversation_fk
-                FOREIGN KEY (user_id, conversation_id)
-                REFERENCES conversations(user_id, id)
-                ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    # Index for action tracking
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_action_tracking_agent
         ON NyxActionTracking(user_id, conversation_id, agent_type, agent_id);
     ''')
 
-    # Agent Communication Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxAgentCommunication (
             id SERIAL PRIMARY KEY,
@@ -1306,27 +1204,21 @@ def create_all_tables():
             response_content JSONB,
             status VARCHAR(20) DEFAULT 'sent',
             timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            
-            CONSTRAINT agent_communication_user_conversation_fk
-                FOREIGN KEY (user_id, conversation_id)
-                REFERENCES conversations(user_id, id)
-                ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    # Index for agent communication (sender)
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_agent_communication_sender
         ON NyxAgentCommunication(user_id, conversation_id, sender_type, sender_id);
     ''')
 
-    # Index for agent communication (recipient)
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_agent_communication_recipient
         ON NyxAgentCommunication(user_id, conversation_id, recipient_type, recipient_id);
     ''')
 
-    # Joint Memory Graph Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxJointMemoryGraph (
             id SERIAL PRIMARY KEY,
@@ -1340,32 +1232,23 @@ def create_all_tables():
             tags JSONB,
             metadata JSONB,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            
-            CONSTRAINT joint_memory_user_conversation_fk
-                FOREIGN KEY (user_id, conversation_id)
-                REFERENCES conversations(user_id, id)
-                ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    # Joint Memory Access Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxJointMemoryAccess (
             id SERIAL PRIMARY KEY,
             memory_id INTEGER NOT NULL,
             agent_type VARCHAR(50) NOT NULL,
             agent_id VARCHAR(50) NOT NULL,
-            access_level VARCHAR(20) DEFAULT 'read', -- read, write, delete
+            access_level VARCHAR(20) DEFAULT 'read',
             granted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            
-            CONSTRAINT joint_memory_access_memory_fk
-                FOREIGN KEY (memory_id)
-                REFERENCES NyxJointMemoryGraph(id)
-                ON DELETE CASCADE
+            FOREIGN KEY (memory_id) REFERENCES NyxJointMemoryGraph(id) ON DELETE CASCADE
         );
     ''')
 
-    # Narrative Governance Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxNarrativeGovernance (
             id SERIAL PRIMARY KEY,
@@ -1378,15 +1261,11 @@ def create_all_tables():
             character_directives JSONB,
             active_from TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             active_until TIMESTAMP WITH TIME ZONE,
-            
-            CONSTRAINT narrative_governance_user_conversation_fk
-                FOREIGN KEY (user_id, conversation_id)
-                REFERENCES conversations(user_id, id)
-                ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
     ''')
 
-    # Agent Registration Table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS NyxAgentRegistry (
             id SERIAL PRIMARY KEY,
@@ -1399,41 +1278,34 @@ def create_all_tables():
             status VARCHAR(20) DEFAULT 'active',
             last_active TIMESTAMP WITH TIME ZONE,
             first_registered TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            
-            CONSTRAINT agent_registry_user_conversation_fk
-                FOREIGN KEY (user_id, conversation_id)
-                REFERENCES conversations(user_id, id)
-                ON DELETE CASCADE,
-                
-            CONSTRAINT agent_registry_unique
-                UNIQUE (user_id, conversation_id, agent_type, agent_id)
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+            CONSTRAINT agent_registry_unique UNIQUE (user_id, conversation_id, agent_type, agent_id)
         );
     ''')
 
-    # Create PlayerSpecialRewards table if not exists
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS PlayerSpecialRewards (
-        reward_id SERIAL PRIMARY KEY,
-        user_id INT NOT NULL,
-        conversation_id INT NOT NULL,
-        reward_name VARCHAR(100) NOT NULL,
-        reward_description TEXT,
-        reward_effect TEXT,
-        reward_category VARCHAR(50) NOT NULL,
-        reward_properties JSONB,
-        used BOOLEAN DEFAULT FALSE,
-        date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id, conversation_id) REFERENCES conversations(user_id, id)
-    )
-    """)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS PlayerSpecialRewards (
+            reward_id SERIAL PRIMARY KEY,
+            user_id INT NOT NULL,
+            conversation_id INT NOT NULL,
+            reward_name VARCHAR(100) NOT NULL,
+            reward_description TEXT,
+            reward_effect TEXT,
+            reward_category VARCHAR(50) NOT NULL,
+            reward_properties JSONB,
+            used BOOLEAN DEFAULT FALSE,
+            date_acquired TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
 
-    # Create indexes for the reward tables
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_inventory_user ON PlayerInventory(user_id, conversation_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_perks_user ON PlayerPerks(user_id, conversation_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_special_rewards_user ON PlayerSpecialRewards(user_id, conversation_id);")
 
-    # Create ContextEvolution table
-    cursor.execute("""
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS ContextEvolution (
             evolution_id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
@@ -1442,12 +1314,12 @@ def create_all_tables():
             changes JSONB NOT NULL,
             context_shift FLOAT NOT NULL,
             timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
-            FOREIGN KEY (user_id, conversation_id) REFERENCES Conversations(user_id, conversation_id)
-        )
-    """)
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+    ''')
 
-    # Create MemoryContextEvolution table
-    cursor.execute("""
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS MemoryContextEvolution (
             memory_id INTEGER NOT NULL,
             evolution_id INTEGER NOT NULL,
@@ -1456,12 +1328,12 @@ def create_all_tables():
             PRIMARY KEY (memory_id, evolution_id),
             FOREIGN KEY (memory_id) REFERENCES Memory(memory_id),
             FOREIGN KEY (evolution_id) REFERENCES ContextEvolution(evolution_id)
-        )
-    """)
+        );
+    ''')
 
-    # Add relevance_score column to Memory table if it doesn't exist
-    cursor.execute("""
-        DO $$ 
+    # Alter Memory table to add missing columns if needed
+    cursor.execute('''
+        DO $$
         BEGIN 
             IF NOT EXISTS (
                 SELECT 1 
@@ -1472,11 +1344,9 @@ def create_all_tables():
                 ALTER TABLE Memory ADD COLUMN relevance_score FLOAT DEFAULT 0.0;
             END IF;
         END $$;
-    """)
-
-    # Add last_context_update column to Memory table if it doesn't exist
-    cursor.execute("""
-        DO $$ 
+    ''')
+    cursor.execute('''
+        DO $$
         BEGIN 
             IF NOT EXISTS (
                 SELECT 1 
@@ -1487,9 +1357,8 @@ def create_all_tables():
                 ALTER TABLE Memory ADD COLUMN last_context_update TIMESTAMP;
             END IF;
         END $$;
-    """)
+    ''')
 
-    # Create indexes for better query performance
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_context_evolution_user_conversation
         ON ContextEvolution(user_id, conversation_id);
@@ -1510,7 +1379,6 @@ def create_all_tables():
         ON Memory(last_context_update);
     """)
 
-    # Done creating everything:
     conn.commit()
     conn.close()
     logging.info("All tables created (old + new).")
@@ -1520,24 +1388,18 @@ def seed_initial_vitals():
     """Seed initial player vitals."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
-        # Get all user/conversation pairs
         cursor.execute("""
             SELECT DISTINCT user_id, conversation_id FROM PlayerStats
             WHERE player_name = 'Chase'
         """)
-        
         rows = cursor.fetchall()
-        
-        # Create default vitals for each pair
         for user_id, conversation_id in rows:
             cursor.execute("""
                 INSERT INTO PlayerVitals (user_id, conversation_id, player_name, energy, hunger)
                 VALUES (%s, %s, 'Chase', 100, 100)
                 ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
             """, (user_id, conversation_id))
-        
         conn.commit()
         logging.info(f"Initial vitals seeded for {len(rows)} players.")
     except Exception as e:
@@ -1549,7 +1411,6 @@ def seed_initial_vitals():
 
 def initialize_conflict_system():
     """Initialize the conflict system by seeding initial data."""
-    # We don't need to create tables again as they're already created in create_all_tables()
     seed_initial_vitals()
     logging.info("Conflict system initialized.")
 
@@ -1557,8 +1418,7 @@ def initialize_conflict_system():
 def seed_initial_data():
     """
     Seeds default data for rules, stats, settings, etc.
-    If you already have references to them in logic, 
-    it ensures your DB has the minimal data set.
+    Ensures the DB has the minimal data set.
     """
     insert_or_update_game_rules()
     insert_stat_definitions()
@@ -1576,23 +1436,17 @@ def seed_initial_resources():
     """Seed initial player resources."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
-        # Get all user/conversation pairs
         cursor.execute("""
             SELECT DISTINCT user_id, conversation_id, player_name FROM PlayerStats
         """)
-        
         rows = cursor.fetchall()
-        
-        # Create default resources for each pair
         for user_id, conversation_id, player_name in rows:
             cursor.execute("""
                 INSERT INTO PlayerResources (user_id, conversation_id, player_name, money, supplies, influence)
                 VALUES (%s, %s, %s, 100, 20, 10)
                 ON CONFLICT (user_id, conversation_id, player_name) DO NOTHING
             """, (user_id, conversation_id, player_name))
-        
         conn.commit()
         logging.info(f"Initial resources seeded for {len(rows)} players.")
     except Exception as e:
@@ -1604,8 +1458,7 @@ def seed_initial_resources():
 
 def initialize_all_data():
     """
-    Convenience function to create tables + seed initial data 
-    in one call.
+    Convenience function to create tables + seed initial data in one call.
     """
     create_all_tables()
     seed_initial_data()
