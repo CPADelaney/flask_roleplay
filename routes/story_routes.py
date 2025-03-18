@@ -13,7 +13,8 @@ from logic.activity_analyzer import ActivityAnalyzer
 # Import utility modules
 from utils.db_helpers import db_transaction, with_transaction, handle_database_operation,fetch_row_async, fetch_all_async, execute_async
 from utils.performance import PerformanceTracker, timed_function, STATS
-from utils.caching import NPC_CACHE, LOCATION_CACHE, AGGREGATOR_CACHE, TIME_CACHE,COMPUTATION_CACHE
+from utils.caching import NPC_CACHE, LOCATION_CACHE, AGGREGATOR_CACHE, TIME_CACHE,COMPUTATION_CACHE, cache
+from utils.performance import timed_function
 
 # Import core logic modules
 from db.connection import get_db_connection
@@ -44,6 +45,10 @@ from logic.social_links import get_relationship_dynamic_level, update_relationsh
 from logic.addiction_system import check_addiction_levels, update_addiction_level, process_addiction_effects, get_addiction_status, get_addiction_label
 
 from nyx.nyx_agent_sdk import process_user_input
+
+from typing import List, Dict, Any, Optional
+
+from lore.dynamic_lore_generator import DynamicLoreGenerator
 
 story_bp = Blueprint("story_bp", __name__)
 
@@ -492,83 +497,48 @@ async def fetch_interactions_async():
     return result
 
 @timed_function(name="get_nearby_npcs")
-async def get_nearby_npcs(user_id, conversation_id, location=None):
-    """
-    Get NPCs that are at the current location with enhanced caching and filtering.
+@cache.cached(timeout=300)  # 5-minute cache
+async def get_nearby_npcs(user_id: int, conversation_id: int, location: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get nearby NPCs with caching and performance tracking.
     
     Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        location: Optional location to filter by
+        user_id: The user's ID
+        conversation_id: The current conversation ID
+        location: Optional location to filter NPCs by
         
     Returns:
-        List of nearby NPCs with relevant details
+        List[Dict[str, Any]]: List of nearby NPCs with their details
     """
-    # Create cache key
-    cache_key = f"nearby_npcs:{user_id}:{conversation_id}:{location or 'all'}"
-    
-    # Check cache first
-    cached_result = NPC_CACHE.get(cache_key)
-    if cached_result:
-        return cached_result
-    
-    # Query database if not in cache
     try:
-        if location:
-            query = """
-                SELECT npc_id, npc_name, current_location, dominance, cruelty, 
-                       archetypes, memory
-                FROM NPCStats
-                WHERE user_id=$1 AND conversation_id=$2 
-                AND current_location=$3
-                ORDER BY introduced DESC
-                LIMIT 5
-            """
-            rows = await fetch_all_async(query, user_id, conversation_id, location)
-        else:
-            query = """
-                SELECT npc_id, npc_name, current_location, dominance, cruelty,
-                       archetypes, memory
-                FROM NPCStats
-                WHERE user_id=$1 AND conversation_id=$2
-                ORDER BY introduced DESC
-                LIMIT 5
-            """
-            rows = await fetch_all_async(query, user_id, conversation_id)
+        # Get NPC system instance
+        npc_system = await IntegratedNPCSystem.get_instance(user_id, conversation_id)
         
-        # Process results
-        nearby_npcs = []
-        for row in rows:
-            # Process JSON fields with error handling
-            try:
-                archetypes = json.loads(row["archetypes"]) if isinstance(row["archetypes"], str) else row["archetypes"] or []
-            except (json.JSONDecodeError, TypeError):
-                archetypes = []
-                
-            try:
-                memories = json.loads(row["memory"]) if isinstance(row["memory"], str) else row["memory"] or []
-            except (json.JSONDecodeError, TypeError):
-                memories = []
+        # Get base NPC list
+        npcs = await npc_system.get_nearby_npcs(location)
+        
+        # Enhance with additional data
+        enhanced_npcs = []
+        for npc in npcs:
+            # Get speech patterns
+            speech_patterns = await npc.get_speech_patterns()
             
-            # Add NPC data with selected memories
-            nearby_npcs.append({
-                "npc_id": row["npc_id"],
-                "npc_name": row["npc_name"],
-                "current_location": row["current_location"],
-                "dominance": row["dominance"],
-                "cruelty": row["cruelty"],
-                "archetypes": archetypes,
-                "recent_memories": memories[:3] if memories else []
+            # Get relationship status
+            relationship = await get_relationship_dynamic_level(user_id, npc['id'])
+            
+            # Get activity status
+            activity = await process_daily_npc_activities(npc['id'])
+            
+            enhanced_npcs.append({
+                **npc,
+                'speech_patterns': speech_patterns,
+                'relationship': relationship,
+                'activity_status': activity
             })
         
-        # Cache the results (shorter TTL for location-specific results)
-        ttl = 20 if location else 30  # Location-specific results expire faster
-        NPC_CACHE.set(cache_key, nearby_npcs, ttl)
-        
-        return nearby_npcs
+        return enhanced_npcs
         
     except Exception as e:
-        logging.error(f"Error getting nearby NPCs: {e}")
+        logger.error(f"Error getting nearby NPCs: {e}", exc_info=True)
         return []
 
 async def process_universal_updates(universal_data, pool):
@@ -2112,79 +2082,96 @@ async def apply_choice():
         return jsonify({"error": str(e)}), 500
 
 @story_bp.route("/generate_multi_npc_scene", methods=["POST"])
-@timed_function
+@timed_function(name="generate_scene")
 async def generate_scene():
-    """
-    Generate a scene with multiple NPCs interacting
-    """
+    """Generate a multi-NPC scene with enhanced integration."""
     try:
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Not logged in"}), 401
-            
-        data = request.get_json() or {}
-        conversation_id = data.get("conversation_id")
-        npc_ids = data.get("npc_ids", [])
-        location = data.get("location")
-        include_player = data.get("include_player", True)
+        data = request.get_json()
+        user_id = data.get('user_id')
+        conv_id = data.get('conversation_id')
+        location = data.get('location')
+        npc_ids = data.get('npc_ids', [])
         
-        if not conversation_id or not npc_ids:
-            return jsonify({"error": "Missing required parameters"}), 400
+        # Get story context
+        story_context = await get_story_context(user_id, conv_id)
         
-        # Create cache key
-        cache_key = f"scene:{conversation_id}:{'-'.join(map(str, sorted(npc_ids)))}:{location}:{include_player}"
+        # Get active conflicts
+        conflict_system = await get_conflict_system(user_id, conv_id)
+        active_conflicts = await conflict_system.get_active_conflicts()
         
-        # Check cache first
-        cached_result = NPC_CACHE.get(cache_key)
-        if cached_result:
-            return jsonify(cached_result)
-            
-        # Generate scene using IntegratedNPCSystem
-        npc_system = IntegratedNPCSystem(user_id, int(conversation_id))
-        scene = await npc_system.generate_multi_npc_scene(
-            npc_ids, location, include_player
+        # Get relevant lore
+        lore_system = await get_lore_system(user_id, conv_id)
+        lore_context = await lore_system.get_narrative_elements(story_context.get('current_narrative_id'))
+        
+        # Get NPC system
+        npc_system = await get_npc_system(user_id, conv_id)
+        
+        # Generate scene with enhanced context
+        scene = await npc_system.generate_scene(
+            location=location,
+            npc_ids=npc_ids,
+            context={
+                'story_context': story_context,
+                'active_conflicts': active_conflicts,
+                'lore_context': lore_context
+            }
         )
         
-        # Cache the result for a short time
-        NPC_CACHE.set(cache_key, scene, 30)  # TTL: 30 seconds
-        
-        return jsonify(scene)
+        return {
+            'success': True,
+            'scene': scene,
+            'story_context': story_context,
+            'active_conflicts': active_conflicts
+        }
         
     except Exception as e:
-        logging.exception("[generate_scene] Error")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error generating scene: {e}")
+        return {'success': False, 'error': str(e)}
 
 @story_bp.route("/generate_overheard_conversation", methods=["POST"])
-@timed_function
+@timed_function(name="generate_conversation")
 async def generate_conversation():
-    """
-    Generate a conversation between NPCs that the player can overhear
-    """
+    """Generate overheard conversation with enhanced integration."""
     try:
-        user_id = session.get("user_id")
-        if not user_id:
-            return jsonify({"error": "Not logged in"}), 401
-            
-        data = request.get_json() or {}
-        conversation_id = data.get("conversation_id")
-        npc_ids = data.get("npc_ids", [])
-        topic = data.get("topic")
-        about_player = data.get("about_player", False)
+        data = request.get_json()
+        user_id = data.get('user_id')
+        conv_id = data.get('conversation_id')
+        npc_ids = data.get('npc_ids', [])
         
-        if not conversation_id or not npc_ids or len(npc_ids) < 2:
-            return jsonify({"error": "Missing required parameters"}), 400
-            
-        # Generate conversation using IntegratedNPCSystem
-        npc_system = IntegratedNPCSystem(user_id, int(conversation_id))
-        conversation = await npc_system.generate_overheard_conversation(
-            npc_ids, topic, about_player
+        # Get story context
+        story_context = await get_story_context(user_id, conv_id)
+        
+        # Get active conflicts
+        conflict_system = await get_conflict_system(user_id, conv_id)
+        active_conflicts = await conflict_system.get_active_conflicts()
+        
+        # Get relevant lore
+        lore_system = await get_lore_system(user_id, conv_id)
+        lore_context = await lore_system.get_narrative_elements(story_context.get('current_narrative_id'))
+        
+        # Get NPC system
+        npc_system = await get_npc_system(user_id, conv_id)
+        
+        # Generate conversation with enhanced context
+        conversation = await npc_system.generate_conversation(
+            npc_ids=npc_ids,
+            context={
+                'story_context': story_context,
+                'active_conflicts': active_conflicts,
+                'lore_context': lore_context
+            }
         )
         
-        return jsonify(conversation)
+        return {
+            'success': True,
+            'conversation': conversation,
+            'story_context': story_context,
+            'active_conflicts': active_conflicts
+        }
         
     except Exception as e:
-        logging.exception("[generate_conversation] Error")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error generating conversation: {e}")
+        return {'success': False, 'error': str(e)}
 
 @story_bp.route("/end_of_day", methods=["POST"])
 @timed_function
@@ -2283,3 +2270,61 @@ async def end_of_day():
     except Exception as e:
         logging.exception("Error in end_of_day route")
         return jsonify({"error": str(e)}), 500
+
+@story_bp.route("/process_user_message", methods=["POST"])
+@timed_function(name="process_user_message")
+async def process_user_message(user_id, conv_id, user_input):
+    """Process user message with enhanced integration."""
+    try:
+        # Get story context
+        story_context = await get_story_context(user_id, conv_id)
+        
+        # Get active conflicts
+        conflict_system = await get_conflict_system(user_id, conv_id)
+        active_conflicts = await conflict_system.get_active_conflicts()
+        
+        # Get relevant NPCs
+        npc_system = await get_npc_system(user_id, conv_id)
+        nearby_npcs = await get_nearby_npcs(user_id, conv_id)
+        
+        # Get lore context
+        lore_system = await get_lore_system(user_id, conv_id)
+        lore_context = await lore_system.get_narrative_elements(story_context.get('current_narrative_id'))
+        
+        # Process NPC responses with enhanced context
+        npc_responses = await process_npc_responses(
+            npc_system,
+            user_input,
+            {
+                'story_context': story_context,
+                'active_conflicts': active_conflicts,
+                'nearby_npcs': nearby_npcs,
+                'lore_context': lore_context
+            }
+        )
+        
+        # Process AI response with Nyx governance
+        ai_response = await process_ai_response_with_nyx(
+            user_id,
+            conv_id,
+            user_input,
+            {
+                'story_context': story_context,
+                'active_conflicts': active_conflicts,
+                'npc_responses': npc_responses,
+                'lore_context': lore_context
+            },
+            None  # aggregator_data will be handled internally
+        )
+        
+        return {
+            'success': True,
+            'npc_responses': format_npc_responses_for_client(npc_responses),
+            'ai_response': ai_response,
+            'story_context': story_context,
+            'active_conflicts': active_conflicts
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing user message: {e}")
+        return {'success': False, 'error': str(e)}
