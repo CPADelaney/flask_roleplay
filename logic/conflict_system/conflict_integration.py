@@ -11,6 +11,7 @@ import json
 from typing import Dict, List, Any, Optional, Union, Tuple
 import asyncio
 import asyncpg
+from datetime import datetime
 
 from agents import function_tool, RunContextWrapper
 from nyx.integrate import get_central_governance
@@ -38,16 +39,45 @@ class ConflictSystemIntegration:
         self.user_id = user_id
         self.conversation_id = conversation_id
         self.agents = None
-        self.agent_id = "conflict_manager"  # Consistent ID for governance
+        self.agent_id = "conflict_manager"
         self.is_initialized = False
+        self.lore_system = None
+        self.npc_system = None
+        self.story_context = None
         
     async def initialize(self):
-        """Initialize the conflict system agents."""
+        """Initialize the conflict system with all necessary systems."""
         if not self.is_initialized:
             self.agents = await initialize_agents()
+            self.lore_system = await get_lore_system(self.user_id, self.conversation_id)
+            self.npc_system = await get_npc_system(self.user_id, self.conversation_id)
+            self.story_context = await self._get_story_context()
             self.is_initialized = True
-            logger.info(f"Conflict system agents initialized for user {self.user_id}")
+            logger.info(f"Conflict system initialized for user {self.user_id}")
         return self
+    
+    async def _get_story_context(self) -> Dict[str, Any]:
+        """Get current story context including NPCs and lore."""
+        try:
+            # Get active NPCs
+            active_npcs = await self.npc_system.get_active_npcs()
+            
+            # Get relevant lore
+            lore_context = await self.lore_system.get_narrative_elements(
+                self.story_context.get('current_narrative_id')
+            )
+            
+            # Get story progression
+            story_progression = await self._get_story_progression()
+            
+            return {
+                'active_npcs': active_npcs,
+                'lore_context': lore_context,
+                'story_progression': story_progression
+            }
+        except Exception as e:
+            logger.error(f"Error getting story context: {e}")
+            return {}
     
     async def check_permission(self, action_type: str, action_details: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -229,39 +259,53 @@ class ConflictSystemIntegration:
         action_description="Generate a new conflict with stakeholders"
     )
     async def generate_conflict(self, conflict_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Generate a new conflict with stakeholders.
-        
-        Args:
-            conflict_data: Data needed to generate the conflict
-            
-        Returns:
-            Generated conflict data
-        """
+        """Generate a new conflict with enhanced integration."""
         await self.initialize()
         
         try:
-            # Call the conflict generation agent to create a new conflict
+            # Get story context
+            story_context = await self._get_story_context()
+            
+            # Enhance conflict data with story context
+            enhanced_data = {
+                **conflict_data,
+                'story_context': story_context,
+                'active_npcs': story_context['active_npcs'],
+                'lore_context': story_context['lore_context']
+            }
+            
+            # Generate conflict with enhanced context
             generation_result = await self.agents["generation"].arun(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
-                conflict_type=conflict_data.get("conflict_type", "interpersonal"),
-                location=conflict_data.get("location"),
-                intensity=conflict_data.get("intensity", "medium"),
-                player_involvement=conflict_data.get("player_involvement", "indirect"),
-                duration=conflict_data.get("duration", "medium"),
-                topics=conflict_data.get("topics", []),
-                existing_npcs=conflict_data.get("existing_npcs", [])
+                conflict_type=enhanced_data.get("conflict_type", "interpersonal"),
+                location=enhanced_data.get("location"),
+                intensity=enhanced_data.get("intensity", "medium"),
+                player_involvement=enhanced_data.get("player_involvement", "indirect"),
+                duration=enhanced_data.get("duration", "medium"),
+                topics=enhanced_data.get("topics", []),
+                existing_npcs=enhanced_data.get("existing_npcs", []),
+                story_context=story_context
             )
             
-            # Generate stakeholders for the conflict
+            # Generate stakeholders with enhanced context
             stakeholder_result = await self.agents["stakeholder"].arun(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
                 conflict_id=generation_result.get("conflict_id"),
                 conflict_details=generation_result.get("conflict_details"),
-                existing_npcs=conflict_data.get("existing_npcs", []),
-                required_roles=conflict_data.get("required_roles", [])
+                existing_npcs=enhanced_data.get("existing_npcs", []),
+                required_roles=enhanced_data.get("required_roles", []),
+                story_context=story_context
+            )
+            
+            # Update lore with new conflict
+            await self.lore_system.handle_narrative_event(
+                self.run_ctx,
+                f"New conflict generated: {generation_result.get('conflict_details', {}).get('name', 'Unnamed Conflict')}",
+                affected_lore_ids=generation_result.get('affected_lore_ids', []),
+                resolution_type="conflict_generation",
+                impact_level="medium"
             )
             
             # Combine results
@@ -271,7 +315,8 @@ class ConflictSystemIntegration:
                 "conflict_details": generation_result.get("conflict_details"),
                 "stakeholders": stakeholder_result.get("stakeholders", []),
                 "estimated_duration": generation_result.get("estimated_duration"),
-                "player_hooks": generation_result.get("player_hooks", [])
+                "player_hooks": generation_result.get("player_hooks", []),
+                "story_context": story_context
             }
             
             return combined_result
@@ -289,40 +334,47 @@ class ConflictSystemIntegration:
         action_description="Resolve an existing conflict"
     )
     async def resolve_conflict(self, resolution_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Resolve an existing conflict.
-        
-        Args:
-            resolution_data: Data needed to resolve the conflict
-            
-        Returns:
-            Resolution result
-        """
+        """Resolve a conflict with enhanced integration."""
         await self.initialize()
         
         try:
-            # Call the conflict resolution agent
+            # Get story context
+            story_context = await self._get_story_context()
+            
+            # Enhance resolution data with story context
+            enhanced_data = {
+                **resolution_data,
+                'story_context': story_context,
+                'active_npcs': story_context['active_npcs'],
+                'lore_context': story_context['lore_context']
+            }
+            
+            # Call the conflict resolution agent with enhanced context
             resolution_result = await self.agents["resolution"].arun(
                 user_id=self.user_id,
                 conversation_id=self.conversation_id,
-                conflict_id=resolution_data.get("conflict_id"),
-                resolution_type=resolution_data.get("resolution_type", "compromise"),
-                winner=resolution_data.get("winner"),
-                loser=resolution_data.get("loser"),
-                player_involvement=resolution_data.get("player_involvement", False),
-                player_action=resolution_data.get("player_action"),
-                resolution_details=resolution_data.get("resolution_details")
+                conflict_id=enhanced_data.get("conflict_id"),
+                resolution_type=enhanced_data.get("resolution_type", "compromise"),
+                winner=enhanced_data.get("winner"),
+                loser=enhanced_data.get("loser"),
+                player_involvement=enhanced_data.get("player_involvement", False),
+                player_action=enhanced_data.get("player_action"),
+                resolution_details=enhanced_data.get("resolution_details"),
+                story_context=story_context
+            )
+            
+            # Update lore with conflict resolution
+            await self.lore_system.handle_narrative_event(
+                self.run_ctx,
+                f"Conflict resolved: {resolution_result.get('conflict_details', {}).get('name', 'Unnamed Conflict')}",
+                affected_lore_ids=resolution_result.get('affected_lore_ids', []),
+                resolution_type=resolution_result.get('resolution_type', 'standard'),
+                impact_level=resolution_result.get('impact_level', 'medium')
             )
             
             # Process consequences and rewards
-            conflict_id = resolution_data.get("conflict_id")
-            
-            # Get conflict details
-            from logic.conflict_system.conflict_tools import get_conflict_details, generate_conflict_consequences
-            conflict = await get_conflict_details(
-                RunContextWrapper(agent_context={"user_id": self.user_id, "conversation_id": self.conversation_id}),
-                conflict_id
-            )
+            conflict_id = enhanced_data.get("conflict_id")
+            conflict = await self.get_conflict_data(conflict_id)
             
             # Get player involvement
             player_involvement = conflict.get("player_involvement", {})
@@ -340,7 +392,8 @@ class ConflictSystemIntegration:
                 "resolved",
                 involvement_level,
                 player_faction,
-                completed_paths
+                completed_paths,
+                story_context
             )
             
             # Process and apply rewards
@@ -351,12 +404,13 @@ class ConflictSystemIntegration:
             
             return {
                 "success": True,
-                "conflict_id": resolution_data.get("conflict_id"),
+                "conflict_id": enhanced_data.get("conflict_id"),
                 "resolution_type": resolution_result.get("resolution_type"),
                 "resolution_details": resolution_result.get("resolution_details"),
                 "aftermath": resolution_result.get("aftermath", {}),
                 "relationship_changes": resolution_result.get("relationship_changes", []),
-                "consequences": consequences
+                "consequences": consequences,
+                "story_context": story_context
             }
             
         except Exception as e:
@@ -737,6 +791,74 @@ class ConflictSystemIntegration:
         details["progress"] = (phase_idx / (len(phases) - 1)) * 100  # As percentage
         
         return details
+
+    async def resolve_conflict_with_lore(self, conflict_id: int) -> Dict[str, Any]:
+        """Resolve conflict with lore system integration.
+        
+        Args:
+            conflict_id: The ID of the conflict to resolve
+            
+        Returns:
+            Dict[str, Any]: Dictionary containing resolution details and affected lore
+        """
+        try:
+            # Get lore system instance
+            lore_system = await get_lore_system(self.user_id, self.conversation_id)
+            
+            # Get conflict data
+            conflict_data = await self.get_conflict_data(conflict_id)
+            
+            # Get stakeholder analysis
+            stakeholders = await self.get_stakeholder_analysis(conflict_id)
+            
+            # Generate resolution through Nyx governance
+            resolution = await self.generate_conflict_resolution(
+                conflict_id,
+                stakeholders=stakeholders
+            )
+            
+            # Handle narrative event through lore system
+            narrative_result = await lore_system.handle_narrative_event(
+                self.run_ctx,
+                f"Conflict resolution: {conflict_data['description']}",
+                affected_lore_ids=conflict_data['affected_lore_ids'],
+                resolution_type=resolution['type'],
+                impact_level=resolution['impact_level']
+            )
+            
+            # Update relationships based on resolution
+            await self.update_relationships_from_resolution(
+                conflict_id,
+                resolution,
+                stakeholders
+            )
+            
+            # Combine results
+            result = {
+                'conflict_id': conflict_id,
+                'resolution': resolution,
+                'narrative_impact': narrative_result,
+                'affected_stakeholders': stakeholders,
+                'timestamp': datetime.utcnow().isoformat()
+            }
+            
+            # Add to memory system
+            await self.memory_system.add_memory(
+                self.run_ctx,
+                f"Conflict resolution for conflict {conflict_id}",
+                result,
+                memory_type="conflict_resolution"
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error resolving conflict {conflict_id}: {e}", exc_info=True)
+            return {
+                'error': str(e),
+                'conflict_id': conflict_id,
+                'status': 'failed'
+            }
 
 async def register_with_governance(user_id: int, conversation_id: int) -> Dict[str, Any]:
     """
