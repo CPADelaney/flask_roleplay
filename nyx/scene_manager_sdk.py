@@ -52,7 +52,7 @@ async def spawn_npc(
     relationship_to_player: Optional[str] = None
 ) -> str:
     """
-    Spawn a new NPC in the current environment.
+    Spawn a new NPC in the current environment using the comprehensive NPCCreationHandler.
     
     Args:
         environment_description: Description of the current environment
@@ -60,22 +60,63 @@ async def spawn_npc(
         relationship_to_player: Optional relationship to player
     """
     # Import here to avoid circular imports
-    from logic.npc_creation import spawn_npc
+    from npcs.new_npc_creation import NPCCreationHandler
     
     user_id = ctx.context.user_id
     conversation_id = ctx.context.conversation_id
     
-    async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("""
-                SELECT value FROM CurrentRoleplay 
-                WHERE user_id = $1 AND conversation_id = $2 AND key = 'EnvironmentDesc'
-            """, user_id, conversation_id)
+    # Create NPC creation handler
+    npc_handler = NPCCreationHandler()
     
-    if row:
-        return row["value"]
-    else:
-        return "No environment description found"
+    # Convert single archetype to list if provided
+    archetype_names = [archetype] if archetype else None
+    
+    # Define specific traits if relationship specified
+    specific_traits = {}
+    if relationship_to_player:
+        specific_traits["relationship_to_player"] = relationship_to_player
+    
+    try:
+        # Create the NPC using the comprehensive handler
+        npc_result = await npc_handler.create_npc_with_context(
+            environment_desc=environment_description,
+            archetype_names=archetype_names,
+            specific_traits=specific_traits if specific_traits else None,
+            user_id=user_id,
+            conversation_id=conversation_id
+        )
+        
+        # Format the NPC data in a way that's compatible with existing code
+        npc_data = {
+            "npc_id": npc_result.npc_id,
+            "name": npc_result.npc_name,
+            "archetype": ', '.join(npc_result.archetypes.archetype_names) if npc_result.archetypes.archetype_names else "Generic",
+            "physical_description": npc_result.physical_description,
+            "personality": {
+                "traits": npc_result.personality.personality_traits,
+                "likes": npc_result.personality.likes,
+                "dislikes": npc_result.personality.dislikes,
+                "hobbies": npc_result.personality.hobbies
+            },
+            "stats": {
+                "dominance": npc_result.stats.dominance,
+                "cruelty": npc_result.stats.cruelty,
+                "closeness": npc_result.stats.closeness,
+                "trust": npc_result.stats.trust,
+                "respect": npc_result.stats.respect,
+                "intensity": npc_result.stats.intensity
+            },
+            "current_location": npc_result.current_location
+        }
+        
+        # Cache the NPC data for faster access
+        cache_key = f"npc:{user_id}:{conversation_id}:{npc_result.npc_name}"
+        NPC_CACHE.set(cache_key, npc_data, 300)  # 5 minute TTL
+        
+        return f"NPC created: {npc_data['name']} - {npc_data['archetype']}"
+    except Exception as e:
+        logger.error(f"Error spawning NPC: {e}")
+        return f"Failed to create NPC: {str(e)}"
 
 @function_tool
 async def update_npc_state(
