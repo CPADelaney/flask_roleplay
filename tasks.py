@@ -6,7 +6,7 @@ import asyncio
 from celery_config import celery_app  # Import our dedicated Celery app
 
 # Import your helper functions and task logic
-from npcs.new_npc_creation import spawn_multiple_npcs, spawn_single_npc
+from npcs.new_npc_creation import spawn_multiple_npcs_enhanced
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
 from new_game_agent import NewGameAgent
 
@@ -35,8 +35,8 @@ def process_new_game_task(user_id, conversation_data):
 @celery_app.task
 def create_npcs_task(user_id, conversation_id, count=10):
     import asyncio
+    from npcs.new_npc_creation import spawn_multiple_npcs_through_nyx
     from db.connection import get_async_db_connection
-    from logic.npc_creation import spawn_multiple_npcs
 
     async def main():
         # 1) Get an async connection
@@ -63,7 +63,7 @@ def create_npcs_task(user_id, conversation_id, count=10):
             day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
 
         # 4) Spawn NPCs using your new approach
-        npc_ids = await spawn_multiple_npcs(
+        npc_ids = await spawn_multiple_npcs_through_nyx(
             user_id=user_id,
             conversation_id=conversation_id,
             environment_desc=environment_desc,
@@ -72,12 +72,9 @@ def create_npcs_task(user_id, conversation_id, count=10):
         )
 
         await conn.close()
-
-        # 5) Return info
         return {
-            "message": f"Successfully created {len(npc_ids)} NPCs",
-            "npc_ids": npc_ids,
-            "day_names": day_names
+            "message": f"Successfully created {len(npc_ids)} NPCs (via Nyx governance)",
+            "npc_ids": npc_ids
         }
 
     final_info = asyncio.run(main())
@@ -120,21 +117,14 @@ def get_gpt_opening_line_task(conversation_id, aggregator_text, opening_user_pro
 
 @celery_app.task
 def nyx_memory_maintenance_task():
-    """
-    Celery task to perform regular maintenance on Nyx's memory system.
-    - Consolidates related memories into patterns
-    - Applies memory decay to older memories
-    - Archives unimportant memories
-    - Updates narrative arcs based on accumulated experiences
-    Should run daily for optimal performance.
-    """
     import asyncio
     import asyncpg
     import os
-    from logic.nyx_memory_manager import perform_memory_maintenance
+    import logging
+    from memory.memory_nyx_integration import run_maintenance_through_nyx
     
-    logging.info("Starting Nyx memory maintenance task")
-    
+    logging.info("Starting Nyx memory maintenance task (via governance)")
+
     async def process_all_conversations():
         dsn = os.getenv("DB_DSN")
         if not dsn:
@@ -145,7 +135,7 @@ def nyx_memory_maintenance_task():
         try:
             conn = await asyncpg.connect(dsn)
             
-            # Get active conversations
+            # Same query to find relevant user_id + conversation_id
             rows = await conn.fetch("""
                 SELECT DISTINCT user_id, conversation_id
                 FROM NyxMemories
@@ -163,13 +153,17 @@ def nyx_memory_maintenance_task():
                 conversation_id = row["conversation_id"]
                 
                 try:
-                    await perform_memory_maintenance(user_id, conversation_id)
+                    await run_maintenance_through_nyx(
+                        user_id=user_id,
+                        conversation_id=conversation_id,
+                        entity_type="nyx",
+                        entity_id=0
+                    )
                     processed_count += 1
-                    logging.info(f"Memory maintenance completed for user_id={user_id}, conversation_id={conversation_id}")
+                    logging.info(f"Completed governed memory maintenance for user={user_id}, conv={conversation_id}")
                 except Exception as e:
-                    logging.error(f"Error in memory maintenance for user_id={user_id}, conversation_id={conversation_id}: {str(e)}")
+                    logging.error(f"Governed maintenance error user={user_id}, conv={conversation_id}: {e}")
                     
-                # Brief pause between processing to avoid overloading the database
                 await asyncio.sleep(0.5)
                 
             return {
@@ -183,8 +177,7 @@ def nyx_memory_maintenance_task():
         finally:
             if conn:
                 await conn.close()
-    
-    # Run the async function and return the result
+
     result = asyncio.run(process_all_conversations())
     logging.info(f"Nyx memory maintenance task completed: {result}")
     return result
