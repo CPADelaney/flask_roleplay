@@ -294,11 +294,8 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
     Advances time (if the activity is time-consuming), triggers special events, 
     updates player stats, etc.
     """
-    from logic.npc_creation import (
-        process_daily_npc_activities,
-        check_for_mask_slippage,
-        detect_relationship_stage_changes
-    )
+    # Update imports to use new NPC creation system
+    from npcs.new_npc_creation import NPCCreationHandler, RunContextWrapper
     from logic.narrative_progression import (
         get_current_narrative_stage,
         check_for_personal_revelations,
@@ -311,6 +308,9 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
 
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # Create NPCCreationHandler instance
+    npc_handler = NPCCreationHandler()
 
     try:
         # Get current time_of_day to see if we need to do anything
@@ -328,9 +328,19 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
         (new_year, new_month, new_day, new_time) = advance_time_and_update(user_id, conversation_id, increment=periods_to_advance)
 
         events = []
-        # NPC activities + relationship stage changes
-        await process_daily_npc_activities(user_id, conversation_id, new_time)
-        await detect_relationship_stage_changes(user_id, conversation_id)
+        
+        # Use the new NPC system for daily activities and stage changes
+        # (The NPCCreationHandler should implement these methods)
+        ctx = RunContextWrapper({
+            "user_id": user_id,
+            "conversation_id": conversation_id
+        })
+        
+        # Process daily activities
+        await npc_handler.process_daily_npc_activities(ctx, new_time)
+        
+        # Detect relationship stages
+        await npc_handler.detect_relationship_stage_changes(ctx)
 
         # Narrative stage
         narrative_stage = await get_current_narrative_stage(user_id, conversation_id)
@@ -372,6 +382,7 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
             if clarity:
                 events.append(clarity)
 
+        # Update mask slippage check to use the new NPCCreationHandler
         if random.random() < SPECIAL_EVENT_CHANCES["mask_slippage"]:
             cursor.execute("""
                 SELECT npc_id FROM NPCStats
@@ -381,7 +392,8 @@ async def advance_time_with_events(user_id: int, conversation_id: int, activity_
             npc_row = cursor.fetchone()
             if npc_row:
                 npc_id = npc_row[0]
-                slip_events = await check_for_mask_slippage(user_id, conversation_id, npc_id)
+                # Use the new NPCCreationHandler for mask slippage
+                slip_events = await npc_handler.check_for_mask_slippage(user_id, conversation_id, npc_id)
                 if slip_events:
                     events.append({
                         "type": "mask_slippage",
