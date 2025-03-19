@@ -212,7 +212,7 @@ connectivity_manager = ConnectivityManager()
 
 async def background_chat_task(conversation_id, user_input, universal_update=None):
     """
-    Background task for processing chat messages using Nyx agent.
+    Background task for processing chat messages using Nyx agent with OpenAI integration.
     """
     try:
         # Acquire user_id from DB
@@ -239,7 +239,7 @@ async def background_chat_task(conversation_id, user_input, universal_update=Non
             "aggregator_data": aggregator_data
         }
         
-        # If universal updates are provided, apply them first
+        # If universal updates are provided, add them to context
         if universal_update:
             context["universal_update"] = universal_update
             async def apply_updates():
@@ -259,9 +259,19 @@ async def background_chat_task(conversation_id, user_input, universal_update=Non
             aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
             context["aggregator_data"] = aggregator_data
         
-        # Process the user_input with Nyx agent
-        from nyx.nyx_agent_sdk import process_user_input
-        response = await process_user_input(user_id, conversation_id, user_input, context)
+        # Process the user_input with OpenAI-enhanced Nyx agent
+        from nyx.nyx_agent_sdk import process_user_input_with_openai
+        response = await process_user_input_with_openai(user_id, conversation_id, user_input, context)
+        
+        if not response.get("success", False):
+            emit('error', {'error': response.get("error", "Unknown error")}, room=conversation_id)
+            return
+            
+        # Extract the message content
+        message_content = response.get("message", "")
+        if not message_content and "function_args" in response:
+            # Extract from function arguments if available
+            message_content = response["function_args"].get("narrative", "")
         
         # Store the Nyx response in DB
         conn = get_db_connection()
@@ -269,17 +279,23 @@ async def background_chat_task(conversation_id, user_input, universal_update=Non
             with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-                    (conversation_id, "Nyx", response["message"])
+                    (conversation_id, "Nyx", message_content)
                 )
                 conn.commit()
         conn.close()
         
-        # Possibly generate an image
+        # Check if we should generate an image
         should_generate = response.get("generate_image", False)
+        if "function_args" in response and "image_generation" in response["function_args"]:
+            # Also check image_generation settings in function args
+            img_settings = response["function_args"]["image_generation"]
+            should_generate = should_generate or img_settings.get("generate", False)
+        
+        # Generate image if needed
         if should_generate:
             try:
                 img_data = {
-                    "narrative": response["message"],
+                    "narrative": message_content,
                     "image_generation": {
                         "generate": True,
                         "priority": "medium",
@@ -288,27 +304,31 @@ async def background_chat_task(conversation_id, user_input, universal_update=Non
                         "reason": "Narrative moment"
                     }
                 }
+                if "function_args" in response and "image_generation" in response["function_args"]:
+                    # Use the image generation settings from the function args if available
+                    img_data["image_generation"].update(response["function_args"]["image_generation"])
+                
                 res = await generate_roleplay_image_from_gpt(img_data, user_id, conversation_id)
                 if res and "image_urls" in res and res["image_urls"]:
                     emit('image', {
                         'image_url': res["image_urls"][0],
-                        'prompt_used': res.get('prompt_used', '')
+                        'prompt_used': res.get('prompt_used', ''),
+                        'reason': img_data["image_generation"].get("reason", "Narrative moment")
                     }, room=conversation_id)
             except Exception as e:
                 logger.error(f"Error generating image: {e}", exc_info=True)
         
         # Stream the text tokens
-        for i in range(0, len(response["message"]), 3):
-            token = response["message"][i:i+3]
+        for i in range(0, len(message_content), 3):
+            token = message_content[i:i+3]
             emit('new_token', {'token': token}, room=conversation_id)
             socketio.sleep(0.05)
         
-        emit('done', {'full_text': response["message"]}, room=conversation_id)
+        emit('done', {'full_text': message_content}, room=conversation_id)
         
     except Exception as e:
         logger.error(f"Error in background_chat_task: {str(e)}", exc_info=True)
         emit('error', {'error': str(e)}, room=conversation_id)
-
 ###############################################################################
 # FLASK APP CREATION
 ###############################################################################
@@ -398,6 +418,25 @@ def create_flask_app():
     
     init_image_routes(app)
     init_chat_routes(app)
+
+
+    async def initialize_openai_integration():
+        """Initialize the OpenAI integration system."""
+        try:
+            from nyx.eternal.openai_integration import initialize
+            from nyx.nyx_agent_sdk import process_user_input
+            
+            # Initialize the OpenAI integration with the original processor
+            initialize(
+                api_key=os.environ.get("OPENAI_API_KEY"),
+                original_processor=process_user_input
+            )
+            
+            logger.info("OpenAI integration system initialized successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error initializing OpenAI integration: {e}", exc_info=True)
+            return False
     
     @app.before_first_request
     async def initialize_systems():
@@ -415,6 +454,10 @@ def create_flask_app():
             
             await initialize_nyx_memory_system()
             logger.info("Nyx memory system initialized successfully")
+            
+            # Add this line to initialize OpenAI integration
+            await initialize_openai_integration()
+            logger.info("OpenAI integration initialized successfully")
             
             await register_conflict_system()
             logger.info("Conflict system initialized successfully")
@@ -516,6 +559,154 @@ def create_flask_app():
         if user_id:
             return jsonify({"logged_in": True, "user_id": user_id}), 200
         return jsonify({"logged_in": False}), 200
+
+    @app.route("/openai_chat", methods=["POST"])
+    @rate_limit(limit=10, period=60)
+    def openai_chat():
+        """Enqueues a background chat task using OpenAI integration for the user input."""
+        if "user_id" not in session:
+            return jsonify({"error": "Not authenticated"}), 401
+        
+        data = request.get_json()
+        user_input = data.get("user_input")
+        conversation_id = data.get("conversation_id")
+        universal_update = data.get("universal_update", {})
+        use_standalone = data.get("use_standalone", False)
+        
+        if not user_input or not conversation_id:
+            return jsonify({"error": "Missing required fields"}), 400
+        
+        # Store user message
+        try:
+            conn = get_db_connection()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                        (conversation_id, "user", user_input)
+                    )
+                    conn.commit()
+        except Exception as e:
+            logger.error(f"Database error: {str(e)}", exc_info=True)
+            return jsonify({"error": "Database error"}), 500
+        
+        # Kick off background chat using OpenAI integration
+        async def openai_chat_task():
+            try:
+                # Get aggregator data
+                from logic.aggregator import get_aggregated_roleplay_context
+                aggregator_data = get_aggregated_roleplay_context(session.get("user_id"), conversation_id, "Chase")
+                
+                context = {
+                    "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
+                    "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
+                    "player_name": aggregator_data.get("playerName", "Chase"),
+                    "npc_present": aggregator_data.get("npcsPresent", []),
+                    "aggregator_data": aggregator_data,
+                    "universal_update": universal_update if universal_update else None
+                }
+                
+                # Apply universal update if provided
+                if universal_update:
+                    from logic.universal_updater import apply_universal_updates
+                    apply_universal_updates(
+                        session.get("user_id"),
+                        conversation_id,
+                        universal_update
+                    )
+                    # Refresh context
+                    aggregator_data = get_aggregated_roleplay_context(session.get("user_id"), conversation_id, "Chase")
+                    context["aggregator_data"] = aggregator_data
+                
+                # Process with OpenAI integration
+                from nyx.nyx_agent_sdk import process_user_input_with_openai, process_user_input_standalone
+                
+                if use_standalone:
+                    # Use standalone OpenAI processing
+                    response = await process_user_input_standalone(
+                        session.get("user_id"), 
+                        conversation_id, 
+                        user_input,
+                        context
+                    )
+                else:
+                    # Use enhanced OpenAI processing
+                    response = await process_user_input_with_openai(
+                        session.get("user_id"), 
+                        conversation_id, 
+                        user_input,
+                        context
+                    )
+                
+                if not response.get("success", False):
+                    emit('error', {'error': response.get("error", "Unknown error")}, room=conversation_id)
+                    return
+                    
+                # Extract the message content
+                message_content = response.get("message", "")
+                if not message_content and "function_args" in response:
+                    # Extract from function arguments if available
+                    message_content = response["function_args"].get("narrative", "")
+                
+                # Store the response
+                conn = get_db_connection()
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                            (conversation_id, "Nyx", message_content)
+                        )
+                        conn.commit()
+                conn.close()
+                
+                # Check if we should generate an image
+                should_generate = response.get("generate_image", False)
+                if "function_args" in response and "image_generation" in response["function_args"]:
+                    # Also check image_generation settings in function args
+                    img_settings = response["function_args"]["image_generation"]
+                    should_generate = should_generate or img_settings.get("generate", False)
+                
+                # Generate image if needed
+                if should_generate:
+                    try:
+                        img_data = {
+                            "narrative": message_content,
+                            "image_generation": {
+                                "generate": True,
+                                "priority": "medium",
+                                "focus": "balanced",
+                                "framing": "medium_shot",
+                                "reason": "Narrative moment"
+                            }
+                        }
+                        if "function_args" in response and "image_generation" in response["function_args"]:
+                            # Use the image generation settings from the function args if available
+                            img_data["image_generation"].update(response["function_args"]["image_generation"])
+                        
+                        res = await generate_roleplay_image_from_gpt(img_data, session.get("user_id"), conversation_id)
+                        if res and "image_urls" in res and res["image_urls"]:
+                            emit('image', {
+                                'image_url': res["image_urls"][0],
+                                'prompt_used': res.get('prompt_used', ''),
+                                'reason': img_data["image_generation"].get("reason", "Narrative moment")
+                            }, room=conversation_id)
+                    except Exception as e:
+                        logger.error(f"Error generating image: {e}", exc_info=True)
+                
+                # Stream the text tokens
+                for i in range(0, len(message_content), 3):
+                    token = message_content[i:i+3]
+                    emit('new_token', {'token': token}, room=conversation_id)
+                    socketio.sleep(0.05)
+                
+                emit('done', {'full_text': message_content}, room=conversation_id)
+                
+            except Exception as e:
+                logger.error(f"Error in openai_chat_task: {str(e)}", exc_info=True)
+                emit('error', {'error': str(e)}, room=conversation_id)
+        
+        socketio.start_background_task(openai_chat_task)
+        return jsonify({"status": "success", "message": "OpenAI chat started"})
     
     @app.route("/logout", methods=["POST"])
     def logout():
