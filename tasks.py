@@ -181,3 +181,4 @@ def nyx_memory_maintenance_task():
     result = asyncio.run(process_all_conversations())
     logging.info(f"Nyx memory maintenance task completed: {result}")
     return result
+app = celery_app
