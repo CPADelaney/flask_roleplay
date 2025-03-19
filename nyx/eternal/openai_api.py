@@ -6,13 +6,13 @@ import logging
 import time
 import os
 
-from .openai_agents_nyx.service_provider import ServiceProvider
+from logic.chatgpt_integration import get_chatgpt_response
 from .openai_facade import NyxAgentsFacade
 
 logger = logging.getLogger(__name__)
 
 class OpenAIAgentsAPI:
-    """API for OpenAI Agents SDK integration that avoids circular imports"""
+    """API for OpenAI Agents SDK integration that leverages existing ChatGPT integration"""
     
     def __init__(self, 
                api_key: Optional[str] = None,
@@ -75,7 +75,7 @@ class OpenAIAgentsAPI:
         if enhancement.get("feature_importance"):
             enhanced_context["feature_importance"] = enhancement["feature_importance"]
         
-        # Call original processor
+        # Call original processor with the enhanced context
         result = await self.original_processor(user_id, conversation_id, user_input, enhanced_context)
         
         # Evaluate response
@@ -101,7 +101,7 @@ class OpenAIAgentsAPI:
                            user_input: str,
                            context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Process user input with standalone OpenAI Agents implementation.
+        Process user input with standalone implementation using existing ChatGPT integration.
         
         Args:
             user_id: User ID
@@ -112,18 +112,53 @@ class OpenAIAgentsAPI:
         Returns:
             Processing result
         """
-        # Get service provider
-        service = ServiceProvider.get_instance(user_id, conversation_id)
-        
         try:
-            # TODO: Implement standalone processing using OpenAI Agents SDK
-            # This would involve creating coordinator_agent and running it
+            # Get aggregated context from existing logic
+            from logic.aggregator import get_aggregated_roleplay_context
+            aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
             
-            # For now, return a placeholder
-            return {
-                "success": False,
-                "error": "Standalone processing not implemented yet"
-            }
+            # Check if context contains universal update
+            if context and context.get("universal_update"):
+                # Apply universal update if provided
+                from logic.universal_updater import apply_universal_updates
+                apply_universal_updates(
+                    user_id,
+                    conversation_id,
+                    context["universal_update"]
+                )
+                # Refresh aggregator data post-update
+                aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
+            
+            # Get reflection setting from context
+            reflection_enabled = context.get("reflection_enabled", False)
+            
+            # Use existing ChatGPT integration
+            response = get_chatgpt_response(
+                conversation_id, 
+                aggregator_data, 
+                user_input, 
+                reflection_enabled
+            )
+            
+            # Process response
+            if response["type"] == "function_call":
+                return {
+                    "success": True,
+                    "type": "function_call",
+                    "function_name": response["function_name"],
+                    "function_args": response["function_args"],
+                    "message": response["function_args"].get("narrative", ""),
+                    "tokens_used": response["tokens_used"]
+                }
+            else:
+                return {
+                    "success": True,
+                    "type": "text",
+                    "response": response["response"],
+                    "message": response["response"],
+                    "tokens_used": response["tokens_used"]
+                }
+                
         except Exception as e:
             logger.error(f"Error in standalone processing: {e}")
             return {
