@@ -2781,3 +2781,86 @@ async def store_messages(user_id: int, conversation_id: int, user_input: str, ny
                 "INSERT INTO messages (conversation_id, sender, content) VALUES ($1, $2, $3)",
                 conversation_id, "Nyx", nyx_response
             )
+# Add to the end of nyx_agent_sdk.py
+
+async def process_user_input_with_openai(
+    user_id: int,
+    conversation_id: int,
+    user_input: str,
+    context_data: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """
+    Process user input using the OpenAI integration from nyx/eternal.
+    
+    This function provides an alternative to the standard process_user_input
+    that leverages the OpenAI Agents enhancements for improved responses.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        user_input: User's input message
+        context_data: Additional context information
+        
+    Returns:
+        Dictionary with response information
+    """
+    from nyx.eternal.openai_integration import process_with_enhancement, initialize
+    
+    # Initialize OpenAI integration with the original processor
+    initialize(
+        api_key=os.environ.get("OPENAI_API_KEY"),
+        original_processor=process_user_input
+    )
+    
+    # Process with enhancement
+    result = await process_with_enhancement(
+        user_id, conversation_id, user_input, context_data
+    )
+    
+    # Ensure output format matches the original process_user_input function
+    if result.get("success", False):
+        if "response" in result and "message" not in result:
+            result["message"] = result["response"]
+        elif "message" in result and "response" not in result:
+            result["response"] = result["message"]
+    
+    return result
+
+async def process_user_input_standalone(
+    user_id: int,
+    conversation_id: int,
+    user_input: str,
+    context_data: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """
+    Process user input using just the OpenAI integration without Nyx enhancement.
+    
+    This can be useful for testing or when you want to bypass Nyx's processing.
+    
+    Args:
+        user_id: User ID
+        conversation_id: Conversation ID
+        user_input: User's input message
+        context_data: Additional context information
+        
+    Returns:
+        Dictionary with response information
+    """
+    from nyx.eternal.openai_integration import process_standalone, initialize
+    
+    # Initialize OpenAI integration
+    initialize(api_key=os.environ.get("OPENAI_API_KEY"))
+    
+    # Process standalone
+    result = await process_standalone(
+        user_id, conversation_id, user_input, context_data
+    )
+    
+    # Ensure output format matches the original process_user_input function
+    if result.get("success", False):
+        if "response" in result and "message" not in result:
+            result["message"] = result["response"]
+        elif "message" in result and "response" not in result:
+            result["response"] = result["message"]
+    
+    return result
