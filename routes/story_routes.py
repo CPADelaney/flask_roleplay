@@ -36,8 +36,6 @@ from npcs.new_npc_creation import NPCCreationHandler, RunContextWrapper
 # Import enhanced modules
 from logic.stats_logic import get_player_current_tier, check_for_combination_triggers, apply_stat_change, apply_activity_effects
 
-from logic.npc_creation import process_daily_npc_activities, check_for_mask_slippage, detect_relationship_stage_changes
-
 from logic.narrative_progression import get_current_narrative_stage, check_for_personal_revelations, check_for_narrative_moments, check_for_npc_revelations, add_dream_sequence, add_moment_of_clarity
 
 from logic.social_links import get_relationship_dynamic_level, update_relationship_dynamic, check_for_relationship_crossroads, check_for_relationship_ritual, get_relationship_summary, apply_crossroads_choice
