@@ -1,5 +1,3 @@
-# main.py
-
 import os
 import logging
 import time
@@ -53,24 +51,31 @@ from middleware.rate_limiting import rate_limit, ip_block_list
 # Import validation
 from middleware.validation import validate_request
 
-# Global socketio instance
-socketio = None
+# Additional modules
+import asyncpg  # <-- ensure explicit import if not done globally
 
-from logic.chatgpt_integration import get_chatgpt_response
-from db.connection import get_db_connection
+# NPC creation / learning
+from npcs.new_npc_creation import NPCCreationHandler, RunContextWrapper
+from npcs.npc_learning_adaptation import NPCLearningManager
 
+# Governance & conflict integration
 from nyx.integrate import get_central_governance
 from logic.conflict_system.conflict_integration import register_enhanced_integration
-from npcs.npc_learning_adaptation import NPCLearningManager
 
 import asyncio
 from typing import Dict, Any, Optional
 from redis import Redis
 from celery import Celery
+
+# Adjust as appropriate for your project’s config
 from .config.settings import config
 from .utils.health_check import HealthCheck
 
-asyncio.run(initialize_nyx_memory_system())
+logger = logging.getLogger(__name__)
+
+# Initialize Nyx memory system at import time
+# (if you prefer this at the bottom of the file or in create_flask_app, that can also work)
+asyncio.run(initialize_nyx_memory_system())  # <-- Make sure eventlet or gevent monkeypatching is done if needed
 
 class ConnectivityManager:
     """Manages connectivity to Redis and Celery services."""
@@ -113,7 +118,7 @@ class ConnectivityManager:
             
             return status
         except Exception as e:
-            logger.error(f"Error checking connectivity: {e}")
+            logger.error(f"Error checking connectivity: {e}", exc_info=True)
             return {
                 'redis': False,
                 'celery': False,
@@ -123,10 +128,7 @@ class ConnectivityManager:
     async def _check_redis(self) -> Dict[str, Any]:
         """Check Redis connectivity."""
         try:
-            # Try to ping Redis
             self.redis_client.ping()
-            
-            # Try to set and get a test value
             test_key = 'connectivity_test'
             test_value = 'test'
             self.redis_client.set(test_key, test_value)
@@ -134,10 +136,11 @@ class ConnectivityManager:
             self.redis_client.delete(test_key)
             
             if retrieved_value == test_value:
+                info = self.redis_client.info()
                 return {
                     'connected': True,
-                    'latency': self.redis_client.info()['instantaneous_ops_per_sec'],
-                    'memory_usage': self.redis_client.info()['used_memory_human']
+                    'latency': info.get('instantaneous_ops_per_sec', 'unknown'),
+                    'memory_usage': info.get('used_memory_human', 'unknown')
                 }
             else:
                 return {
@@ -153,7 +156,6 @@ class ConnectivityManager:
     async def _check_celery(self) -> Dict[str, Any]:
         """Check Celery connectivity."""
         try:
-            # Try to inspect Celery workers
             inspector = self.celery_app.control.inspect()
             active_workers = inspector.active()
             
@@ -180,7 +182,6 @@ class ConnectivityManager:
             inspector = self.celery_app.control.inspect()
             reserved = inspector.reserved()
             scheduled = inspector.scheduled()
-            
             return {
                 'reserved_tasks': len(reserved) if reserved else 0,
                 'scheduled_tasks': len(scheduled) if scheduled else 0,
@@ -190,10 +191,8 @@ class ConnectivityManager:
                 }
             }
         except Exception as e:
-            logger.error(f"Error getting queue status: {e}")
-            return {
-                'error': str(e)
-            }
+            logger.error(f"Error getting queue status: {e}", exc_info=True)
+            return {'error': str(e)}
     
     async def monitor_connectivity(self, interval: int = 60):
         """Monitor connectivity status periodically."""
@@ -201,36 +200,37 @@ class ConnectivityManager:
             status = await self.check_connectivity()
             if not status['redis'] or not status['celery']:
                 logger.warning(f"Connectivity issues detected: {status['details']}")
-                # Notify administrators or take corrective action
+                # Handle or notify as appropriate
             await asyncio.sleep(interval)
 
-# Create global instance
+# Global connectivity manager
 connectivity_manager = ConnectivityManager()
+
+###############################################################################
+# BACKGROUND TASKS
+###############################################################################
 
 async def background_chat_task(conversation_id, user_input, universal_update=None):
     """
-    Background task for processing chat messages using SDK Nyx agent.
+    Background task for processing chat messages using Nyx agent.
     """
     try:
-        # Get user_id
+        # Acquire user_id from DB
         async with asyncpg.create_pool(dsn=get_db_connection()) as pool:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow(
                     "SELECT user_id FROM conversations WHERE id = $1", 
                     conversation_id
                 )
-                
                 if not row:
-                    logging.error(f"No conversation found with id {conversation_id}")
+                    logger.error(f"No conversation found with id {conversation_id}")
                     return
-                    
                 user_id = row['user_id']
         
-        # Get context data
+        # Get aggregator context
         from logic.aggregator import get_aggregated_roleplay_context
-        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")  # Default name
+        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, "Chase")
         
-        # Build context
         context = {
             "location": aggregator_data.get("currentRoleplay", {}).get("CurrentLocation", "Unknown"),
             "time_of_day": aggregator_data.get("timeOfDay", "Morning"),
@@ -239,148 +239,121 @@ async def background_chat_task(conversation_id, user_input, universal_update=Non
             "aggregator_data": aggregator_data
         }
         
-        # Add universal update data
+        # If universal updates are provided, apply them first
         if universal_update:
             context["universal_update"] = universal_update
-            
-            # Process updates with async context
             async def apply_updates():
-                universal_update["user_id"] = user_id
-                universal_update["conversation_id"] = conversation_id
+                from logic.universal_updater import apply_universal_updates_async
                 dsn = os.getenv("DB_DSN")
-                
                 async with asyncpg.create_pool(dsn=dsn) as pool:
                     async with pool.acquire() as conn:
                         return await apply_universal_updates_async(
-                            user_id, 
-                            conversation_id, 
+                            user_id,
+                            conversation_id,
                             universal_update,
                             conn
                         )
-            
-            # Apply updates
             await apply_updates()
             
-            # Refresh context after updates
+            # Refresh aggregator data post-update
             aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, context["player_name"])
             context["aggregator_data"] = aggregator_data
         
-        # Process via SDK
+        # Process the user_input with Nyx agent
         from nyx.nyx_agent_sdk import process_user_input
         response = await process_user_input(user_id, conversation_id, user_input, context)
         
-        # Store Nyx's response
-        from db.connection import get_db_connection
+        # Store the Nyx response in DB
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-            (conversation_id, "Nyx", response["message"])
-        )
-        conn.commit()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
+                    (conversation_id, "Nyx", response["message"])
+                )
+                conn.commit()
         conn.close()
         
-        # Check if we should generate an image
+        # Possibly generate an image
         should_generate = response.get("generate_image", False)
-        
         if should_generate:
             try:
-                # Generate image based on the response
-                from routes.ai_image_generator import generate_roleplay_image_from_gpt
-                
-                image_result = await generate_roleplay_image_from_gpt(
-                    {
-                        "narrative": response["message"],
-                        "image_generation": {
-                            "generate": True,
-                            "priority": "medium",
-                            "focus": "balanced",
-                            "framing": "medium_shot",
-                            "reason": "Narrative moment"
-                        }
-                    },
-                    user_id,
-                    conversation_id
-                )
-                
-                # Emit image to the client via SocketIO
-                from flask_socketio import emit
-                if image_result and "image_urls" in image_result and image_result["image_urls"]:
+                img_data = {
+                    "narrative": response["message"],
+                    "image_generation": {
+                        "generate": True,
+                        "priority": "medium",
+                        "focus": "balanced",
+                        "framing": "medium_shot",
+                        "reason": "Narrative moment"
+                    }
+                }
+                res = await generate_roleplay_image_from_gpt(img_data, user_id, conversation_id)
+                if res and "image_urls" in res and res["image_urls"]:
                     emit('image', {
-                        'image_url': image_result["image_urls"][0],
-                        'prompt_used': image_result.get('prompt_used', '')
+                        'image_url': res["image_urls"][0],
+                        'prompt_used': res.get('prompt_used', '')
                     }, room=conversation_id)
             except Exception as e:
-                logging.error(f"Error generating image: {e}")
+                logger.error(f"Error generating image: {e}", exc_info=True)
         
-        # Emit response to client
-        from flask_socketio import emit
-        
-        # Stream the response token by token
+        # Stream the text tokens
         for i in range(0, len(response["message"]), 3):
             token = response["message"][i:i+3]
             emit('new_token', {'token': token}, room=conversation_id)
             socketio.sleep(0.05)
-            
-        # Signal completion
+        
         emit('done', {'full_text': response["message"]}, room=conversation_id)
         
     except Exception as e:
-        logging.error(f"Error in background_chat_task: {str(e)}", exc_info=True)
-        from flask_socketio import emit
+        logger.error(f"Error in background_chat_task: {str(e)}", exc_info=True)
         emit('error', {'error': str(e)}, room=conversation_id)
+
+###############################################################################
+# FLASK APP CREATION
+###############################################################################
 
 def create_flask_app():
     """Create and configure a Flask application."""
-    app = Flask(
-        __name__,
-        static_folder='static',
-        template_folder='templates'
-    )
+    app = Flask(__name__, static_folder='static', template_folder='templates')
     
-    # Load configuration from config module
     from config import get_config
     security_config = get_config("security")
     
-    # Configure app
+    # Basic app config
     app.config['SECRET_KEY'] = security_config["secret_key"]
     app.config['SESSION_COOKIE_SECURE'] = security_config["session_cookie_secure"]
     app.config['SESSION_COOKIE_HTTPONLY'] = security_config["session_cookie_httponly"]
     app.config['SESSION_COOKIE_SAMESITE'] = security_config["session_cookie_samesite"]
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(seconds=security_config["permanent_session_lifetime"])
     
-    # Initialize database connection pool
+    # Initialize DB pool
     if not initialize_connection_pool():
-        logging.error("Failed to initialize database connection pool")
-    
-    # Register function to close database connections on shutdown
+        logger.error("Failed to initialize database connection pool")
     atexit.register(close_connection_pool)
     
-    # Initialize Swagger documentation
+    # Swagger
     swagger_config = {
         "headers": [],
         "specs": [
             {
                 "endpoint": 'apispec',
                 "route": '/apispec.json',
-                "rule_filter": lambda rule: True,  # all in
-                "model_filter": lambda tag: True,  # all in
+                "rule_filter": lambda rule: True,
+                "model_filter": lambda tag: True,
             }
         ],
         "static_url_path": "/flasgger_static",
         "swagger_ui": True,
         "specs_route": "/docs"
     }
-    
     template = {
         "swagger": "2.0",
         "info": {
             "title": "NPC Roleplay API",
             "description": "API for managing NPCs, memories, and interactions",
             "version": "1.0.0",
-            "contact": {
-                "email": "support@example.com"
-            }
+            "contact": {"email": "support@example.com"}
         },
         "securityDefinitions": {
             "Bearer": {
@@ -390,16 +363,11 @@ def create_flask_app():
                 "description": "JWT token in format: Bearer <token>"
             }
         },
-        "security": [
-            {
-                "Bearer": []
-            }
-        ]
+        "security": [{"Bearer": []}]
     }
-    
     Swagger(app, config=swagger_config, template=template)
     
-    # Initialize security middleware
+    # Security
     Talisman(app, content_security_policy={
         'default-src': "'self'",
         'script-src': ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
@@ -407,7 +375,7 @@ def create_flask_app():
     })
     csrf = SeaSurf(app)
     
-    # Initialize metrics
+    # Metrics
     metrics = PrometheusMetrics(app)
     metrics.info('app_info', 'Application info', version='1.0.0')
     
@@ -428,51 +396,43 @@ def create_flask_app():
     app.register_blueprint(conflict_bp, url_prefix='/conflict')
     app.register_blueprint(npc_learning_bp, url_prefix='/npc-learning')
     
-    # Initialize routes for other modules
     init_image_routes(app)
     init_chat_routes(app)
     
-    # Initialize Nyx memory system
     @app.before_first_request
     async def initialize_systems():
         """Initialize all required systems on application startup."""
         try:
-            # Initialize database tables and run migrations
             from db.schema_and_seed import create_all_tables, seed_initial_data
             from db.schema_migrations import ensure_schema_version
             
-            # Run migrations first
             ensure_schema_version()
-            logging.info("Database migrations completed successfully")
+            logger.info("Database migrations completed successfully")
             
-            # Create tables and seed data
             create_all_tables()
             seed_initial_data()
-            logging.info("Database tables initialized successfully")
+            logger.info("Database tables initialized successfully")
             
-            # Initialize database tables for Nyx memory
             await initialize_nyx_memory_system()
-            logging.info("Nyx memory system initialized successfully")
+            logger.info("Nyx memory system initialized successfully")
             
-            # Initialize conflict system
             await register_conflict_system()
-            logging.info("Conflict system initialized successfully")
+            logger.info("Conflict system initialized successfully")
             
-            # Initialize NPC learning system
-            from npcs.npc_learning_adaptation import NPCLearningManager
             await NPCLearningManager.initialize_system()
-            logging.info("NPC learning system initialized successfully")
+            logger.info("NPC learning system initialized successfully")
             
-            # Initialize universal updater
             from logic.universal_updater import initialize_universal_updater
             await initialize_universal_updater()
-            logging.info("Universal updater initialized successfully")
+            logger.info("Universal updater initialized successfully")
             
         except Exception as e:
-            logging.error(f"Error initializing systems: {str(e)}", exc_info=True)
-            # Don't fail startup, but log the error
+            logger.error(f"Error initializing systems: {str(e)}", exc_info=True)
     
-    # HTTP routes
+    ###########################################################################
+    # ROUTES
+    ###########################################################################
+    
     @app.route("/chat")
     def chat_page():
         if "user_id" not in session:
@@ -481,6 +441,7 @@ def create_flask_app():
     
     @app.route("/start_chat", methods=["POST"])
     def start_chat():
+        """Enqueues a background chat task using SocketIO for the user input."""
         if "user_id" not in session:
             return jsonify({"error": "Not authenticated"}), 401
     
@@ -488,8 +449,8 @@ def create_flask_app():
         user_input = data.get("user_input")
         conversation_id = data.get("conversation_id")
         universal_update = data.get("universal_update", {})
-    
-        # Store user message in the database
+        
+        # Store user message
         try:
             conn = get_db_connection()
             with conn:
@@ -500,12 +461,11 @@ def create_flask_app():
                     )
                     conn.commit()
         except Exception as e:
-            logging.error(f"Database error: {str(e)}")
+            logger.error(f"Database error: {str(e)}", exc_info=True)
             return jsonify({"error": "Database error"}), 500
-    
-        # Start the background chat task (now using enhanced context)
+        
+        # Kick off background chat
         socketio.start_background_task(background_chat_task, conversation_id, user_input, universal_update)
-    
         return jsonify({"status": "success", "message": "Chat started"})
     
     @app.route("/login_page", methods=["GET"])
@@ -513,59 +473,41 @@ def create_flask_app():
         return render_template("login.html")
     
     @app.route("/login", methods=["POST"])
-    @rate_limit(limit=5, period=60)  # 5 login attempts per minute
+    @rate_limit(limit=5, period=60)
     @validate_request({
-        'username': {
-            'type': 'string',
-            'pattern': 'username',
-            'max_length': 30,
-            'required': True
-        },
-        'password': {
-            'type': 'string',
-            'max_length': 100,
-            'required': True
-        }
+        'username': {'type': 'string', 'pattern': 'username', 'max_length': 30, 'required': True},
+        'password': {'type': 'string', 'max_length': 100, 'required': True}
     })
     def login():
-        # Get sanitized data from the request
         data = request.sanitized_data
         username = data["username"]
         password = data["password"]
         
         try:
-            conn = None
-            try:
-                conn = get_db_connection()
-                with conn.cursor() as cur:
-                    cur.execute("SELECT id, password_hash FROM users WHERE username = %s", (username,))
-                    row = cur.fetchone()
-            finally:
-                if conn:
-                    conn.close()
+            conn = get_db_connection()
+            user_id, hashed_password = None, None
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, password_hash FROM users WHERE username=%s", (username,))
+                row = cur.fetchone()
+                if row:
+                    user_id, hashed_password = row
+            conn.close()
             
-            if not row:
-                # Use constant time comparison to prevent timing attacks
-                # Still do a fake check even if user doesn't exist
+            if not user_id:
+                # Fake check to mitigate timing attacks
                 bcrypt.checkpw(password.encode('utf-8'), b'$2b$12$' + b'x' * 53)
                 return jsonify({"error": "Invalid username or password"}), 401
             
-            user_id, hashed_password = row
-            
-            # Verify password
             if not bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8')):
                 return jsonify({"error": "Invalid username or password"}), 401
             
-            # Set session with appropriate security
             session["user_id"] = user_id
-            session.permanent = True  # Use permanent session with lifetime
-            
-            # Log successful login
-            logging.info(f"User {username} (ID: {user_id}) logged in successfully")
-            
+            session.permanent = True
+            logger.info(f"User {username} (ID: {user_id}) logged in successfully")
             return jsonify({"message": "Logged in", "user_id": user_id})
+        
         except Exception as e:
-            logging.error(f"Login error: {str(e)}", exc_info=True)
+            logger.error(f"Login error: {str(e)}", exc_info=True)
             return jsonify({"error": "Server error"}), 500
     
     @app.route("/whoami", methods=["GET"])
@@ -581,104 +523,67 @@ def create_flask_app():
         return jsonify({"message": "Logged out"}), 200
     
     @app.route("/register", methods=["POST"])
-    @rate_limit(limit=3, period=300)  # 3 register attempts per 5 minutes
+    @rate_limit(limit=3, period=300)
     @validate_request({
-        'username': {
-            'type': 'string',
-            'pattern': 'username',
-            'max_length': 30,
-            'required': True
-        },
-        'password': {
-            'type': 'string',
-            'min_length': 8,
-            'max_length': 100,
-            'required': True
-        },
-        'email': {
-            'type': 'string',
-            'pattern': 'email',
-            'max_length': 100,
-            'required': True
-        }
+        'username': {'type': 'string', 'pattern': 'username', 'max_length': 30, 'required': True},
+        'password': {'type': 'string', 'min_length': 8, 'max_length': 100, 'required': True},
+        'email':    {'type': 'string', 'pattern': 'email', 'max_length': 100, 'required': True}
     })
     def register():
-        # Get sanitized data
         data = request.sanitized_data
         username = data["username"]
         password = data["password"]
         email = data["email"]
         
         try:
-            # Generate password hash
             password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-            
-            conn = None
-            try:
-                conn = get_db_connection()
+            conn = get_db_connection()
+            user_id = None
+            with conn:
                 with conn.cursor() as cur:
-                    # Check if username already exists
-                    cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+                    cur.execute("SELECT id FROM users WHERE username=%s", (username,))
                     if cur.fetchone():
                         return jsonify({"error": "Username already exists"}), 409
                     
-                    # Check if email already exists
-                    cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+                    cur.execute("SELECT id FROM users WHERE email=%s", (email,))
                     if cur.fetchone():
                         return jsonify({"error": "Email already exists"}), 409
                     
-                    # Insert new user
                     cur.execute(
-                        "INSERT INTO users (username, password_hash, email, created_at) VALUES (%s, %s, %s, NOW()) RETURNING id",
+                        """INSERT INTO users (username, password_hash, email, created_at)
+                           VALUES (%s, %s, %s, NOW()) RETURNING id""",
                         (username, password_hash, email)
                     )
                     user_id = cur.fetchone()[0]
                     conn.commit()
-            finally:
-                if conn:
-                    conn.close()
+            conn.close()
             
-            # Log successful registration
-            logging.info(f"New user registered: {username} (ID: {user_id})")
-            
-            # Set session
+            logger.info(f"New user registered: {username} (ID: {user_id})")
             session["user_id"] = user_id
             session.permanent = True
             
             return jsonify({"message": "User registered successfully", "user_id": user_id})
         except Exception as e:
-            logging.error(f"Registration error: {str(e)}", exc_info=True)
+            logger.error(f"Registration error: {str(e)}", exc_info=True)
             return jsonify({"error": "Server error"}), 500
     
     @app.route("/start_new_game", methods=["POST"])
-    @validate_request({
-        'user_id': {
-            'type': 'integer',
-            'required': True
-        }
-    })
+    @validate_request({'user_id': {'type': 'integer','required': True}})
     async def start_new_game():
-        """Start a new game with proper Nyx integration."""
+        """Start a new game with Nyx integration."""
         try:
             user_id = session.get("user_id")
             if not user_id:
                 return jsonify({"error": "Not authenticated"}), 401
-
-            # Create new conversation
-            conversation_id = create_conversation_sync(user_id)
             
-            # Initialize Nyx memory system for this conversation
+            # Create conversation
+            conversation_id = create_conversation_sync(user_id)  # <-- presumably a local helper
             await initialize_nyx_memory_system(user_id, conversation_id)
             
-            # Register the new game agent with Nyx governance
-            from new_game_agent import register_with_governance
+            from new_game_agent import register_with_governance, NewGameAgent
             await register_with_governance(user_id, conversation_id)
             
-            # Create and initialize the new game agent
-            from new_game_agent import NewGameAgent
             agent = NewGameAgent()
-            
-            # Process the new game creation
             result = await agent.process_new_game(user_id, {"conversation_id": conversation_id})
             
             if not result.get("success"):
@@ -686,71 +591,64 @@ def create_flask_app():
                     "error": result.get("error", "Failed to create new game"),
                     "conversation_id": conversation_id
                 }), 500
-                
-            # Update conversation status
-            conn = await asyncpg.connect(dsn=DB_DSN)
+            
+            async_conn = await asyncpg.connect(dsn=DB_DSN)
             try:
-                await conn.execute("""
-                    UPDATE conversations 
-                    SET status = 'ready', 
-                        conversation_name = $1
-                    WHERE id = $2 AND user_id = $3
-                """, result.get("game_name", "New Game"), conversation_id, user_id)
+                await async_conn.execute(
+                    """UPDATE conversations 
+                       SET status='ready', conversation_name=$1
+                       WHERE id=$2 AND user_id=$3""",
+                    result.get("game_name","New Game"),
+                    conversation_id,
+                    user_id
+                )
             finally:
-                await conn.close()
+                await async_conn.close()
             
             return jsonify({
                 "success": True,
                 "conversation_id": conversation_id,
-                "game_name": result.get("game_name", "New Game")
+                "game_name": result.get("game_name","New Game")
             })
             
         except Exception as e:
-            logging.error(f"Error starting new game: {e}", exc_info=True)
+            logger.error(f"Error starting new game: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
     
     @app.before_first_request
     async def register_conflict_system():
-        """Register the conflict system with Nyx on application startup."""
+        """Register the conflict system with Nyx on startup."""
         try:
-            # Register for default user (adapt as needed for your multi-user setup)
             user_id = 1
             conversation_id = 1
-            
-            # Register the enhanced conflict system
-            result = await register_enhanced_integration(user_id, conversation_id)
-            
-            if result["success"]:
+            res = await register_enhanced_integration(user_id, conversation_id)
+            if res["success"]:
                 app.logger.info("Conflict system successfully registered with Nyx governance")
             else:
-                app.logger.error(f"Failed to register conflict system: {result['message']}")
-                
+                app.logger.error(f"Failed to register conflict system: {res['message']}")
         except Exception as e:
             app.logger.error(f"Error during conflict system registration: {str(e)}", exc_info=True)
     
-    # Health and monitoring endpoints
+    ###########################################################################
+    # HEALTH ENDPOINTS
+    ###########################################################################
+    
     @app.route("/health", methods=["GET"])
     def health_check():
         """
-        Basic health check endpoint for monitoring and load balancers.
-        Returns 200 OK if the application is running.
+        Basic health check endpoint
         """
-        return jsonify({
-            "status": "healthy",
-            "timestamp": time.time()
-        })
+        return jsonify({"status": "healthy","timestamp": time.time()})
     
     @app.route("/readiness", methods=["GET"])
     def readiness_check():
         """
-        Readiness check endpoint that tests critical dependencies.
-        Returns 200 OK if the application is ready to accept traffic,
-        or 503 Service Unavailable if any dependencies are not available.
+        Readiness check endpoint for checking dependencies
         """
         status = {"status": "ready", "timestamp": time.time(), "checks": {}}
         is_ready = True
         
-        # Check database connectivity
+        # DB check
         try:
             conn = get_db_connection()
             with conn.cursor() as cur:
@@ -762,145 +660,113 @@ def create_flask_app():
             status["checks"]["database"] = f"error: {str(e)}"
             is_ready = False
         
-        # Check Redis/Celery connectivity if applicable
-        try:
-            # This is a placeholder for Redis/Celery connectivity check
-            # Replace with actual code if you have Redis/Celery
-            import os
-            if os.getenv("REDIS_URL"):
-                from redis import Redis
+        # Redis/Celery check if desired
+        if os.getenv("REDIS_URL"):
+            try:
                 r = Redis.from_url(os.getenv("REDIS_URL"))
                 r.ping()
                 status["checks"]["redis"] = "connected"
-        except ImportError:
-            status["checks"]["redis"] = "not configured"
-        except Exception as e:
-            status["checks"]["redis"] = f"error: {str(e)}"
-            is_ready = False
+            except Exception as e:
+                status["checks"]["redis"] = f"error: {str(e)}"
+                is_ready = False
         
-        # Update overall status
         if not is_ready:
             status["status"] = "not ready"
             return jsonify(status), 503
-        
         return jsonify(status)
     
     return app
 
+###############################################################################
+# SOCKET.IO 
+###############################################################################
+
+socketio = None
+
 def create_socketio(app):
-    """
-    Create and configure the SocketIO instance
-    """
     global socketio
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', 
-                       logger=True, engineio_logger=True, ping_timeout=60)
+                        logger=True, engineio_logger=True, ping_timeout=60)
     
     @socketio.on('connect')
     def handle_connect():
-        """Handle client connection and initialize game state."""
-        logging.info("SocketIO: Client connected")
+        logger.info("SocketIO: Client connected")
         emit('response', {'data': 'Connected to SocketIO server!'})
         
-        # Schedule regular NPC learning cycle
+        # Schedule learning cycle if not yet scheduled
         if not hasattr(app, '_npc_learning_scheduler_running'):
             app._npc_learning_scheduler_running = True
             socketio.start_background_task(schedule_npc_learning_cycles)
     
     @socketio.on('disconnect')
     def handle_disconnect():
-        logging.info("SocketIO: Client disconnected")
+        logger.info("SocketIO: Client disconnected")
     
     @socketio.on('join')
     def handle_join(data):
-        """Handle client joining a conversation room."""
         conversation_id = data.get('conversation_id')
         if conversation_id:
             join_room(conversation_id)
-            logging.info(f"SocketIO: Client joined room {conversation_id}")
-            
-            # Initialize conversation state if needed
+            logger.info(f"SocketIO: Client joined room {conversation_id}")
+            # Initialize conversation state in background
             socketio.start_background_task(initialize_conversation_state, conversation_id)
-            
             emit('joined', {'room': conversation_id})
         else:
-            logging.warning("Client attempted to join room without conversation_id")
+            logger.warning("Client attempted to join room without conversation_id")
             emit('error', {'error': 'Missing conversation_id'})
     
     @socketio.on('message')
     def handle_message(data):
-        """Handle incoming chat messages and process them with Nyx."""
         conversation_id = data.get('conversation_id')
         message = data.get('message')
-        user_id = data.get('user_id')  # Optional, may be fetched from DB based on conversation_id
+        user_id = data.get('user_id')
         
-        # Simple validation
         if not conversation_id or not message:
-            logging.warning("Received incomplete message data")
+            logger.warning("Received incomplete message data")
             emit('error', {'error': 'Invalid message data'}, room=request.sid)
             return
-
-        try:
-            # Process universal updates if present
-            universal_update = None
-            if 'universal_update' in data:
-                universal_update = data['universal_update']
-                logging.info(f"Universal update received for conversation {conversation_id}")
-            
-            # Background processing using the enhanced Nyx task
-            socketio.start_background_task(
-                enhanced_background_chat_task,
-                conversation_id=conversation_id,
-                user_input=message,
-                universal_update=universal_update,
-                user_id=user_id
-            )
-            
-            logging.debug(f"Started background chat task for conversation {conversation_id}")
-            
-        except Exception as e:
-            logging.error(f"Error handling message: {str(e)}", exc_info=True)
-            emit('error', {'error': 'Server error processing message'}, room=request.sid)
+        
+        universal_update = data.get('universal_update')
+        
+        # Enhanced chat with universal updates
+        socketio.start_background_task(
+            enhanced_background_chat_task,
+            conversation_id=conversation_id,
+            user_input=message,
+            universal_update=universal_update,
+            user_id=user_id
+        )
+        logger.debug(f"Started background chat task for conversation {conversation_id}")
     
-    # Move the storybeat handler here
     @socketio.on('storybeat')
     def handle_storybeat(data):
         """
-        Socket.IO event handler for advanced storybeat processing.
-        Incorporates the functionality from next_storybeat in story_routes.py
-        but uses Socket.IO for real-time streaming of responses.
+        Similar logic as your custom story route,
+        but triggered via SocketIO instead of HTTP
         """
         try:
-            # Get user session data
             user_id = session.get("user_id")
             if not user_id:
                 emit('error', {'error': 'Not authenticated'})
                 return
-    
-            # Extract data from the message
+            
             user_input = data.get("user_input", "").strip()
             conversation_id = data.get("conversation_id")
             player_name = data.get("player_name", "Chase")
             advance_time = data.get("advance_time", False)
             universal_update = data.get("universal_update", {})
-    
+            
             if not user_input or not conversation_id:
                 emit('error', {'error': 'Missing required fields'})
                 return
-    
-            # Join the room for this conversation
-            join_room(conversation_id)
             
-            # Emit an acknowledgment that processing has begun
+            join_room(conversation_id)
             emit('processing', {'message': 'Processing your request...'})
             
-            # Function to do the heavy processing in background
             def process_message_background():
                 conn = None
                 try:
-                    # Create database connection
                     conn = get_db_connection()
-                    
-                    # Validate conversation ownership
                     with conn:
                         with conn.cursor() as cur:
                             cur.execute("SELECT user_id FROM conversations WHERE id=%s", (conversation_id,))
@@ -912,85 +778,57 @@ def create_socketio(app):
                                 socketio.emit('error', {'error': f"Conversation {conversation_id} not owned by this user"}, room=conversation_id)
                                 return
                             
-                            # Store user message
+                            # Store user input
                             cur.execute(
                                 "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
                                 (conversation_id, "user", user_input)
                             )
                             conn.commit()
                     
-                    # Process universal updates if provided
+                    # Possibly apply universal updates
                     if universal_update:
-                        def apply_universal_updates_thread():
-                            import asyncio
-                            import os
-                            import asyncpg
-                            from logic.universal_updater import apply_universal_updates_async
-                            
-                            universal_update["user_id"] = user_id
-                            universal_update["conversation_id"] = conversation_id
-                            
-                            async def run_updates():
-                                dsn = os.getenv("DB_DSN")
-                                async_conn = await asyncpg.connect(dsn=dsn)
-                                try:
-                                    return await apply_universal_updates_async(
-                                        user_id, conversation_id, universal_update, async_conn
-                                    )
-                                finally:
-                                    await async_conn.close()
-                            
-                            result = asyncio.run(run_updates())
-                            logging.info(f"Universal update result: {result}")
+                        from logic.universal_updater import apply_universal_updates_async
+                        async def apply_updates():
+                            dsn = os.getenv("DB_DSN")
+                            pool = await asyncpg.create_pool(dsn=dsn)
+                            async with pool.acquire() as async_conn:
+                                return await apply_universal_updates_async(user_id, conversation_id, universal_update, async_conn)
+                        asyncio.run(apply_updates())  # <-- blocking call in background thread
                         
-                        # Apply updates before generating response
-                        apply_universal_updates_thread()
-                    
-                    # Check and spawn NPCs if needed
-                    from logic.aggregator import get_aggregated_roleplay_context
-                    from logic.npc_creation import spawn_multiple_npcs
-                    import asyncio
-                    
-                    # Check NPC count
+                    # Check unintroduced NPCs
                     with conn:
                         with conn.cursor() as cur:
                             cur.execute("""
                                 SELECT COUNT(*) FROM NPCStats
                                 WHERE user_id=%s AND conversation_id=%s AND introduced=FALSE
-                            """, (user_id, conversation_id))
-                            count = cur.fetchone()[0]
+                            """,(user_id, conversation_id))
+                            unintroduced_count = cur.fetchone()[0]
                     
-                    # If too few NPCs, spawn more
-                    if count < 2:
-                        logging.info("Only %d unintroduced NPC(s) found; generating 3 more.", count)
-                        # Get aggregator data for environment context
-                        aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
-                        env_desc = aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", 
-                                                                               "A default environment description.")
-                        calendar = aggregator_data.get("calendar", {})
-                        day_names = calendar.get("days", 
-                                             ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
+                    if unintroduced_count < 2:
+                        logger.info("Only %d unintroduced NPC(s) found; generating 3 more.", unintroduced_count)
                         
-                        # Spawn NPCs using asyncio
                         async def spawn_npcs_async():
-                            return await spawn_multiple_npcs(user_id, conversation_id, env_desc, day_names, count=3)
+                            npc_handler = NPCCreationHandler()
+                            ctx = RunContextWrapper({"user_id": user_id, "conversation_id": conversation_id})
+                            return await npc_handler.spawn_multiple_npcs(ctx, 3)
                         
-                        npc_ids = asyncio.run(spawn_npcs_async())
-                        logging.info(f"Generated new NPCs: {npc_ids}")
+                        try:
+                            new_npc_ids = asyncio.run(spawn_npcs_async())
+                            logger.info(f"Generated new NPCs: {new_npc_ids}")
+                        except Exception as e:
+                            logger.error(f"Error spawning NPCs: {e}", exc_info=True)
                     
                     # Advance time if requested
-                    from logic.time_cycle import advance_time_and_update
-                    
                     if advance_time:
-                        new_year, new_month, new_day, new_phase = advance_time_and_update(
-                            user_id, conversation_id, increment=1
-                        )
-                        logging.info(f"Advanced time to Y{new_year} M{new_month} D{new_day} {new_phase}")
+                        from logic.time_cycle import advance_time_and_update
+                        new_year, new_month, new_day, new_phase = advance_time_and_update(user_id, conversation_id, increment=1)
+                        logger.info(f"Advanced time to Y{new_year} M{new_month} D{new_day} {new_phase}")
                     
-                    # Get the latest aggregated context (after time advance and NPC creation)
+                    # Rebuild aggregator data
+                    from logic.aggregator import get_aggregated_roleplay_context
                     aggregator_data = get_aggregated_roleplay_context(user_id, conversation_id, player_name)
                     
-                    # Append additional NPC context
+                    # Gather extra NPC memory
                     npc_context_summary = ""
                     with conn:
                         with conn.cursor() as cur:
@@ -998,392 +836,194 @@ def create_socketio(app):
                                 SELECT npc_name, memory, archetype_extras_summary
                                 FROM NPCStats
                                 WHERE user_id=%s AND conversation_id=%s AND introduced=TRUE
-                            """, (user_id, conversation_id))
-                            
+                            """,(user_id, conversation_id))
                             for row in cur.fetchall():
-                                npc_name, memory_json, extras_summary = row
-                                mem_text = ""
-                                if memory_json:
-                                    # Handle the case where memory_json might already be a list
-                                    if isinstance(memory_json, list):
-                                        mem_list = memory_json
+                                nm, mem_json, extras = row
+                                mem_list = []
+                                if mem_json:
+                                    if isinstance(mem_json, list):
+                                        mem_list = mem_json
                                     else:
                                         try:
-                                            mem_list = json.loads(memory_json)
+                                            mem_list = json.loads(mem_json)
                                         except Exception as e:
-                                            logging.warning(f"Error parsing memory JSON for NPC {npc_name}: {e}")
-                                            mem_list = []
-                                    
-                                    # Convert the memory list to a string
-                                    if isinstance(mem_list, list):
-                                        mem_text = " ".join(str(item) for item in mem_list)
-                                    else:
-                                        mem_text = str(mem_list)
-                                
-                                extra_text = extras_summary if extras_summary else ""
-                                npc_context_summary += f"{npc_name}: {mem_text} {extra_text}\n"
+                                            logger.warning(f"Error parsing memory JSON for NPC {nm}: {e}")
+                                mem_text = " ".join(str(item) for item in mem_list) if mem_list else ""
+                                npc_context_summary += f"{nm}: {mem_text} {extras or ''}\n"
                     
-                    # Build the complete context
                     from routes.story_routes import build_aggregator_text, gather_rule_knowledge
                     rule_knowledge = gather_rule_knowledge()
                     aggregator_text = build_aggregator_text(aggregator_data, rule_knowledge)
-                    
                     if npc_context_summary:
                         aggregator_text += "\nNPC Context:\n" + npc_context_summary
                     
-                    # Get response from GPT
+                    # ChatGPT response
                     from logic.chatgpt_integration import get_chatgpt_response
                     response_data = get_chatgpt_response(conversation_id, aggregator_text, user_input)
                     
-                    # Extract narrative
                     if response_data["type"] == "function_call":
-                        ai_response = response_data["function_args"].get("narrative", "")
+                        ai_response = response_data["function_args"].get("narrative","")
                         
-                        # Process universal updates from GPT response
                         if response_data["function_args"]:
+                            # Possibly apply universal updates
+                            from logic.universal_updater import apply_universal_updates_async
+                            async def apply_gpt_updates():
+                                dsn = os.getenv("DB_DSN")
+                                pool = await asyncpg.create_pool(dsn=dsn)
+                                async with pool.acquire() as async_conn:
+                                    return await apply_universal_updates_async(
+                                        user_id, conversation_id, response_data["function_args"], async_conn
+                                    )
                             try:
-                                import asyncio
-                                import asyncpg
-                                from logic.universal_updater import apply_universal_updates_async
-                                
-                                async def apply_updates():
-                                    dsn = os.getenv("DB_DSN")
-                                    conn = await asyncpg.connect(dsn=dsn, statement_cache_size=0)
-                                    try:
-                                        return await apply_universal_updates_async(
-                                            user_id, 
-                                            conversation_id, 
-                                            response_data["function_args"],
-                                            conn
-                                        )
-                                    finally:
-                                        await conn.close()
-                                
-                                update_result = asyncio.run(apply_updates())
-                                logging.info(f"Applied universal updates from GPT: {update_result}")
-                            except Exception as update_error:
-                                logging.error(f"Error applying universal updates from GPT: {str(update_error)}")
-                                
-                        should_generate, reason = should_generate_image_for_response(
-                            user_id, 
-                            conversation_id, 
-                            response_data["function_args"]
-                        )
-                        
-                        # Process image generation if needed
-                        if should_generate:
-                            logging.info(f"Generating image for scene: {reason}")
-                            image_result = generate_roleplay_image_from_gpt(
-                                response_data["function_args"], 
-                                user_id, 
-                                conversation_id
-                            )
+                                update_result = asyncio.run(apply_gpt_updates())
+                                logger.info(f"Applied universal updates from GPT: {update_result}")
+                            except Exception as e:
+                                logger.error(f"Error applying GPT updates: {e}", exc_info=True)
                             
-                            # Emit image to the client
-                            if image_result and "image_urls" in image_result and image_result["image_urls"]:
-                                socketio.emit('image', {
-                                    'image_url': image_result["image_urls"][0],
-                                    'prompt_used': image_result.get('prompt_used', ''),
-                                    'reason': reason
-                                }, room=conversation_id)
-                                logging.info(f"Image emitted to client: {image_result['image_urls'][0]}")
-                                
+                        # Possibly generate an image
+                        should_gen, reason = should_generate_image_for_response(user_id, conversation_id, response_data["function_args"])
+                        if should_gen:
+                            logger.info(f"Generating image for scene: {reason}")
+                            res = generate_roleplay_image_from_gpt(response_data["function_args"], user_id, conversation_id)
+                            if res and "image_urls" in res and res["image_urls"]:
+                                socketio.emit('image',{
+                                    'image_url':res["image_urls"][0],
+                                    'prompt_used':res.get('prompt_used',''),
+                                    'reason':reason
+                                },room=conversation_id)
                     else:
-                        ai_response = response_data.get("response", "")
+                        ai_response = response_data.get("response","")
                     
-                    # Stream the response token by token
-                    for i in range(0, len(ai_response), 3):
+                    # Stream response
+                    for i in range(0, len(ai_response),3):
                         token = ai_response[i:i+3]
-                        socketio.emit('new_token', {'token': token}, room=conversation_id)
+                        socketio.emit('new_token',{'token':token},room=conversation_id)
                         socketio.sleep(0.05)
                     
-                    # Store the complete GPT response in the database
+                    # Save GPT response
                     try:
                         with conn:
                             with conn.cursor() as cur:
                                 cur.execute(
-                                    "INSERT INTO messages (conversation_id, sender, content) VALUES (%s, %s, %s)",
-                                    (conversation_id, "Nyx", ai_response)
+                                    "INSERT INTO messages (conversation_id,sender,content) VALUES (%s,%s,%s)",
+                                    (conversation_id,"Nyx",ai_response)
                                 )
                                 conn.commit()
                     except Exception as db_error:
-                        logging.error(f"Database error storing GPT response: {str(db_error)}")
+                        logger.error(f"DB error storing GPT response: {db_error}", exc_info=True)
                     
-                    # Emit the final 'done' event with the full text
-                    socketio.emit('done', {'full_text': ai_response}, room=conversation_id)
-                    
+                    socketio.emit('done',{'full_text':ai_response},room=conversation_id)
+                
                 except Exception as e:
-                    logging.error(f"Error in background processing: {str(e)}", exc_info=True)
-                    socketio.emit('error', {'error': f"Server error: {str(e)}"}, room=conversation_id)
+                    logger.error(f"Error in background storybeat processing: {e}", exc_info=True)
+                    socketio.emit('error',{'error':f"Server error: {e}"},room=conversation_id)
+                
                 finally:
                     if conn:
                         conn.close()
             
-            # Start the background processing task
             socketio.start_background_task(process_message_background)
-                    
+        
         except Exception as e:
-            logging.error(f"Unexpected error in handle_storybeat: {str(e)}", exc_info=True)
-            emit('error', {'error': f"Unexpected server error: {str(e)}"})
+            logger.error(f"Unexpected error in storybeat: {e}", exc_info=True)
+            emit('error',{'error':f"Unexpected server error: {e}"})
     
     return socketio
-        
-# Optional ASGI wrapper for ASGI servers
-asgi_app = None
 
-def init_asgi():
-    global asgi_app
-    app = create_flask_app()
-    socketio = create_socketio(app)
-    asgi_app = WsgiToAsgi(app)
-    return asgi_app
+###############################################################################
+# SCHEDULERS / HELPERS
+###############################################################################
 
 def schedule_npc_learning_cycles():
-    """Schedule regular NPC learning cycles for all active game sessions"""
-    logging.info("Starting NPC learning cycle scheduler")
+    """
+    Example of an eventlet-based recurring job. 
+    (If you want reliable scheduling, consider Celery beat or APScheduler.)
+    """
+    logger.info("Starting NPC learning cycle scheduler")
     try:
         while True:
-            # Run every 15 minutes (900 seconds)
-            socketio.sleep(900)
-            
+            socketio.sleep(900)  # every 15 min
             try:
-                # Get active conversations
                 conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, user_id 
-                    FROM conversations 
-                    WHERE last_active > NOW() - INTERVAL '1 day'
-                """)
-                conversations = cursor.fetchall()
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT id, user_id 
+                        FROM conversations
+                        WHERE last_active > NOW() - INTERVAL '1 day'
+                    """)
+                    convs = cur.fetchall()
                 conn.close()
                 
-                for conversation_id, user_id in conversations:
+                for (conv_id, uid) in convs:
                     try:
-                        # Get NPCs in this conversation
+                        # get NPCs
                         conn = get_db_connection()
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            SELECT npc_id 
-                            FROM NPCStats 
-                            WHERE user_id = %s AND conversation_id = %s
-                        """, (user_id, conversation_id))
-                        npc_ids = [row[0] for row in cursor.fetchall()]
+                        npc_ids = []
+                        with conn.cursor() as cur:
+                            cur.execute("""
+                                SELECT npc_id FROM NPCStats
+                                WHERE user_id=%s AND conversation_id=%s
+                            """,(uid, conv_id))
+                            npc_ids = [row[0] for row in cur.fetchall()]
                         conn.close()
                         
                         if npc_ids:
-                            # Process learning cycle in background
-                            async def process_learning_cycle():
-                                try:
-                                    manager = NPCLearningManager(user_id, conversation_id)
-                                    await manager.initialize()
-                                    result = await manager.run_regular_adaptation_cycle(npc_ids)
-                                    logging.info(f"NPC learning cycle for conversation {conversation_id}: {len(npc_ids)} NPCs processed")
-                                except Exception as e:
-                                    logging.error(f"Error in NPC learning cycle for conversation {conversation_id}: {e}")
-                            
-                            # Run the learning cycle asynchronously
-                            import asyncio
-                            asyncio.run(process_learning_cycle())
+                            async def run_learning():
+                                manager = NPCLearningManager(uid, conv_id)
+                                await manager.initialize()
+                                await manager.run_regular_adaptation_cycle(npc_ids)
+                                logger.info(f"Learning cycle for conversation {conv_id}: {len(npc_ids)} NPCs")
+                            asyncio.run(run_learning())
                     
                     except Exception as e:
-                        logging.error(f"Error processing NPCs for conversation {conversation_id}: {e}")
-                
+                        logger.error(f"Error in NPC learning cycle for {conv_id}: {e}", exc_info=True)
             except Exception as e:
-                logging.error(f"Error in NPC learning scheduler: {e}")
-                
+                logger.error(f"Error in learning scheduler: {e}", exc_info=True)
     except Exception as e:
-        logging.error(f"NPC learning scheduler crashed: {e}")
-        
+        logger.error(f"NPC learning scheduler crashed: {e}", exc_info=True)
+
 async def initialize_conversation_state(conversation_id):
-    """Initialize conversation state when a client joins."""
+    """
+    Called in a background task to ensure conversation is 'ready'.
+    """
     try:
-        # Get conversation details
         conn = await asyncpg.connect(dsn=DB_DSN)
         try:
-            row = await conn.fetchrow("""
-                SELECT user_id, status 
-                FROM conversations 
-                WHERE id = $1
-            """, conversation_id)
-            
+            row = await conn.fetchrow("SELECT user_id, status FROM conversations WHERE id=$1", conversation_id)
             if not row:
-                logging.error(f"Conversation {conversation_id} not found")
+                logger.error(f"Conversation {conversation_id} not found")
                 return
-                
-            user_id, status = row
             
-            # If conversation is not ready, initialize it
+            user_id, status = row
             if status != 'ready':
                 from new_game_agent import NewGameAgent
                 agent = NewGameAgent()
                 await agent.process_new_game(user_id, {"conversation_id": conversation_id})
-                
-                # Update status
                 await conn.execute("""
-                    UPDATE conversations 
-                    SET status = 'ready'
-                    WHERE id = $1
+                    UPDATE conversations
+                    SET status='ready'
+                    WHERE id=$1
                 """, conversation_id)
-                
         finally:
             await conn.close()
-            
     except Exception as e:
-        logging.error(f"Error initializing conversation state: {e}", exc_info=True)
+        logger.error(f"Error in initialize_conversation_state: {e}", exc_info=True)
+
+###############################################################################
+# MAIN ENTRY
+###############################################################################
 
 if __name__ == "__main__":
     import eventlet
     eventlet.monkey_patch()
-    logging.basicConfig(level=logging.INFO, 
-                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     port = int(os.getenv("PORT", 5000))
+    
     app = create_flask_app()
     socketio = create_socketio(app)
+    
     socketio.run(app, host="0.0.0.0", port=port, debug=False)
-
-async def process_universal_update_with_governance(
-    user_id: str,
-    conversation_id: str,
-    data: dict,
-    conn: asyncpg.Connection
-) -> dict:
-    """
-    Process universal updates with governance and context integration.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        data: Update data
-        conn: Database connection
-        
-    Returns:
-        Dictionary with update results
-    """
-    try:
-        # 1. Validate and normalize data
-        data = normalize_smart_quotes_inplace(data)
-        
-        # 2. Check governance permissions
-        if not await check_governance_permissions(user_id, "universal_update"):
-            return {
-                "success": False,
-                "error": "Insufficient permissions for universal update"
-            }
-            
-        # 3. Get current context
-        context = await get_current_context(user_id, conversation_id)
-        
-        # 4. Apply updates to database
-        update_result = await apply_universal_updates_async(
-            user_id, conversation_id, data, conn
-        )
-        
-        if not update_result["success"]:
-            return update_result
-            
-        # 5. Update context with changes
-        updated_context = await update_context_with_universal_updates(
-            context, data, user_id, conversation_id
-        )
-        
-        # 6. Save updated context
-        await save_context(user_id, conversation_id, updated_context)
-        
-        # 7. Report action to governance
-        await report_action_to_governance(
-            user_id,
-            "universal_update",
-            {
-                "conversation_id": conversation_id,
-                "updates_applied": update_result["updates_applied"],
-                "errors": update_result.get("errors")
-            }
-        )
-        
-        return {
-            "success": True,
-            "updates_applied": update_result["updates_applied"],
-            "context_updated": True,
-            "errors": update_result.get("errors")
-        }
-        
-    except Exception as e:
-        logging.error(f"Error in process_universal_update_with_governance: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-async def handle_story_route(
-    user_id: str,
-    conversation_id: str,
-    route_data: dict,
-    conn: asyncpg.Connection
-) -> dict:
-    """
-    Handle story route with universal updates and context integration.
-    
-    Args:
-        user_id: User ID
-        conversation_id: Conversation ID
-        route_data: Route data
-        conn: Database connection
-        
-    Returns:
-        Dictionary with route results
-    """
-    try:
-        # 1. Get current context
-        context = await get_current_context(user_id, conversation_id)
-        
-        # 2. Process route data
-        route_result = await process_route_data(route_data, context)
-        
-        # 3. Apply universal updates if present
-        if "universal_updates" in route_result:
-            update_result = await process_universal_update_with_governance(
-                user_id, conversation_id,
-                route_result["universal_updates"],
-                conn
-            )
-            
-            if not update_result["success"]:
-                return {
-                    "success": False,
-                    "error": f"Failed to apply universal updates: {update_result.get('error')}"
-                }
-                
-        # 4. Update context with route changes
-        if "context_updates" in route_result:
-            updated_context = await update_context_with_universal_updates(
-                context,
-                route_result["context_updates"],
-                user_id,
-                conversation_id
-            )
-            
-            # Save updated context
-            await save_context(user_id, conversation_id, updated_context)
-            
-        # 5. Generate response
-        response = await generate_route_response(
-            route_result,
-            context,
-            user_id,
-            conversation_id
-        )
-        
-        return {
-            "success": True,
-            "response": response,
-            "context_updated": "context_updates" in route_result,
-            "universal_updates_applied": "universal_updates" in route_result
-        }
-        
-    except Exception as e:
-        logging.error(f"Error in handle_story_route: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
