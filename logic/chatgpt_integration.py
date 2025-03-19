@@ -463,7 +463,7 @@ def get_chatgpt_response(
     aggregator_text: str, 
     user_input: str,
     reflection_enabled: bool = False
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get a response from OpenAI with an optional hidden reflection step. 
     When reflection_enabled=True, it first requests an internal reflection in JSON, 
