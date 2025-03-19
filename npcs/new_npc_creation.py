@@ -36,6 +36,7 @@ from logic.gpt_utils import spaced_gpt_call
 from logic.gpt_helpers import fetch_npc_name
 from logic.social_links import create_social_link
 from logic.calendar import load_calendar_names
+from memory.memory_nyx_integration import remember_through_nyx
 
 logger = logging.getLogger(__name__)
 
@@ -2333,71 +2334,92 @@ class NPCCreationHandler:
     
     # --- Memory system methods ---
     
-    async def store_npc_memories(self, user_id, conversation_id, npc_id, memories):
+    async def store_npc_memories(
+        self,
+        user_id: int,
+        conversation_id: int,
+        npc_id: int,
+        memories: list[str]
+    ) -> None:
         """
-        Store NPC memories using the memory system with enhanced features.
+        Store a batch of memories for an NPC, ensuring each memory is governed by Nyx.
         
+        Steps:
+          1. For each memory, decide significance (“high” for first couple, else “medium”).
+          2. Tag them if they contain certain keywords.
+          3. Call remember_through_nyx(...) so governance can approve or deny the memory.
+          4. If Nyx denies, skip it (or handle however you like).
+          5. If approved, we have a memory_id from Nyx. Optionally do semantic follow-up.
+    
         Args:
-            user_id: User ID
-            conversation_id: Conversation ID
-            npc_id: NPC ID
-            memories: List of memory strings
+            user_id: The user’s ID in your system.
+            conversation_id: The conversation ID (table: conversations).
+            npc_id: The NPC's primary key in NPCStats or similar.
+            memories: List of memory_text strings for the NPC.
         """
         if not memories:
             return
-        
-        # Get memory system instance
-        memory_system = await MemorySystem.get_instance(user_id, conversation_id)
-        
-        # Create specialized NPC memory manager
-        npc_memory_manager = await memory_system.npc_memory(npc_id)
-        
-        # Get NPC stats for contextualization
-        npc_stats = await npc_memory_manager.get_npc_stats()
-        dominance = npc_stats.get('dominance', 50)
-        
-        # Store each memory with appropriate tags and emotional analysis
+    
+        # Optionally: get your memory manager here for post-approval queries
+        #   npc_memory_manager = await memory_system.npc_memory(npc_id)
+    
         for i, memory_text in enumerate(memories):
-            # Determine appropriate significance based on content and position
-            # First memories are often more foundational
+            # 1) Decide significance
             significance = "high" if i < 2 else "medium"
-            
-            # Add appropriate tags based on content
-            tags = ["initial_memory"]
-            
-            # Simple keyword tagging for demonstration
-            if "childhood" in memory_text.lower() or "young" in memory_text.lower():
+    
+            # 2) Basic tags:
+            tags = ["npc_creation", "initial_memory"]
+            text_lower = memory_text.lower()
+    
+            if "childhood" in text_lower or "young" in text_lower:
                 tags.append("childhood")
-            
-            if "power" in memory_text.lower() or "control" in memory_text.lower():
+            if "power" in text_lower or "control" in text_lower:
                 tags.append("power_dynamics")
-                
-            if "family" in memory_text.lower() or "parent" in memory_text.lower():
+            if "family" in text_lower or "parent" in text_lower:
                 tags.append("family")
-                
-            # Store with emotional analysis
-            await memory_system.remember(
+    
+            # 3) Call remember_through_nyx(...) for governance
+            result = await remember_through_nyx(
+                user_id=user_id,
+                conversation_id=conversation_id,
                 entity_type="npc",
                 entity_id=npc_id,
                 memory_text=memory_text,
                 importance=significance,
-                emotional=True,  # Perform emotional analysis
+                emotional=True,
                 tags=tags
             )
-            
-            # For key memories, create semantic abstractions that represent general beliefs
-            if significance == "high" and random.random() < 0.7:  # 70% chance for high significance memories
+    
+            # 4) Check for error / block
+            if "error" in result:
+                logging.warning(
+                    f"NPC={npc_id} memory blocked by Nyx, reason: {result['error']}"
+                )
+                continue
+    
+            stored_id = result.get("memory_id")
+            logging.info(
+                f"NPC={npc_id} memory stored via Nyx. significance={significance}, memory_id={stored_id}"
+            )
+    
+            # 5) Optional post-approval steps:
+            # If significance is high, do a follow-up semantic step:
+            if significance == "high" and random.random() < 0.7:
+                # In your code, you'd have something like:
                 semantic_manager = SemanticMemoryManager(user_id, conversation_id)
-                
-                # Get the recently added memory's ID
-                recent_memories = await npc_memory_manager.retrieve_memories(limit=1)
-                if recent_memories:
+    
+                # Now we *already have* the new memory’s ID from `stored_id`.
+                # So generate a semantic abstraction from that memory:
+                try:
                     await semantic_manager.generate_semantic_memory(
-                        source_memory_id=recent_memories[0].id,
+                        source_memory_id=stored_id,  # The memory we just saved
                         entity_type="npc",
                         entity_id=npc_id,
-                        abstraction_level=0.7  # Higher abstraction
+                        abstraction_level=0.7
                     )
+                except Exception as e:
+                    logging.error(f"Error generating semantic memory for NPC {npc_id}: {e}")
+
     
     async def propagate_shared_memories(self, user_id, conversation_id, source_npc_id, source_npc_name, memories):
         """
