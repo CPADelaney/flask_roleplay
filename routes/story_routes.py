@@ -19,7 +19,6 @@ from utils.performance import timed_function
 # Import core logic modules
 from db.connection import get_db_connection
 from logic.universal_updater import apply_universal_updates
-from logic.npc_creation import spawn_multiple_npcs_enhanced, create_and_refine_npc
 from logic.aggregator import get_aggregated_roleplay_context
 from logic.time_cycle import get_current_time, should_advance_time, nightly_maintenance
 from logic.inventory_logic import add_item_to_inventory, remove_item_from_inventory
@@ -32,6 +31,7 @@ from config import CONFIG
 
 # Import IntegratedNPCSystem
 from logic.fully_integrated_npc_system import IntegratedNPCSystem
+from npcs.new_npc_creation import NPCCreationHandler, RunContextWrapper
 
 # Import enhanced modules
 from logic.stats_logic import get_player_current_tier, check_for_combination_triggers, apply_stat_change, apply_activity_effects
@@ -1683,11 +1683,25 @@ async def next_storybeat():
             tracker.start_phase("spawn_npcs")
             unintroduced_count = npc_count_result[0] if npc_count_result else 0
             if unintroduced_count < 2:
-                await resources["npc_system"].create_multiple_npcs(
-                    aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", ""),
-                    aggregator_data.get("calendar", {}).get("days", ["Monday","Tuesday","..."]),
-                    count=3
-                )
+                try:
+                    # Create NPCCreationHandler
+                    npc_handler = NPCCreationHandler()
+                    
+                    # Create context wrapper
+                    ctx = RunContextWrapper({
+                        "user_id": user_id,
+                        "conversation_id": conv_id
+                    })
+                    
+                    # Get environment description
+                    env_desc = aggregator_data.get("currentRoleplay", {}).get("EnvironmentDesc", 
+                                                                      "A default environment.")
+                    
+                    # Spawn NPCs directly
+                    npc_ids = await npc_handler.spawn_multiple_npcs(ctx, count=3)
+                    logging.info(f"Generated new NPCs: {npc_ids}")
+                except Exception as e:
+                    logging.error(f"Error spawning NPCs: {e}")
             tracker.end_phase()
 
             # 5) Process universal updates if present
@@ -2328,3 +2342,35 @@ async def process_user_message(user_id, conv_id, user_input):
     except Exception as e:
         logger.error(f"Error processing user message: {e}")
         return {'success': False, 'error': str(e)}
+
+async def create_npc_with_new_handler(user_id, conv_id, env_desc, archetype_names=None):
+    """
+    Create an NPC with the new NPCCreationHandler
+    """
+    try:
+        # Create NPCCreationHandler
+        npc_handler = NPCCreationHandler()
+        
+        # Create NPC
+        npc_result = await npc_handler.create_npc_with_context(
+            environment_desc=env_desc,
+            archetype_names=archetype_names,
+            user_id=user_id,
+            conversation_id=conv_id
+        )
+        
+        # Convert to dict format
+        return {
+            "npc_id": npc_result.npc_id,
+            "npc_name": npc_result.npc_name,
+            "physical_description": npc_result.physical_description,
+            "personality": npc_result.personality.dict() if hasattr(npc_result.personality, 'dict') else npc_result.personality,
+            "stats": npc_result.stats.dict() if hasattr(npc_result.stats, 'dict') else npc_result.stats,
+            "archetypes": npc_result.archetypes.dict() if hasattr(npc_result.archetypes, 'dict') else npc_result.archetypes,
+            "schedule": npc_result.schedule,
+            "memories": npc_result.memories,
+            "current_location": npc_result.current_location
+        }
+    except Exception as e:
+        logging.error(f"Error creating NPC: {e}")
+        return {"error": str(e)}
