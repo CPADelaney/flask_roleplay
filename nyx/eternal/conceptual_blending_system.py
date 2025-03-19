@@ -2394,7 +2394,7 @@ class ConceptualBlendingSystem:
         
         return coherence_score
     
-    def _evaluate_practicality(self, blend: ConceptualBlend) -> float:
+def _evaluate_practicality(self, blend: ConceptualBlend) -> float:
         """Evaluate practicality of a blend"""
         # 1. Check if blend has clear, defined concepts
         concept_clarity = 0.0
@@ -2408,3 +2408,226 @@ class ConceptualBlendingSystem:
             concept_clarity /= len(blend.concepts)
         
         # 2. Check for concrete relations
+        relation_concreteness = 0.0
+        
+        for relation in blend.relations:
+            # Relations with high strength are more concrete
+            relation_concreteness += relation["strength"]
+            
+            # Relations with specific types (not emergent or abstract) are more practical
+            if "emergent" not in relation["type"] and "novel" not in relation["type"] and "abstract" not in relation["type"]:
+                relation_concreteness += 0.5
+        
+        if blend.relations:
+            relation_concreteness /= len(blend.relations) * 1.5  # Normalize by max possible score
+        
+        # 3. Check if blend has organizing principles
+        organizing_score = min(1.0, len(blend.organizing_principles) / 3)  # Cap at 3 principles
+        
+        # 4. Check if blend has been elaborated
+        elaboration_score = min(1.0, len(blend.elaborations) / 5)  # Cap at 5 elaborations
+        
+        # 5. Source concept proportion (blends with more source material may be more practical)
+        source_coverage = 0.0
+        total_mappings = 0
+        
+        for concept in blend.concepts.values():
+            source_concepts = concept.get("source_concepts", [])
+            total_mappings += len(source_concepts)
+        
+        if blend.concepts:
+            avg_mappings_per_concept = total_mappings / len(blend.concepts)
+            source_coverage = min(1.0, avg_mappings_per_concept)
+        
+        # Combine scores
+        practicality_score = (
+            concept_clarity * 0.3 +
+            relation_concreteness * 0.3 +
+            organizing_score * 0.2 +
+            elaboration_score * 0.1 +
+            source_coverage * 0.1
+        )
+        
+        return practicality_score
+    
+    def _evaluate_expressiveness(self, blend: ConceptualBlend) -> float:
+        """Evaluate expressiveness of a blend"""
+        # 1. Concept richness (diversity of concept types)
+        concept_names = [c["name"] for c in blend.concepts.values()]
+        name_diversity = 0.0
+        
+        if concept_names:
+            # Count unique words in concept names
+            all_words = []
+            for name in concept_names:
+                all_words.extend(re.findall(r'\w+', name.lower()))
+            
+            unique_words = len(set(all_words))
+            total_words = len(all_words)
+            
+            if total_words > 0:
+                name_diversity = min(1.0, unique_words / total_words * (1 + math.log(len(concept_names)) / 10))
+        
+        # 2. Property richness (variety of properties)
+        property_diversity = 0.0
+        all_props = set()
+        prop_values = []
+        
+        for concept in blend.concepts.values():
+            props = concept.get("properties", {})
+            all_props.update(props.keys())
+            
+            for value in props.values():
+                if isinstance(value, (str, int, float, bool)):
+                    prop_values.append(str(value))
+        
+        if blend.concepts:
+            # Normalize by number of concepts
+            property_diversity = min(1.0, len(all_props) / (len(blend.concepts) * 3))
+            
+            # Boost for diverse values
+            if prop_values:
+                unique_values = len(set(prop_values))
+                value_diversity = unique_values / len(prop_values)
+                property_diversity = (property_diversity + value_diversity) / 2
+        
+        # 3. Relation expressiveness (diversity of relation types)
+        relation_diversity = 0.0
+        
+        if blend.relations:
+            relation_types = [r["type"] for r in blend.relations]
+            unique_types = len(set(relation_types))
+            
+            # More unique types relative to total = more expressive
+            relation_diversity = min(1.0, unique_types / len(relation_types) * 2)
+        
+        # 4. Emergent structure expressiveness
+        emergent_score = min(1.0, len(blend.emergent_structure) / 2)  # Cap at 2 structures
+        
+        # 5. Naming expressiveness (creative names are more expressive)
+        naming_expressiveness = 0.0
+        
+        for concept in blend.concepts.values():
+            name = concept["name"]
+            
+            # Count special characters in name
+            special_chars = sum(1 for c in name if not c.isalnum() and not c.isspace())
+            
+            # Count word count
+            word_count = len(re.findall(r'\w+', name))
+            
+            # Higher word count and moderate special chars = more expressive
+            word_score = min(1.0, word_count / 4)  # Cap at 4 words
+            special_score = max(0, min(1.0, special_chars / 3))  # Cap at 3 special chars
+            
+            naming_expressiveness += (word_score * 0.7 + special_score * 0.3)
+        
+        if blend.concepts:
+            naming_expressiveness /= len(blend.concepts)
+        
+        # Combine scores
+        expressiveness_score = (
+            name_diversity * 0.2 +
+            property_diversity * 0.3 +
+            relation_diversity * 0.2 +
+            emergent_score * 0.2 +
+            naming_expressiveness * 0.1
+        )
+        
+        return expressiveness_score
+    
+    def _evaluate_surprise(self, blend: ConceptualBlend) -> float:
+        """Evaluate surprise or unexpectedness of a blend"""
+        # 1. Concept unexpectedness
+        concept_surprise = 0.0
+        
+        for concept in blend.concepts.values():
+            source_concepts = concept.get("source_concepts", [])
+            
+            # Concepts with multiple, distant sources are more surprising
+            if len(source_concepts) >= 2:
+                # Get source spaces
+                space_ids = [s.get("space_id") for s in source_concepts if s.get("space_id")]
+                unique_spaces = len(set(space_ids))
+                
+                # More unique spaces = more surprising
+                concept_surprise += min(1.0, unique_spaces / 2)
+            
+            # Check for property surprises
+            properties = concept.get("properties", {})
+            
+            # Unusual property combinations are surprising
+            if "contrast" in concept["name"] or "unexpected" in concept["name"]:
+                concept_surprise += 0.2
+                
+            # Properties with extreme values are surprising
+            for prop_name, prop_value in properties.items():
+                if isinstance(prop_value, (int, float)) and abs(prop_value) > 10:
+                    concept_surprise += 0.1
+        
+        if blend.concepts:
+            concept_surprise /= len(blend.concepts)
+        
+        # 2. Relation unexpectedness
+        relation_surprise = 0.0
+        
+        for relation in blend.relations:
+            # Relations marked as emergent, unexpected, or novel are surprising
+            if any(term in relation["type"].lower() for term in ["emergent", "unexpected", "novel", "surprise"]):
+                relation_surprise += 0.3
+            
+            # Relations that only exist in the blend (not in sources) are surprising
+            if relation.get("source_relation") is None:
+                relation_surprise += 0.2
+            
+            # Relations with extreme strengths are surprising
+            strength = relation["strength"]
+            if strength < 0.2 or strength > 0.8:
+                relation_surprise += 0.1
+        
+        if blend.relations:
+            relation_surprise /= len(blend.relations)
+        
+        # 3. Emergent structure surprise
+        emergent_surprise = 0.0
+        
+        for structure in blend.emergent_structure:
+            # Large emergent structures are more surprising
+            concept_count = len(structure.get("concepts", []))
+            relation_count = len(structure.get("relations", []))
+            
+            size_score = min(1.0, (concept_count + relation_count) / 10)
+            
+            # Names with surprise-related terms are more surprising
+            surprise_terms = ["unexpected", "novel", "surprise", "emergent", "creative"]
+            term_match = any(term in structure["name"].lower() for term in surprise_terms)
+            
+            term_score = 0.3 if term_match else 0.0
+            
+            emergent_surprise += size_score * 0.7 + term_score * 0.3
+        
+        if blend.emergent_structure:
+            emergent_surprise /= len(blend.emergent_structure)
+        
+        # 4. Overall blend unexpectedness
+        
+        # Blend type contributes to surprise
+        type_score = 0.0
+        if blend.type == "contrast":
+            type_score = 0.8  # Contrast blends are very surprising
+        elif blend.type == "elaboration":
+            type_score = 0.6  # Elaboration blends are moderately surprising
+        elif blend.type == "fusion":
+            type_score = 0.4  # Fusion blends are somewhat surprising
+        else:
+            type_score = 0.2  # Other blend types are less surprising
+        
+        # Combine scores
+        surprise_score = (
+            concept_surprise * 0.3 +
+            relation_surprise * 0.3 +
+            emergent_surprise * 0.2 +
+            type_score * 0.2
+        )
+        
+        return surprise_score
