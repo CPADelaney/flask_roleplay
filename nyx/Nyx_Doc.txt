@@ -844,3 +844,450 @@ Integration Layer Consolidation: Creating a coordinating integration layer with 
 This consolidation strategy aims to reduce code duplication, improve maintainability, and enhance performance while preserving all existing functionality.
 Conclusion
 The Lore System provides a comprehensive framework for managing narrative elements in interactive experiences. Its modular design, governance integration, and resource-aware operations enable rich, consistent storytelling while maintaining system health and performance. The ongoing consolidation efforts will further enhance maintainability and reduce redundancies while preserving all functionality.
+
+Enhanced Memory System Documentation
+Memory System Overview
+The Memory System within the Nyx Framework provides sophisticated, human-like memory capabilities that support dynamic narrative experiences. It implements advanced memory mechanisms including emotional context, memory decay, reconsolidation, schema formation, and interference effects. This system allows NPCs, players, and the Nyx DM to form, recall, and adapt memories in a psychologically realistic manner.
+Core Functionality
+
+Multi-entity Memory Management: Maintains separate memory stores for NPCs, players, and the Nyx DM
+Emotional Memory Processing: Associates memories with emotional states that influence recall
+Memory Consolidation: Transforms episodic memories into semantic knowledge over time
+Memory Decay: Simulates natural forgetting with significance-based retention
+Reconsolidation Effects: Alters memories subtly each time they're recalled
+Schema Formation: Identifies patterns across memories to form mental models
+Memory Interference: Models how similar memories can influence each other
+Flashback Generation: Creates contextually-triggered memory flashbacks
+Progressive Revelation: Manages the gradual reveal of NPC true nature
+Belief Formation: Develops beliefs from accumulated experiences
+Integrated Telemetry: Monitors system performance and optimizes operations
+
+Module Details
+Core Memory System (core.py)
+The Core Memory System provides the fundamental data structures and operations for memory management throughout the Nyx Framework.
+Key Components:
+
+Memory class with comprehensive attributes (text, type, significance, emotional intensity, tags, fidelity)
+Enumerated types for memory categorization (MemoryType, MemoryStatus, MemorySignificance)
+Memory cache management with TTL policies
+Multiple embedding providers (OpenAI, SentenceTransformer) for vector representations
+Transaction management through decorators
+Comprehensive memory operations (add, retrieve, consolidate, decay)
+Alternate memory architecture for testing different approaches
+
+Module Connections: The Core Memory System forms the foundation of the entire memory architecture. It connects directly to the Database Connection Manager through the DBConnectionManager class which it uses for all database operations. It provides the Memory class that's used by all higher-level components like EmotionalMemoryManager, SemanticMemoryManager, and others. The @with_transaction decorator it defines is used throughout the codebase to ensure transactional integrity. The embedding functions connect to external AI services for vector generation. The memory cache connects to the broader caching system for performance optimization.
+Database Connection Manager (connection.py)
+The Database Connection Manager provides efficient and reliable database operations for the memory system.
+Key Components:
+
+Connection pooling with thread safety
+Comprehensive metrics tracking (connections, transactions, queries)
+Connection lifecycle management
+Transaction context managers for clean error handling
+Performance monitoring (connection usage, transaction duration)
+Query execution helpers for common operations
+Connection acquisition and release management
+
+Module Connections: The Connection Manager is a foundational service used by virtually all memory components. It's directly imported by the Core Memory System in core.py which uses it for all database operations. The TransactionContext class is used by maintenance.py for cleanup operations, by emotional.py for state updates, and by many other modules requiring database transactions. The metrics collected by this component are used by telemetry.py for performance monitoring. It interacts with the configuration system (config.py) to obtain database connection parameters.
+Memory Configuration System (config.py)
+The Memory Configuration System provides centralized configuration management for all memory-related components.
+Key Components:
+
+Default configuration values for all memory subsystems
+Configuration sections for database, embedding, memory, emotional parameters, etc.
+Environment variable overrides for all settings
+Deep merging capability for configuration updates
+Convenience shortcuts for commonly accessed configuration sections
+Global configuration object for system-wide access
+
+Module Connections: The Configuration System connects to all major memory components by providing settings. It's imported by the Connection Manager (connection.py) to get database settings, by the Core Memory System (core.py) for memory parameters, and by telemetry.py for metric configuration. The constants defined here (DB_CONFIG, EMBEDDING_CONFIG, etc.) are referenced throughout the codebase. The module doesn't depend on other memory components, making it a root dependency in the system hierarchy.
+Memory Wrapper (wrapper.py)
+The Memory Wrapper provides a simplified, high-level interface to the complex memory system, making it easier for other Nyx components to interact with memory functionality.
+Key Components:
+
+Singleton pattern for memory system instances
+High-level memory operations (remember, recall, maintain)
+Specialized methods for different entity types (NPC, player, DM)
+Integration points with other system components
+Simplified API that hides underlying complexity
+Entity-specific operations (reveal_npc_trait, add_journal_entry)
+Bridge to advanced functionality when needed
+
+Module Connections: The Memory Wrapper sits at the top of the memory system hierarchy, being the primary interface that other Nyx components use to interact with memories. It initializes and uses the Integrated Memory System (integrated.py), which in turn connects to all specialized components. It imports specialized managers from managers.py like NPCMemoryManager, PlayerMemoryManager, and NyxMemoryManager to provide entity-specific functionality. It also connects directly to the EmotionalMemoryManager, FlashbackManager, and ProgressiveRevealManager for specialized operations. The wrapper is the primary entry point used by main.py and other high-level components.
+Integrated Memory System (integrated.py)
+The Integrated Memory System brings together all specialized memory components into a cohesive whole, providing unified memory operations with rich contextual awareness.
+Key Components:
+
+IntegratedMemorySystem class as the central coordinator
+Comprehensive memory operations with cross-component processing
+Emotional analysis integration for all memories
+Schema application for pattern recognition
+Interference detection and processing
+Conflict handling between memory components
+Memory maintenance across all subsystems
+Telemetry and performance monitoring integration
+
+Module Connections: The Integrated Memory System is the central coordination point for all specialized memory components. It imports and initializes UnifiedMemoryManager from core.py, MemorySchemaManager from schemas.py, EmotionalMemoryManager from emotional.py, MemoryInterferenceManager from interference.py, FlashbackManager from flashbacks.py, SemanticMemoryManager from semantic.py, ReconsolidationManager from reconsolidation.py, and ProgressiveRevealManager from masks.py. It's used by the Memory Wrapper (wrapper.py) as the implementation behind the simplified API. It also connects to telemetry.py for performance monitoring and exports functions used by memory_nyx_integration.py for governance integration.
+Emotional Memory System (emotional.py)
+The Emotional Memory System handles the emotional aspects of memories, including tagging, recall biases, and emotional state tracking.
+Key Components:
+
+EmotionalMemoryManager for memory-emotion operations
+Emotion categories with properties (valence, arousal, decay rate)
+Emotional content analysis in text
+Mood-congruent memory recall
+Emotional state tracking and updating
+Trauma modeling and trigger detection
+Emotional decay maintenance for realistic change over time
+
+Module Connections: The Emotional Memory System is integrated with the Core Memory System (core.py) through the UnifiedMemoryManager which it uses for basic memory operations. It connects to the OpenAI Integration for text analysis of emotional content. The Integrated Memory System (integrated.py) uses it for emotion analysis during memory creation and retrieval. It's accessed by the Memory Wrapper (wrapper.py) through npc_emotion and get_npc_emotion methods. This module also creates the EntityEmotionalState table, which stores emotional state data used by other components for context-aware processing.
+Flashback System (flashbacks.py)
+The Flashback System generates memory flashbacks based on contextual triggers, simulating how past memories can suddenly resurface.
+Key Components:
+
+FlashbackManager for flashback generation and management
+Context-triggered flashback generation
+Formatting of flashbacks based on emotional intensity
+Tracking flashback reactions and impacts
+Journal entry integration for player awareness
+Word trigger detection for spontaneous flashbacks
+
+Module Connections: The Flashback System integrates with the Core Memory System (core.py) through the UnifiedMemoryManager for memory operations. It's accessed by the Integrated Memory System (integrated.py) during memory retrieval operations to potentially generate flashbacks. The Memory Wrapper (wrapper.py) provides direct access through the npc_flashback method. It writes to the PlayerJournal table, connecting to player experience tracking. The module creates its own FlashbackHistory table for tracking flashback events, which can be accessed by other components for narrative continuity.
+Memory Interference System (interference.py)
+The Memory Interference System models how memories can interfere with each other, causing blending, intrusions, and false memories.
+Key Components:
+
+MemoryInterferenceManager for interference operations
+Proactive and retroactive interference detection
+Memory competition simulation during recall
+Memory blending for creating false memories
+Intrusive memory generation
+False memory creation and tracking
+Interference maintenance for ongoing processing
+
+Module Connections: The Memory Interference System works closely with the Core Memory System (core.py) through the UnifiedMemoryManager for basic memory operations. It connects to OpenAI for generating blended and altered memories. The Integrated Memory System (integrated.py) uses it during memory creation to detect potential interference and during retrieval to simulate memory competition. It updates memory metadata with interference information, which affects future retrievals. It's accessible through the Memory Wrapper (wrapper.py) via the create_false_memory method for advanced narrative scenarios.
+Memory Managers (managers.py)
+The Memory Managers provide specialized memory operations for different entity types, with tailored functionality for NPCs, players, and the Nyx DM.
+Key Components:
+
+NPCMemoryManager for NPC-specific memory operations
+NyxMemoryManager for Nyx DM operations and reflections
+PlayerMemoryManager for player memory and journal entries
+ConflictMemoryManager for conflict-related memories
+LoreMemoryManager for lore-related knowledge management
+ContextEvolutionManager for tracking context changes over time
+Comprehensive state tracking across entity types
+
+Module Connections: The Memory Managers extend the UnifiedMemoryManager from core.py, building specialized functionality on top of the core operations. NPCMemoryManager connects to the NPCStats table to access character information. NyxMemoryManager interfaces with NyxAgentState and CurrentRoleplay tables to maintain narrative coherence. PlayerMemoryManager connects to PlayerStats and PlayerJournal tables for comprehensive player tracking. The Memory Wrapper (wrapper.py) exposes these specialized managers through methods like npc_memory, dm_memory, and player_memory. The managers are used by the Integrated Memory System (integrated.py) for entity-specific operations.
+Progressive Mask System (masks.py)
+The Progressive Mask System manages the facade versus true nature of NPCs, supporting gradual character revelation.
+Key Components:
+
+ProgressiveRevealManager for mask management
+Opposing trait pairs for mask/true nature contrast
+Physical tells and verbal slips for different traits
+Mask integrity tracking over time
+Revelation event generation with varying severity
+Automated reveals based on time and context
+Perception difficulty calculation for player insight checks
+
+Module Connections: The Progressive Mask System integrates with the Core Memory System (core.py) through the UnifiedMemoryManager for recording revelations. It connects to the NPCStats table to access character traits for mask generation. The Memory Wrapper (wrapper.py) exposes its functionality through the reveal_npc_trait and get_npc_mask methods. The Integrated Memory System (integrated.py) uses it during memory creation to potentially trigger mask slippage events. It creates and manages the NPCMasks table, which is referenced by other components for consistent character representation.
+Memory Agent SDK (memory_agent_sdk.py)
+The Memory Agent SDK provides agent-based interfaces to memory functionality, allowing for AI-driven memory operations.
+Key Components:
+
+Memory-focused agents with specialized functionality
+Function tools for common memory operations
+Input models with validation (MemoryInput, MemoryQueryInput, etc.)
+Agent context management for state tracking
+Input guardrails for safety and validation
+Agent creation and coordination helpers
+Runner for executing agent workflows
+
+Module Connections: The Memory Agent SDK builds on the Agent Framework, extending it with memory-specific capabilities. It connects to the Memory System through the MemorySystemContext which initializes and uses the Memory Wrapper (wrapper.py). The function tools it defines (remember, recall, create_belief, etc.) map directly to operations in the Memory Wrapper. It's used by memory_nyx_integration.py to create and manage the memory agent. The SDK is designed for integration with the broader Nyx Agent Framework, exposing memory functionality through a standardized agent interface.
+Memory Reconsolidation System (reconsolidation.py)
+The Memory Reconsolidation System simulates how memories change subtly each time they're recalled, supporting realistic memory evolution.
+Key Components:
+
+ReconsolidationManager for memory alterations
+Schema-influenced memory reconsolidation
+Emotional context effects on memory alteration
+Source confusion simulation between similar memories
+Memory fidelity tracking and decay
+Text alteration with natural language variations
+Background reconsolidation for ongoing memory evolution
+
+Module Connections: The Memory Reconsolidation System works closely with the Core Memory System (core.py) through the UnifiedMemoryManager for basic memory operations. It connects to OpenAI for generating altered memory texts. The Integrated Memory System (integrated.py) uses it during memory retrieval to subtly alter recalled memories. It checks for memory schemas through the MemorySchemas table, connecting to the Schema System (schemas.py). It's accessed during maintenance operations to perform background reconsolidation. The results of reconsolidation affect future retrievals and belief formation, connecting to the Semantic Memory System (semantic.py).
+Memory Schema System (schemas.py)
+The Memory Schema System identifies patterns across memories to form mental models that influence memory interpretation and recall.
+Key Components:
+
+MemorySchemaManager for schema operations
+Schema formation from experience patterns
+Schema-based memory interpretation
+Schema evolution based on conflicting evidence
+Schema conflict detection and resolution
+Schema merging for more comprehensive models
+Schema maintenance for ongoing refinement
+
+Module Connections: The Memory Schema System integrates with the Core Memory System (core.py) through the UnifiedMemoryManager for memory operations. It connects to OpenAI for pattern recognition and schema generation. The Integrated Memory System (integrated.py) uses it during memory creation to apply schemas and during retrieval to interpret memories through schemas. It creates and manages the MemorySchemas table, which is referenced by the Reconsolidation System (reconsolidation.py) during memory alterations. It's accessed during maintenance operations to perform background schema updates and conflict resolution.
+Semantic Memory System (semantic.py)
+The Semantic Memory System transforms concrete experiences into abstract knowledge, supporting higher-level understanding and beliefs.
+Key Components:
+
+SemanticMemoryManager for semantic operations
+Semantic abstraction generation from episodic memories
+Pattern finding across similar memories
+Belief formation and confidence tracking
+Counterfactual generation for alternative scenarios
+Semantic network building around topics
+Related topic extraction for knowledge organization
+
+Module Connections: The Semantic Memory System works with the Core Memory System (core.py) through the UnifiedMemoryManager for basic memory operations. It connects to OpenAI for generating abstractions and identifying patterns. The Integrated Memory System (integrated.py) uses it during memory creation to generate semantic memories from significant observations. It's exposed through the Memory Wrapper (wrapper.py) via create_belief and get_beliefs methods. It creates and manages the SemanticNetworks table for tracking knowledge relationships. The beliefs it generates influence NPC behavior and narrative development, connecting to the broader game systems.
+Memory Telemetry System (telemetry.py)
+The Memory Telemetry System tracks performance metrics for the memory system, enabling optimization and issue detection.
+Key Components:
+
+Background worker for telemetry processing
+Batched database writes for efficiency
+Real-time metrics tracking
+Operation success/failure monitoring
+Duration tracking for performance analysis
+Error history for troubleshooting
+Data size tracking for resource management
+Old telemetry cleanup for database optimization
+
+Module Connections: The Memory Telemetry System connects to the Database Connection Manager (connection.py) for database operations. It's used by the Core Memory System (core.py) through the @with_transaction decorator which includes telemetry calls. The Integrated Memory System (integrated.py) and other components call its record method to track operations. It creates and manages the memory_telemetry table, which can be analyzed for system optimization. The metrics it collects are used by the Memory Maintenance System (maintenance.py) for data-driven optimizations.
+Memory Maintenance System (maintenance.py)
+The Memory Maintenance System handles background operations to keep the memory system healthy and efficient.
+Key Components:
+
+MemoryMaintenance class for cleanup operations
+Old memory cleanup based on importance and age
+Memory archiving for less relevant but retained memories
+System resource monitoring (memory, CPU)
+Maintenance scheduling based on resource usage
+Configurable retention policies
+Performance monitoring and optimization
+
+Module Connections: The Memory Maintenance System connects to the Database Connection Manager (connection.py) for database operations. It's called by scheduled tasks defined in nyx_enhancements_integration.py via the nyx_memory_maintenance_task function. It uses prometheus_client for metrics reporting which connects to the broader monitoring system. It references configuration from config.py for retention settings. The maintenance operations affect how memories are stored and retrieved, connecting to the core functionality of the entire memory system.
+Memory Initialization (init.py)
+The Memory Initialization module handles system setup, configuration loading, and entity initialization.
+Key Components:
+
+Database initialization for all memory tables
+Configuration loading from files and environment
+NPC setup with initial memories and masks
+Player setup with stats and initial memories
+Nyx DM setup with goals and narrative arcs
+Command-line interface for initialization
+Error handling for setup operations
+
+Module Connections: The Memory Initialization module connects to all other memory components during system startup. It imports and calls UnifiedMemoryManager.create_tables from core.py, create_schema_tables from schemas.py, and similar methods from other components. It uses the Configuration System (config.py) to load settings. It communicates with DBConnectionManager from connection.py for database operations. It initializes the Memory System via the MemorySystem.get_instance method from wrapper.py. It's called during application startup to ensure all memory components are properly configured and ready.
+Memory-Nyx Integration (memory_nyx_integration.py)
+The Memory-Nyx Integration module bridges the memory system with Nyx's central governance, ensuring coordinated operation and permission management.
+Key Components:
+
+MemoryNyxBridge class for integration
+Governance permission checking for memory operations
+Directive processing from Nyx to memory
+Error handling and transaction management
+State tracking for bridge operations
+Singleton pattern for bridge instances
+Convenience functions for common operations
+
+Module Connections: The Memory-Nyx Integration module connects the Memory System to the broader Nyx Framework. It imports the Memory Agent SDK (memory_agent_sdk.py) to create and manage the memory agent. It accesses the NyxUnifiedGovernor from nyx.nyx_governance for permissions. It uses the MemorySystemContext from memory_agent_sdk.py to interface with the memory system. It provides functions like remember_through_nyx that are called by other Nyx components to access memory functionality with governance oversight. It serves as the primary integration point between the autonomous memory system and the centrally governed Nyx framework.
+Nyx Enhancements Integration (nyx_enhancements_integration.py)
+The Nyx Enhancements Integration module integrates the memory system into the existing Nyx codebase, providing enhanced functionality for narrative operations.
+Key Components:
+
+Memory system initialization functions
+Celery tasks for background processing
+Enhanced background chat task with memory integration
+Context enhancement with relevant memories
+Narrative arc updates based on interactions
+Database migration for memory system tables
+Error handling and cleanup mechanisms
+Socket.IO integration for streaming responses
+
+Module Connections: The Nyx Enhancements Integration module serves as the primary connection point between the memory system and the main application. It imports NyxAgent, NyxMemoryManager, and related classes for integration. It connects to the main database through get_db_connection, with proper async handling. It uses the NPCLearningManager to process interactions for learning. It emits events through Socket.IO for client feedback, connecting to the front-end interface. The initialize_nyx_memory_system function is called during application startup. The enhanced_background_chat_task function replaces the standard background_chat_task for memory-enhanced processing. It interacts with the main application flow, memory system, and user interface components.
+System Interaction Flow
+The memory system's components interact in complex patterns to provide human-like memory capabilities:
+
+Memory Creation Flow:
+
+User input enters through the Web Application (main.py)
+Input is processed by enhanced_background_chat_task in nyx_enhancements_integration.py
+The task calls NyxMemoryManager.add_memory to create a memory
+The add_memory call passes through memory_nyx_integration.py for governance permission
+If approved, the memory is processed by IntegratedMemorySystem.add_memory in integrated.py
+This triggers emotional analysis, schema application, and interference detection
+The memory is stored via UnifiedMemoryManager.add_memory in core.py
+The DBConnectionManager in connection.py handles the database transaction
+Telemetry.record in telemetry.py tracks the operation performance
+
+
+Memory Retrieval Flow:
+
+When context is needed, enhance_context_with_memories in nyx_enhancements_integration.py is called
+This calls NyxMemoryManager.retrieve_memories for relevant memories
+The retrieval request passes through memory_nyx_integration.py for governance permission
+If approved, IntegratedMemorySystem.retrieve_memories in integrated.py processes the request
+This triggers emotional context, memory competition, and flashback checks
+Memories are retrieved via UnifiedMemoryManager.retrieve_memories in core.py
+Retrieved memories are processed by ReconsolidationManager in reconsolidation.py
+The memories are interpreted through schemas via MemorySchemaManager in schemas.py
+The enhanced context is returned for use in response generation
+
+
+Maintenance Flow:
+
+Scheduled maintenance is triggered via nyx_memory_maintenance_task in nyx_enhancements_integration.py
+This processes conversations via perform_memory_maintenance
+For each entity, IntegratedMemorySystem.run_memory_maintenance is called
+This triggers core maintenance, schema maintenance, emotional decay, reconsolidation, and interference processing
+Old memories are archived or deleted based on significance and access patterns
+Schemas are evolved or merged based on new evidence
+Telemetry data is cleaned up to manage database size
+Performance metrics are collected for system optimization
+
+
+Progressive Revelation Flow:
+
+During interactions, check_for_automated_reveals in masks.py may trigger
+This evaluates each NPC's mask integrity and context for potential reveals
+If a reveal is appropriate, generate_mask_slippage creates a revelation event
+The revelation is stored in the NPC's memory via UnifiedMemoryManager.add_memory
+A journal entry is created for the player to record the observation
+The NPC's mask integrity is reduced, affecting future interactions
+This information influences future NPC behavior and narrative progression
+
+
+Schema Evolution Flow:
+
+As new memories are added, schemas are applied via apply_schema_to_memory in schemas.py
+Periodically, detect_schema_from_memories analyzes patterns in memories
+If conflicts are found, find_schema_conflicting_memories identifies the issues
+These conflicts trigger evolve_schema_from_conflicts to update the schema
+If schemas become very similar, merge_schemas combines them into a more comprehensive model
+Schema maintenance runs periodically through run_schema_maintenance
+These evolving schemas influence memory interpretation, reconsolidation, and recall
+
+
+
+This interaction flow demonstrates how the memory components work together to create a sophisticated, psychologically realistic memory system that enhances narrative experiences through dynamic memory processes.
+Implementation Details
+Database Schema
+The memory system uses several specialized tables for efficient data management:
+
+unified_memories: Core table for all memory storage
+
+Standard fields: id, entity_type, entity_id, user_id, conversation_id, memory_text, memory_type, significance, emotional_intensity, tags
+Technical fields: embedding (VECTOR), metadata (JSONB), timestamp, times_recalled, last_recalled, status, is_consolidated
+Optimized with multiple indexes for efficient retrieval
+
+
+NyxMemories: Specialized table for Nyx agent memories
+
+Similar to unified_memories but with Nyx-specific structure
+Additional fields for is_archived, is_consolidated flags
+
+
+NyxAgentState: Tracks Nyx's metacognitive state
+
+Fields: current_goals, predicted_futures, reflection_notes, emotional_state, narrative_assessment
+Used for introspection and narrative planning
+
+
+MemorySchemas: Stores identified memory patterns
+
+Fields: schema_name, category, schema_data (JSONB)
+Tracks confidence, evolution, conflicts, and examples
+
+
+EntityEmotionalState: Tracks emotional states for entities
+
+Fields: emotional_state (JSONB), last_updated
+Stores current emotions, mood, trauma, and biases
+
+
+FlashbackHistory: Records flashback events
+
+Fields: flashback_id, reaction_text, reaction_type
+Tracks impact of memories resurfacing
+
+
+NPCMasks: Manages NPC facade versus true nature
+
+Fields: mask_data (JSONB), last_updated
+Stores presented traits, hidden traits, integrity, and reveal history
+
+
+memory_telemetry: Tracks system performance
+
+Fields: operation, success, duration, data_size, error, metadata
+Used for performance optimization and issue detection
+
+
+
+Vector Embedding Strategy
+The memory system uses vector embeddings for semantic memory operations:
+
+Multiple embedding providers with fallback chain:
+
+Primary: OpenAI Embedding API (text-embedding-ada-002)
+Fallback: SentenceTransformer (all-MiniLM-L6-v2)
+Last resort: Zero vectors with logging
+
+
+Embedding caching for performance:
+
+Cached at memory creation time
+Used for similarity calculation during retrieval
+Applied during memory consolidation for clustering
+
+
+Similarity-based operations:
+
+Vector search for semantic similarity via PostgreSQL HNSW index
+Used for memory retrieval, inference detection, and schema application
+Supports clustering for pattern identification
+
+
+Batch processing:
+
+Batched embedding generation for efficiency
+Configurable batch size via EMBEDDING_BATCH_SIZE
+Error handling with individual retry for batch items
+
+
+
+Transaction Management
+The memory system uses robust transaction management:
+
+Decorator-based approach:
+
+@with_transaction decorator for consistent handling
+Automatic rollback on exceptions
+Connection management with proper release
+Telemetry integration for performance tracking
+
+
+Context managers:
+
+TransactionContext for clean transaction handling
+ConnectionContext for connection lifecycle
+Nested transactions with correct isolation levels
+Error propagation with proper cleanup
+
+
+Performance monitoring:
+
+Duration tracking for long-running transactions
+Warning logs for transactions exceeding thresholds
+Metrics collection for optimization
+Connection pooling for efficiency
+
+
+
+This comprehensive implementation enables the memory system to provide realistic, psychologically-informed memory capabilities that enhance the narrative experience through dynamic memory processes.
