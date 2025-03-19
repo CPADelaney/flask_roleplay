@@ -9,20 +9,10 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union, Any, Tuple
 from dataclasses import dataclass
 from functools import lru_cache
+import contextlib
 
 # Import existing modules to utilize their functionality
 from db.connection import get_db_connection, get_connection_pool
-from logic.npc_creation import (
-    create_npc_partial, 
-    insert_npc_stub_into_db, 
-    assign_random_relationships,
-    gpt_generate_physical_description,
-    gpt_generate_schedule,
-    gpt_generate_memories,
-    gpt_generate_affiliations,
-    integrate_femdom_elements,
-    propagate_shared_memories
-)
 from logic.social_links import (
     create_social_link,
     update_link_type_and_level,
@@ -49,6 +39,13 @@ from logic.stats_logic import (
     record_stat_change_event,
     STAT_THRESHOLDS,
     STAT_COMBINATIONS
+)
+
+# Import the new NPC creation system
+from npcs.new_npc_creation import (
+    NPCCreationHandler, 
+    RunContextWrapper, 
+    NPCCreationResult
 )
 
 # Import agent-based architecture components
@@ -150,6 +147,7 @@ class IntegratedNPCSystem:
             'cache_misses': 0,
             'avg_query_time': 0,
             'query_times': [],
+            'memory_retrieval_time': []
         }
         
         # Initialize the activity manager
@@ -157,6 +155,9 @@ class IntegratedNPCSystem:
         
         # Initialize the agent system - core component for NPC agentic behavior
         self.agent_system = NPCAgentSystem(user_id, conversation_id)
+        
+        # Initialize the NPC creation handler from the new system
+        self.npc_creation_handler = NPCCreationHandler()
         
         logger.info(f"Initialized IntegratedNPCSystem for user={user_id}, conversation={conversation_id}")
         
@@ -168,17 +169,17 @@ class IntegratedNPCSystem:
         self._setup_metrics_reporting()
 
     def _setup_cache_cleanup(self):
-    """Set up periodic cache cleanup task with memory pressure detection."""
-    async def cache_cleanup_task():
-        while True:
-            await asyncio.sleep(300)  # Run every 5 minutes
-            
-            # Check for memory pressure
-            memory_pressure = self._detect_memory_pressure()
-            await self._cleanup_cache(force=memory_pressure)
-    
-    # Start the task without waiting for it
-    asyncio.create_task(cache_cleanup_task())
+        """Set up periodic cache cleanup task with memory pressure detection."""
+        async def cache_cleanup_task():
+            while True:
+                await asyncio.sleep(300)  # Run every 5 minutes
+                
+                # Check for memory pressure
+                memory_pressure = self._detect_memory_pressure()
+                await self._cleanup_cache(force=memory_pressure)
+        
+        # Start the task without waiting for it
+        asyncio.create_task(cache_cleanup_task())
 
     def _detect_memory_pressure(self):
         """Detect memory pressure in the application."""
@@ -387,128 +388,70 @@ class IntegratedNPCSystem:
         times = self.perf_metrics['query_times'][-100:]  # Only keep last 100 times
         self.perf_metrics['avg_query_time'] = sum(times) / len(times)
     
-    def _setup_cache_cleanup(self):
-        """Set up periodic cache cleanup task with improved granularity."""
-        async def cache_cleanup_task():
-            while True:
-                await asyncio.sleep(300)  # Run every 5 minutes
-                await self._cleanup_cache()
-        
-        # Start the task without waiting for it
-        asyncio.create_task(cache_cleanup_task())
-    
     def _setup_metrics_reporting(self):
         """Set up periodic metrics reporting for performance monitoring."""
         async def metrics_reporting_task():
             while True:
                 await asyncio.sleep(600)  # Report every 10 minutes
-                logger.info(f"Performance metrics: {self.perf_metrics}")
-                # Reset some counters
-                self.perf_metrics['db_queries'] = 0
-                self.perf_metrics['cache_hits'] = 0
-                self.perf_metrics['cache_misses'] = 0
-                self.perf_metrics['query_times'] = self.perf_metrics['query_times'][-100:]
+                await self._report_performance_metrics()
         
         # Start the task without waiting for it
         asyncio.create_task(metrics_reporting_task())
     
-    async def _cleanup_cache(self):
-        """Clean up expired cache entries with granular control."""
-        now = datetime.now()
+    async def _report_performance_metrics(self):
+        """Report detailed performance metrics."""
+        # Calculate additional derived metrics
+        db_metrics = {
+            "db_queries": self.perf_metrics['db_queries'],
+            "avg_query_time": self.perf_metrics['avg_query_time'],
+            "max_query_time": max(self.perf_metrics['query_times']) if self.perf_metrics['query_times'] else 0,
+            "min_query_time": min(self.perf_metrics['query_times']) if self.perf_metrics['query_times'] else 0,
+            "slow_query_count": sum(1 for t in self.perf_metrics['query_times'] if t > 0.5)
+        }
         
-        # Check global TTL first
-        global_expired = now - self.last_cache_refresh > self.cache_ttl
-        if global_expired:
-            self.last_cache_refresh = now
-            logger.debug(f"Global cache TTL expired, clearing all caches")
-            
-            # Clear all caches
-            self.npc_cache.clear()
-            self.relationship_cache.clear()
-            self.memory_cache.clear()
-            return
+        cache_metrics = {
+            "cache_hits": self.perf_metrics['cache_hits'],
+            "cache_misses": self.perf_metrics['cache_misses'],
+            "hit_ratio": self.perf_metrics['cache_hits'] / (self.perf_metrics['cache_hits'] + self.perf_metrics['cache_misses']) 
+                if (self.perf_metrics['cache_hits'] + self.perf_metrics['cache_misses']) > 0 else 0,
+            "cache_size": {
+                "npc_cache": len(self.npc_cache),
+                "relationship_cache": len(self.relationship_cache),
+                "memory_cache": len(self.memory_cache)
+            }
+        }
         
-        # Check individual entries for expiration
-        expired_npc_keys = []
-        for key, data in self.npc_cache.items():
-            if now - data.get("last_updated", datetime.min) > self.cache_ttl:
-                expired_npc_keys.append(key)
+        # Get pool statistics if available
+        pool_metrics = {}
+        try:
+            pool = await self.get_connection_pool()
+            pool_metrics = {
+                "pool_size": pool.get_size(),
+                "pool_free_size": pool.get_free_size(),
+                "pool_max_size": pool.get_max_size()
+            }
+        except Exception:
+            pool_metrics = {"note": "Unable to get pool statistics"}
         
-        expired_rel_keys = []
-        for key, data in self.relationship_cache.items():
-            if now - data.get("last_updated", datetime.min) > self.cache_ttl:
-                expired_rel_keys.append(key)
+        # Combine all metrics
+        full_metrics = {
+            "timestamp": datetime.now().isoformat(),
+            "db": db_metrics,
+            "cache": cache_metrics,
+            "pool": pool_metrics
+        }
         
-        expired_mem_keys = []
-        for key, data in self.memory_cache.items():
-            if now - data.get("last_updated", datetime.min) > self.cache_ttl:
-                expired_mem_keys.append(key)
+        # Log metrics at appropriate level
+        if db_metrics["slow_query_count"] > 10:
+            logger.warning(f"Performance metrics indicate issues: {full_metrics}")
+        else:
+            logger.info(f"Performance metrics: {full_metrics}")
         
-        # Remove expired entries
-        for key in expired_npc_keys:
-            del self.npc_cache[key]
-        
-        for key in expired_rel_keys:
-            del self.relationship_cache[key]
-        
-        for key in expired_mem_keys:
-            del self.memory_cache[key]
-        
-        logger.debug(f"Cleaned up {len(expired_npc_keys)} NPC cache entries, " +
-                    f"{len(expired_rel_keys)} relationship cache entries, " +
-                    f"{len(expired_mem_keys)} memory cache entries")
-        """
-        Initialize the NPC system with caching and connection pooling.
-        
-        Args:
-            user_id: The user ID
-            conversation_id: The conversation ID
-        """
-        self.user_id = user_id
-        self.conversation_id = conversation_id
-        
-        # Initialize connection pool for better database performance
-        self.connection_pool = get_connection_pool()
-        
-        # Initialize caching structures
-        self.npc_cache = {}  # Cache for NPC data
-        self.relationship_cache = {}  # Cache for relationship data
-        self.last_cache_refresh = datetime.now()
-        self.cache_ttl = timedelta(minutes=5)  # Cache time-to-live
-        
-        # Initialize the activity manager
-        self.activity_manager = ActivityManager()
-        
-        # Initialize the agent system - core component for NPC agentic behavior
-        self.agent_system = NPCAgentSystem(user_id, conversation_id)
-        
-        logger.info(f"Initialized IntegratedNPCSystem with NPCAgentSystem for user={user_id}, conversation={conversation_id}")
-        logger.info(f"Available time phases: {TIME_PHASES}")
-        
-        # Initialize memory system
-        self._memory_system = None
-        
-        # Set up periodic cache cleanup
-        self._setup_cache_cleanup()
-    
-    def _setup_cache_cleanup(self):
-        """Set up periodic cache cleanup task"""
-        async def cache_cleanup_task():
-            while True:
-                await asyncio.sleep(300)  # Run every 5 minutes
-                self._cleanup_cache()
-        
-        # Start the task without waiting for it
-        asyncio.create_task(cache_cleanup_task())
-    
-    def _cleanup_cache(self):
-        """Clean up expired cache entries"""
-        now = datetime.now()
-        if now - self.last_cache_refresh > self.cache_ttl:
-            self.npc_cache.clear()
-            self.relationship_cache.clear()
-            self.last_cache_refresh = now
-            logger.debug("Cleared NPC system caches due to TTL expiration")
+        # Reset counters
+        self.perf_metrics['db_queries'] = 0
+        self.perf_metrics['cache_hits'] = 0
+        self.perf_metrics['cache_misses'] = 0
+        self.perf_metrics['query_times'] = self.perf_metrics['query_times'][-100:]
     
     async def _get_memory_system(self):
         """Lazy-load the memory system."""
@@ -523,439 +466,153 @@ class IntegratedNPCSystem:
     # NPC CREATION AND MANAGEMENT
     #=================================================================
     
-async def create_new_npc(self, environment_desc: str, day_names: List[str], sex: str = "female") -> int:
-    """Create a new NPC with enhanced transaction management."""
-    logger.info(f"Creating new NPC in environment: {environment_desc[:30]}...")
-    
-    # Exponential backoff settings
-    retry_count = 0
-    max_retries = 3
-    backoff_factor = 1.5
-    
-    while retry_count <= max_retries:
-        pool = None
-        conn = None
-        transaction_active = False
-        savepoint_name = None
+    async def create_new_npc(self, environment_desc: str, day_names: List[str], sex: str = "female") -> int:
+        """
+        Create a new NPC using the new NPCCreationHandler.
         
-        try:
-            # Create database transaction for all operations
-            pool = await self.get_connection_pool()
-            conn = await pool.acquire()
+        Args:
+            environment_desc: Description of the environment
+            day_names: List of day names
+            sex: Gender of the NPC
             
-            # Start transaction
-            await conn.execute("BEGIN")
-            transaction_active = True
-            
-            # Step 1: Create the partial NPC (base data) 
-            partial_npc = create_npc_partial(
-                user_id=self.user_id,
-                conversation_id=self.conversation_id,
-                sex=sex,
-                total_archetypes=4,
-                environment_desc=environment_desc
-            )
-            
-            # Create savepoint before NPC insertion - allows partial rollback
-            savepoint_name = f"npc_creation_{datetime.now().timestamp()}"
-            await conn.execute(f"SAVEPOINT {savepoint_name}")
-            
-            # Step 2: Insert the partial NPC into the database
-            npc_id = await conn.fetchval("""
-                INSERT INTO NPCStats (
-                    user_id, conversation_id, npc_name, sex, 
-                    archetype_summary, archetypes, introduced
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, FALSE)
-                RETURNING npc_id
-            """, 
-                self.user_id, self.conversation_id,
-                partial_npc['npc_name'], partial_npc['sex'],
-                partial_npc['archetype_summary'], 
-                json.dumps(partial_npc.get('archetypes', []))
-            )
-            
-            logger.info(f"Created NPC stub with ID {npc_id} and name {partial_npc['npc_name']}")
-            
-            # Step 3: Assign relationships within transaction
-            await self._assign_relationships_in_transaction(
-                conn, npc_id, partial_npc["npc_name"], partial_npc.get("archetypes", [])
-            )
-            
-            # Step 4: Get relationships for memory generation
-            relationships = await conn.fetchval("""
-                SELECT relationships 
-                FROM NPCStats 
-                WHERE user_id=$1 AND conversation_id=$2 AND npc_id=$3
-            """, self.user_id, self.conversation_id, npc_id)
-            
-            if relationships:
-                if isinstance(relationships, str):
-                    relationships = json.loads(relationships)
-            else:
-                relationships = []
-            
-            # Release savepoint since basic data is successfully created
-            await conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
-            
-            # Step 5: Parallelize generation tasks with optimized performance
-            generation_tasks = [
-                self._generate_with_timeout("physical_description", 
-                    gpt_generate_physical_description, 
-                    self.user_id, self.conversation_id, partial_npc, environment_desc
-                ),
-                self._generate_with_timeout("schedule", 
-                    gpt_generate_schedule, 
-                    self.user_id, self.conversation_id, partial_npc, environment_desc, day_names
-                ),
-                self._generate_with_timeout("memories", 
-                    gpt_generate_memories, 
-                    self.user_id, self.conversation_id, partial_npc, environment_desc, relationships
-                ),
-                self._generate_with_timeout("affiliations", 
-                    gpt_generate_affiliations, 
-                    self.user_id, self.conversation_id, partial_npc, environment_desc
-                )
-            ]
-            
-            # Process generation tasks concurrently with timeout handling
-            results = await asyncio.gather(*generation_tasks, return_exceptions=True)
-            
-            # Process generation results with robust error handling
-            physical_description, schedule, memories, affiliations = self._process_generation_results(results)
-            
-            # Create a new savepoint for NPC enhancement
-            savepoint_name = f"npc_enhancement_{datetime.now().timestamp()}"
-            await conn.execute(f"SAVEPOINT {savepoint_name}")
-            
-            # Step 6: Determine current location from schedule or default
-            current_location = await self._extract_location_from_schedule(
-                schedule, 
-                day_names[0],  # Default to first day
-                "Morning"      # Default to morning
-            )
-            
-            # Get current game time for better location determination
+        Returns:
+            NPC ID
+        """
+        logger.info(f"Creating new NPC in environment: {environment_desc[:30]}...")
+        
+        # Exponential backoff settings
+        retry_count = 0
+        max_retries = 3
+        backoff_factor = 1.5
+        
+        while retry_count <= max_retries:
             try:
-                year, month, day, time_of_day = await self.get_current_game_time()
-                # Calculate day index based on current day
-                day_index = (day - 1) % len(day_names)
-                current_day_name = day_names[day_index]
+                # Create context for the NPC creation handler
+                ctx = RunContextWrapper({
+                    "user_id": self.user_id,
+                    "conversation_id": self.conversation_id
+                })
                 
-                # Extract current location with actual time
-                current_location = await self._extract_location_from_schedule(
-                    schedule, current_day_name, time_of_day
+                # Use the new NPC creation system
+                creation_result = await self.npc_creation_handler.create_npc_with_context(
+                    environment_desc=environment_desc,
+                    archetype_names=None,  # Let the system choose appropriate archetypes
+                    specific_traits={"sex": sex},  # Pass the requested sex
+                    user_id=self.user_id,
+                    conversation_id=self.conversation_id
                 )
+                
+                npc_id = creation_result.npc_id
+                npc_name = creation_result.npc_name
+                current_location = creation_result.current_location
+                memories = creation_result.memories
+                
+                # Create agent and initialize in background
+                asyncio.create_task(
+                    self._initialize_npc_agent(
+                        npc_id=npc_id,
+                        npc_name=npc_name,
+                        memories=memories,
+                        current_location=current_location,
+                        time_of_day="Morning"  # Default or get from time system
+                    )
+                )
+                
+                # Update cache with new NPC
+                self.npc_cache[npc_id] = {
+                    "npc_id": npc_id,
+                    "npc_name": npc_name,
+                    "last_updated": datetime.now()
+                }
+                
+                logger.info(f"Successfully created NPC {npc_id} ({npc_name})")
+                return npc_id
+                
             except Exception as e:
-                logger.warning(f"Error getting current time for NPC location: {e}")
-                # Fall back to default location determined earlier
+                # Handle the retry logic
+                retry_count += 1
+                error_msg = f"Error creating NPC (attempt {retry_count}/{max_retries}): {e}"
+                logger.error(error_msg)
+                
+                if retry_count <= max_retries:
+                    wait_time = (backoff_factor ** retry_count) * 0.5
+                    logger.warning(f"Retrying in {wait_time:.1f}s")
+                    await asyncio.sleep(wait_time)
+                else:
+                    # Try minimal fallback NPC on final retry
+                    try:
+                        # Create minimal viable NPC with just essential fields
+                        minimal_npc_id = await self._create_minimal_fallback_npc(
+                            f"NPC_{datetime.now().timestamp()}",
+                            sex
+                        )
+                        return minimal_npc_id
+                    except Exception as fallback_error:
+                        logger.error(f"Even fallback NPC creation failed: {fallback_error}")
+                        raise NPCCreationError(f"Complete NPC creation failure: {e}, fallback also failed: {fallback_error}")
+
+    async def _initialize_npc_agent(
+        self, 
+        npc_id: int, 
+        npc_name: str, 
+        memories: List[Dict[str, Any]],
+        current_location: str,
+        time_of_day: str
+    ):
+        """Initialize NPC agent with memory and perception in the background."""
+        try:
+            # Create agent if it doesn't exist
+            if npc_id not in self.agent_system.npc_agents:
+                self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
             
-            # Step 7: Update NPC with all generated data
-            await conn.execute("""
-                UPDATE NPCStats 
-                SET physical_description=$1,
-                    schedule=$2,
-                    memory=$3,
-                    current_location=$4,
-                    affiliations=$5
-                WHERE user_id=$6 AND conversation_id=$7 AND npc_id=$8
-            """, 
-                physical_description,
-                json.dumps(schedule),
-                json.dumps(memories),
-                current_location,
-                json.dumps(affiliations),
-                self.user_id, self.conversation_id, npc_id
-            )
+            agent = self.agent_system.npc_agents[npc_id]
             
-            # Commit the complete transaction
-            await conn.execute("COMMIT")
-            transaction_active = False
+            # Initialize memories in batches for better performance
+            if memories:
+                memory_system = await agent._get_memory_system()
+                
+                # Process in batches of 5 for optimal performance
+                batch_size = 5
+                for i in range(0, len(memories), batch_size):
+                    batch = memories[i:i+batch_size]
+                    
+                    # Create batch memory tasks
+                    memory_tasks = []
+                    for memory in batch:
+                        memory_text = memory if isinstance(memory, str) else memory.get("text", "")
+                        memory_tasks.append(
+                            memory_system.remember(
+                                entity_type="npc",
+                                entity_id=npc_id,
+                                memory_text=memory_text,
+                                importance="medium",
+                                tags=["creation", "origin"]
+                            )
+                        )
+                    
+                    # Process batch concurrently
+                    await asyncio.gather(*memory_tasks)
+                    
+                    # Small delay between batches to prevent overloading
+                    await asyncio.sleep(0.1)
             
-            logger.info(f"Successfully created and refined NPC {npc_id} ({partial_npc['npc_name']})")
+            # Initialize mask
+            mask_manager = await agent._get_mask_manager()
+            await mask_manager.initialize_npc_mask(npc_id)
             
-            # Create agent and initialize in background
-            asyncio.create_task(
-                self._initialize_npc_agent(
-                    npc_id=npc_id,
-                    npc_name=partial_npc["npc_name"],
-                    memories=memories,
-                    current_location=current_location,
-                    time_of_day=time_of_day
-                )
-            )
-            
-            # Update cache with new NPC
-            self.npc_cache[npc_id] = {
-                "npc_id": npc_id,
-                "npc_name": partial_npc["npc_name"],
-                "last_updated": datetime.now()
+            # Create initial perception
+            initial_context = {
+                "location": current_location,
+                "time_of_day": time_of_day,
+                "description": f"Initial perception upon creation at {current_location}"
             }
             
-            return npc_id
-                
-        except asyncpg.PostgresConnectionError as e:
-            # Connection error - try to reconnect with backoff
-            retry_count += 1
-            if retry_count <= max_retries:
-                # Exponential backoff
-                wait_time = (backoff_factor ** retry_count) * 0.5
-                logger.warning(f"Database connection error, retrying in {wait_time:.1f}s: {e}")
-                
-                # Rollback transaction if active
-                if transaction_active and conn:
-                    try:
-                        await conn.execute("ROLLBACK")
-                    except Exception:
-                        pass  # Already disconnected
-                        
-                await asyncio.sleep(wait_time)
-                continue
-            else:
-                logger.error(f"Failed to create new NPC after {max_retries} retries: {e}")
-                raise NPCCreationError(f"Database connection failure: {e}")
-        
-        except asyncpg.PostgresTransactionError as e:
-            # Transaction error - try to rollback to savepoint if possible
-            if transaction_active and conn and savepoint_name:
-                try:
-                    await conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
-                    # Continue with fallback approach after rollback to savepoint
-                    logger.warning(f"Transaction error, rolled back to savepoint {savepoint_name}: {e}")
-                    # Attempt minimal fallback operation
-                    # [Implementation of fallback logic after savepoint rollback]
-                except Exception as rollback_error:
-                    logger.error(f"Rollback to savepoint failed: {rollback_error}")
-                    if transaction_active and conn:
-                        await conn.execute("ROLLBACK")
-                    raise NPCCreationError(f"Transaction error: {e}, rollback failed: {rollback_error}")
-            else:
-                # No savepoint or connection, full rollback
-                if transaction_active and conn:
-                    await conn.execute("ROLLBACK")
-                raise NPCCreationError(f"Transaction error: {e}")
-                
+            await agent.perceive_environment(initial_context)
+            
         except Exception as e:
-            # Other errors - try fallback
-            error_msg = f"Failed to create new NPC: {e}"
-            logger.error(error_msg)
-            
-            # Rollback transaction if active
-            if transaction_active and conn:
-                try:
-                    await conn.execute("ROLLBACK")
-                except Exception:
-                    pass
-            
-            # Try minimal fallback NPC on final retry
-            if retry_count >= max_retries:
-                logger.warning("Attempting to create minimal viable NPC as fallback")
-                try:
-                    # Create minimal viable NPC with just essential fields
-                    minimal_npc_id = await self._create_minimal_fallback_npc(
-                        partial_npc.get("npc_name", f"NPC_{datetime.now().timestamp()}"),
-                        sex
-                    )
-                    return minimal_npc_id
-                except Exception as fallback_error:
-                    logger.error(f"Even fallback NPC creation failed: {fallback_error}")
-                    raise NPCCreationError(f"Complete NPC creation failure: {e}, fallback also failed: {fallback_error}")
-            
-            retry_count += 1
-            if retry_count <= max_retries:
-                wait_time = (backoff_factor ** retry_count) * 0.5
-                logger.warning(f"NPC creation error, retrying in {wait_time:.1f}s: {e}")
-                await asyncio.sleep(wait_time)
-            else:
-                raise NPCCreationError(error_msg)
-        
-        finally:
-            # Always clean up resources
-            if conn:
-                # Rollback if transaction still active
-                if transaction_active:
-                    try:
-                        await conn.execute("ROLLBACK")
-                    except Exception as e:
-                        logger.error(f"Error rolling back transaction: {e}")
-                
-                # Release connection
-                if pool:
-                    try:
-                        await pool.release(conn)
-                    except Exception as e:
-                        logger.error(f"Error releasing connection: {e}")
+            logger.error(f"Error initializing NPC agent {npc_id}: {e}")
+            # Non-critical error, just log
 
-async def _generate_with_timeout(self, name, func, *args, timeout=15.0):
-    """Run a generation function with timeout protection."""
-    try:
-        return await asyncio.wait_for(func(*args), timeout=timeout)
-    except asyncio.TimeoutError:
-        logger.warning(f"Generation of {name} timed out after {timeout}s")
-        
-        # Return default values based on generation type
-        if name == "physical_description":
-            return "A typical person with unremarkable features."
-        elif name == "schedule":
-            return {day: {"Morning": "Goes about their day", 
-                         "Afternoon": "Continues their routine", 
-                         "Evening": "Relaxes", 
-                         "Night": "Sleeps"} 
-                   for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]}
-        elif name == "memories":
-            return [{"text": "I exist in this world.", "importance": "high"}]
-        elif name == "affiliations":
-            return []
-    except Exception as e:
-        logger.error(f"Error generating {name}: {e}")
-        return Exception(f"Error generating {name}: {e}")
-
-async def _initialize_npc_agent(
-    self, 
-    npc_id: int, 
-    npc_name: str, 
-    memories: List[Dict[str, Any]],
-    current_location: str,
-    time_of_day: str
-):
-    """Initialize NPC agent with memory and perception in the background."""
-    try:
-        # Create agent if it doesn't exist
-        if npc_id not in self.agent_system.npc_agents:
-            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
-        
-        agent = self.agent_system.npc_agents[npc_id]
-        
-        # Initialize memories in batches for better performance
-        if memories:
-            memory_system = await agent._get_memory_system()
-            
-            # Process in batches of 5 for optimal performance
-            batch_size = 5
-            for i in range(0, len(memories), batch_size):
-                batch = memories[i:i+batch_size]
-                
-                # Create batch memory tasks
-                memory_tasks = []
-                for memory in batch:
-                    memory_tasks.append(
-                        memory_system.remember(
-                            entity_type="npc",
-                            entity_id=npc_id,
-                            memory_text=memory.get("text", ""),
-                            importance=memory.get("importance", "medium"),
-                            tags=["creation", "origin"]
-                        )
-                    )
-                
-                # Process batch concurrently
-                await asyncio.gather(*memory_tasks)
-                
-                # Small delay between batches to prevent overloading
-                await asyncio.sleep(0.1)
-        
-        # Initialize mask
-        mask_manager = await agent._get_mask_manager()
-        await mask_manager.initialize_npc_mask(npc_id)
-        
-        # Create initial perception
-        initial_context = {
-            "location": current_location,
-            "time_of_day": time_of_day,
-            "description": f"Initial perception upon creation at {current_location}"
-        }
-        
-        await agent.perceive_environment(initial_context)
-        
-    except Exception as e:
-        logger.error(f"Error initializing NPC agent {npc_id}: {e}")
-        # Non-critical error, just log
-
-# Helper methods for the enhanced create_new_npc function
-async def _assign_relationships_in_transaction(self, conn, new_npc_id: int, new_npc_name: str, 
-                                              npc_archetypes: List[str]):
-    """Assign random relationships within a transaction."""
-    # Implementation depends on your assign_random_relationships function
-    # but modified to use the provided connection
-    
-    # Example implementation:
-    # Get existing NPCs
-    rows = await conn.fetch("""
-        SELECT npc_id, npc_name, archetypes
-        FROM NPCStats
-        WHERE user_id=$1 AND conversation_id=$2 AND npc_id != $3
-        LIMIT 10
-    """, self.user_id, self.conversation_id, new_npc_id)
-    
-    # Create relationships with 1-3 random NPCs
-    for row in random.sample(rows, min(3, len(rows))):
-        other_id = row["npc_id"]
-        other_name = row["npc_name"]
-        
-        # Create relationship in both directions
-        await conn.execute("""
-            INSERT INTO SocialLinks (
-                user_id, conversation_id, 
-                entity1_type, entity1_id, 
-                entity2_type, entity2_id,
-                link_type, link_level
-            ) VALUES ($1, $2, 'npc', $3, 'npc', $4, 'neutral', 50)
-        """, self.user_id, self.conversation_id, new_npc_id, other_id)
-        
-        await conn.execute("""
-            INSERT INTO SocialLinks (
-                user_id, conversation_id, 
-                entity1_type, entity1_id, 
-                entity2_type, entity2_id,
-                link_type, link_level
-            ) VALUES ($1, $2, 'npc', $3, 'npc', $4, 'neutral', 50)
-        """, self.user_id, self.conversation_id, other_id, new_npc_id)
-
-def _process_generation_results(self, results):
-    """Process results from parallel generation tasks with error handling."""
-    physical_description, schedule, memories, affiliations = None, None, None, None
-    
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            logger.error(f"Error in NPC generation task {i}: {result}")
-            # Use default values for failed tasks
-            if i == 0:  # Physical description
-                physical_description = "A typical person with no remarkable features."
-            elif i == 1:  # Schedule
-                schedule = {day: {"Morning": "Goes about their day", 
-                                 "Afternoon": "Continues their routine", 
-                                 "Evening": "Relaxes", 
-                                 "Night": "Sleeps"} for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]}
-            elif i == 2:  # Memories
-                memories = [{"text": "I exist.", "importance": "high"}]
-            elif i == 3:  # Affiliations
-                affiliations = []
-        else:
-            if i == 0:
-                physical_description = result
-            elif i == 1:
-                schedule = result
-            elif i == 2:
-                memories = result
-            elif i == 3:
-                affiliations = result
-    
-    return physical_description, schedule, memories, affiliations
-
-async def _propagate_memories_safely(self, npc_id: int, npc_name: str, memories: List[Dict[str, Any]]):
-    """Safely propagate memories to other NPCs, handling exceptions."""
-    try:
-        await propagate_shared_memories(
-            user_id=self.user_id,
-            conversation_id=self.conversation_id,
-            source_npc_id=npc_id,
-            source_npc_name=npc_name,
-            memories=memories
-        )
-    except Exception as e:
-        logger.error(f"Error propagating memories from NPC {npc_id}: {e}")
-        # This is in a background task, so we just log the error and continue
-    
     async def _create_minimal_fallback_npc(self, npc_name: str, sex: str) -> int:
         """
         Create a minimal viable NPC as a fallback when full creation fails.
@@ -997,225 +654,234 @@ async def _propagate_memories_safely(self, npc_id: int, npc_name: str, memories:
             """, json.dumps(basic_schedule), npc_id)
             
             return npc_id
-    
-    async def _extract_location_from_schedule(self, schedule, current_day_name, time_of_day):
-        """
-        Extract location from a scheduled activity.
-        
-        Args:
-            schedule: The NPC's schedule
-            current_day_name: Current day name
-            time_of_day: Current time of day
-            
-        Returns:
-            Extracted location or "Unknown"
-        """
-        # Default location
-        current_location = "Unknown"
-        
-        # Extract from schedule if available
-        if schedule and current_day_name in schedule and time_of_day in schedule[current_day_name]:
-            activity = schedule[current_day_name][time_of_day]
-            # Extract location from activity description
-            location_keywords = ["at the", "in the", "at", "in"]
-            for keyword in location_keywords:
-                if keyword in activity:
-                    parts = activity.split(keyword, 1)
-                    if len(parts) > 1:
-                        potential_location = parts[1].split(".")[0].split(",")[0].strip()
-                        if len(potential_location) > 3:  # Avoid very short fragments
-                            current_location = potential_location
-                            break
-        
-        # If we couldn't extract a location, use a random location from the database
-        if current_location == "Unknown":
-            async with self.connection_pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    """
-                    SELECT location_name 
-                    FROM Locations 
-                    WHERE user_id=$1 AND conversation_id=$2 
-                    ORDER BY RANDOM() LIMIT 1
-                    """,
-                    self.user_id, self.conversation_id
-                )
-                
-                if row:
-                    current_location = row["location_name"]
-        
-        return current_location
-    
+
     async def create_multiple_npcs(self, environment_desc: str, day_names: List[str], count: int = 3) -> List[int]:
         """
-        Create multiple NPCs in the system with parallel execution.
+        Create multiple NPCs using the new NPCCreationHandler.
         
         Args:
             environment_desc: Description of the environment
-            day_names: List of day names used in the calendar
+            day_names: List of day names
             count: Number of NPCs to create
             
         Returns:
             List of created NPC IDs
         """
-        # Create NPCs in parallel for better performance
-        creation_tasks = [
-            self.create_new_npc(environment_desc, day_names)
-            for _ in range(count)
-        ]
+        # Create context for the NPC creation handler
+        ctx = RunContextWrapper({
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id
+        })
         
-        # Handle exceptions individually to prevent one failure from stopping all
-        npc_ids = []
-        results = await asyncio.gather(*creation_tasks, return_exceptions=True)
+        # Spawn multiple NPCs using the new handler
+        npc_ids = await self.npc_creation_handler.spawn_multiple_npcs(
+            ctx, 
+            count=count
+        )
         
-        for result in results:
-            if isinstance(result, Exception):
-                logger.error(f"Error creating NPC: {result}")
-            else:
-                npc_ids.append(result)
+        # Initialize agents for the new NPCs
+        for npc_id in npc_ids:
+            # Get NPC details to initialize agent
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT npc_name, current_location, memory 
+                FROM NPCStats 
+                WHERE npc_id=%s AND user_id=%s AND conversation_id=%s
+            """, (npc_id, self.user_id, self.conversation_id))
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                npc_name = row[0]
+                current_location = row[1] or "Unknown"
+                memories = row[2] if row[2] else []
+                
+                # Parse memories if needed
+                if isinstance(memories, str):
+                    try:
+                        memories = json.loads(memories)
+                    except:
+                        memories = []
+                
+                # Initialize agent in background
+                asyncio.create_task(
+                    self._initialize_npc_agent(
+                        npc_id=npc_id,
+                        npc_name=npc_name,
+                        memories=memories,
+                        current_location=current_location,
+                        time_of_day="Morning"  # Default
+                    )
+                )
+                
+                # Update cache
+                self.npc_cache[npc_id] = {
+                    "npc_id": npc_id,
+                    "npc_name": npc_name,
+                    "last_updated": datetime.now()
+                }
         
         return npc_ids
 
-async def batch_create_memories(
-    self, 
-    npc_id: int,
-    memories: List[Dict[str, Any]]
-) -> List[int]:
-    """
-    Create multiple memories in a single operation for better performance.
-    
-    Args:
-        npc_id: ID of the NPC
-        memories: List of memory objects with text, type, significance, etc.
+    async def batch_create_memories(
+        self, 
+        npc_id: int,
+        memories: List[Dict[str, Any]]
+    ) -> List[int]:
+        """
+        Create multiple memories in a single operation for better performance.
         
-    Returns:
-        List of created memory IDs
-    """
-    if not memories:
-        return []
+        Args:
+            npc_id: ID of the NPC
+            memories: List of memory objects with text, type, significance, etc.
+            
+        Returns:
+            List of created memory IDs
+        """
+        if not memories:
+            return []
+            
+        memory_system = await self._get_memory_system()
         
-    memory_system = await self._get_memory_system()
-    
-    # Prepare all memories for batch insertion
-    batch_values = []
-    for memory in memories:
-        # Get emotional analysis for each memory text
-        emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(
-            memory.get("text", "")
-        )
-        
-        batch_values.append({
-            "entity_type": "npc",
-            "entity_id": npc_id,
-            "memory_text": memory.get("text", ""),
-            "importance": memory.get("importance", "medium"),
-            "emotional": memory.get("emotional", False),
-            "primary_emotion": emotion_analysis.get("primary_emotion", "neutral"),
-            "emotion_intensity": emotion_analysis.get("intensity", 0.5),
-            "tags": memory.get("tags", [])
-        })
-    
-    # Execute batch insert
-    results = await memory_system.batch_remember(batch_values)
-    
-    # Process schemas in background task for efficiency
-    self._process_batch_schemas(results, npc_id)
-    
-    return results.get("memory_ids", [])
-    
-async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
-    """
-    Get detailed information about an NPC, enhanced with agent-based data.
-    Uses caching for performance optimization and connection reuse.
-    """
-    # Check cache first
-    cache_key = f"npc:{npc_id}"
-    if cache_key in self.npc_cache and (datetime.now() - self.npc_cache[cache_key].get("last_updated", datetime.min)).seconds < 300:
-        self.perf_metrics['cache_hits'] += 1
-        return self.npc_cache[cache_key]
-    
-    self.perf_metrics['cache_misses'] += 1
-    
-    # Get or create NPC agent
-    if npc_id not in self.agent_system.npc_agents:
-        self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
-    
-    agent = self.agent_system.npc_agents[npc_id]
-    
-    try:
-        # Use connection pool for better performance
-        async with self.connection_pool.acquire() as conn:
-            # Use a single connection for all related queries
-            start_time = datetime.now()
+        # Prepare all memories for batch insertion
+        batch_values = []
+        for memory in memories:
+            memory_text = memory if isinstance(memory, str) else memory.get("text", "")
             
-            npc_data = await self._fetch_npc_basic_data(conn, npc_id)
-            if not npc_data:
-                error_msg = f"NPC with ID {npc_id} not found"
-                logger.error(error_msg)
-                raise NPCNotFoundError(error_msg)
-            
-            # Get social links (with single query for performance)
-            links = await self._fetch_npc_relationships(npc_id, conn)
-            
-            query_time = (datetime.now() - start_time).total_seconds()
-            self.perf_metrics['query_times'].append(query_time)
-            self.perf_metrics['db_queries'] += 1
-            
-            # Get enhanced memory from the agent's memory system
-            memory_system = await agent._get_memory_system()
-            memory_result = await memory_system.recall(
-                entity_type="npc",
-                entity_id=npc_id,
-                limit=5
+            # Get emotional analysis for each memory text
+            emotion_analysis = await memory_system.emotional_manager.analyze_emotional_content(
+                memory_text
             )
             
-            agent_memories = memory_result.get("memories", [])
+            batch_values.append({
+                "entity_type": "npc",
+                "entity_id": npc_id,
+                "memory_text": memory_text,
+                "importance": memory.get("importance", "medium") if isinstance(memory, dict) else "medium",
+                "emotional": memory.get("emotional", False) if isinstance(memory, dict) else False,
+                "primary_emotion": emotion_analysis.get("primary_emotion", "neutral"),
+                "emotion_intensity": emotion_analysis.get("intensity", 0.5),
+                "tags": memory.get("tags", []) if isinstance(memory, dict) else []
+            })
+        
+        # Execute batch insert
+        results = await memory_system.batch_remember(batch_values)
+        
+        # Process schemas in background task for efficiency
+        asyncio.create_task(self._process_batch_schemas(results, npc_id))
+        
+        return results.get("memory_ids", [])
+    
+    async def _process_batch_schemas(self, results, npc_id):
+        """Process batch memory schemas in the background."""
+        try:
+            memory_system = await self._get_memory_system()
+            schema_manager = await memory_system.get_schema_manager()
             
-            # Get mask information using agent
-            mask_info = await agent._get_mask_manager().get_npc_mask(npc_id)
-            
-            # Get emotional state using agent
-            emotional_state = await memory_system.get_npc_emotion(npc_id)
-            
-            # Get beliefs using agent
-            beliefs = await memory_system.get_beliefs(
-                entity_type="npc",
-                entity_id=npc_id,
-                topic="player"
-            )
-            
-            # Get current perception through agent
-            current_perception = None
-            if agent.last_perception:
-                current_perception = {
-                    "location": agent.last_perception.get("environment", {}).get("location"),
-                    "time_of_day": agent.last_perception.get("environment", {}).get("time_of_day"),
-                    "entities_present": agent.last_perception.get("environment", {}).get("entities_present", [])
+            # Process at most 5 schemas to avoid overloading
+            memory_ids = results.get("memory_ids", [])[:5]
+            if memory_ids:
+                await schema_manager.process_memories_for_schemas(
+                    "npc", npc_id, memory_ids
+                )
+        except Exception as e:
+            logger.error(f"Error processing batch schemas for NPC {npc_id}: {e}")
+        
+    async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get detailed information about an NPC, enhanced with agent-based data.
+        Uses caching for performance optimization and connection reuse.
+        """
+        # Check cache first
+        cache_key = f"npc:{npc_id}"
+        if cache_key in self.npc_cache and (datetime.now() - self.npc_cache[cache_key].get("last_updated", datetime.min)).seconds < 300:
+            self.perf_metrics['cache_hits'] += 1
+            return self.npc_cache[cache_key]
+        
+        self.perf_metrics['cache_misses'] += 1
+        
+        # Get or create NPC agent
+        if npc_id not in self.agent_system.npc_agents:
+            self.agent_system.npc_agents[npc_id] = NPCAgent(npc_id, self.user_id, self.conversation_id)
+        
+        agent = self.agent_system.npc_agents[npc_id]
+        
+        try:
+            # Use connection pool for better performance
+            async with self.connection_pool.acquire() as conn:
+                # Use a single connection for all related queries
+                start_time = datetime.now()
+                
+                npc_data = await self._fetch_npc_basic_data(conn, npc_id)
+                if not npc_data:
+                    error_msg = f"NPC with ID {npc_id} not found"
+                    logger.error(error_msg)
+                    raise NPCNotFoundError(error_msg)
+                
+                # Get social links (with single query for performance)
+                links = await self._fetch_npc_relationships(npc_id, conn)
+                
+                query_time = (datetime.now() - start_time).total_seconds()
+                self.perf_metrics['query_times'].append(query_time)
+                self.perf_metrics['db_queries'] += 1
+                
+                # Get enhanced memory from the agent's memory system
+                memory_system = await agent._get_memory_system()
+                memory_result = await memory_system.recall(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    limit=5
+                )
+                
+                agent_memories = memory_result.get("memories", [])
+                
+                # Get mask information using agent
+                mask_info = await agent._get_mask_manager().get_npc_mask(npc_id)
+                
+                # Get emotional state using agent
+                emotional_state = await memory_system.get_npc_emotion(npc_id)
+                
+                # Get beliefs using agent
+                beliefs = await memory_system.get_beliefs(
+                    entity_type="npc",
+                    entity_id=npc_id,
+                    topic="player"
+                )
+                
+                # Get current perception through agent
+                current_perception = None
+                if agent.last_perception:
+                    current_perception = {
+                        "location": agent.last_perception.get("environment", {}).get("location"),
+                        "time_of_day": agent.last_perception.get("environment", {}).get("time_of_day"),
+                        "entities_present": agent.last_perception.get("environment", {}).get("entities_present", [])
+                    }
+                
+                # Build enhanced response with agent-based data
+                npc_details = {
+                    **npc_data,  # Merge basic data
+                    "memories": agent_memories or npc_data.get("memories", [])[:5],  # Prefer agent memories
+                    "memory_count": len(npc_data.get("memories", [])),
+                    "mask": mask_info if mask_info and "error" not in mask_info else {"integrity": 100},
+                    "emotional_state": emotional_state,
+                    "beliefs": beliefs,
+                    "current_perception": current_perception,
+                    "relationships": links
                 }
-            
-            # Build enhanced response with agent-based data
-            npc_details = {
-                **npc_data,  # Merge basic data
-                "memories": agent_memories or npc_data.get("memories", [])[:5],  # Prefer agent memories
-                "memory_count": len(npc_data.get("memories", [])),
-                "mask": mask_info if mask_info and "error" not in mask_info else {"integrity": 100},
-                "emotional_state": emotional_state,
-                "beliefs": beliefs,
-                "current_perception": current_perception,
-                "relationships": links
-            }
-            
-            # Update cache
-            self.npc_cache[cache_key] = npc_details
-            self.npc_cache[cache_key]["last_updated"] = datetime.now()
-            
-            return npc_details
-    
-    except NPCNotFoundError:
-        raise
-    except Exception as e:
-        error_msg = f"Error getting NPC details: {e}"
-        logger.error(error_msg)
-        return None
+                
+                # Update cache
+                self.npc_cache[cache_key] = npc_details
+                self.npc_cache[cache_key]["last_updated"] = datetime.now()
+                
+                return npc_details
+        
+        except NPCNotFoundError:
+            raise
+        except Exception as e:
+            error_msg = f"Error getting NPC details: {e}"
+            logger.error(error_msg)
+            return None
 
     async def _fetch_npc_basic_data(self, conn, npc_id: int) -> Dict[str, Any]:
         """Fetch basic NPC data from database using provided connection."""
@@ -1380,49 +1046,6 @@ async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
             logger.error(error_msg)
             return False
 
-    async def _execute_with_retry(self, func, *args, max_retries=3, **kwargs):
-    """
-    Execute a database function with retry logic.
-    
-    Args:
-        func: Async function to execute
-        *args: Arguments to pass to the function
-        max_retries: Maximum number of retries
-        **kwargs: Keyword arguments to pass to the function
-        
-    Returns:
-        Result of the function
-    """
-    retry_count = 0
-    last_error = None
-    backoff_factor = 1.5
-    
-    while retry_count <= max_retries:
-        try:
-            return await func(*args, **kwargs)
-        except asyncpg.PostgresConnectionError as e:
-            retry_count += 1
-            if retry_count <= max_retries:
-                wait_time = (backoff_factor ** retry_count) * 0.5
-                logger.warning(f"Database connection error, retrying in {wait_time:.1f}s: {e}")
-                await asyncio.sleep(wait_time)
-                continue
-            last_error = e
-        except Exception as e:
-            # For non-connection errors, only retry certain types
-            if isinstance(e, (asyncpg.PostgresError, asyncpg.InterfaceError)):
-                retry_count += 1
-                if retry_count <= max_retries:
-                    wait_time = (backoff_factor ** retry_count) * 0.5
-                    logger.warning(f"Database error, retrying in {wait_time:.1f}s: {e}")
-                    await asyncio.sleep(wait_time)
-                    continue
-            last_error = e
-            break
-    
-    # If we got here, all retries failed
-    raise last_error if last_error else RuntimeError("Maximum retries exceeded")
-    
     #=================================================================
     # SOCIAL LINKS AND RELATIONSHIPS
     #=================================================================
@@ -2722,7 +2345,7 @@ async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
         
         # Extract query text for cache key
         query_text = self._extract_query_text(context)
-        cache_key = f"mem_{self.npc_id}_{hash(query_text)}_{limit}"
+        cache_key = f"mem_{hash(query_text)}_{limit}"
         
         # Check cache
         cached_memories = self._check_memory_cache(cache_key)
@@ -2731,10 +2354,10 @@ async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
         
         try:
             # Delegate to appropriate implementation
-            if self.use_subsystems:
-                memories = await self._retrieve_memories_subsystems(context, limit, memory_types)
+            if MEMORY_SYSTEM_AVAILABLE:
+                memories = await self._retrieve_memories_optimized(context, limit, memory_types)
             else:
-                memories = await self._retrieve_memories_db(context, limit, memory_types)
+                memories = await self._retrieve_memories_fallback(context, limit, memory_types)
             
             # Cache the result
             self._cache_memories(cache_key, memories)
@@ -2797,380 +2420,15 @@ async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
             "type": "fallback",
             "significance": 1
         }]
-        
-    async def _retrieve_memories_with_vector_search(self, npc_id, query, context, limit):
-        """Retrieve memories using vector search."""
-        # Implementation of vector search retrieval
-        memory_system = await self._get_memory_system()
-        
-        # Build enhanced query incorporating context
-        enhanced_query = self._build_enhanced_query(query, context)
-        
-        # Use vector search through memory system
-        vector_results = await memory_system.recall(
-            entity_type="npc",
-            entity_id=npc_id,
-            query=enhanced_query,
-            limit=limit,
-            use_vector_search=True
-        )
-        
-        return vector_results.get("memories", [])
-
-    def _setup_metrics_reporting(self):
-        """Set up periodic metrics reporting for performance monitoring."""
-        async def metrics_reporting_task():
-            while True:
-                await asyncio.sleep(600)  # Report every 10 minutes
-                await self._report_performance_metrics()
-        
-        # Start the task without waiting for it
-        asyncio.create_task(metrics_reporting_task())
     
-    async def _report_performance_metrics(self):
-        """Report detailed performance metrics."""
-        # Calculate additional derived metrics
-        db_metrics = {
-            "db_queries": self.perf_metrics['db_queries'],
-            "avg_query_time": self.perf_metrics['avg_query_time'],
-            "max_query_time": max(self.perf_metrics['query_times']) if self.perf_metrics['query_times'] else 0,
-            "min_query_time": min(self.perf_metrics['query_times']) if self.perf_metrics['query_times'] else 0,
-            "slow_query_count": sum(1 for t in self.perf_metrics['query_times'] if t > 0.5)
-        }
-        
-        cache_metrics = {
-            "cache_hits": self.perf_metrics['cache_hits'],
-            "cache_misses": self.perf_metrics['cache_misses'],
-            "hit_ratio": self.perf_metrics['cache_hits'] / (self.perf_metrics['cache_hits'] + self.perf_metrics['cache_misses']) 
-                if (self.perf_metrics['cache_hits'] + self.perf_metrics['cache_misses']) > 0 else 0,
-            "cache_size": {
-                "npc_cache": len(self.npc_cache),
-                "relationship_cache": len(self.relationship_cache),
-                "memory_cache": len(self.memory_cache)
-            }
-        }
-        
-        memory_metrics = {}
-        try:
-            # Try to get memory info using psutil if available
-            import psutil
-            process = psutil.Process()
-            memory_info = process.memory_info()
-            memory_percent = process.memory_percent()
-            
-            memory_metrics = {
-                "memory_usage_mb": memory_info.rss / (1024 * 1024),
-                "memory_percent": memory_percent,
-                "memory_vms_mb": memory_info.vms / (1024 * 1024)
-            }
-        except ImportError:
-            # Just log basic metrics if psutil isn't available
-            memory_metrics = {"note": "psutil not available for detailed memory metrics"}
-        
-        # Get pool statistics if available
-        pool_metrics = {}
-        try:
-            pool = await self.get_connection_pool()
-            pool_metrics = {
-                "pool_size": pool.get_size(),
-                "pool_free_size": pool.get_free_size(),
-                "pool_max_size": pool.get_max_size()
-            }
-        except Exception:
-            pool_metrics = {"note": "Unable to get pool statistics"}
-        
-        # Combine all metrics
-        full_metrics = {
-            "timestamp": datetime.now().isoformat(),
-            "npc_id": self.npc_id,
-            "db": db_metrics,
-            "cache": cache_metrics,
-            "memory": memory_metrics,
-            "pool": pool_metrics
-        }
-        
-        # Log metrics at appropriate level
-        if memory_metrics.get("memory_percent", 0) > 80 or db_metrics["slow_query_count"] > 10:
-            logger.warning(f"Performance metrics indicate issues: {full_metrics}")
-        else:
-            logger.info(f"Performance metrics: {full_metrics}")
-        
-        # Reset counters
-        self.perf_metrics['db_queries'] = 0
-        self.perf_metrics['cache_hits'] = 0
-        self.perf_metrics['cache_misses'] = 0
-        self.perf_metrics['query_times'] = self.perf_metrics['query_times'][-100:]
-    
-    async def _retrieve_memories_with_keyword_search(self, npc_id, query, context, limit):
-        """Retrieve memories using keyword search."""
-        memory_system = await self._get_memory_system()
-        
-        # Extract keywords from query and context
-        keywords = self._extract_keywords(query, context)
-        
-        if not keywords:
-            return []
-        
-        # Use regular recall with keywords
-        results = await memory_system.recall(
-            entity_type="npc",
-            entity_id=npc_id,
-            query=" OR ".join(keywords),
-            limit=limit
-        )
-        
-        return results.get("memories", [])
-    
-    async def _retrieve_memories_by_recency(self, npc_id, query, context, limit):
-        """Retrieve memories by recency as a fallback."""
-        memory_system = await self._get_memory_system()
-        
-        # Just get recent memories
-        results = await memory_system.recall(
-            entity_type="npc",
-            entity_id=npc_id,
-            query="",  # Empty query
-            limit=limit,
-            sort_by="recency"
-        )
-        
-        return results.get("memories", [])
-    
-    async def _retrieve_memories_emergency_fallback(self, npc_id, query, context, limit):
-        """Emergency fallback for when all other retrieval methods fail."""
-        # Direct database query
-        pool = await self.get_connection_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch("""
-                SELECT id, memory_text, memory_type, significance
-                FROM NPCMemories
-                WHERE npc_id = $1 AND status = 'active'
-                ORDER BY timestamp DESC
-                LIMIT $2
-            """, npc_id, limit)
-            
-            return [
-                {
-                    "id": row["id"],
-                    "text": row["memory_text"],
-                    "type": row["memory_type"],
-                    "significance": row["significance"]
-                }
-                for row in rows
-            ]
-
-    async def batch_retrieve_memories(
-        self,
-        query_text: str,
-        npc_ids: List[int],
-        limit_per_npc: int = 3
-    ) -> Dict[int, List[Dict[str, Any]]]:
-        """
-        Batch memory retrieval for multiple NPCs.
-        
-        Args:
-            query_text: Query text to search for
-            npc_ids: List of NPC IDs to query
-            limit_per_npc: Maximum memories per NPC
-            
-        Returns:
-            Dict mapping NPC IDs to their memories
-        """
-        if not npc_ids:
-            return {}
-        
-        # Generate vector embedding once for efficiency
-        embedding = None
-        try:
-            memory_system = await self._get_memory_system()
-            embedding = await memory_system.semantic_manager.generate_embedding(query_text)
-        except Exception as e:
-            logger.warning(f"Failed to generate embedding for batch retrieval: {e}")
-        
-        # Get connection for batch operations
-        pool = await self.get_connection_pool()
-        
-        # Process in efficient batches
-        batch_size = 5
-        result_dict = {}
-        
-        try:
-            async with pool.acquire() as conn:
-                for i in range(0, len(npc_ids), batch_size):
-                    batch = npc_ids[i:i+batch_size]
-                    
-                    # Use vector search if embedding is available
-                    if embedding:
-                        # Execute vector search for all NPCs in batch
-                        batch_queries = []
-                        for npc_id in batch:
-                            batch_queries.append("""
-                                SELECT id, memory_text, memory_type, tags, 
-                                       emotional_intensity, significance,
-                                       times_recalled, timestamp, status, confidence
-                                FROM NPCMemories
-                                WHERE npc_id = $1
-                                  AND status IN ('active', 'summarized')
-                                ORDER BY embedding <-> $2
-                                LIMIT $3
-                            """)
-                        
-                        # Prepare all query parameters
-                        batch_params = [(npc_id, embedding, limit_per_npc) for npc_id in batch]
-                        
-                        # Execute all queries concurrently
-                        tasks = [conn.fetch(query, *params) for query, params in zip(batch_queries, batch_params)]
-                        batch_results = await asyncio.gather(*tasks)
-                        
-                        # Process batch results
-                        for npc_id, rows in zip(batch, batch_results):
-                            result_dict[npc_id] = self._format_memory_rows(rows)
-                    else:
-                        # Fallback to keyword search
-                        # Split query into keywords
-                        keywords = query_text.lower().split()
-                        
-                        # Create parameterized query with each keyword as a parameter
-                        conditions = " OR ".join(f"LOWER(memory_text) LIKE '%' || ${i+2} || '%'" for i in range(len(keywords)))
-                        
-                        batch_queries = []
-                        for npc_id in batch:
-                            query = f"""
-                                SELECT id, memory_text, memory_type, tags,
-                                       emotional_intensity, significance,
-                                       times_recalled, timestamp, status, confidence
-                                FROM NPCMemories
-                                WHERE npc_id = $1
-                                  AND status IN ('active', 'summarized')
-                                  AND ({conditions})
-                                ORDER BY significance DESC, timestamp DESC
-                                LIMIT ${len(keywords) + 2}
-                            """
-                            batch_queries.append(query)
-                        
-                        # Prepare parameters for each query
-                        batch_params = [(npc_id,) + tuple(keywords) + (limit_per_npc,) for npc_id in batch]
-                        
-                        # Execute all queries concurrently
-                        tasks = [conn.fetch(query, *params) for query, params in zip(batch_queries, batch_params)]
-                        batch_results = await asyncio.gather(*tasks)
-                        
-                        # Process batch results
-                        for npc_id, rows in zip(batch, batch_results):
-                            result_dict[npc_id] = self._format_memory_rows(rows)
-                    
-                    # Add small delay between batches to avoid overwhelming the database
-                    if i + batch_size < len(npc_ids):
-                        await asyncio.sleep(0.05)
-            
-            return result_dict
-        
-        except Exception as e:
-            logger.error(f"Error in batch memory retrieval: {e}")
-            # Attempt individual fallback retrievals
-            return await self._individual_fallback_retrievals(npc_ids, query_text, limit_per_npc)
-    
-    def _format_memory_rows(self, rows):
-        """Format database rows into memory objects."""
-        memories = []
-        
-        for row in rows:
-            memories.append({
-                "id": row["id"],
-                "text": row["memory_text"],
-                "type": row["memory_type"],
-                "tags": row["tags"] if row["tags"] else [],
-                "emotional_intensity": row["emotional_intensity"],
-                "significance": row["significance"],
-                "times_recalled": row["times_recalled"],
-                "timestamp": row["timestamp"].isoformat() if isinstance(row["timestamp"], datetime) else row["timestamp"],
-                "confidence": row["confidence"]
-            })
-        
-        return memories
-    
-    async def _individual_fallback_retrievals(self, npc_ids, query_text, limit_per_npc):
-        """Individual fallback retrievals when batch retrieval fails."""
-        result_dict = {}
-        
-        # Process each NPC separately
-        for npc_id in npc_ids:
-            try:
-                # Use memory system for individual retrieval
-                memory_system = await self._get_memory_system()
-                
-                memory_result = await memory_system.recall(
-                    entity_type="npc",
-                    entity_id=npc_id,
-                    query=query_text,
-                    limit=limit_per_npc
-                )
-                
-                result_dict[npc_id] = memory_result.get("memories", [])
-            except Exception as e:
-                logger.error(f"Error in fallback retrieval for NPC {npc_id}: {e}")
-                result_dict[npc_id] = []
-        
-        return result_dict
-    
-    def _build_enhanced_query(self, query_text, context):
-        """Build enhanced query from text and context."""
-        enhanced_query = query_text or ""
-        
-        if isinstance(context, dict):
-            # Add location if available
-            if "location" in context:
-                enhanced_query += f" location:{context['location']}"
-            
-            # Add time info if available
-            if "time_of_day" in context:
-                enhanced_query += f" time:{context['time_of_day']}"
-            
-            # Add entity info if available
-            if "entities_present" in context:
-                entities_str = " ".join(context["entities_present"])
-                enhanced_query += f" entities:{entities_str}"
-        
-        return enhanced_query
-    
-    def _extract_keywords(self, query, context):
-        """Extract keywords from query and context."""
-        keywords = []
-        
-        # Add words from the query
-        if query:
-            # Split by spaces and punctuation
-            import re
-            words = re.findall(r'\w+', query.lower())
-            
-            # Filter out common stop words
-            stop_words = {'a', 'an', 'the', 'and', 'or', 'but', 'is', 'are', 'was', 'were'}
-            keywords.extend([w for w in words if w not in stop_words and len(w) > 2])
-        
-        # Add context keywords
-        if isinstance(context, dict):
-            if "location" in context:
-                keywords.append(context["location"])
-            if "time_of_day" in context:
-                keywords.append(context["time_of_day"])
-        
-        return keywords
-    
-    async def _retrieve_memories_optimized(
-        self,
-        npc_id: int,
-        query: str = None,
-        context: Dict[str, Any] = None,
-        limit: int = 5
-    ) -> List[Dict[str, Any]]:
+    async def _retrieve_memories_optimized(self, context, limit=5, memory_types=None):
         """
         Optimized implementation of memory retrieval with vector search.
         
         Args:
-            npc_id: ID of the NPC
-            query: Search query text
-            context: Additional context 
+            context: Query context (text or dict)
             limit: Maximum memories to retrieve
+            memory_types: Optional filter for memory types
             
         Returns:
             List of relevant memories
@@ -3189,42 +2447,9 @@ async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
             context_dict = context
         
         # Prepare query text
-        query_text = query or ""
-        if context_dict.get("text"):
-            query_text += " " + context_dict["text"]
+        query_text = context_dict.get("text", "")
         
-        # Extract emotional state for mood-congruent retrieval
-        emotional_state = await memory_system.get_npc_emotion(npc_id)
-        current_emotion = None
-        if emotional_state and "current_emotion" in emotional_state:
-            current_emotion = emotional_state["current_emotion"]
-        
-        # For strong emotions, use mood-congruent recall
-        if current_emotion and current_emotion.get("intensity", 0.0) > 0.6:
-            primary_emotion = current_emotion.get("primary", {}).get("name", "neutral")
-            
-            # Generate optimized recall query for mood-congruent memories
-            mood_memories = await memory_system.emotional_manager.retrieve_mood_congruent_memories(
-                entity_type="npc",
-                entity_id=npc_id,
-                current_mood=current_emotion,
-                limit=limit
-            )
-            
-            # If we got mood-congruent memories, use them
-            if mood_memories and len(mood_memories) >= limit // 2:
-                # Create cache entry for performance
-                cache_entry = (datetime.now(), mood_memories)
-                self._memory_cache[cache_key] = cache_entry
-                
-                # Update performance metrics
-                elapsed = (datetime.now() - start_time).total_seconds()
-                self.perf_metrics['memory_retrieval_time'].append(elapsed)
-                
-                return mood_memories
-        
-        # Use vector search for semantic retrieval
-        # Build a richer query incorporating context elements
+        # Build enhanced query incorporating context
         enhanced_query = query_text
         if context_dict:
             # Add location if available
@@ -3243,66 +2468,73 @@ async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
         # Use vector search through memory system
         vector_results = await memory_system.recall(
             entity_type="npc",
-            entity_id=npc_id,
+            entity_id=None,  # Will be filled by specific NPC ID in actual use
             query=enhanced_query,
             limit=limit,
             use_vector_search=True
         )
         
-        # Get relevant memories
+        # Get memories and update timing metrics
         memories = vector_results.get("memories", [])
-        
-        # If we have fewer than requested, try additional strategies
-        if len(memories) < limit:
-            # Try retrieving recent memories
-            recent_memories = await memory_system.recall(
-                entity_type="npc",
-                entity_id=npc_id,
-                query="",
-                limit=limit - len(memories),
-                sort_by="recency"
-            )
-            
-            # Append unique recent memories
-            existing_ids = {m.get("id") for m in memories}
-            for memory in recent_memories.get("memories", []):
-                if memory.get("id") not in existing_ids:
-                    memories.append(memory)
-                    existing_ids.add(memory.get("id"))
-        
-        # Potentially add a flashback if the context is emotionally charged
-        if query and any(term in query.lower() for term in ["fear", "scary", "danger", "threat", "pain"]):
-            # 15% chance of flashback for emotionally charged queries
-            if random.random() < 0.15:
-                flashback = await memory_system.npc_flashback(
-                    npc_id=npc_id,
-                    context=query
-                )
-                
-                if flashback:
-                    # Insert flashback at beginning for emphasis
-                    memories.insert(0, {
-                        "id": f"flashback_{datetime.now().timestamp()}",
-                        "text": flashback.get("text", ""),
-                        "type": "flashback",
-                        "significance": 5,
-                        "is_flashback": True
-                    })
-        
-        # Update retrieval timestamps for each memory
-        memory_ids = [m.get("id") for m in memories if m.get("id")]
-        if memory_ids:
-            await memory_system.core_manager.update_memory_retrieval_timestamps(memory_ids)
-        
-        # Cache the result
-        cache_entry = (datetime.now(), memories)
-        self._memory_cache[cache_key] = cache_entry
         
         # Update performance metrics
         elapsed = (datetime.now() - start_time).total_seconds()
         self.perf_metrics['memory_retrieval_time'].append(elapsed)
         
         return memories
+    
+    async def _retrieve_memories_fallback(self, context, limit=5, memory_types=None):
+        """
+        Fallback implementation of memory retrieval when optimized system not available.
+        
+        Args:
+            context: Query context (text or dict)
+            limit: Maximum memories to retrieve
+            memory_types: Optional filter for memory types
+            
+        Returns:
+            List of relevant memories
+        """
+        # Extract query text
+        query_text = self._extract_query_text(context)
+        
+        # Simple direct database query as fallback
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Basic search using text similarity
+            cursor.execute("""
+                SELECT id, memory_text, memory_type, significance, emotional_intensity
+                FROM NPCMemories
+                WHERE user_id = %s AND conversation_id = %s
+                ORDER BY 
+                    CASE 
+                        WHEN LOWER(memory_text) LIKE %s THEN 1
+                        ELSE 2
+                    END,
+                    significance DESC,
+                    created_at DESC
+                LIMIT %s
+            """, (self.user_id, self.conversation_id, f"%{query_text.lower()}%", limit))
+            
+            memories = []
+            for row in cursor.fetchall():
+                memories.append({
+                    "id": row[0],
+                    "text": row[1],
+                    "type": row[2],
+                    "significance": row[3],
+                    "emotional_intensity": row[4]
+                })
+            
+            return memories
+        except Exception as e:
+            logger.error(f"Error in fallback memory retrieval: {e}")
+            return self._get_fallback_memories()
+        finally:
+            cursor.close()
+            conn.close()
     
     async def propagate_memory_to_related_npcs(self, 
                                            source_npc_id: int,
@@ -3753,7 +2985,7 @@ async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
             return {
                 "activity_type": activity_type,
                 "time_advanced": self._should_advance_time(activity_type),
-                "would_advance": True if activity_type in self.TIME_ADVANCING_ACTIVITIES else False,
+                "would_advance": True if activity_type in ["sleep", "rest", "eat", "travel", "wait"] else False,
                 "activity_progression": self._get_activity_progression(activity_type, player_input)
             }
             
@@ -3957,95 +3189,128 @@ async def get_npc_details(self, npc_id: int) -> Optional[Dict[str, Any]]:
         except Exception as e:
             logger.error(f"Error processing NPC perception for NPC {npc_id}: {e}")
     
-async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
-    """
-    Process scheduled activities for all NPCs using the agent system.
-    Optimized for better performance with many NPCs through batching.
-    """
-    logger.info("Processing scheduled activities")
-    
-    try:
-        # Get current time information for context
-        year, month, day, time_of_day = await self.get_current_game_time()
+    async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
+        """
+        Process scheduled activities for all NPCs using the agent system.
+        Optimized for better performance with many NPCs through batching.
+        """
+        logger.info("Processing scheduled activities")
         
-        # Create base context for all NPCs
-        base_context = {
-            "year": year,
-            "month": month,
-            "day": day,
-            "time_of_day": time_of_day,
-            "activity_type": "scheduled"
-        }
-        
-        # Get all NPCs with their current locations - batch query for performance
-        npc_data = await self._fetch_all_npc_data_for_activities()
-        
-        # Count total NPCs to process
-        total_npcs = len(npc_data)
-        if total_npcs == 0:
-            return {"npc_responses": [], "count": 0}
-                
-        logger.info(f"Processing scheduled activities for {total_npcs} NPCs")
-        
-        # For very large NPC counts, process in batches rather than all at once
-        batch_size = 20  # Adjust based on system capabilities
-        npc_responses = []
-        
-        # Process in batches
-        for i in range(0, total_npcs, batch_size):
-            batch = list(npc_data.items())[i:i+batch_size]
-            
-            # Create tasks for this batch
-            batch_tasks = []
-            for npc_id, data in batch:
-                batch_tasks.append(
-                    self._process_single_npc_activity(npc_id, data, base_context)
-                )
-            
-            # Run batch concurrently
-            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-            
-            # Process batch results
-            for result in batch_results:
-                if isinstance(result, Exception):
-                    logger.error(f"Error processing scheduled activity: {result}")
-                elif result:  # Skip None results
-                    npc_responses.append(result)
-                
-            # If we have multiple batches, add a small delay between them to reduce system load
-            if i + batch_size < total_npcs:
-                await asyncio.sleep(0.1)
-            
-        # After all NPCs processed, do agent system coordination
         try:
-            # Call the internal coordination method instead of recursively calling this method
-            agent_responses = await self._process_coordination_activities(base_context)
-        except Exception as e:
-            logger.error(f"Error in agent system coordination: {e}")
-            agent_responses = []
-        
-        # Combined results from individual processing and agent system
-        combined_results = {
-            "npc_responses": npc_responses,
-            "agent_system_responses": agent_responses,
-            "count": len(npc_responses) + len(agent_responses)
-        }
-        
-        # Add summary statistics
-        combined_results["stats"] = {
-            "total_npcs": total_npcs,
-            "successful_activities": len(npc_responses),
-            "time_of_day": time_of_day,
-            "processing_time": None  # Could add timing info here
-        }
-        
-        return combined_results
+            # Get current time information for context
+            year, month, day, time_of_day = await self.get_current_game_time()
             
-    except Exception as e:
-        error_msg = f"Error processing NPC scheduled activities: {e}"
-        logger.error(error_msg)
-        raise NPCSystemError(error_msg)
-
+            # Create base context for all NPCs
+            base_context = {
+                "year": year,
+                "month": month,
+                "day": day,
+                "time_of_day": time_of_day,
+                "activity_type": "scheduled"
+            }
+            
+            # Get all NPCs with their current locations - batch query for performance
+            npc_data = await self._fetch_all_npc_data_for_activities()
+            
+            # Count total NPCs to process
+            total_npcs = len(npc_data)
+            if total_npcs == 0:
+                return {"npc_responses": [], "count": 0}
+                
+            logger.info(f"Processing scheduled activities for {total_npcs} NPCs")
+            
+            # For very large NPC counts, process in batches rather than all at once
+            batch_size = 20  # Adjust based on system capabilities
+            npc_responses = []
+            
+            # Process in batches
+            for i in range(0, total_npcs, batch_size):
+                batch = list(npc_data.items())[i:i+batch_size]
+                
+                # Create tasks for this batch
+                batch_tasks = []
+                for npc_id, data in batch:
+                    batch_tasks.append(
+                        self._process_single_npc_activity(npc_id, data, base_context)
+                    )
+                
+                # Run batch concurrently
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                
+                # Process batch results
+                for result in batch_results:
+                    if isinstance(result, Exception):
+                        logger.error(f"Error processing scheduled activity: {result}")
+                    elif result:  # Skip None results
+                        npc_responses.append(result)
+                    
+                # If we have multiple batches, add a small delay between them to reduce system load
+                if i + batch_size < total_npcs:
+                    await asyncio.sleep(0.1)
+                
+            # After all NPCs processed, do agent system coordination
+            try:
+                # Call the internal coordination method
+                agent_responses = await self._process_coordination_activities(base_context)
+            except Exception as e:
+                logger.error(f"Error in agent system coordination: {e}")
+                agent_responses = []
+            
+            # Combined results from individual processing and agent system
+            combined_results = {
+                "npc_responses": npc_responses,
+                "agent_system_responses": agent_responses,
+                "count": len(npc_responses) + len(agent_responses)
+            }
+            
+            # Add summary statistics
+            combined_results["stats"] = {
+                "total_npcs": total_npcs,
+                "successful_activities": len(npc_responses),
+                "time_of_day": time_of_day,
+                "processing_time": None  # Could add timing info here
+            }
+            
+            return combined_results
+                
+        except Exception as e:
+            error_msg = f"Error processing NPC scheduled activities: {e}"
+            logger.error(error_msg)
+            raise NPCSystemError(error_msg)
+    
+    async def _fetch_all_npc_data_for_activities(self) -> Dict[int, Dict[str, Any]]:
+        """Fetch all NPCs with basic data needed for activities."""
+        npc_data = {}
+        
+        try:
+            # Use optimized batch query
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT npc_id, npc_name, current_location, schedule
+                    FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                """, self.user_id, self.conversation_id)
+                
+                for row in rows:
+                    schedule = row["schedule"]
+                    if isinstance(schedule, str):
+                        try:
+                            schedule = json.loads(schedule)
+                        except:
+                            schedule = {}
+                    
+                    npc_data[row["npc_id"]] = {
+                        "name": row["npc_name"],
+                        "location": row["current_location"],
+                        "schedule": schedule
+                    }
+                
+                return npc_data
+        except Exception as e:
+            logger.error(f"Error fetching NPC data for activities: {e}")
+            return {}
+    
     async def _process_coordination_activities(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Process NPC coordination activities - handling group interactions and influences.
@@ -4084,7 +3349,7 @@ async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
                     # Check if this group should interact
                     if await self._should_group_interact(dom_npc_id, npc_ids, group_context):
                         # Use coordinator to handle the group interaction
-                        group_result = await self.coordinator.make_group_decisions(
+                        group_result = await self.agent_system.coordinator.make_group_decisions(
                             npc_ids, 
                             group_context
                         )
@@ -4103,79 +3368,96 @@ async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Error in coordination activities: {e}")
             return []
-            
+    
+    async def _get_npcs_by_location(self) -> Dict[str, List[int]]:
+        """Group NPCs by their current location."""
+        location_groups = {}
+        
+        try:
+            # Use connection pool for performance
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT npc_id, current_location
+                    FROM NPCStats
+                    WHERE user_id = $1 AND conversation_id = $2
+                    AND current_location IS NOT NULL
+                """, self.user_id, self.conversation_id)
+                
+                for row in rows:
+                    npc_id = row["npc_id"]
+                    location = row["current_location"]
+                    
+                    if location not in location_groups:
+                        location_groups[location] = []
+                        
+                    location_groups[location].append(npc_id)
+                
+                return location_groups
+        except Exception as e:
+            logger.error(f"Error grouping NPCs by location: {e}")
+            return {}
+    
     async def _find_dominant_npcs(self, npc_ids: List[int]) -> List[int]:
         """Find NPCs with high dominance that might initiate group activities."""
         dominant_npcs = []
         
-        with get_db_connection() as conn, conn.cursor() as cursor:
-            cursor.execute("""
-                SELECT npc_id 
-                FROM NPCStats
-                WHERE npc_id = ANY(%s)
-                AND dominance > 65
-                ORDER BY dominance DESC
-            """, (npc_ids,))
-            
-            dominant_npcs = [row[0] for row in cursor.fetchall()]
-        
-        return dominant_npcs
+        try:
+            # Use connection pool for performance
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT npc_id 
+                    FROM NPCStats
+                    WHERE npc_id = ANY($1) AND user_id = $2 AND conversation_id = $3
+                    AND dominance > 65
+                    ORDER BY dominance DESC
+                """, npc_ids, self.user_id, self.conversation_id)
+                
+                dominant_npcs = [row["npc_id"] for row in rows]
+                
+                return dominant_npcs
+        except Exception as e:
+            logger.error(f"Error finding dominant NPCs: {e}")
+            return []
     
     async def _should_group_interact(self, initiator_id: int, group_members: List[int], context: Dict[str, Any]) -> bool:
         """Determine if a group interaction should occur based on social dynamics."""
         # Base chance - 30%
         interaction_chance = 0.3
         
-        # Check time of day - certain times are more social
-        time_of_day = context.get("time_of_day", "")
-        if time_of_day == "evening":
-            interaction_chance += 0.2  # More group interactions in evening
-        
-        # Check if initiator has high dominance and cruelty (femdom context)
-        with get_db_connection() as conn, conn.cursor() as cursor:
-            cursor.execute("""
-                SELECT dominance, cruelty
-                FROM NPCStats
-                WHERE npc_id = %s
-            """, (initiator_id,))
+        try:
+            # Check time of day - certain times are more social
+            time_of_day = context.get("time_of_day", "")
+            if time_of_day == "evening":
+                interaction_chance += 0.2  # More group interactions in evening
             
-            row = cursor.fetchone()
-            if row:
-                dominance, cruelty = row
+            # Check if initiator has high dominance and cruelty (femdom context)
+            pool = await self.get_connection_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT dominance, cruelty
+                    FROM NPCStats
+                    WHERE npc_id = $1 AND user_id = $2 AND conversation_id = $3
+                """, initiator_id, self.user_id, self.conversation_id)
                 
-                # Highly dominant NPCs more likely to initiate group dynamics
-                if dominance > 80:
-                    interaction_chance += 0.2
+                if row:
+                    dominance = row["dominance"]
+                    cruelty = row["cruelty"]
                     
-                # Cruel dominants enjoy group discipline scenes
-                if cruelty > 70:
-                    interaction_chance += 0.15
-        
-        # Random roll against the calculated chance
-        return random.random() < interaction_chance
-    
-    async def _get_npcs_by_location(self) -> Dict[str, List[int]]:
-        """Group NPCs by their current location."""
-        location_groups = {}
-        
-        with get_db_connection() as conn, conn.cursor() as cursor:
-            cursor.execute("""
-                SELECT npc_id, current_location
-                FROM NPCStats
-                WHERE user_id = %s
-                AND conversation_id = %s
-                AND current_location IS NOT NULL
-            """, (self.user_id, self.conversation_id))
+                    # Highly dominant NPCs more likely to initiate group dynamics
+                    if dominance > 80:
+                        interaction_chance += 0.2
+                        
+                    # Cruel dominants enjoy group discipline scenes
+                    if cruelty > 70:
+                        interaction_chance += 0.15
             
-            for row in cursor.fetchall():
-                npc_id, location = row
-                
-                if location not in location_groups:
-                    location_groups[location] = []
-                    
-                location_groups[location].append(npc_id)
-        
-        return location_groups
+            # Random roll against the calculated chance
+            return random.random() < interaction_chance
+        except Exception as e:
+            logger.error(f"Error determining if group should interact: {e}")
+            return False
     
     async def _process_single_npc_activity(self, npc_id, data, base_context):
         """
@@ -4229,7 +3511,7 @@ async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Error processing activity for NPC {npc_id}: {e}")
             return None
-
+    
     async def run_memory_maintenance(self) -> Dict[str, Any]:
         """
         Run memory maintenance for all agents with enhanced processing.
@@ -4615,6 +3897,36 @@ async def process_npc_scheduled_activities(self) -> Dict[str, Any]:
             if conn:
                 await pool.release(conn)
     
+    async def _apply_stat_changes_transaction(self, conn, stat_changes, cause):
+        """Apply stat changes within a transaction."""
+        try:
+            # Apply each stat change
+            for stat_name, change_value in stat_changes.items():
+                # Get current value
+                row = await conn.fetchrow("""
+                    SELECT {stat_name} FROM PlayerStats 
+                    WHERE user_id=$1 AND conversation_id=$2 AND player_name='Chase'
+                """, self.user_id, self.conversation_id)
+                
+                if row:
+                    old_value = row[stat_name]
+                    new_value = old_value + change_value
+                    
+                    # Update the stat
+                    await conn.execute("""
+                        UPDATE PlayerStats SET {stat_name} = $1
+                        WHERE user_id=$2 AND conversation_id=$3 AND player_name='Chase'
+                    """, new_value, self.user_id, self.conversation_id)
+                    
+                    # Log the change
+                    await conn.execute("""
+                        INSERT INTO StatHistory (user_id, conversation_id, stat_name, old_value, new_value, cause, timestamp)
+                        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+                    """, self.user_id, self.conversation_id, stat_name, old_value, new_value, cause)
+        except Exception as e:
+            logger.error(f"Error applying stat changes in transaction: {e}")
+            raise
+    
     def _check_interaction_cache(self, cache_key: str) -> Optional[Dict[str, Any]]:
         """Check cache for recent similar interactions."""
         if not hasattr(self, '_interaction_cache'):
@@ -4852,7 +4164,7 @@ async def example_usage():
     print(f"Group interaction result: {group_result}")
     
     # Generate a scene with both NPCs
-    scene = await npc_system.generate_npc_scene([npc_id, second_npc_id], "Garden")
+    scene = await npc_system.generate_multi_npc_scene([npc_id, second_npc_id], "Garden")
     print(f"Generated scene: {scene}")
     
     # Process scheduled activities
