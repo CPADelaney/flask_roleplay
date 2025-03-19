@@ -895,7 +895,772 @@ class CausalReasoningSystem:
         
         return model
     
-    async def _validate_causal_model(self, model: CausalModel, 
+async def _validate_causal_model(self, model: CausalModel, 
                             observations: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Validate causal model against observations"""
         # Calculate model quality metrics
+        validation = {
+            "node_count": len(model.nodes),
+            "relation_count": len(model.relations),
+            "coverage": 0.0,  # Percentage of observed variables covered by the model
+            "accuracy": 0.0,  # Accuracy of predictions
+            "complexity": 0.0,  # Model complexity
+            "score": 0.0      # Overall validation score
+        }
+        
+        # Calculate coverage
+        observed_nodes = set(obs["node_id"] for obs in observations if "node_id" in obs)
+        model_nodes = set(model.nodes.keys())
+        covered_nodes = observed_nodes.intersection(model_nodes)
+        
+        if observed_nodes:
+            validation["coverage"] = len(covered_nodes) / len(observed_nodes)
+        
+        # Calculate prediction accuracy (hold out some observations and test)
+        accuracy_scores = []
+        for node_id in covered_nodes:
+            node = model.nodes[node_id]
+            if len(node.observations) >= 4:
+                # Use last observation as test
+                test_obs = node.observations[-1]
+                predicted_state = self._predict_node_state(model, node_id)
+                
+                # Calculate accuracy
+                if predicted_state is not None and test_obs["value"] == predicted_state:
+                    accuracy_scores.append(1.0)
+                else:
+                    accuracy_scores.append(0.0)
+        
+        if accuracy_scores:
+            validation["accuracy"] = sum(accuracy_scores) / len(accuracy_scores)
+        
+        # Calculate complexity
+        validation["complexity"] = len(model.relations) / (len(model.nodes) if model.nodes else 1)
+        
+        # Calculate overall score
+        validation["score"] = (
+            validation["coverage"] * 0.4 +
+            validation["accuracy"] * 0.4 +
+            (1.0 / (1.0 + validation["complexity"])) * 0.2  # Penalize complexity
+        )
+        
+        # Add validation result to model
+        model.add_validation_result("system_validation", validation)
+        
+        return validation
+    
+    def _predict_node_state(self, model: CausalModel, node_id: str) -> Any:
+        """Predict the state of a node based on the causal model"""
+        if node_id not in model.nodes:
+            return None
+            
+        node = model.nodes[node_id]
+        
+        # If node has observations, use most likely state
+        if node.observations:
+            return node.get_current_state()
+            
+        # Otherwise, infer from causal parents
+        parents = list(model.graph.predecessors(node_id))
+        if not parents:
+            return node.default_state
+        
+        # Get parent states
+        parent_states = {}
+        for parent_id in parents:
+            parent = model.nodes.get(parent_id)
+            if parent:
+                parent_states[parent_id] = parent.get_current_state()
+        
+        # Simple inference: majority vote over parent relations
+        target_probabilities = {}
+        
+        for parent_id, parent_state in parent_states.items():
+            # Get relations from this parent
+            for relation_id, relation in model.relations.items():
+                if relation.source_id == parent_id and relation.target_id == node_id:
+                    # Get conditional probability if available
+                    for target_state in node.states:
+                        prob = relation.get_conditional_probability(parent_state, target_state)
+                        target_probabilities[target_state] = target_probabilities.get(target_state, 0) + prob
+        
+        # Return most likely state
+        if target_probabilities:
+            return max(target_probabilities.items(), key=lambda x: x[1])[0]
+        
+        return node.default_state
+    
+    async def discover_causal_relations(self, model_id: str) -> Dict[str, Any]:
+        """Discover causal relations in a model automatically"""
+        if model_id not in self.causal_models:
+            raise ValueError(f"Model {model_id} not found")
+            
+        model = self.causal_models[model_id]
+        
+        # Collect observations from model
+        observations = []
+        for node_id, node in model.nodes.items():
+            for obs in node.observations:
+                observations.append({
+                    "node_id": node_id,
+                    "value": obs["value"],
+                    "confidence": obs["confidence"],
+                    "timestamp": obs["timestamp"]
+                })
+        
+        # If not enough observations, return empty result
+        if len(observations) < self.config["min_data_points"]:
+            return {
+                "status": "insufficient_data",
+                "required": self.config["min_data_points"],
+                "available": len(observations)
+            }
+        
+        # Run causal structure inference
+        result = await self.infer_causal_structure(model_id, observations)
+        
+        return result
+    
+    async def define_intervention(self, model_id: str, target_node: str, 
+                           target_value: Any, name: str,
+                           description: str = "") -> str:
+        """Define an intervention on a causal model"""
+        if model_id not in self.causal_models:
+            raise ValueError(f"Model {model_id} not found")
+            
+        model = self.causal_models[model_id]
+        
+        if target_node not in model.nodes:
+            raise ValueError(f"Node {target_node} not found in model {model_id}")
+            
+        # Generate intervention ID
+        intervention_id = f"intervention_{self.next_intervention_id}"
+        self.next_intervention_id += 1
+        
+        # Create intervention
+        intervention = Intervention(
+            intervention_id=intervention_id,
+            name=name,
+            target_node=target_node,
+            target_value=target_value,
+            description=description
+        )
+        
+        # Predict effects
+        effects = await self._predict_intervention_effects(model, target_node, target_value)
+        
+        # Add effects to intervention
+        for node_id, effect in effects.items():
+            if effect["is_side_effect"]:
+                intervention.add_side_effect(
+                    node_id=node_id,
+                    expected_value=effect["expected_value"],
+                    probability=effect["probability"],
+                    severity=effect.get("severity", 0.5),
+                    mechanism=effect.get("mechanism", "")
+                )
+            else:
+                intervention.add_effect(
+                    node_id=node_id,
+                    expected_value=effect["expected_value"],
+                    probability=effect["probability"],
+                    mechanism=effect.get("mechanism", "")
+                )
+        
+        # Store intervention
+        self.interventions[intervention_id] = intervention
+        
+        # Update statistics
+        self.stats["interventions_performed"] += 1
+        
+        return intervention_id
+    
+    async def _predict_intervention_effects(self, model: CausalModel, 
+                                   target_node: str, target_value: Any) -> Dict[str, Dict[str, Any]]:
+        """Predict the effects of an intervention"""
+        effects = {}
+        
+        # Get descendants of target node
+        descendants = model.get_descendants(target_node)
+        
+        # Predict effects on each descendant
+        for desc_id in descendants:
+            descendant = model.nodes.get(desc_id)
+            if not descendant:
+                continue
+                
+            # Get causal path from target to descendant
+            paths = list(nx.all_simple_paths(model.graph, target_node, desc_id, 
+                                         cutoff=self.config["max_model_depth"]))
+            
+            if not paths:
+                continue
+                
+            # Calculate effect probability based on path strengths
+            path_probabilities = []
+            expected_values = {}
+            
+            for path in paths:
+                # Calculate path strength
+                path_strength = 1.0
+                
+                for i in range(len(path) - 1):
+                    source = path[i]
+                    target = path[i + 1]
+                    
+                    # Get relation between these nodes
+                    relations = model.get_relations_between(source, target)
+                    if relations:
+                        # Use max strength relation
+                        max_strength = max(rel.strength for rel in relations)
+                        path_strength *= max_strength
+                
+                path_probabilities.append(path_strength)
+                
+                # Determine expected value through this path
+                if path_strength > 0.2:  # Only consider significant paths
+                    # Simplified logic - in a real system would use conditional probabilities
+                    if descendant.states:
+                        # For discrete states, choose most likely next state
+                        current_state_idx = descendant.states.index(descendant.get_current_state()) if descendant.get_current_state() in descendant.states else 0
+                        next_state_idx = (current_state_idx + 1) % len(descendant.states)
+                        expected_value = descendant.states[next_state_idx]
+                    else:
+                        # For continuous values, increment/decrement based on path structure
+                        current_value = descendant.get_current_state() or 0
+                        if isinstance(current_value, (int, float)):
+                            expected_value = current_value + (0.1 * len(path))  # Simple increment
+                        else:
+                            expected_value = current_value
+                    
+                    # Count occurrences of expected values
+                    expected_values[expected_value] = expected_values.get(expected_value, 0) + path_strength
+            
+            # Calculate overall probability
+            overall_probability = max(path_probabilities) if path_probabilities else 0.0
+            
+            # Determine most likely expected value
+            most_likely_value = None
+            if expected_values:
+                most_likely_value = max(expected_values.items(), key=lambda x: x[1])[0]
+            else:
+                most_likely_value = descendant.get_current_state()
+            
+            # Determine if this is a direct effect or side effect
+            is_side_effect = len(paths[0]) > 2  # If path length > 2, it's not a direct effect
+            
+            effects[desc_id] = {
+                "expected_value": most_likely_value,
+                "probability": overall_probability,
+                "is_side_effect": is_side_effect,
+                "severity": 0.3 if is_side_effect else 0.0,  # Simplified severity calculation
+                "mechanism": f"Causal path via {len(paths)} paths"
+            }
+        
+        return effects
+    
+    async def record_intervention_outcome(self, intervention_id: str, 
+                                  outcomes: Dict[str, Any]) -> Dict[str, Any]:
+        """Record the outcomes of an intervention"""
+        if intervention_id not in self.interventions:
+            raise ValueError(f"Intervention {intervention_id} not found")
+            
+        intervention = self.interventions[intervention_id]
+        
+        # Record observations for each outcome
+        for node_id, value in outcomes.items():
+            # Check if this is an effect or side effect
+            is_side_effect = node_id in intervention.side_effects and node_id not in intervention.effects
+            
+            # Record observation
+            intervention.record_observation(node_id, value, is_side_effect)
+        
+        # Evaluate intervention success
+        success_score = await self._evaluate_intervention_success(intervention)
+        
+        return {
+            "intervention_id": intervention_id,
+            "success_score": success_score,
+            "recorded_outcomes": len(outcomes)
+        }
+    
+    async def _evaluate_intervention_success(self, intervention: Intervention) -> float:
+        """Evaluate the success of an intervention"""
+        # Count correct predictions
+        total_effects = len(intervention.effects)
+        correct_effects = 0
+        
+        for node_id, effect in intervention.effects.items():
+            if effect["observed"]:
+                if effect["actual_value"] == effect["expected_value"]:
+                    correct_effects += 1
+        
+        # Calculate success score
+        success_score = correct_effects / total_effects if total_effects > 0 else 0.0
+        
+        # Adjust for side effects
+        side_effect_penalty = 0.0
+        for node_id, effect in intervention.side_effects.items():
+            if effect["observed"]:
+                side_effect_penalty += effect["severity"] * 0.1
+        
+        # Final adjusted score
+        adjusted_score = max(0.0, success_score - side_effect_penalty)
+        
+        return adjusted_score
+    
+    async def reason_counterfactually(self, model_id: str, 
+                              query: Dict[str, Any]) -> Dict[str, Any]:
+        """Perform counterfactual reasoning using causal model"""
+        if model_id not in self.causal_models:
+            raise ValueError(f"Model {model_id} not found")
+            
+        model = self.causal_models[model_id]
+        
+        # Extract query components
+        counterfactual_id = f"counterfactual_{self.next_counterfactual_id}"
+        self.next_counterfactual_id += 1
+        
+        factual_values = query.get("factual_values", {})
+        counterfactual_values = query.get("counterfactual_values", {})
+        target_nodes = query.get("target_nodes", [])
+        
+        # Validate query
+        if not counterfactual_values:
+            return {
+                "error": "No counterfactual values provided",
+                "counterfactual_id": counterfactual_id
+            }
+        
+        # Identify relevant variables
+        relevant_vars = await self._identify_relevant_variables(model, counterfactual_values, target_nodes)
+        
+        # Build counterfactual world
+        counterfactual_world = await self._set_counterfactual_values(model, factual_values, counterfactual_values)
+        
+        # Propagate effects through causal graph
+        results = await self._propagate_effects(model, counterfactual_world, relevant_vars)
+        
+        # Analyze results
+        analysis = await self._analyze_counterfactual_results(model, factual_values, counterfactual_values, results)
+        
+        # Store counterfactual analysis
+        self.counterfactuals[counterfactual_id] = {
+            "timestamp": datetime.now().isoformat(),
+            "model_id": model_id,
+            "query": query,
+            "relevant_variables": relevant_vars,
+            "results": results,
+            "analysis": analysis
+        }
+        
+        # Update statistics
+        self.stats["counterfactuals_analyzed"] += 1
+        
+        return {
+            "counterfactual_id": counterfactual_id,
+            "relevant_variables": relevant_vars,
+            "results": results,
+            "analysis": analysis
+        }
+    
+    async def _identify_relevant_variables(self, model: CausalModel,
+                                  counterfactual_values: Dict[str, Any],
+                                  target_nodes: List[str]) -> List[str]:
+        """Identify variables relevant to the counterfactual query"""
+        relevant_vars = set()
+        
+        # Add counterfactual nodes
+        for node_id in counterfactual_values.keys():
+            if node_id in model.nodes:
+                relevant_vars.add(node_id)
+                
+                # Add descendants of counterfactual nodes
+                descendants = model.get_descendants(node_id)
+                relevant_vars.update(descendants)
+        
+        # Add target nodes
+        for node_id in target_nodes:
+            if node_id in model.nodes:
+                relevant_vars.add(node_id)
+                
+                # Add ancestors of target nodes
+                ancestors = model.get_ancestors(node_id)
+                relevant_vars.update(ancestors)
+        
+        # If no target nodes specified, use all nodes affected by counterfactual
+        if not target_nodes:
+            for cf_node_id in counterfactual_values.keys():
+                if cf_node_id in model.nodes:
+                    descendants = model.get_descendants(cf_node_id)
+                    relevant_vars.update(descendants)
+        
+        return list(relevant_vars)
+    
+    async def _set_counterfactual_values(self, model: CausalModel,
+                                factual_values: Dict[str, Any],
+                                counterfactual_values: Dict[str, Any]) -> Dict[str, Any]:
+        """Set up the counterfactual world with modified values"""
+        # Start with factual values
+        world = factual_values.copy()
+        
+        # Get current states for nodes not in factual values
+        for node_id, node in model.nodes.items():
+            if node_id not in world:
+                world[node_id] = node.get_current_state()
+        
+        # Apply counterfactual changes
+        for node_id, value in counterfactual_values.items():
+            if node_id in model.nodes:
+                world[node_id] = value
+        
+        return world
+    
+    async def _propagate_effects(self, model: CausalModel,
+                         counterfactual_world: Dict[str, Any],
+                         relevant_vars: List[str]) -> Dict[str, Any]:
+        """Propagate effects through the causal graph"""
+        # Create a copy of the world to modify
+        results = counterfactual_world.copy()
+        
+        # Get topological ordering of nodes
+        try:
+            node_order = list(nx.topological_sort(model.graph))
+        except nx.NetworkXUnfeasible:
+            # Graph has cycles, use a default order
+            node_order = list(model.nodes.keys())
+        
+        # Filter to relevant variables
+        node_order = [n for n in node_order if n in relevant_vars]
+        
+        # Process nodes in topological order
+        for node_id in node_order:
+            # Skip nodes with counterfactual values (they're fixed)
+            if node_id in counterfactual_world:
+                continue
+                
+            # Get parents
+            parents = list(model.graph.predecessors(node_id))
+            
+            if not parents:
+                continue
+                
+            # Get parent values
+            parent_values = {p: results.get(p) for p in parents}
+            
+            # Predict node value based on parents
+            node = model.nodes.get(node_id)
+            if node:
+                prediction = await self._predict_from_parents(model, node_id, parent_values)
+                results[node_id] = prediction
+        
+        return results
+    
+    async def _predict_from_parents(self, model: CausalModel,
+                            node_id: str,
+                            parent_values: Dict[str, Any]) -> Any:
+        """Predict a node's value based on parent values"""
+        node = model.nodes.get(node_id)
+        if not node:
+            return None
+            
+        # Get relevant relations
+        incoming_relations = []
+        for relation_id, relation in model.relations.items():
+            if relation.target_id == node_id and relation.source_id in parent_values:
+                incoming_relations.append(relation)
+        
+        if not incoming_relations:
+            return node.get_current_state()
+            
+        # For discrete states
+        if node.states:
+            state_scores = {state: 0.0 for state in node.states}
+            
+            for relation in incoming_relations:
+                source_id = relation.source_id
+                source_value = parent_values.get(source_id)
+                
+                if source_value is not None:
+                    for state in node.states:
+                        # Get conditional probability
+                        prob = relation.get_conditional_probability(source_value, state)
+                        
+                        # Weight by relation strength
+                        weighted_prob = prob * relation.strength
+                        
+                        # Add to score
+                        state_scores[state] += weighted_prob
+            
+            # Return state with highest score
+            if state_scores:
+                return max(state_scores.items(), key=lambda x: x[1])[0]
+            
+        # For continuous values
+        current_value = node.get_current_state()
+        if isinstance(current_value, (int, float)):
+            # Calculate weighted influence from parents
+            weighted_sum = 0.0
+            total_weight = 0.0
+            
+            for relation in incoming_relations:
+                source_id = relation.source_id
+                source_value = parent_values.get(source_id)
+                
+                if isinstance(source_value, (int, float)):
+                    source_node = model.nodes.get(source_id)
+                    if source_node:
+                        # Calculate effect direction (simple approximation)
+                        source_current = source_node.get_current_state()
+                        if source_current is not None and isinstance(source_current, (int, float)):
+                            source_diff = source_value - source_current
+                            
+                            # Apply causal effect
+                            effect = source_diff * relation.strength
+                            weighted_sum += effect
+                            total_weight += relation.strength
+            
+            # Apply weighted effect to current value
+            if total_weight > 0:
+                new_value = current_value + (weighted_sum / total_weight)
+                return new_value
+        
+        return current_value
+    
+    async def _analyze_counterfactual_results(self, model: CausalModel,
+                                     factual_values: Dict[str, Any],
+                                     counterfactual_values: Dict[str, Any],
+                                     results: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze the results of counterfactual reasoning"""
+        analysis = {
+            "summary": "",
+            "changes": {},
+            "significant_effects": [],
+            "pathways": [],
+            "confidence": 0.0
+        }
+        
+        # Identify changes from factual to counterfactual
+        changes = {}
+        for node_id, value in results.items():
+            if node_id in factual_values and factual_values[node_id] != value:
+                node = model.nodes.get(node_id)
+                if node:
+                    changes[node_id] = {
+                        "name": node.name,
+                        "factual": factual_values[node_id],
+                        "counterfactual": value,
+                        "significant": self._is_significant_change(node, factual_values[node_id], value)
+                    }
+        
+        analysis["changes"] = changes
+        
+        # Identify significant effects
+        significant_effects = []
+        for node_id, change in changes.items():
+            if change["significant"]:
+                node = model.nodes.get(node_id)
+                if node:
+                    significant_effects.append({
+                        "node_id": node_id,
+                        "name": node.name,
+                        "factual": change["factual"],
+                        "counterfactual": change["counterfactual"],
+                        "type": node.type
+                    })
+        
+        analysis["significant_effects"] = significant_effects
+        
+        # Identify causal pathways
+        for cf_node_id in counterfactual_values.keys():
+            for effect_node_id in significant_effects:
+                effect_id = effect_node_id["node_id"]
+                
+                # Find paths from counterfactual node to effect
+                paths = list(nx.all_simple_paths(model.graph, cf_node_id, effect_id, 
+                                             cutoff=self.config["max_model_depth"]))
+                
+                for path in paths:
+                    # Calculate path strength
+                    path_strength = 1.0
+                    path_nodes = []
+                    
+                    for i in range(len(path) - 1):
+                        source = path[i]
+                        target = path[i + 1]
+                        
+                        # Get relation between these nodes
+                        relations = model.get_relations_between(source, target)
+                        if relations:
+                            # Use max strength relation
+                            max_rel = max(relations, key=lambda r: r.strength)
+                            path_strength *= max_rel.strength
+                            
+                            # Add to path nodes
+                            source_node = model.nodes.get(source)
+                            target_node = model.nodes.get(target)
+                            
+                            if source_node and target_node:
+                                path_nodes.append({
+                                    "from": {
+                                        "id": source,
+                                        "name": source_node.name,
+                                        "value": results.get(source)
+                                    },
+                                    "to": {
+                                        "id": target,
+                                        "name": target_node.name,
+                                        "value": results.get(target)
+                                    },
+                                    "relation": {
+                                        "type": max_rel.type,
+                                        "strength": max_rel.strength,
+                                        "mechanism": max_rel.mechanism
+                                    }
+                                })
+                    
+                    # Add pathway if significant
+                    if path_strength >= 0.2:  # Only include significant paths
+                        analysis["pathways"].append({
+                            "from": cf_node_id,
+                            "to": effect_id,
+                            "strength": path_strength,
+                            "nodes": path_nodes
+                        })
+        
+        # Calculate overall confidence
+        if significant_effects:
+            # Average of path strengths for significant effects
+            path_strengths = [p["strength"] for p in analysis["pathways"]]
+            if path_strengths:
+                avg_strength = sum(path_strengths) / len(path_strengths)
+                analysis["confidence"] = avg_strength
+            else:
+                analysis["confidence"] = 0.3  # Low confidence if no clear paths
+        else:
+            analysis["confidence"] = 0.5  # Moderate confidence in no significant effects
+        
+        # Generate summary
+        changed_count = len(changes)
+        significant_count = len(significant_effects)
+        
+        if changed_count == 0:
+            analysis["summary"] = "The counterfactual change would have no effect."
+        elif significant_count == 0:
+            analysis["summary"] = f"The counterfactual change would affect {changed_count} variables, but none significantly."
+        else:
+            analysis["summary"] = f"The counterfactual change would significantly affect {significant_count} out of {changed_count} changed variables."
+        
+        return analysis
+    
+    def _is_significant_change(self, node: CausalNode, factual_value: Any, 
+                            counterfactual_value: Any) -> bool:
+        """Determine if a change is significant"""
+        # For categorical values, any change is significant
+        if node.states and factual_value != counterfactual_value:
+            return True
+            
+        # For numeric values, check if change is substantial
+        if isinstance(factual_value, (int, float)) and isinstance(counterfactual_value, (int, float)):
+            current_value = factual_value
+            if current_value == 0:
+                # Avoid division by zero
+                return abs(counterfactual_value) > 0.1
+            else:
+                relative_change = abs((counterfactual_value - current_value) / current_value)
+                return relative_change > 0.1  # More than 10% change
+        
+        # Default case
+        return factual_value != counterfactual_value
+    
+    async def get_causal_model(self, model_id: str) -> Dict[str, Any]:
+        """Get a causal model by ID"""
+        if model_id not in self.causal_models:
+            raise ValueError(f"Model {model_id} not found")
+            
+        return self.causal_models[model_id].to_dict()
+    
+    async def get_all_causal_models(self) -> List[Dict[str, Any]]:
+        """Get all causal models"""
+        return [model.to_dict() for model in self.causal_models.values()]
+    
+    async def get_intervention(self, intervention_id: str) -> Dict[str, Any]:
+        """Get an intervention by ID"""
+        if intervention_id not in self.interventions:
+            raise ValueError(f"Intervention {intervention_id} not found")
+            
+        return self.interventions[intervention_id].to_dict()
+    
+    async def get_counterfactual(self, counterfactual_id: str) -> Dict[str, Any]:
+        """Get a counterfactual analysis by ID"""
+        if counterfactual_id not in self.counterfactuals:
+            raise ValueError(f"Counterfactual {counterfactual_id} not found")
+            
+        return self.counterfactuals[counterfactual_id]
+    
+    async def get_stats(self) -> Dict[str, Any]:
+        """Get statistics about the causal reasoning system"""
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "models": self.stats["models_created"],
+            "nodes": self.stats["nodes_created"],
+            "relations": self.stats["relations_created"],
+            "interventions": self.stats["interventions_performed"],
+            "counterfactuals": self.stats["counterfactuals_analyzed"],
+            "discovery_runs": self.stats["discovery_runs"],
+            "configuration": self.config
+        }
+    
+    async def save_state(self, file_path: str) -> bool:
+        """Save current state to file"""
+        try:
+            state = {
+                "causal_models": {model_id: model.to_dict() for model_id, model in self.causal_models.items()},
+                "interventions": {int_id: intervention.to_dict() for int_id, intervention in self.interventions.items()},
+                "counterfactuals": self.counterfactuals,
+                "observations": self.observations,
+                "config": self.config,
+                "stats": self.stats,
+                "next_model_id": self.next_model_id,
+                "next_intervention_id": self.next_intervention_id,
+                "next_counterfactual_id": self.next_counterfactual_id,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            with open(file_path, 'w') as f:
+                json.dump(state, f, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error saving causal reasoning state: {e}")
+            return False
+        
+    async def load_state(self, file_path: str) -> bool:
+        """Load state from file"""
+        try:
+            with open(file_path, 'r') as f:
+                state = json.load(f)
+            
+            # Load models
+            self.causal_models = {}
+            for model_id, model_data in state["causal_models"].items():
+                self.causal_models[model_id] = CausalModel.from_dict(model_data)
+            
+            # Load interventions
+            self.interventions = {}
+            for int_id, int_data in state["interventions"].items():
+                self.interventions[int_id] = Intervention.from_dict(int_data)
+            
+            # Load other attributes
+            self.counterfactuals = state["counterfactuals"]
+            self.observations = state["observations"]
+            self.config = state["config"]
+            self.stats = state["stats"]
+            self.next_model_id = state["next_model_id"]
+            self.next_intervention_id = state["next_intervention_id"]
+            self.next_counterfactual_id = state["next_counterfactual_id"]
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error loading causal reasoning state: {e}")
+            return False
