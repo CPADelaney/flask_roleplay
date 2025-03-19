@@ -402,4 +402,178 @@ class DynamicAdaptationSystem:
         return features
     
     def _calculate_context_complexity(self, context: Dict[str, Any]) -> float:
-        """Calculate the compl
+        """Calculate the complexity of the current context"""
+        # Count the number of nested elements and total elements
+        total_elements = 0
+        nested_elements = 0
+        max_depth = 0
+        
+        def count_elements(obj, depth=0):
+            nonlocal total_elements, nested_elements, max_depth
+            max_depth = max(max_depth, depth)
+            
+            if isinstance(obj, dict):
+                total_elements += len(obj)
+                for key, value in obj.items():
+                    if isinstance(value, (dict, list)):
+                        nested_elements += 1
+                        count_elements(value, depth + 1)
+            elif isinstance(obj, list):
+                total_elements += len(obj)
+                for item in obj:
+                    if isinstance(item, (dict, list)):
+                        nested_elements += 1
+                        count_elements(item, depth + 1)
+        
+        count_elements(context)
+        
+        # Calculate complexity factors
+        size_factor = min(1.0, total_elements / 50.0)  # Normalize by expecting max 50 elements
+        nesting_factor = min(1.0, nested_elements / 10.0)  # Normalize by expecting max 10 nested elements
+        depth_factor = min(1.0, max_depth / 5.0)  # Normalize by expecting max depth of 5
+        
+        # Combine factors with weights
+        complexity = (
+            size_factor * 0.4 +
+            nesting_factor * 0.3 +
+            depth_factor * 0.3
+        )
+        
+        return complexity
+    
+    def _calculate_context_volatility(self) -> float:
+        """Calculate the volatility of the context over time"""
+        if len(self.context_history) < 3:
+            return 0.0  # Not enough history to calculate volatility
+        
+        # Calculate pairwise differences between consecutive contexts
+        differences = []
+        for i in range(1, len(self.context_history)):
+            diff = self._calculate_context_difference(
+                self.context_history[i], 
+                self.context_history[i-1]
+            )
+            differences.append(diff)
+        
+        # Calculate variance of differences
+        mean_diff = sum(differences) / len(differences)
+        variance = sum((diff - mean_diff) ** 2 for diff in differences) / len(differences)
+        
+        # Normalize to [0,1]
+        volatility = min(1.0, math.sqrt(variance) * 3.0)  # Scale to make values more meaningful
+        
+        return volatility
+    
+    def _calculate_strategy_score(self,
+                                strategy: Dict[str, Any], 
+                                context_features: Dict[str, float],
+                                performance: Dict[str, Any],
+                                complexity: float,
+                                volatility: float) -> float:
+        """Calculate a score for how well a strategy matches the current context"""
+        params = strategy["parameters"]
+        
+        # Base score starts at 0.5
+        score = 0.5
+        
+        # Adjust based on complexity
+        # Higher complexity prefers higher adaptation rate
+        complexity_match = 1.0 - abs(complexity - params["adaptation_rate"])
+        score += complexity_match * 0.1
+        
+        # Adjust based on volatility
+        # Higher volatility prefers higher exploration rate
+        volatility_match = 1.0 - abs(volatility - params["exploration_rate"])
+        score += volatility_match * 0.1
+        
+        # Adjust based on performance trends
+        trends = performance.get("trends", {})
+        
+        # If performance is declining, prefer more exploratory strategies
+        declining_metrics = sum(1 for t in trends.values() if t.get("direction") == "declining")
+        if declining_metrics > 0:
+            exploration_bonus = params["exploration_rate"] * 0.1 * declining_metrics
+            score += exploration_bonus
+        
+        # If performance is good and stable, prefer more conservative strategies
+        stable_good_metrics = sum(1 for m, t in zip(performance.get("current", {}).values(), trends.values()) 
+                                if m > 0.7 and t.get("direction") in ["stable", "improving"])
+        if stable_good_metrics > 0:
+            precision_bonus = params["precision_focus"] * 0.1 * stable_good_metrics
+            score += precision_bonus
+        
+        # Adjust based on history - avoid using the same strategy too many times in a row
+        recency_penalty = 0.0
+        for i, history_item in enumerate(reversed(self.strategy_history)):
+            if history_item["strategy_id"] == strategy["id"]:
+                recency_penalty += 0.05 * (0.8 ** i)  # Exponential decay with distance
+        
+        score -= min(0.2, recency_penalty)  # Cap penalty
+        
+        # Ensure score is in [0,1] range
+        return min(1.0, max(0.0, score))
+    
+    def _calculate_performance_volatility(self) -> float:
+        """Calculate the volatility of performance metrics over time"""
+        if len(self.performance_history) < 3:
+            return 0.0  # Not enough history
+        
+        # Extract all metric values
+        metric_values = {}
+        
+        for history_point in self.performance_history:
+            for metric, value in history_point["metrics"].items():
+                if metric not in metric_values:
+                    metric_values[metric] = []
+                metric_values[metric].append(value)
+        
+        # Calculate standard deviation for each metric
+        std_devs = []
+        for values in metric_values.values():
+            if len(values) >= 3:  # Need at least 3 points
+                mean = sum(values) / len(values)
+                variance = sum((v - mean) ** 2 for v in values) / len(values)
+                std_devs.append(math.sqrt(variance))
+        
+        if not std_devs:
+            return 0.0
+            
+        # Average standard deviation across metrics
+        avg_std_dev = sum(std_devs) / len(std_devs)
+        
+        # Normalize to [0,1] with reasonable scaling
+        volatility = min(1.0, avg_std_dev * 3.0)
+        
+        return volatility
+    
+    def _summarize_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a summary of the context for history records"""
+        summary = {}
+        
+        # Include basic scalar values
+        for key, value in context.items():
+            if isinstance(value, (str, int, float, bool)):
+                summary[key] = value
+        
+        # Add derived measures
+        summary["complexity"] = self._calculate_context_complexity(context)
+        summary["volatility"] = self._calculate_context_volatility()
+        
+        return summary
+    
+    def _summarize_performance(self, performance: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a summary of performance for history records"""
+        summary = {}
+        
+        # Include current metrics
+        current = performance.get("current", {})
+        summary["metrics"] = current
+        
+        # Include average
+        if current:
+            summary["average"] = sum(current.values()) / len(current)
+        
+        # Include volatility
+        summary["volatility"] = self._calculate_performance_volatility()
+        
+        return summary
