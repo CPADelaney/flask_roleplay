@@ -12,6 +12,7 @@ psycopg2
 openai==1.66.2
 openai-agents==0.0.4
 asyncpg
+celery
 
 # Web framework
 flask==3.0.0
