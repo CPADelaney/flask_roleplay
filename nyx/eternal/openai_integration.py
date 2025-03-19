@@ -35,7 +35,7 @@ def get_api() -> OpenAIAgentsAPI:
     global _api_instance
     
     if _api_instance is None:
-        raise RuntimeError("OpenAI Agents integration not initialized")
+        raise RuntimeError("OpenAI Agents integration not initialized. Call initialize() first.")
     
     return _api_instance
 
