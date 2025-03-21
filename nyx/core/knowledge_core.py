@@ -8,30 +8,16 @@ import math
 import networkx as nx
 import numpy as np
 
-from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple, Union
-
-# Try to import a real embedding model from sentence-transformers or transformers
-# If you prefer a different approach (like OpenAI embeddings), adapt the code below.
-
-try:
-    from sentence_transformers import SentenceTransformer
-    _EMBEDDING_MODEL_AVAILABLE = True
-except ImportError:
-    _EMBEDDING_MODEL_AVAILABLE = False
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional, Tuple, Union, Set
+import random
+from collections import Counter
 
 logger = logging.getLogger(__name__)
 
-
-###############################################################################
-#                           KNOWLEDGE NODE & RELATION
-###############################################################################
-
 class KnowledgeNode:
-    """
-    Represents a node in the knowledge graph, storing a piece of knowledge.
-    """
-
+    """Represents a node in the knowledge graph, storing a piece of knowledge."""
+    
     def __init__(self,
                  id: str,
                  type: str,
@@ -68,11 +54,11 @@ class KnowledgeNode:
                new_confidence: Optional[float] = None,
                source: Optional[str] = None) -> None:
         """
-        Merge new content into the node’s existing content, optionally adjusting confidence and source.
+        Merge new content into the node's existing content, optionally adjusting confidence and source.
 
-        :param new_content: Additional or overriding fields for the node’s content.
-        :param new_confidence: If provided, set the node’s confidence to this new value.
-        :param source: If provided, update the node’s source.
+        :param new_content: Additional or overriding fields for the node's content.
+        :param new_confidence: If provided, set the node's confidence to this new value.
+        :param source: If provided, update the node's source.
         """
         self.content.update(new_content)
         if new_confidence is not None:
@@ -83,7 +69,7 @@ class KnowledgeNode:
 
     def access(self) -> None:
         """
-        Record an “access” operation on the node, for usage statistics or confidence decay logic.
+        Record an "access" operation on the node, for usage statistics or confidence decay logic.
         """
         self.last_accessed = datetime.now()
         self.access_count += 1
@@ -191,32 +177,266 @@ class KnowledgeRelation:
         return relation
 
 
-###############################################################################
-#                       REASONING SYSTEM (SIMPLE STUB)
-###############################################################################
+class ExplorationTarget:
+    """Represents a target for exploration"""
+    
+    def __init__(self, target_id: str, domain: str, topic: str, 
+                importance: float = 0.5, urgency: float = 0.5,
+                knowledge_gap: float = 0.5):
+        self.id = target_id
+        self.domain = domain
+        self.topic = topic
+        self.importance = importance  # How important is this knowledge (0.0-1.0)
+        self.urgency = urgency  # How urgent is filling this gap (0.0-1.0)
+        self.knowledge_gap = knowledge_gap  # How large is the gap (0.0-1.0)
+        self.created_at = datetime.now()
+        self.last_explored = None
+        self.exploration_count = 0
+        self.exploration_results = []
+        self.related_questions = []
+        self.priority_score = self._calculate_priority()
+        
+    def _calculate_priority(self) -> float:
+        """Calculate priority score based on factors"""
+        # Weights for different factors
+        weights = {
+            "importance": 0.4,
+            "urgency": 0.3,
+            "knowledge_gap": 0.3
+        }
+        
+        # Calculate weighted score
+        priority = (
+            self.importance * weights["importance"] +
+            self.urgency * weights["urgency"] +
+            self.knowledge_gap * weights["knowledge_gap"]
+        )
+        
+        return priority
+    
+    def update_priority(self) -> float:
+        """Update priority based on current factors"""
+        # Apply decay factor for previously explored targets
+        if self.exploration_count > 0:
+            # Decay based on exploration count (diminishing returns)
+            exploration_factor = 1.0 / (1.0 + self.exploration_count * 0.5)
+            
+            # Decay based on recency (more recent = less urgent to revisit)
+            if self.last_explored:
+                days_since = (datetime.now() - self.last_explored).total_seconds() / (24 * 3600)
+                recency_factor = min(1.0, days_since / 30)  # Max effect after 30 days
+            else:
+                recency_factor = 1.0
+                
+            # Apply factors to base priority
+            self.priority_score = self._calculate_priority() * exploration_factor * recency_factor
+        else:
+            # Never explored, use base priority
+            self.priority_score = self._calculate_priority()
+            
+        return self.priority_score
+    
+    def record_exploration(self, result: Dict[str, Any]) -> None:
+        """Record an exploration of this target"""
+        self.exploration_count += 1
+        self.last_explored = datetime.now()
+        self.exploration_results.append({
+            "timestamp": self.last_explored.isoformat(),
+            "result": result
+        })
+        
+        # Update knowledge gap based on result
+        if "knowledge_gained" in result:
+            knowledge_gained = result["knowledge_gained"]
+            
+            # Reduce knowledge gap proportionally to knowledge gained
+            self.knowledge_gap = max(0.0, self.knowledge_gap - knowledge_gained)
+        
+        # Update priority score
+        self.update_priority()
+    
+    def add_related_question(self, question: str) -> None:
+        """Add a related question to this exploration target"""
+        if question not in self.related_questions:
+            self.related_questions.append(question)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation"""
+        return {
+            "id": self.id,
+            "domain": self.domain,
+            "topic": self.topic,
+            "importance": self.importance,
+            "urgency": self.urgency,
+            "knowledge_gap": self.knowledge_gap,
+            "created_at": self.created_at.isoformat(),
+            "last_explored": self.last_explored.isoformat() if self.last_explored else None,
+            "exploration_count": self.exploration_count,
+            "exploration_results": self.exploration_results,
+            "related_questions": self.related_questions,
+            "priority_score": self.priority_score
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ExplorationTarget':
+        """Create from dictionary representation"""
+        target = cls(
+            target_id=data["id"],
+            domain=data["domain"],
+            topic=data["topic"],
+            importance=data["importance"],
+            urgency=data["urgency"],
+            knowledge_gap=data["knowledge_gap"]
+        )
+        target.created_at = datetime.fromisoformat(data["created_at"])
+        if data["last_explored"]:
+            target.last_explored = datetime.fromisoformat(data["last_explored"])
+        target.exploration_count = data["exploration_count"]
+        target.exploration_results = data["exploration_results"]
+        target.related_questions = data["related_questions"]
+        target.priority_score = data["priority_score"]
+        return target
+
+
+class KnowledgeMap:
+    """Maps knowledge domains and gaps"""
+    
+    def __init__(self):
+        self.domains = {}  # domain -> {topic -> level}
+        self.connections = {}  # (domain1, topic1) -> [(domain2, topic2, strength), ...]
+        self.importance_levels = {}  # (domain, topic) -> importance
+        self.last_updated = {}  # (domain, topic) -> datetime
+        
+    def add_knowledge(self, domain: str, topic: str, 
+                    level: float = 0.0, importance: float = 0.5) -> None:
+        """Add or update knowledge in the map"""
+        # Ensure domain exists
+        if domain not in self.domains:
+            self.domains[domain] = {}
+            
+        # Update knowledge level
+        self.domains[domain][topic] = level
+        
+        # Update importance and timestamp
+        key = (domain, topic)
+        self.importance_levels[key] = importance
+        self.last_updated[key] = datetime.now()
+    
+    def add_connection(self, domain1: str, topic1: str, 
+                     domain2: str, topic2: str, 
+                     strength: float = 0.5) -> None:
+        """Add a connection between knowledge topics"""
+        # Create key for first topic
+        key1 = (domain1, topic1)
+        
+        # Ensure key exists in connections
+        if key1 not in self.connections:
+            self.connections[key1] = []
+            
+        # Add connection
+        connection = (domain2, topic2, strength)
+        if connection not in self.connections[key1]:
+            self.connections[key1].append(connection)
+            
+        # Add reverse connection
+        key2 = (domain2, topic2)
+        if key2 not in self.connections:
+            self.connections[key2] = []
+            
+        reverse_connection = (domain1, topic1, strength)
+        if reverse_connection not in self.connections[key2]:
+            self.connections[key2].append(reverse_connection)
+    
+    def get_knowledge_level(self, domain: str, topic: str) -> float:
+        """Get knowledge level for a domain/topic"""
+        if domain in self.domains and topic in self.domains[domain]:
+            return self.domains[domain][topic]
+        return 0.0
+    
+    def get_importance(self, domain: str, topic: str) -> float:
+        """Get importance level for a domain/topic"""
+        key = (domain, topic)
+        return self.importance_levels.get(key, 0.5)
+    
+    def get_knowledge_gaps(self) -> List[Tuple[str, str, float, float]]:
+        """Get all knowledge gaps (domain, topic, level, importance)"""
+        gaps = []
+        
+        for domain, topics in self.domains.items():
+            for topic, level in topics.items():
+                if level < 0.7:  # Consider anything below 0.7 as a gap
+                    gap_size = 1.0 - level
+                    importance = self.get_importance(domain, topic)
+                    gaps.append((domain, topic, gap_size, importance))
+        
+        # Sort by gap_size * importance (descending)
+        gaps.sort(key=lambda x: x[2] * x[3], reverse=True)
+        
+        return gaps
+    
+    def get_related_topics(self, domain: str, topic: str) -> List[Tuple[str, str, float]]:
+        """Get topics related to a given topic"""
+        key = (domain, topic)
+        return self.connections.get(key, [])
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation"""
+        return {
+            "domains": {domain: dict(topics) for domain, topics in self.domains.items()},
+            "connections": {f"{k[0]}|{k[1]}": v for k, v in self.connections.items()},
+            "importance_levels": {f"{k[0]}|{k[1]}": v for k, v in self.importance_levels.items()},
+            "last_updated": {f"{k[0]}|{k[1]}": v.isoformat() for k, v in self.last_updated.items()}
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'KnowledgeMap':
+        """Create from dictionary representation"""
+        knowledge_map = cls()
+        
+        # Load domains
+        for domain, topics in data["domains"].items():
+            knowledge_map.domains[domain] = topics
+        
+        # Load connections
+        for key_str, connections in data["connections"].items():
+            domain, topic = key_str.split("|")
+            knowledge_map.connections[(domain, topic)] = connections
+        
+        # Load importance levels
+        for key_str, importance in data["importance_levels"].items():
+            domain, topic = key_str.split("|")
+            knowledge_map.importance_levels[(domain, topic)] = importance
+        
+        # Load timestamps
+        for key_str, timestamp in data["last_updated"].items():
+            domain, topic = key_str.split("|")
+            knowledge_map.last_updated[(domain, topic)] = datetime.fromisoformat(timestamp)
+            
+        return knowledge_map
+
 
 class SimpleReasoningSystem:
     """
-    A minimal example of a “reasoning” component that attempts to resolve contradictions.
+    A minimal example of a "reasoning" component that attempts to resolve contradictions.
     Replace/extend with your custom logic or external reasoner calls.
     """
 
     async def resolve_contradiction(self, node1: Dict[str, Any], node2: Dict[str, Any]) -> Dict[str, Any]:
         """
         A naive contradiction-resolution approach:
-        - Always pick the node with higher confidence as “preferred”.
+        - Always pick the node with higher confidence as "preferred".
         - Return the other node with reduced confidence.
 
         :param node1: Node dict (from node.to_dict()).
         :param node2: Node dict.
         :return: A dictionary indicating resolution status and which node is preferred.
         """
-        # Example: just pick the higher confidence node as “preferred”
+        # Example: just pick the higher confidence node as "preferred"
         confidence1 = node1["confidence"]
         confidence2 = node2["confidence"]
 
         if abs(confidence1 - confidence2) < 0.05:
-            # If they are almost the same, say we “didn’t” resolve it fully
+            # If they are almost the same, say we "didn't" resolve it fully
             return {
                 "resolved": False,
                 "preferred_node": None
@@ -234,9 +454,391 @@ class SimpleReasoningSystem:
                 }
 
 
-###############################################################################
-#                           KNOWLEDGE CORE (MAIN CLASS)
-###############################################################################
+class CuriositySystem:
+    """System for curiosity-driven exploration and knowledge gap identification"""
+    
+    def __init__(self):
+        self.knowledge_map = KnowledgeMap()
+        self.exploration_targets = {}  # id -> ExplorationTarget
+        self.exploration_history = []
+        self.next_target_id = 1
+        
+        # Configuration
+        self.config = {
+            "max_active_targets": 20,
+            "exploration_budget": 0.5,  # 0.0 to 1.0
+            "novelty_bias": 0.7,        # 0.0 to 1.0
+            "importance_threshold": 0.3, # Minimum importance to consider
+            "knowledge_decay_rate": 0.01 # Rate of knowledge decay over time
+        }
+        
+        # Statistics
+        self.stats = {
+            "total_explorations": 0,
+            "successful_explorations": 0,
+            "knowledge_gained": 0.0,
+            "avg_importance": 0.0
+        }
+        
+    async def add_knowledge(self, domain: str, topic: str, level: float, 
+                         importance: float = 0.5) -> None:
+        """Add knowledge to the knowledge map"""
+        self.knowledge_map.add_knowledge(domain, topic, level, importance)
+        
+        # Update related exploration targets
+        for target_id, target in self.exploration_targets.items():
+            if target.domain == domain and target.topic == topic:
+                # Update knowledge gap
+                original_gap = target.knowledge_gap
+                target.knowledge_gap = max(0.0, 1.0 - level)
+                
+                # Update priority
+                target.update_priority()
+                
+                # If gap is closed, mark as explored
+                if target.knowledge_gap < 0.2 and not target.last_explored:
+                    target.record_exploration({
+                        "source": "external_knowledge",
+                        "knowledge_gained": original_gap - target.knowledge_gap
+                    })
+        
+    async def add_knowledge_connection(self, domain1: str, topic1: str,
+                                   domain2: str, topic2: str,
+                                   strength: float = 0.5) -> None:
+        """Add a connection between knowledge topics"""
+        self.knowledge_map.add_connection(domain1, topic1, domain2, topic2, strength)
+        
+    async def identify_knowledge_gaps(self) -> List[Dict[str, Any]]:
+        """Identify knowledge gaps from the knowledge map"""
+        # Get gaps from knowledge map
+        gaps = self.knowledge_map.get_knowledge_gaps()
+        
+        # Convert to dictionaries
+        gap_dicts = []
+        for domain, topic, gap_size, importance in gaps:
+            if importance >= self.config["importance_threshold"]:
+                gap_dicts.append({
+                    "domain": domain,
+                    "topic": topic,
+                    "gap_size": gap_size,
+                    "importance": importance,
+                    "priority": gap_size * importance
+                })
+        
+        # Sort by priority (descending)
+        gap_dicts.sort(key=lambda x: x["priority"], reverse=True)
+        
+        return gap_dicts
+        
+    async def create_exploration_target(self, domain: str, topic: str,
+                                     importance: float = 0.5, urgency: float = 0.5,
+                                     knowledge_gap: Optional[float] = None) -> str:
+        """Create a new exploration target"""
+        # Generate target id
+        target_id = f"target_{self.next_target_id}"
+        self.next_target_id += 1
+        
+        # Get knowledge gap from knowledge map if not provided
+        if knowledge_gap is None:
+            level = self.knowledge_map.get_knowledge_level(domain, topic)
+            knowledge_gap = 1.0 - level
+        
+        # Create exploration target
+        target = ExplorationTarget(
+            target_id=target_id,
+            domain=domain,
+            topic=topic,
+            importance=importance,
+            urgency=urgency,
+            knowledge_gap=knowledge_gap
+        )
+        
+        # Store target
+        self.exploration_targets[target_id] = target
+        
+        return target_id
+        
+    async def get_exploration_targets(self, limit: int = 10, 
+                                  min_priority: float = 0.0) -> List[Dict[str, Any]]:
+        """Get current exploration targets sorted by priority"""
+        # Update priorities
+        for target in self.exploration_targets.values():
+            target.update_priority()
+        
+        # Sort by priority
+        sorted_targets = sorted(
+            [t for t in self.exploration_targets.values() if t.priority_score >= min_priority],
+            key=lambda x: x.priority_score,
+            reverse=True
+        )
+        
+        # Apply limit
+        targets = sorted_targets[:limit]
+        
+        # Convert to dictionaries
+        return [target.to_dict() for target in targets]
+        
+    async def record_exploration(self, target_id: str, 
+                             result: Dict[str, Any]) -> Dict[str, Any]:
+        """Record the result of an exploration"""
+        if target_id not in self.exploration_targets:
+            return {"error": f"Target {target_id} not found"}
+        
+        # Get target
+        target = self.exploration_targets[target_id]
+        
+        # Record exploration
+        target.record_exploration(result)
+        
+        # Update knowledge map if knowledge gained
+        if "knowledge_gained" in result and result["knowledge_gained"] > 0:
+            level = 1.0 - target.knowledge_gap
+            self.knowledge_map.add_knowledge(
+                target.domain,
+                target.topic,
+                level,
+                target.importance
+            )
+        
+        # Update statistics
+        self.stats["total_explorations"] += 1
+        if result.get("success", False):
+            self.stats["successful_explorations"] += 1
+        self.stats["knowledge_gained"] += result.get("knowledge_gained", 0.0)
+        
+        # Calculate average importance
+        total_importance = sum(target.importance for target in self.exploration_targets.values())
+        if self.exploration_targets:
+            self.stats["avg_importance"] = total_importance / len(self.exploration_targets)
+        
+        # Add to exploration history
+        self.exploration_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "target_id": target_id,
+            "domain": target.domain,
+            "topic": target.topic,
+            "result": result
+        })
+        
+        # Prune history if needed
+        if len(self.exploration_history) > 1000:
+            self.exploration_history = self.exploration_history[-1000:]
+        
+        return {
+            "target": target.to_dict(),
+            "updated_knowledge_level": 1.0 - target.knowledge_gap
+        }
+        
+    async def generate_questions(self, target_id: str, limit: int = 5) -> List[str]:
+        """Generate questions to explore a target"""
+        if target_id not in self.exploration_targets:
+            return []
+        
+        # Get target
+        target = self.exploration_targets[target_id]
+        
+        # If there are already questions, return them
+        if len(target.related_questions) >= limit:
+            return target.related_questions[:limit]
+        
+        # Generate basic questions
+        questions = [
+            f"What is {target.topic} in the context of {target.domain}?",
+            f"Why is {target.topic} important in {target.domain}?",
+            f"How does {target.topic} relate to other topics in {target.domain}?",
+            f"What are the key components or aspects of {target.topic}?",
+            f"What are common misconceptions about {target.topic}?"
+        ]
+        
+        # Get related topics for more targeted questions
+        related_topics = self.knowledge_map.get_related_topics(target.domain, target.topic)
+        for domain, topic, strength in related_topics[:3]:  # Use up to 3 related topics
+            questions.append(f"How does {target.topic} relate to {topic}?")
+        
+        # Add questions to target
+        for question in questions:
+            target.add_related_question(question)
+        
+        return questions[:limit]
+        
+    async def apply_knowledge_decay(self) -> Dict[str, Any]:
+        """Apply decay to knowledge levels over time"""
+        decay_stats = {
+            "domains_affected": 0,
+            "topics_affected": 0,
+            "total_decay": 0.0,
+            "average_decay": 0.0
+        }
+        
+        now = datetime.now()
+        decay_factor = self.config["knowledge_decay_rate"]
+        
+        # Apply decay to all domains and topics
+        for domain, topics in self.knowledge_map.domains.items():
+            domain_affected = False
+            
+            for topic, level in list(topics.items()):
+                # Get last update time
+                key = (domain, topic)
+                last_updated = self.knowledge_map.last_updated.get(key)
+                
+                if last_updated:
+                    # Calculate days since last update
+                    days_since = (now - last_updated).total_seconds() / (24 * 3600)
+                    
+                    # Apply decay based on time
+                    if days_since > 30:  # Only decay knowledge older than 30 days
+                        decay_amount = level * decay_factor * (days_since / 30)
+                        new_level = max(0.0, level - decay_amount)
+                        
+                        # Update knowledge level
+                        self.knowledge_map.domains[domain][topic] = new_level
+                        
+                        # Update statistics
+                        decay_stats["topics_affected"] += 1
+                        decay_stats["total_decay"] += decay_amount
+                        domain_affected = True
+            
+            if domain_affected:
+                decay_stats["domains_affected"] += 1
+        
+        # Calculate average decay
+        if decay_stats["topics_affected"] > 0:
+            decay_stats["average_decay"] = decay_stats["total_decay"] / decay_stats["topics_affected"]
+        
+        return decay_stats
+        
+    async def get_curiosity_statistics(self) -> Dict[str, Any]:
+        """Get statistics about the curiosity system"""
+        # Calculate domains and topics
+        domain_count = len(self.knowledge_map.domains)
+        topic_count = sum(len(topics) for topics in self.knowledge_map.domains.values())
+        
+        # Calculate knowledge levels
+        knowledge_levels = []
+        for domain, topics in self.knowledge_map.domains.items():
+            for topic, level in topics.items():
+                knowledge_levels.append(level)
+        
+        avg_knowledge = sum(knowledge_levels) / len(knowledge_levels) if knowledge_levels else 0.0
+        
+        # Calculate knowledge gaps
+        gaps = self.knowledge_map.get_knowledge_gaps()
+        avg_gap_size = sum(gap[2] for gap in gaps) / len(gaps) if gaps else 0.0
+        
+        # Calculate exploration statistics
+        active_targets = len(self.exploration_targets)
+        explored_targets = sum(1 for t in self.exploration_targets.values() if t.exploration_count > 0)
+        
+        # Create statistics dictionary
+        statistics = {
+            "knowledge_map": {
+                "domain_count": domain_count,
+                "topic_count": topic_count,
+                "connection_count": sum(len(connections) for connections in self.knowledge_map.connections.values()),
+                "average_knowledge_level": avg_knowledge,
+                "average_gap_size": avg_gap_size,
+                "knowledge_gap_count": len(gaps)
+            },
+            "exploration": {
+                "active_targets": active_targets,
+                "explored_targets": explored_targets,
+                "exploration_ratio": explored_targets / active_targets if active_targets > 0 else 0.0,
+                "success_rate": self.stats["successful_explorations"] / self.stats["total_explorations"] if self.stats["total_explorations"] > 0 else 0.0,
+                "total_knowledge_gained": self.stats["knowledge_gained"],
+                "average_target_importance": self.stats["avg_importance"]
+            },
+            "configuration": self.config
+        }
+        
+        return statistics
+
+    async def prioritize_domains(self) -> List[Dict[str, Any]]:
+        """Prioritize knowledge domains based on gaps and importance"""
+        domain_stats = {}
+        
+        # Collect statistics for each domain
+        for domain, topics in self.knowledge_map.domains.items():
+            domain_topics = len(topics)
+            domain_knowledge = sum(level for level in topics.values()) / domain_topics if domain_topics > 0 else 0.0
+            
+            # Calculate domain importance
+            domain_importance = 0.0
+            for topic in topics:
+                key = (domain, topic)
+                importance = self.knowledge_map.importance_levels.get(key, 0.5)
+                domain_importance += importance
+            domain_importance /= domain_topics if domain_topics > 0 else 1.0
+            
+            # Calculate domain knowledge gap
+            domain_gap = 1.0 - domain_knowledge
+            
+            # Calculate domain priority
+            domain_priority = domain_gap * domain_importance
+            
+            domain_stats[domain] = {
+                "topic_count": domain_topics,
+                "average_knowledge": domain_knowledge,
+                "average_importance": domain_importance,
+                "knowledge_gap": domain_gap,
+                "priority": domain_priority
+            }
+        
+        # Sort domains by priority
+        prioritized_domains = [
+            {"domain": domain, **stats}
+            for domain, stats in domain_stats.items()
+        ]
+        prioritized_domains.sort(key=lambda x: x["priority"], reverse=True)
+        
+        return prioritized_domains
+        
+    async def save_state(self, file_path: str) -> bool:
+        """Save current state to file"""
+        try:
+            state = {
+                "knowledge_map": self.knowledge_map.to_dict(),
+                "exploration_targets": {tid: target.to_dict() for tid, target in self.exploration_targets.items()},
+                "exploration_history": self.exploration_history,
+                "next_target_id": self.next_target_id,
+                "config": self.config,
+                "stats": self.stats,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            with open(file_path, 'w') as f:
+                json.dump(state, f, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error saving curiosity state: {e}")
+            return False
+        
+    async def load_state(self, file_path: str) -> bool:
+        """Load state from file"""
+        try:
+            with open(file_path, 'r') as f:
+                state = json.load(f)
+            
+            # Load knowledge map
+            self.knowledge_map = KnowledgeMap.from_dict(state["knowledge_map"])
+            
+            # Load exploration targets
+            self.exploration_targets = {}
+            for tid, target_data in state["exploration_targets"].items():
+                self.exploration_targets[tid] = ExplorationTarget.from_dict(target_data)
+            
+            # Load other attributes
+            self.exploration_history = state["exploration_history"]
+            self.next_target_id = state["next_target_id"]
+            self.config = state["config"]
+            self.stats = state["stats"]
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error loading curiosity state: {e}")
+            return False
+
 
 class KnowledgeCore:
     """
@@ -291,17 +893,65 @@ class KnowledgeCore:
         self.reasoning_system = None  # We'll use the SimpleReasoningSystem by default
         self.knowledge_store_file = knowledge_store_file
 
-        # If real embeddings are enabled, try to load the model
-        if self.config["enable_embeddings"] and _EMBEDDING_MODEL_AVAILABLE:
+        # Setup Curiosity system for exploration
+        self.curiosity_system = CuriositySystem()
+
+        # Try to load the model
+        self._embedding_model = None
+        self._try_load_embedding_model()
+
+    def _try_load_embedding_model(self):
+        """Try to load an embedding model if available"""
+        if self.config["enable_embeddings"]:
             try:
-                # Use a standard SentenceTransformer model—change if you want a smaller/larger one
-                self._embedding_model = SentenceTransformer('all-mpnet-base-v2')
-                logger.info("Loaded embedding model (SentenceTransformer).")
+                # First, try to import SentenceTransformer
+                try:
+                    from sentence_transformers import SentenceTransformer
+                    # Use a standard SentenceTransformer model
+                    self._embedding_model = SentenceTransformer('all-mpnet-base-v2')
+                    logger.info("Loaded embedding model (SentenceTransformer).")
+                except ImportError:
+                    # Try to see if we can use transformers directly
+                    try:
+                        from transformers import AutoTokenizer, AutoModel
+                        import torch
+                        
+                        # A simplified wrapper to make it work like SentenceTransformer
+                        class SimpleEmbedder:
+                            def __init__(self, model_name):
+                                self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+                                self.model = AutoModel.from_pretrained(model_name)
+                                
+                            def encode(self, texts, show_progress_bar=False):
+                                # Simple mean pooling function
+                                def mean_pooling(model_output, attention_mask):
+                                    token_embeddings = model_output[0]
+                                    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+                                    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+                                
+                                # Tokenize
+                                encoded_input = self.tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
+                                
+                                # Compute token embeddings
+                                with torch.no_grad():
+                                    model_output = self.model(**encoded_input)
+                                
+                                # Perform pooling
+                                embeddings = mean_pooling(model_output, encoded_input['attention_mask'])
+                                
+                                # Normalize
+                                embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+                                
+                                return embeddings.numpy()
+                        
+                        self._embedding_model = SimpleEmbedder('sentence-transformers/all-mpnet-base-v2')
+                        logger.info("Loaded embedding model (Transformers).")
+                    except ImportError:
+                        logger.warning("Neither SentenceTransformer nor Transformers is available.")
+                        self._embedding_model = None
             except Exception as e:
                 logger.warning(f"Error loading embedding model: {e}")
                 self._embedding_model = None
-        else:
-            self._embedding_model = None
 
     async def initialize(self,
                          system_references: Dict[str, Any]) -> None:
@@ -320,6 +970,14 @@ class KnowledgeCore:
             self.reasoning_system = SimpleReasoningSystem()
 
         await self._load_knowledge()
+        
+        # Initialize curiosity system
+        if self.memory_system:
+            # Pass memory system reference if available
+            system_refs = {"memory_system": self.memory_system}
+            if self.reasoning_system:
+                system_refs["reasoning_system"] = self.reasoning_system
+        
         logger.info("Knowledge Core initialized.")
 
     async def _load_knowledge(self) -> None:
@@ -426,7 +1084,7 @@ class KnowledgeCore:
         """
         Add a new piece of knowledge (node) to the system.
 
-        :param type: The node’s knowledge type (concept, fact, rule, etc.)
+        :param type: The node's knowledge type (concept, fact, rule, etc.)
         :param content: Main data for the knowledge node.
         :param source: Where this knowledge came from (system name, user ID, etc.)
         :param confidence: Float in [0..1] for how reliable the knowledge is.
@@ -473,9 +1131,9 @@ class KnowledgeCore:
                     metadata=r.get("metadata", {})
                 )
 
-        # Optionally add “similar_to” edges for moderately similar nodes
+        # Optionally add "similar_to" edges for moderately similar nodes
         for sim_id, sim_val in similar_nodes:
-            if sim_val > self.config["similarity_threshold"] * 0.6:
+            if sim_val > self.config["similarity_threshold"] * 0.6:  # Use up to 3 related topics
                 await self.add_relation(
                     source_id=node_id,
                     target_id=sim_id,
@@ -503,7 +1161,7 @@ class KnowledgeCore:
         :param type: e.g., "supports", "contradicts", "specializes", "similar_to"
         :param weight: Strength of the relation
         :param metadata: Additional fields to store about the relation
-        :return: True if successful, False if either node doesn’t exist
+        :return: True if successful, False if either node doesn't exist
         """
         if source_id not in self.nodes or target_id not in self.nodes:
             logger.warning(f"Cannot add relation: node {source_id} or {target_id} does not exist.")
@@ -529,6 +1187,26 @@ class KnowledgeCore:
             await self._handle_contradiction(source_id, target_id)
 
         self.integration_stats["relations_added"] += 1
+        
+        # Update curiosity system with connection if appropriate
+        if type in ["related", "similar_to", "specializes"]:
+            # Extract domain and topic from node content if available
+            source_node = self.nodes[source_id]
+            target_node = self.nodes[target_id]
+            
+            source_domain = source_node.content.get("domain", source_node.type)
+            source_topic = source_node.content.get("topic", list(source_node.content.keys())[0] if source_node.content else "unknown")
+            
+            target_domain = target_node.content.get("domain", target_node.type)
+            target_topic = target_node.content.get("topic", list(target_node.content.keys())[0] if target_node.content else "unknown")
+            
+            # Add connection to curiosity system
+            await self.curiosity_system.add_knowledge_connection(
+                source_domain, source_topic,
+                target_domain, target_topic,
+                weight
+            )
+        
         return True
 
     async def _integrate_with_existing(self,
@@ -541,7 +1219,7 @@ class KnowledgeCore:
         :param new_node: The newly proposed KnowledgeNode
         :param existing_id: ID of the existing node
         :param similarity: A measure of how similar they are
-        :return: The existing node’s ID (which now contains updated content)
+        :return: The existing node's ID (which now contains updated content)
         """
         existing_node = self.nodes[existing_id]
         existing_node.access()
@@ -550,7 +1228,7 @@ class KnowledgeCore:
         if new_node.confidence > existing_node.confidence:
             # new_node is more reliable, use it as the basis
             updated_content = new_node.content.copy()
-            # keep old content that’s missing in new
+            # keep old content that's missing in new
             for key, val in existing_node.content.items():
                 if key not in updated_content:
                     updated_content[key] = val
@@ -593,7 +1271,7 @@ class KnowledgeCore:
             if self.reasoning_system:
                 try:
                     resolution = await self.reasoning_system.resolve_contradiction(node1.to_dict(),
-                                                                                    node2.to_dict())
+                                                                                  node2.to_dict())
                     if resolution["resolved"]:
                         preferred = resolution["preferred_node"]
                         if preferred == node1_id:
@@ -657,11 +1335,11 @@ class KnowledgeCore:
 
     async def _generate_embedding(self, node: KnowledgeNode) -> np.ndarray:
         """
-        Convert the node’s content to an embedding using a real (or fallback) model.
+        Convert the node's content to an embedding using a real (or fallback) model.
         """
-        # If a real sentence-transformers model is loaded, do that:
+        # If a real model is loaded, do that:
         if self._embedding_model:
-            # Convert content to a “document” string
+            # Convert content to a "document" string
             content_str = json.dumps(node.content, ensure_ascii=False)
             embedding = self._embedding_model.encode([content_str], show_progress_bar=False)
             # sentence-transformers returns a 2D array [ [vector], ]
@@ -742,6 +1420,9 @@ class KnowledgeCore:
 
         # 6. update stats
         await self._update_knowledge_stats()
+        
+        # 7. apply knowledge decay in curiosity system
+        await self.curiosity_system.apply_knowledge_decay()
 
         logger.info("Integration cycle completed.")
         # Optionally save knowledge
@@ -921,7 +1602,7 @@ class KnowledgeCore:
 
     async def _infer_relations(self) -> None:
         """
-        Demonstrate a simple “transitive” inference:
+        Demonstrate a simple "transitive" inference:
           A -> B, B -> C => maybe A -> C if certain relation types align
         """
         new_relations = []
@@ -1033,7 +1714,7 @@ class KnowledgeCore:
             "limit": limit
         }, sort_keys=True)
 
-        # If we already have an answer in our query_cache that’s <1 minute old, reuse
+        # If we already have an answer in our query_cache that's <1 minute old, reuse
         now = datetime.now()
         if cache_key in self.query_cache:
             entry = self.query_cache[cache_key]
@@ -1168,4 +1849,39 @@ class KnowledgeCore:
             "knowledge_queries": self.integration_stats["knowledge_queries"],
             "integration_cycles": self.integration_stats["integration_cycles"]
         }
+        
+        # Add curiosity system statistics
+        curiosity_stats = await self.curiosity_system.get_curiosity_statistics()
+        stats["curiosity_system"] = curiosity_stats
+        
         return stats
+    
+    # Curiosity System Methods
+    
+    async def identify_knowledge_gaps(self) -> List[Dict[str, Any]]:
+        """Identify knowledge gaps from the knowledge graph"""
+        return await self.curiosity_system.identify_knowledge_gaps()
+    
+    async def create_exploration_target(self, domain: str, topic: str,
+                                     importance: float = 0.5, urgency: float = 0.5,
+                                     knowledge_gap: Optional[float] = None) -> str:
+        """Create a new exploration target"""
+        return await self.curiosity_system.create_exploration_target(
+            domain=domain, topic=topic, importance=importance, 
+            urgency=urgency, knowledge_gap=knowledge_gap)
+    
+    async def get_exploration_targets(self, limit: int = 10, min_priority: float = 0.0) -> List[Dict[str, Any]]:
+        """Get current exploration targets sorted by priority"""
+        return await self.curiosity_system.get_exploration_targets(limit=limit, min_priority=min_priority)
+    
+    async def record_exploration(self, target_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Record the result of an exploration"""
+        return await self.curiosity_system.record_exploration(target_id=target_id, result=result)
+    
+    async def generate_questions(self, target_id: str, limit: int = 5) -> List[str]:
+        """Generate questions to explore a target"""
+        return await self.curiosity_system.generate_questions(target_id=target_id, limit=limit)
+    
+    async def prioritize_domains(self) -> List[Dict[str, Any]]:
+        """Prioritize knowledge domains based on gaps and importance"""
+        return await self.curiosity_system.prioritize_domains()
