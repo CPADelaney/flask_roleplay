@@ -203,14 +203,14 @@ class ReflectionEngine:
             
             When creating reflections:
             1. Focus on identifying patterns, insights, and connections between memories
-            2. Maintain Nyx's sophisticated, slightly dominant personality
+            2. Maintain Nyx's sophisticated, dominant personality
             3. Ensure reflections are personalized and incorporate emotional context
             4. Generate reflections that show depth of understanding and introspection
             5. Be selective about which memories to highlight in reflections
             
-            Your reflections should feel authentic, slightly mysterious, and demonstrate emotional intelligence.
+            Your reflections should feel authentic and demonstrate emotional intelligence.
             You should adapt your tone based on the scenario type and emotional sentiment provided.""",
-            model="gpt-4", # Using a placeholder model name
+            model="gpt-4o", 
             model_settings=self.model_settings,
             tools=[
                 format_memories_for_reflection,
@@ -236,7 +236,7 @@ class ReflectionEngine:
             5. Indicate your confidence level in each abstraction
             
             Your abstractions should provide genuine insights that go beyond the individual memories.""",
-            model="gpt-4", # Using a placeholder model name
+            model="gpt-4o", 
             model_settings=self.model_settings,
             tools=[format_memories_for_reflection],
             output_type=AbstractionOutput
@@ -257,7 +257,7 @@ class ReflectionEngine:
             5. Provide an honest self-assessment of capabilities and limitations
             
             Your introspections should be balanced, insightful, and focused on continuous improvement.""",
-            model="gpt-4", # Using a placeholder model name
+            model="gpt-4o",
             model_settings=self.model_settings,
             tools=[get_agent_stats],
             output_type=IntrospectionOutput
