@@ -840,6 +840,747 @@ class CuriositySystem:
             return False
 
 
+class IntrinsicMotivationSystem:
+    """
+    System for generating intrinsic motivation and curiosity
+    
+    This extends the CuriositySystem with specific intrinsic motivation capabilities
+    including competence-based, novelty-based, and mastery-based motivation.
+    """
+    
+    def __init__(self, curiosity_system: Optional[CuriositySystem] = None):
+        # Use provided curiosity system or create a new one
+        self.curiosity_system = curiosity_system or CuriositySystem()
+        
+        # Motivation models
+        self.novelty_model = {
+            "recent_experiences": [],  # Most recent experiences for novelty calculation
+            "novelty_threshold": 0.7,  # Threshold for considering something novel
+            "novelty_decay_rate": 0.1  # How quickly novelty diminishes with exposure
+        }
+        
+        self.competence_model = {
+            "skill_areas": {},         # Skill areas and competence levels
+            "learning_curves": {},     # Learning curve parameters for each skill
+            "competence_thresholds": {
+                "low": 0.3,            # Threshold for low competence
+                "medium": 0.6,         # Threshold for medium competence
+                "high": 0.9            # Threshold for high competence
+            }
+        }
+        
+        self.curiosity_targets = {} # Current targets of curiosity weighted by interest
+        
+        # Configuration
+        self.config = {
+            "novelty_weight": 0.4,     # Weight for novelty-based motivation
+            "competence_weight": 0.3,  # Weight for competence-based motivation
+            "mastery_weight": 0.3,     # Weight for mastery-based motivation
+            "min_motivation_level": 0.2, # Minimum motivation level to consider
+            "max_active_targets": 10,   # Maximum number of active curiosity targets
+            "motivation_boost_rate": 0.2, # Rate at which motivation can be boosted
+            "motivation_decay_rate": 0.1  # Rate at which motivation decays over time
+        }
+        
+        # Statistics and state
+        self.motivation_levels = {}    # Current motivation levels for different areas
+        self.exploration_history = []  # History of explorations
+        self.motivation_history = []   # History of motivation levels over time
+    
+    async def initialize(self, skill_areas: List[Dict[str, Any]] = None) -> None:
+        """Initialize the intrinsic motivation system with skill areas"""
+        if skill_areas:
+            for skill in skill_areas:
+                skill_id = skill.get("id", f"skill_{len(self.competence_model['skill_areas'])}")
+                self.competence_model["skill_areas"][skill_id] = {
+                    "name": skill.get("name", skill_id),
+                    "level": skill.get("level", 0.1),
+                    "experience": skill.get("experience", 0),
+                    "last_practiced": datetime.now().isoformat(),
+                    "related_domains": skill.get("related_domains", [])
+                }
+                
+                # Create learning curve parameters
+                self.competence_model["learning_curves"][skill_id] = {
+                    "learning_rate": skill.get("learning_rate", 0.1),
+                    "plateau": skill.get("plateau", 0.9),
+                    "difficulty": skill.get("difficulty", 0.5)
+                }
+                
+                # Initialize motivation level for this skill
+                self.motivation_levels[skill_id] = 0.5
+    
+    async def update_competence(self, skill_id: str, experience_gained: float, 
+                           success_rate: float) -> Dict[str, Any]:
+        """Update competence level for a skill based on experience and success"""
+        if skill_id not in self.competence_model["skill_areas"]:
+            return {"error": f"Skill {skill_id} not found"}
+        
+        # Get current skill data
+        skill = self.competence_model["skill_areas"][skill_id]
+        learning_curve = self.competence_model["learning_curves"][skill_id]
+        
+        # Calculate effective experience gain based on success rate
+        effective_experience = experience_gained * (0.5 + 0.5 * success_rate)
+        
+        # Update experience
+        skill["experience"] += effective_experience
+        
+        # Calculate new competence level using a learning curve model
+        old_level = skill["level"]
+        learning_rate = learning_curve["learning_rate"]
+        difficulty = learning_curve["difficulty"]
+        plateau = learning_curve["plateau"]
+        
+        # Learning curve formula: Level approaches plateau at a decreasing rate
+        progress_factor = 1.0 - (skill["level"] / plateau)
+        level_gain = effective_experience * learning_rate * progress_factor * (1.0 - difficulty)
+        skill["level"] = min(plateau, skill["level"] + level_gain)
+        
+        # Update last practiced timestamp
+        skill["last_practiced"] = datetime.now().isoformat()
+        
+        # Update motivation based on competence change
+        motivation_change = await self._calculate_competence_motivation_change(
+            skill_id, old_level, skill["level"]
+        )
+        self.motivation_levels[skill_id] += motivation_change
+        self.motivation_levels[skill_id] = max(0.0, min(1.0, self.motivation_levels[skill_id]))
+        
+        # Store motivation history
+        self.motivation_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "skill_id": skill_id,
+            "motivation_level": self.motivation_levels[skill_id],
+            "cause": "competence_update",
+            "change": motivation_change
+        })
+        
+        return {
+            "skill_id": skill_id,
+            "old_level": old_level,
+            "new_level": skill["level"],
+            "experience_gained": effective_experience,
+            "motivation_change": motivation_change,
+            "current_motivation": self.motivation_levels[skill_id]
+        }
+    
+    async def _calculate_competence_motivation_change(self, skill_id: str, 
+                                               old_level: float, new_level: float) -> float:
+        """Calculate motivation change based on competence change"""
+        # No change in level means no motivation change
+        if old_level == new_level:
+            return 0.0
+        
+        # Calculate level change
+        level_change = new_level - old_level
+        
+        # Calculate motivation change based on competence thresholds
+        thresholds = self.competence_model["competence_thresholds"]
+        
+        # Higher motivation gain in the mid-range of competence (flow state theory)
+        if new_level < thresholds["low"]:
+            # Low competence - moderate motivation for easy wins
+            motivation_factor = 0.5
+        elif new_level < thresholds["medium"]:
+            # Medium-low competence - high motivation (rapid growth)
+            motivation_factor = 1.0
+        elif new_level < thresholds["high"]:
+            # Medium-high competence - highest motivation (flow state)
+            motivation_factor = 1.2
+        else:
+            # High competence - decreasing motivation (diminishing returns)
+            motivation_factor = 0.3
+        
+        # Calculate motivation change
+        motivation_change = level_change * motivation_factor * self.config["competence_weight"]
+        
+        # Boost small gains for positive reinforcement
+        if 0 < motivation_change < 0.01:
+            motivation_change = 0.01
+        
+        return motivation_change
+    
+    async def track_novelty(self, experience: Dict[str, Any]) -> Dict[str, Any]:
+        """Track a new experience for novelty calculation"""
+        # Extract features
+        features = self._extract_experience_features(experience)
+        
+        # Calculate novelty based on recent experiences
+        novelty_score = await self._calculate_novelty_score(features)
+        
+        # Add to recent experiences
+        self.novelty_model["recent_experiences"].append({
+            "timestamp": datetime.now().isoformat(),
+            "features": features,
+            "novelty_score": novelty_score,
+            "experience_id": experience.get("id", f"exp_{len(self.novelty_model['recent_experiences'])}")
+        })
+        
+        # Limit size of recent experiences
+        if len(self.novelty_model["recent_experiences"]) > 100:
+            self.novelty_model["recent_experiences"] = self.novelty_model["recent_experiences"][-100:]
+        
+        # Update motivation based on novelty
+        domains = experience.get("domains", [])
+        topics = experience.get("topics", [])
+        
+        # Create combined domains+topics for motivation update
+        areas = list(set(domains + topics))
+        
+        # Update motivation for each area
+        motivation_changes = {}
+        for area in areas:
+            # Initialize motivation level if not exists
+            if area not in self.motivation_levels:
+                self.motivation_levels[area] = 0.5
+            
+            # Calculate motivation change based on novelty
+            if novelty_score > self.novelty_model["novelty_threshold"]:
+                # High novelty increases motivation
+                motivation_change = novelty_score * self.config["novelty_weight"]
+            else:
+                # Low novelty slightly decreases motivation
+                motivation_change = -0.05 * self.config["novelty_weight"]
+            
+            # Apply change
+            self.motivation_levels[area] += motivation_change
+            self.motivation_levels[area] = max(0.0, min(1.0, self.motivation_levels[area]))
+            
+            motivation_changes[area] = {
+                "change": motivation_change,
+                "level": self.motivation_levels[area]
+            }
+            
+            # Store motivation history
+            self.motivation_history.append({
+                "timestamp": datetime.now().isoformat(),
+                "area": area,
+                "motivation_level": self.motivation_levels[area],
+                "cause": "novelty_update",
+                "change": motivation_change,
+                "novelty_score": novelty_score
+            })
+        
+        return {
+            "novelty_score": novelty_score,
+            "is_novel": novelty_score > self.novelty_model["novelty_threshold"],
+            "motivation_changes": motivation_changes
+        }
+    
+    def _extract_experience_features(self, experience: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract relevant features from an experience for novelty calculation"""
+        features = {}
+        
+        # Extract basic properties
+        for key in ["type", "domain", "topic", "source", "difficulty"]:
+            if key in experience:
+                features[key] = experience[key]
+        
+        # Extract content features based on type
+        if experience.get("type") == "interaction":
+            features["entities"] = experience.get("entities", [])
+            features["actions"] = experience.get("actions", [])
+            features["outcome"] = experience.get("outcome")
+        elif experience.get("type") == "observation":
+            features["entities"] = experience.get("entities", [])
+            features["environment"] = experience.get("environment")
+            features["attributes"] = experience.get("attributes", [])
+        elif experience.get("type") == "information":
+            features["concepts"] = experience.get("concepts", [])
+            features["facts"] = experience.get("facts", [])
+            features["connections"] = experience.get("connections", [])
+        
+        # Extract structural features
+        features["complexity"] = experience.get("complexity", 0.5)
+        features["emotional_impact"] = experience.get("emotional_impact", 0.0)
+        
+        return features
+    
+    async def _calculate_novelty_score(self, features: Dict[str, Any]) -> float:
+        """Calculate novelty score by comparing to recent experiences"""
+        if not self.novelty_model["recent_experiences"]:
+            return 1.0  # First experience is fully novel
+        
+        # Calculate similarity to each recent experience
+        similarities = []
+        for recent_exp in self.novelty_model["recent_experiences"]:
+            similarity = self._calculate_feature_similarity(features, recent_exp["features"])
+            similarities.append(similarity)
+        
+        # Novelty is inverse of maximum similarity
+        max_similarity = max(similarities)
+        novelty = 1.0 - max_similarity
+        
+        return novelty
+    
+    def _calculate_feature_similarity(self, features1: Dict[str, Any], 
+                                  features2: Dict[str, Any]) -> float:
+        """Calculate similarity between two feature sets"""
+        # Get common keys
+        common_keys = set(features1.keys()) & set(features2.keys())
+        if not common_keys:
+            return 0.0  # No common features
+        
+        # Calculate similarity for each common feature
+        similarities = []
+        for key in common_keys:
+            # Calculate feature-specific similarity
+            if isinstance(features1[key], list) and isinstance(features2[key], list):
+                # For lists (e.g., entities, actions), use Jaccard similarity
+                set1 = set(features1[key])
+                set2 = set(features2[key])
+                union_size = len(set1 | set2)
+                intersection_size = len(set1 & set2)
+                
+                if union_size > 0:
+                    similarities.append(intersection_size / union_size)
+                else:
+                    similarities.append(1.0)  # Both empty lists
+            elif isinstance(features1[key], (int, float)) and isinstance(features2[key], (int, float)):
+                # For numeric values, calculate inverse distance
+                distance = abs(features1[key] - features2[key])
+                max_range = 1.0  # Assuming normalized values
+                similarities.append(1.0 - min(1.0, distance / max_range))
+            elif features1[key] == features2[key]:
+                # For exact matches
+                similarities.append(1.0)
+            else:
+                # Different values
+                similarities.append(0.0)
+        
+        # Weight the similarities (could be improved with feature-specific weights)
+        return sum(similarities) / len(similarities)
+    
+    async def generate_exploration_targets(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Generate intrinsically motivated exploration targets"""
+        # Calculate novelty opportunities
+        novelty_opportunities = await self._identify_novelty_opportunities()
+        
+        # Calculate competence opportunities
+        competence_opportunities = await self._identify_competence_opportunities()
+        
+        # Calculate mastery opportunities
+        mastery_opportunities = await self._identify_mastery_opportunities()
+        
+        # Combine all opportunities with their respective weights
+        all_opportunities = []
+        
+        # Add novelty opportunities
+        for opp in novelty_opportunities:
+            all_opportunities.append({
+                **opp,
+                "score": opp["score"] * self.config["novelty_weight"],
+                "motivation_type": "novelty"
+            })
+        
+        # Add competence opportunities
+        for opp in competence_opportunities:
+            all_opportunities.append({
+                **opp,
+                "score": opp["score"] * self.config["competence_weight"],
+                "motivation_type": "competence"
+            })
+        
+        # Add mastery opportunities
+        for opp in mastery_opportunities:
+            all_opportunities.append({
+                **opp,
+                "score": opp["score"] * self.config["mastery_weight"],
+                "motivation_type": "mastery"
+            })
+        
+        # Sort by score
+        all_opportunities.sort(key=lambda x: x["score"], reverse=True)
+        
+        # Convert top opportunities to exploration targets
+        targets = []
+        for opp in all_opportunities[:limit]:
+            # Create a target in the curiosity system
+            target_id = await self.curiosity_system.create_exploration_target(
+                domain=opp["domain"],
+                topic=opp["topic"],
+                importance=opp["importance"],
+                urgency=opp["urgency"],
+                knowledge_gap=opp.get("knowledge_gap", 0.5)
+            )
+            
+            # Generate questions for the target
+            questions = await self.curiosity_system.generate_questions(target_id)
+            
+            # Add to targets list
+            targets.append({
+                "target_id": target_id,
+                "domain": opp["domain"],
+                "topic": opp["topic"],
+                "motivation_type": opp["motivation_type"],
+                "score": opp["score"],
+                "importance": opp["importance"],
+                "urgency": opp["urgency"],
+                "questions": questions,
+                "created_at": datetime.now().isoformat()
+            })
+            
+            # Track as curiosity target
+            self.curiosity_targets[target_id] = {
+                "domain": opp["domain"],
+                "topic": opp["topic"],
+                "interest_level": opp["score"],
+                "created_at": datetime.now().isoformat(),
+                "motivation_type": opp["motivation_type"]
+            }
+        
+        return targets
+    
+    async def _identify_novelty_opportunities(self) -> List[Dict[str, Any]]:
+        """Identify opportunities for novelty-based exploration"""
+        opportunities = []
+        
+        # Get knowledge domains from curiosity system
+        gaps = await self.curiosity_system.identify_knowledge_gaps()
+        
+        # Select gaps with high potential for novelty
+        for gap in gaps:
+            domain = gap["domain"]
+            topic = gap["topic"]
+            
+            # Calculate novelty potential
+            novelty_potential = await self._calculate_novelty_potential(domain, topic)
+            
+            if novelty_potential > 0.3:  # Threshold for considering it a novelty opportunity
+                opportunities.append({
+                    "domain": domain,
+                    "topic": topic,
+                    "score": novelty_potential,
+                    "importance": gap["importance"],
+                    "urgency": novelty_potential,
+                    "knowledge_gap": gap["gap_size"],
+                    "reason": "High novelty potential"
+                })
+        
+        # Also look for unexplored domains
+        domains = list(self.curiosity_system.knowledge_map.domains.keys())
+        for domain in domains:
+            # Check if we have recent experiences in this domain
+            domain_experiences = [exp for exp in self.novelty_model["recent_experiences"] 
+                               if exp["features"].get("domain") == domain]
+            
+            if not domain_experiences:
+                # No recent experiences, high novelty potential
+                opportunities.append({
+                    "domain": domain,
+                    "topic": "exploration",
+                    "score": 0.9,
+                    "importance": 0.7,
+                    "urgency": 0.8,
+                    "knowledge_gap": 0.8,
+                    "reason": "Unexplored domain"
+                })
+        
+        return opportunities
+    
+    async def _calculate_novelty_potential(self, domain: str, topic: str) -> float:
+        """Calculate the potential for novelty in a domain/topic"""
+        # Check if we have recent experiences with this domain/topic
+        domain_experiences = [exp for exp in self.novelty_model["recent_experiences"] 
+                           if exp["features"].get("domain") == domain]
+        
+        topic_experiences = [exp for exp in self.novelty_model["recent_experiences"] 
+                          if exp["features"].get("topic") == topic]
+        
+        # If no experiences, high novelty potential
+        if not domain_experiences and not topic_experiences:
+            return 1.0
+        
+        # Calculate recency factor - more recent experiences decrease novelty potential
+        avg_time = None
+        if domain_experiences or topic_experiences:
+            all_experiences = domain_experiences + topic_experiences
+            timestamps = [datetime.fromisoformat(exp["timestamp"]) for exp in all_experiences]
+            now = datetime.now()
+            time_diffs = [(now - ts).total_seconds() / (24 * 3600) for ts in timestamps]  # days
+            avg_time = sum(time_diffs) / len(time_diffs) if time_diffs else 0
+        
+        # Higher average time means higher novelty potential
+        recency_factor = min(1.0, avg_time / 30) if avg_time is not None else 1.0  # Max effect after 30 days
+        
+        # Calculate exposure factor - more experiences decrease novelty potential
+        exposure_count = len(domain_experiences) + len(topic_experiences)
+        exposure_factor = 1.0 / (1.0 + 0.2 * exposure_count)  # Decay with more exposure
+        
+        # Combine factors
+        novelty_potential = 0.7 * recency_factor + 0.3 * exposure_factor
+        
+        return novelty_potential
+    
+    async def _identify_competence_opportunities(self) -> List[Dict[str, Any]]:
+        """Identify opportunities for competence-based exploration"""
+        opportunities = []
+        
+        # Check skill areas in the competence model
+        for skill_id, skill in self.competence_model["skill_areas"].items():
+            level = skill["level"]
+            learning_curve = self.competence_model["learning_curves"][skill_id]
+            
+            # Calculate competence-based motivation
+            thresholds = self.competence_model["competence_thresholds"]
+            
+            # Highest motivation in the "flow" state (not too easy, not too hard)
+            if level < thresholds["low"]:
+                # Too low - moderate motivation
+                motivation = 0.4
+                reason = "Foundational skill building"
+            elif level < thresholds["medium"]:
+                # Medium-low - high motivation (flow state)
+                motivation = 0.9
+                reason = "Rapid skill development"
+            elif level < thresholds["high"]:
+                # Medium-high - moderate motivation
+                motivation = 0.7
+                reason = "Skill mastery"
+            else:
+                # Very high - low motivation (too easy)
+                motivation = 0.2
+                reason = "Skill maintenance"
+            
+            # Adjust based on learning rate and difficulty
+            learning_rate = learning_curve["learning_rate"]
+            difficulty = learning_curve["difficulty"]
+            
+            # Fast learning rate and moderate difficulty is motivating
+            rate_factor = 1.0 + (learning_rate - 0.5)
+            difficulty_factor = 1.0 - abs(difficulty - 0.5) * 2  # Peak at medium difficulty
+            
+            adjusted_motivation = motivation * rate_factor * difficulty_factor
+            
+            # Get related domains for this skill
+            related_domains = skill["related_domains"]
+            
+            # Create an opportunity for each related domain
+            for domain in related_domains:
+                opportunities.append({
+                    "domain": domain,
+                    "topic": skill["name"],
+                    "score": adjusted_motivation,
+                    "importance": 0.7,  # Competence building is important
+                    "urgency": 0.5,
+                    "knowledge_gap": 1.0 - level,
+                    "reason": reason,
+                    "skill_id": skill_id,
+                    "skill_level": level
+                })
+        
+        return opportunities
+    
+    async def _identify_mastery_opportunities(self) -> List[Dict[str, Any]]:
+        """Identify opportunities for mastery-based exploration"""
+        opportunities = []
+        
+        # Get skills near mastery level
+        near_mastery_skills = []
+        mastery_threshold = self.competence_model["competence_thresholds"]["high"]
+        
+        for skill_id, skill in self.competence_model["skill_areas"].items():
+            if 0.7 <= skill["level"] < mastery_threshold:
+                near_mastery_skills.append((skill_id, skill))
+        
+        # For each near-mastery skill, find related knowledge gaps
+        for skill_id, skill in near_mastery_skills:
+            related_domains = skill["related_domains"]
+            
+            for domain in related_domains:
+                # Find knowledge gaps in this domain
+                domain_gaps = [gap for gap in await self.curiosity_system.identify_knowledge_gaps()
+                             if gap["domain"] == domain]
+                
+                for gap in domain_gaps:
+                    # Calculate how important this gap is for mastery
+                    mastery_relevance = 1.0 - gap["gap_size"]  # Smaller gaps more relevant for mastery
+                    
+                    # Calculate motivation score
+                    motivation_score = mastery_relevance * (1.0 - (skill["level"] - 0.7) / 0.3)
+                    
+                    if motivation_score > 0.5:  # Threshold for considering it a mastery opportunity
+                        opportunities.append({
+                            "domain": domain,
+                            "topic": gap["topic"],
+                            "score": motivation_score,
+                            "importance": gap["importance"],
+                            "urgency": 0.6,  # Mastery is somewhat urgent
+                            "knowledge_gap": gap["gap_size"],
+                            "reason": "Near mastery completion",
+                            "skill_id": skill_id,
+                            "skill_level": skill["level"]
+                        })
+        
+        return opportunities
+    
+    async def apply_motivation_decay(self) -> Dict[str, Any]:
+        """Apply decay to motivation levels over time"""
+        decay_stats = {
+            "areas_affected": 0,
+            "total_decay": 0.0,
+            "average_decay": 0.0
+        }
+        
+        decay_rate = self.config["motivation_decay_rate"]
+        
+        # Apply decay to all motivation levels
+        for area, level in self.motivation_levels.items():
+            # Calculate decay amount
+            decay_amount = level * decay_rate
+            
+            # Apply decay
+            new_level = max(self.config["min_motivation_level"], level - decay_amount)
+            self.motivation_levels[area] = new_level
+            
+            # Update statistics
+            decay_stats["areas_affected"] += 1
+            decay_stats["total_decay"] += decay_amount
+        
+        # Calculate average decay
+        if decay_stats["areas_affected"] > 0:
+            decay_stats["average_decay"] = decay_stats["total_decay"] / decay_stats["areas_affected"]
+        
+        return decay_stats
+    
+    async def boost_motivation(self, area: str, boost_amount: float) -> Dict[str, Any]:
+        """Boost motivation level for a specific area"""
+        if area not in self.motivation_levels:
+            # Initialize if not exists
+            self.motivation_levels[area] = 0.5
+        
+        # Apply boost
+        old_level = self.motivation_levels[area]
+        new_level = min(1.0, old_level + boost_amount * self.config["motivation_boost_rate"])
+        self.motivation_levels[area] = new_level
+        
+        # Store motivation history
+        self.motivation_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "area": area,
+            "motivation_level": new_level,
+            "cause": "manual_boost",
+            "change": new_level - old_level
+        })
+        
+        return {
+            "area": area,
+            "old_level": old_level,
+            "new_level": new_level,
+            "change": new_level - old_level
+        }
+    
+    async def get_motivation_statistics(self) -> Dict[str, Any]:
+        """Get statistics about the motivation system"""
+        # Calculate averages and distributions
+        avg_motivation = 0.0
+        if self.motivation_levels:
+            avg_motivation = sum(self.motivation_levels.values()) / len(self.motivation_levels)
+        
+        # Calculate distribution
+        motivation_distribution = {
+            "low": 0,
+            "medium": 0,
+            "high": 0
+        }
+        
+        for level in self.motivation_levels.values():
+            if level < 0.4:
+                motivation_distribution["low"] += 1
+            elif level < 0.7:
+                motivation_distribution["medium"] += 1
+            else:
+                motivation_distribution["high"] += 1
+        
+        # Calculate most motivated areas
+        sorted_motivations = sorted(
+            [(area, level) for area, level in self.motivation_levels.items()],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        
+        top_areas = [{"area": area, "level": level} for area, level in sorted_motivations[:5]]
+        
+        # Calculate curiosity target statistics
+        target_types = {}
+        for target in self.curiosity_targets.values():
+            motivation_type = target.get("motivation_type", "unknown")
+            target_types[motivation_type] = target_types.get(motivation_type, 0) + 1
+        
+        # Create statistics dictionary
+        statistics = {
+            "average_motivation": avg_motivation,
+            "motivation_distribution": motivation_distribution,
+            "top_motivated_areas": top_areas,
+            "total_areas": len(self.motivation_levels),
+            "curiosity_targets": {
+                "total": len(self.curiosity_targets),
+                "by_type": target_types
+            },
+            "configuration": {
+                "weights": {
+                    "novelty": self.config["novelty_weight"],
+                    "competence": self.config["competence_weight"],
+                    "mastery": self.config["mastery_weight"]
+                }
+            }
+        }
+        
+        return statistics
+    
+    async def save_state(self, file_path: str) -> bool:
+        """Save current state to file"""
+        try:
+            # Save curiosity system state
+            await self.curiosity_system.save_state(f"{file_path}_curiosity")
+            
+            # Save motivation system state
+            motivation_state = {
+                "novelty_model": self.novelty_model,
+                "competence_model": {
+                    "skill_areas": self.competence_model["skill_areas"],
+                    "learning_curves": self.competence_model["learning_curves"],
+                    "competence_thresholds": self.competence_model["competence_thresholds"]
+                },
+                "curiosity_targets": self.curiosity_targets,
+                "motivation_levels": self.motivation_levels,
+                "motivation_history": self.motivation_history,
+                "config": self.config,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            with open(file_path, 'w') as f:
+                json.dump(motivation_state, f, indent=2)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error saving motivation state: {e}")
+            return False
+        
+    async def load_state(self, file_path: str) -> bool:
+        """Load state from file"""
+        try:
+            # Load curiosity system state
+            await self.curiosity_system.load_state(f"{file_path}_curiosity")
+            
+            # Load motivation system state
+            with open(file_path, 'r') as f:
+                state = json.load(f)
+            
+            # Load motivation system components
+            self.novelty_model = state["novelty_model"]
+            self.competence_model = state["competence_model"]
+            self.curiosity_targets = state["curiosity_targets"]
+            self.motivation_levels = state["motivation_levels"]
+            self.motivation_history = state["motivation_history"]
+            self.config = state["config"]
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error loading motivation state: {e}")
+            return False
+            
 class KnowledgeCore:
     """
     Main system that integrates knowledge across different components, storing data
