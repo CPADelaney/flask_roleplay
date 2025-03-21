@@ -29,6 +29,8 @@ class MetaCore:
     3. Resource optimization - dynamic allocation of cognitive resources
     4. Performance evaluation - systematic assessment of cognitive effectiveness
     5. Strategic adaptation - evolving cognitive strategies based on feedback
+    6. Attention management - managing focus on critical systems or processes
+    7. Meta-parameter optimization - improving the meta-cognitive process itself
     """
     
     def __init__(self):
@@ -67,6 +69,12 @@ class MetaCore:
         self.reflections = []
         self.improvement_plans = []
         
+        # Error logging
+        self.error_logs = []
+        
+        # Attention focus
+        self.attention_focus = None
+        
         # Configuration
         self.meta_parameters = {
             # Learning parameters
@@ -80,7 +88,15 @@ class MetaCore:
             "evaluation_interval": 5,    # Cycles between evaluations
             "confidence_threshold": 0.7, # Threshold for accepting a new strategy
             "resource_flexibility": 0.3, # How much to vary resource allocation
-            "bottleneck_severity_threshold": 0.7 # Threshold for critical bottlenecks
+            "bottleneck_severity_threshold": 0.7, # Threshold for critical bottlenecks
+            
+            # Parameter optimization
+            "parameter_optimization_interval": 50, # Cycles between meta-parameter optimizations
+            "parameter_adjustment_factor": 0.2,    # How much to adjust parameters
+            
+            # Attention management
+            "attention_shift_threshold": 0.8,      # Threshold to shift attention 
+            "attention_default_duration": 5        # Default cycles for attention focus
         }
         
         # System references (will be set in initialize)
@@ -90,6 +106,7 @@ class MetaCore:
         self.initialized = False
         self.last_evaluation_time = None
         self.last_reflection_time = None
+        self.last_parameter_optimization_cycle = 0
         self.cognitive_cycle_count = 0
         
         # Next ID counters for tracking
@@ -171,39 +188,86 @@ class MetaCore:
         cycle_start = time.time()
         self.cognitive_cycle_count += 1
         
-        # 1. Collect performance metrics from all systems
-        performance_data = await self._collect_performance_metrics()
+        # 1. Check attention focus
+        attention_shift = await self._check_attention_focus(context)
         
-        # 2. Update performance history
+        # 2. Collect performance metrics from all systems
+        try:
+            performance_data = await self._collect_performance_metrics()
+        except Exception as e:
+            await self.log_cognitive_error("metric_collection_failure", 
+                                        f"Failed to collect performance metrics: {str(e)}", 
+                                        severity=0.7, 
+                                        context={"cycle": self.cognitive_cycle_count})
+            performance_data = {}
+        
+        # 3. Update performance history
         self._update_performance_history(performance_data)
         
-        # 3. Check if evaluation is needed
+        # 4. Check for inefficient dependencies
+        dependency_issues = self._identify_inefficient_dependencies()
+        if dependency_issues:
+            # Log the most critical dependency issue
+            most_critical = dependency_issues[0]
+            await self.log_cognitive_error("inefficient_dependency",
+                                        most_critical["recommendation"],
+                                        severity=0.6,
+                                        context=most_critical)
+        
+        # 5. Check if evaluation is needed
         evaluation_results = None
         if self._should_evaluate():
-            evaluation_results = await self.evaluate_cognition()
-            self.last_evaluation_time = datetime.datetime.now()
+            try:
+                evaluation_results = await self.evaluate_cognition()
+                self.last_evaluation_time = datetime.datetime.now()
+            except Exception as e:
+                await self.log_cognitive_error("evaluation_failure", 
+                                           f"Failed to evaluate cognition: {str(e)}", 
+                                           severity=0.8, 
+                                           context={"cycle": self.cognitive_cycle_count})
         
-        # 4. Check if reflection is needed
+        # 6. Check if reflection is needed
         reflection_results = None
         if self._should_reflect():
-            reflection_results = await self._conduct_reflection()
-            self.last_reflection_time = datetime.datetime.now()
+            try:
+                reflection_results = await self._conduct_reflection()
+                self.last_reflection_time = datetime.datetime.now()
+            except Exception as e:
+                await self.log_cognitive_error("reflection_failure", 
+                                           f"Failed to conduct reflection: {str(e)}", 
+                                           severity=0.7, 
+                                           context={"cycle": self.cognitive_cycle_count})
         
-        # 5. Update resource allocation if needed
+        # 7. Update resource allocation if needed
         resource_changes = {}
         if evaluation_results:
             resource_changes = evaluation_results.get("resource_changes", {})
         
-        # 6. Update system metrics
+        # 8. Check if meta-parameter optimization is needed
+        meta_parameter_changes = None
+        if self._should_optimize_parameters():
+            try:
+                meta_parameter_changes = await self.improve_meta_parameters()
+                self.last_parameter_optimization_cycle = self.cognitive_cycle_count
+            except Exception as e:
+                await self.log_cognitive_error("parameter_optimization_failure", 
+                                           f"Failed to optimize meta-parameters: {str(e)}", 
+                                           severity=0.6, 
+                                           context={"cycle": self.cognitive_cycle_count})
+        
+        # 9. Update system metrics
         self._update_system_metrics(cycle_start)
         
         # Return cycle results
         return {
             "cycle": self.cognitive_cycle_count,
             "performance_data": performance_data,
+            "attention_shift": attention_shift,
             "evaluation_results": evaluation_results,
             "reflection_results": reflection_results,
             "resource_changes": resource_changes,
+            "meta_parameter_changes": meta_parameter_changes,
+            "dependency_issues": dependency_issues[:3] if dependency_issues else [],  # Return top 3 issues only
             "system_metrics": self.system_metrics
         }
     
@@ -246,6 +310,31 @@ class MetaCore:
             if severe_issues:
                 logger.info("Severe performance issues detected - triggering reflection")
                 return True
+                
+        # Attention-triggered reflection
+        if self.attention_focus and self.attention_focus.get("priority", 0) > 0.8:
+            # High priority attention focus might need reflection
+            return True
+        
+        return False
+    
+    def _should_optimize_parameters(self) -> bool:
+        """Determine if it's time to optimize meta-parameters"""
+        # Only optimize parameters occasionally (every 50 cycles by default)
+        cycles_since_optimization = self.cognitive_cycle_count - self.last_parameter_optimization_cycle
+        
+        # Time-based optimization
+        if cycles_since_optimization >= self.meta_parameters["parameter_optimization_interval"]:
+            return True
+        
+        # If overall performance is very poor, consider optimizing sooner
+        if self.performance_history and self.cognitive_cycle_count > 10:
+            overall_effectiveness = self._calculate_overall_effectiveness()
+            if overall_effectiveness < 0.3:  # Very poor performance
+                # The more cycles since last optimization, the more likely to optimize
+                probability = cycles_since_optimization / self.meta_parameters["parameter_optimization_interval"]
+                if random.random() < probability:
+                    return True
         
         return False
     
@@ -946,6 +1035,24 @@ class MetaCore:
             insights.append(insight)
             self.insights.append(insight)
         
+        # Check for inefficient dependencies
+        inefficient_dependencies = self._identify_inefficient_dependencies()
+        for dependency in inefficient_dependencies[:3]:  # Add top 3 only
+            insight_id = f"insight_{self.next_insight_id}"
+            self.next_insight_id += 1
+            
+            insight = {
+                "id": insight_id,
+                "type": "inefficient_dependency",
+                "description": f"Inefficient dependency from {dependency['source_name']} to {dependency['target_name']}",
+                "impact": dependency.get("impact", 0.5),
+                "recommendation": dependency.get("recommendation", "Reconsider dependency structure"),
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+            
+            insights.append(insight)
+            self.insights.append(insight)
+            
         # Generate insights about learning and adaptation
         if len(self.performance_history["reasoning"]) >= 10:
             learning_insights = self._analyze_learning_trends()
@@ -1162,6 +1269,100 @@ class MetaCore:
         
         return insights
     
+    def _identify_inefficient_dependencies(self) -> List[Dict[str, Any]]:
+        """Identify inefficient dependencies between processes"""
+        inefficient_dependencies = []
+        
+        # Build dependency graph
+        dependency_graph = {}
+        for process_id, process in self.cognitive_processes.items():
+            for dependency in getattr(process, "dependencies", []):
+                dep_id = dependency.get("process_id")
+                importance = dependency.get("importance", 0.5)
+                
+                if process_id not in dependency_graph:
+                    dependency_graph[process_id] = []
+                
+                dependency_graph[process_id].append({
+                    "target_id": dep_id,
+                    "importance": importance
+                })
+        
+        # Check for inefficiencies
+        for source_id, dependencies in dependency_graph.items():
+            source_process = self.cognitive_processes.get(source_id)
+            if not source_process:
+                continue
+                
+            source_name = getattr(source_process, "name", "Unknown Process")
+            source_type = getattr(source_process, "type", "unknown")
+            
+            for dep in dependencies:
+                target_id = dep["target_id"]
+                importance = dep["importance"]
+                
+                target_process = self.cognitive_processes.get(target_id)
+                if not target_process:
+                    continue
+                
+                target_name = getattr(target_process, "name", "Unknown Process")
+                target_type = getattr(target_process, "type", "unknown")
+                
+                # Check for performance issues
+                inefficiency_score = 0.0
+                reasons = []
+                
+                # Check for status issues (blocking)
+                source_status = getattr(source_process, "status", "unknown")
+                target_status = getattr(target_process, "status", "unknown")
+                
+                if source_status == "blocked" and target_status != "completed":
+                    inefficiency_score += 0.4
+                    reasons.append("Frequent blocking")
+                
+                # Check for high latency in dependent process
+                target_metrics = getattr(target_process, "performance_metrics", {})
+                if target_metrics.get("response_time", 0) > 2.0:  # High response time
+                    inefficiency_score += 0.3
+                    reasons.append("High dependency latency")
+                
+                # Check for high importance but low performance
+                if importance > 0.7:
+                    target_efficiency = target_metrics.get("efficiency", 0.5)
+                    if target_efficiency < 0.4:  # Low efficiency
+                        inefficiency_score += importance * 0.4
+                        reasons.append("High importance but low performance")
+                
+                # Add if significant inefficiency found
+                if inefficiency_score > 0.3:
+                    recommendation = ""
+                    
+                    if "Frequent blocking" in reasons:
+                        recommendation = "Consider making dependency asynchronous or preemptive"
+                    elif "High dependency latency" in reasons:
+                        recommendation = "Optimize dependent process or use caching"
+                    else:
+                        recommendation = "Reconsider dependency structure or improve dependent process"
+                    
+                    inefficient_dependencies.append({
+                        "source_id": source_id,
+                        "source_name": source_name,
+                        "source_type": source_type,
+                        "target_id": target_id,
+                        "target_name": target_name,
+                        "target_type": target_type,
+                        "importance": importance,
+                        "inefficiency_score": inefficiency_score,
+                        "reasons": reasons,
+                        "impact": inefficiency_score * importance,
+                        "recommendation": recommendation
+                    })
+        
+        # Sort by impact
+        inefficient_dependencies.sort(key=lambda x: x["impact"], reverse=True)
+        
+        return inefficient_dependencies
+    
     def _calculate_resource_trend(self, values: List[float]) -> Dict[str, Any]:
         """Calculate trend from a series of resource values"""
         if len(values) < 2:
@@ -1251,6 +1452,12 @@ class MetaCore:
         except:
             # Resource usage metrics not available, use fallback values
             pass
+        
+        # Update error rate
+        if hasattr(self, 'error_logs') and self.error_logs:
+            total_errors = len(self.error_logs)
+            if runtime > 0:
+                self.system_metrics["error_rate"] = total_errors / runtime
     
     async def _update_system_parameters(self, bottlenecks: List[Dict[str, Any]], 
                                       strategy_analysis: Dict[str, Any]) -> None:
@@ -1311,6 +1518,563 @@ class MetaCore:
                         logger.info(f"Updated strategy for {system_name} system")
                     except Exception as e:
                         logger.error(f"Error updating strategy for {system_name}: {str(e)}")
+    
+    #--------------------------------------------------------------------------
+    # Attention Management Methods
+    #--------------------------------------------------------------------------
+    
+    async def set_attention_focus(self, focus: Dict[str, Any]) -> None:
+        """Set the current attention focus"""
+        self.attention_focus = {
+            "target": focus.get("target"),
+            "priority": focus.get("priority", 0.5),
+            "timestamp": datetime.datetime.now().isoformat(),
+            "reason": focus.get("reason", ""),
+            "expiration": focus.get("expiration")
+        }
+        
+        logger.info(f"Attention focus set to {focus.get('target')} with priority {focus.get('priority', 0.5)}")
+
+    async def clear_attention_focus(self) -> None:
+        """Clear the current attention focus"""
+        old_focus = self.attention_focus
+        self.attention_focus = None
+        
+        if old_focus:
+            logger.info(f"Cleared attention focus from {old_focus.get('target')}")
+
+    async def get_attention_focus(self) -> Optional[Dict[str, Any]]:
+        """Get the current attention focus"""
+        return self.attention_focus
+    
+    async def _check_attention_focus(self, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Check if attention focus needs to shift based on context"""
+        if not self.attention_focus:
+            # No current focus, check if we should establish one
+            attention_shift = self._determine_attention_priority(context)
+            if attention_shift:
+                await self.set_attention_focus(attention_shift)
+                return {"type": "established", "focus": attention_shift}
+            return None
+        
+        # Check if current focus has expired
+        if "expiration" in self.attention_focus:
+            expiration = self.attention_focus["expiration"]
+            if isinstance(expiration, str):
+                try:
+                    expiration_time = datetime.datetime.fromisoformat(expiration)
+                    if datetime.datetime.now() > expiration_time:
+                        old_focus = self.attention_focus.copy()
+                        await self.clear_attention_focus()
+                        return {"type": "expired", "previous_focus": old_focus}
+                except ValueError:
+                    # Invalid timestamp format
+                    pass
+            elif isinstance(expiration, int):
+                # Expiration in cycles
+                if self.cognitive_cycle_count >= expiration:
+                    old_focus = self.attention_focus.copy()
+                    await self.clear_attention_focus()
+                    return {"type": "expired", "previous_focus": old_focus}
+        
+        # Check if a higher priority focus should take over
+        new_priority = self._determine_attention_priority(context)
+        if new_priority and new_priority.get("priority", 0) > self.attention_focus.get("priority", 0):
+            if (new_priority.get("priority", 0) - self.attention_focus.get("priority", 0) > 
+                self.meta_parameters["attention_shift_threshold"]):
+                old_focus = self.attention_focus.copy()
+                await self.set_attention_focus(new_priority)
+                return {"type": "shifted", "previous_focus": old_focus, "new_focus": new_priority}
+                
+        # No change in attention
+        return None
+    
+    def _determine_attention_priority(self, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Determine if any system or process needs priority attention"""
+        highest_priority = None
+        
+        # Check for critical bottlenecks
+        if "bottlenecks" in context:
+            critical_bottlenecks = [b for b in context["bottlenecks"] 
+                                  if b.get("severity", 0) >= self.meta_parameters["bottleneck_severity_threshold"]]
+            if critical_bottlenecks:
+                top_bottleneck = critical_bottlenecks[0]
+                priority = top_bottleneck.get("severity", 0.5)
+                process_type = top_bottleneck.get("process_type", "unknown")
+                process_name = top_bottleneck.get("process_name", "Unknown")
+                
+                highest_priority = {
+                    "target": process_type,
+                    "priority": priority,
+                    "reason": f"Critical bottleneck in {process_name}",
+                    "expiration": self.cognitive_cycle_count + self.meta_parameters["attention_default_duration"]
+                }
+        
+        # Check for extremely low performance
+        for system_name, history in self.performance_history.items():
+            if not history:
+                continue
+                
+            latest = history[-1].get("metrics", {})
+            
+            # Check for critically low performance
+            if latest.get("success_rate", 1.0) < 0.2:  # Extremely low success
+                priority = 0.9
+                reason = f"Critically low success rate in {system_name}"
+                
+                if not highest_priority or priority > highest_priority.get("priority", 0):
+                    highest_priority = {
+                        "target": system_name,
+                        "priority": priority,
+                        "reason": reason,
+                        "expiration": self.cognitive_cycle_count + self.meta_parameters["attention_default_duration"]
+                    }
+        
+        # Check context for explicit attention requests
+        if "attention_request" in context:
+            attention_request = context["attention_request"]
+            request_priority = attention_request.get("priority", 0.5)
+            
+            if not highest_priority or request_priority > highest_priority.get("priority", 0):
+                highest_priority = {
+                    "target": attention_request.get("target"),
+                    "priority": request_priority,
+                    "reason": attention_request.get("reason", "Explicit request"),
+                    "expiration": attention_request.get("expiration", 
+                                                     self.cognitive_cycle_count + self.meta_parameters["attention_default_duration"])
+                }
+        
+        return highest_priority
+    
+    #--------------------------------------------------------------------------
+    # Error Logging and Monitoring Methods
+    #--------------------------------------------------------------------------
+    
+    async def log_cognitive_error(self, error_type: str, message: str, 
+                              severity: float = 0.5, context: Dict[str, Any] = None) -> None:
+        """Log a cognitive error for later analysis"""
+        error_log = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "cycle": self.cognitive_cycle_count,
+            "type": error_type,
+            "message": message,
+            "severity": severity,
+            "context": context or {}
+        }
+        
+        self.error_logs.append(error_log)
+        
+        # Keep error logs to a reasonable size
+        if len(self.error_logs) > 100:
+            self.error_logs = self.error_logs[-100:]
+        
+        # For high severity errors, consider shifting attention
+        if severity >= 0.8:
+            # Create attention request for high-severity errors
+            attention_request = {
+                "target": error_type,
+                "priority": severity,
+                "reason": f"Critical error: {message[:50]}...",
+                "expiration": self.cognitive_cycle_count + 5  # Short focus for error handling
+            }
+            
+            # Only set focus if no higher priority focus exists
+            if (not self.attention_focus or 
+                attention_request["priority"] > self.attention_focus.get("priority", 0)):
+                await self.set_attention_focus(attention_request)
+        
+        # Log severe errors
+        if severity >= 0.7:
+            logger.error(f"Cognitive error: {error_type} - {message}")
+        elif severity >= 0.5:
+            logger.warning(f"Cognitive warning: {error_type} - {message}")
+        else:
+            logger.info(f"Cognitive notice: {error_type} - {message}")
+    
+    async def get_error_logs(self, error_type: Optional[str] = None, 
+                        min_severity: float = 0.0,
+                        limit: int = 10) -> List[Dict[str, Any]]:
+        """Get error logs, optionally filtered by type and severity"""
+        filtered_logs = [log for log in self.error_logs 
+                      if log["severity"] >= min_severity and 
+                         (error_type is None or log["type"] == error_type)]
+        
+        # Sort by timestamp (most recent first)
+        sorted_logs = sorted(filtered_logs, 
+                          key=lambda x: x["timestamp"], 
+                          reverse=True)
+        
+        return sorted_logs[:limit]
+    
+    def _calculate_overall_effectiveness(self) -> float:
+        """Calculate overall system effectiveness across all monitored systems"""
+        total_score = 0.0
+        systems_count = 0
+        
+        for system_name, history in self.performance_history.items():
+            if not history:
+                continue
+                
+            # Get latest metrics
+            latest = history[-1].get("metrics", {})
+            
+            # Calculate effectiveness
+            effectiveness = 0.5  # Default
+            
+            if "effectiveness" in latest:
+                effectiveness = latest["effectiveness"]
+            elif "success_rate" in latest:
+                effectiveness = latest["success_rate"]
+            elif "accuracy" in latest and "response_time" in latest:
+                # Balance accuracy and response time
+                norm_time = min(1.0, 1.0 / (1.0 + latest["response_time"]))
+                effectiveness = 0.7 * latest["accuracy"] + 0.3 * norm_time
+            elif "error_rate" in latest:
+                # Lower error rate means higher effectiveness
+                effectiveness = max(0.0, 1.0 - latest["error_rate"] * 2)
+            
+            total_score += effectiveness
+            systems_count += 1
+        
+        if systems_count == 0:
+            return 0.5  # Default when no data available
+            
+        return total_score / systems_count
+    
+    #--------------------------------------------------------------------------
+    # Meta-Parameter Optimization Methods
+    #--------------------------------------------------------------------------
+    
+    async def improve_meta_parameters(self) -> Dict[str, Any]:
+        """Recursively improve the meta-parameters themselves"""
+        # History of parameter configurations and their performance
+        param_history = self._get_parameter_history()
+        
+        # Analyze which parameter changes led to improvements
+        param_effectiveness = self._analyze_parameter_effectiveness(param_history)
+        
+        # Generate new parameter configurations to try
+        new_params = self._generate_parameter_candidates(param_effectiveness)
+        
+        # Evaluate and select the most promising configuration
+        selected_params = await self._evaluate_parameter_candidates(new_params)
+        
+        # Apply the selected parameters
+        old_params = self.meta_parameters.copy()
+        self._apply_meta_parameters(selected_params)
+        
+        # Record the changes
+        changes = {}
+        for param, new_value in selected_params.items():
+            old_value = old_params.get(param)
+            if new_value != old_value:
+                changes[param] = {"old": old_value, "new": new_value}
+        
+        # Return the changes
+        return {
+            "parameters_changed": changes,
+            "effectiveness_analysis": param_effectiveness,
+            "cycle": self.cognitive_cycle_count
+        }
+    
+    def _get_parameter_history(self) -> List[Dict[str, Any]]:
+        """Get history of parameter configurations and their performance"""
+        # Create if not exists
+        if not hasattr(self, '_parameter_history'):
+            self._parameter_history = []
+            
+            # Add current configuration as baseline
+            self._parameter_history.append({
+                "parameters": self.meta_parameters.copy(),
+                "timestamp": datetime.datetime.now().isoformat(),
+                "cycle": self.cognitive_cycle_count,
+                "metrics": {
+                    "cycle_time": self.system_metrics["average_cycle_time"],
+                    "error_rate": self.system_metrics["error_rate"],
+                    "overall_effectiveness": self._calculate_overall_effectiveness()
+                }
+            })
+            
+        return self._parameter_history
+    
+    def _analyze_parameter_effectiveness(self, param_history: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+        """Analyze which parameter changes led to improvements"""
+        if len(param_history) < 2:
+            # Not enough history to analyze
+            return {param: {"effect": 0.0, "confidence": 0.0} for param in self.meta_parameters}
+            
+        # Analyze each parameter
+        effectiveness = {}
+        
+        for param in self.meta_parameters:
+            # Skip parameters without enough variation
+            values = [entry["parameters"].get(param) for entry in param_history]
+            unique_values = set(values)
+            
+            if len(unique_values) < 2:
+                effectiveness[param] = {"effect": 0.0, "confidence": 0.0}
+                continue
+                
+            # Calculate correlation with performance
+            cycle_times = [entry["metrics"].get("cycle_time", 0) for entry in param_history]
+            error_rates = [entry["metrics"].get("error_rate", 0) for entry in param_history]
+            effectiveness_scores = [entry["metrics"].get("overall_effectiveness", 0.5) for entry in param_history]
+            
+            # Correlate parameter with various metrics
+            time_correlation = self._calculate_correlation(values, cycle_times)
+            error_correlation = self._calculate_correlation(values, error_rates)
+            effectiveness_correlation = self._calculate_correlation(values, effectiveness_scores)
+            
+            # Combine correlations (negative correlation with time and error is good, positive with effectiveness is good)
+            effect = -0.3 * time_correlation - 0.3 * error_correlation + 0.4 * effectiveness_correlation
+            
+            # Determine confidence based on sample size and consistency
+            confidence = min(1.0, len(param_history) / 10) * min(1.0, abs(effect) * 2)
+            
+            effectiveness[param] = {
+                "effect": effect,
+                "confidence": confidence,
+                "effectiveness_correlation": effectiveness_correlation,
+                "error_correlation": error_correlation,
+                "time_correlation": time_correlation
+            }
+        
+        return effectiveness
+    
+    def _calculate_correlation(self, x: List[float], y: List[float]) -> float:
+        """Calculate correlation coefficient between two variables"""
+        if len(x) != len(y) or len(x) < 2:
+            return 0.0
+            
+        n = len(x)
+        mean_x = sum(x) / n
+        mean_y = sum(y) / n
+        
+        numerator = sum((x[i] - mean_x) * (y[i] - mean_y) for i in range(n))
+        denominator_x = sum((x[i] - mean_x) ** 2 for i in range(n))
+        denominator_y = sum((y[i] - mean_y) ** 2 for i in range(n))
+        
+        if denominator_x == 0 or denominator_y == 0:
+            return 0.0
+            
+        return numerator / (math.sqrt(denominator_x) * math.sqrt(denominator_y))
+    
+    def _generate_parameter_candidates(self, param_effectiveness: Dict[str, Dict[str, float]]) -> List[Dict[str, Any]]:
+        """Generate new parameter configurations to try"""
+        candidates = []
+        current_config = self.meta_parameters.copy()
+        
+        # Generate individual parameter variations first
+        for param, effect_data in param_effectiveness.items():
+            effect = effect_data.get("effect", 0.0)
+            confidence = effect_data.get("confidence", 0.0)
+            
+            # Skip parameters with low confidence
+            if confidence < 0.2:
+                continue
+                
+            # Adjust parameter based on effect direction and confidence
+            if abs(effect) > 0.1:  # Only adjust if effect is significant
+                candidate = current_config.copy()
+                
+                # Adjust in the direction of improvement
+                adjustment = effect * confidence * self.meta_parameters["parameter_adjustment_factor"]
+                
+                # Apply adjustment based on parameter type
+                if param in ["evaluation_interval", "reflection_frequency", "parameter_optimization_interval"]:
+                    # Integer parameter
+                    current_value = candidate[param]
+                    new_value = max(1, round(current_value * (1 + adjustment)))
+                    candidate[param] = new_value
+                elif param in ["learning_rate", "exploration_rate"]:
+                    # Rate parameter (0-1)
+                    current_value = candidate[param]
+                    new_value = min(0.9, max(0.01, current_value + adjustment * 0.1))
+                    candidate[param] = new_value
+                elif param.endswith("threshold"):
+                    # Threshold parameter (0-1)
+                    current_value = candidate[param]
+                    new_value = min(0.95, max(0.05, current_value + adjustment * 0.1))
+                    candidate[param] = new_value
+                elif param == "resource_flexibility":
+                    # Flexibility parameter (0-1)
+                    current_value = candidate[param]
+                    new_value = min(0.9, max(0.1, current_value + adjustment * 0.1))
+                    candidate[param] = new_value
+                elif param == "parameter_adjustment_factor":
+                    # Adjustment factor (0-1)
+                    current_value = candidate[param]
+                    new_value = min(0.5, max(0.05, current_value + adjustment * 0.05))
+                    candidate[param] = new_value
+                else:
+                    # Default case - scale by percentage
+                    current_value = candidate[param]
+                    new_value = current_value * (1 + adjustment)
+                    candidate[param] = new_value
+                
+                candidates.append(candidate)
+        
+        # Generate combinations of top parameters
+        top_params = sorted(param_effectiveness.items(), 
+                          key=lambda x: abs(x[1]["effect"]) * x[1]["confidence"], 
+                          reverse=True)[:3]
+        
+        if len(top_params) >= 2:
+            combo_candidate = current_config.copy()
+            
+            for param, effect_data in top_params:
+                effect = effect_data.get("effect", 0.0)
+                confidence = effect_data.get("confidence", 0.0)
+                
+                if abs(effect) > 0.1 and confidence > 0.2:
+                    adjustment = effect * confidence * 0.05  # Smaller adjustment for combined changes
+                    
+                    # Apply adjustment (similar logic as above)
+                    if param in ["evaluation_interval", "reflection_frequency", "parameter_optimization_interval"]:
+                        current_value = combo_candidate[param]
+                        new_value = max(1, round(current_value * (1 + adjustment)))
+                        combo_candidate[param] = new_value
+                    elif param in ["learning_rate", "exploration_rate"]:
+                        current_value = combo_candidate[param]
+                        new_value = min(0.9, max(0.01, current_value + adjustment * 0.1))
+                        combo_candidate[param] = new_value
+                    elif param.endswith("threshold"):
+                        current_value = combo_candidate[param]
+                        new_value = min(0.95, max(0.05, current_value + adjustment * 0.1))
+                        combo_candidate[param] = new_value
+                    else:
+                        current_value = combo_candidate[param]
+                        new_value = current_value * (1 + adjustment)
+                        combo_candidate[param] = new_value
+            
+            candidates.append(combo_candidate)
+        
+        # Add a random exploration candidate
+        random_candidate = current_config.copy()
+        
+        for param in random_candidate:
+            # Apply random adjustment
+            if param in ["evaluation_interval", "reflection_frequency", "parameter_optimization_interval"]:
+                random_candidate[param] = max(1, round(random_candidate[param] * random.uniform(0.8, 1.2)))
+            elif param in ["learning_rate", "exploration_rate"]:
+                random_candidate[param] = min(0.9, max(0.01, random_candidate[param] + random.uniform(-0.1, 0.1)))
+            elif param.endswith("threshold"):
+                random_candidate[param] = min(0.95, max(0.05, random_candidate[param] + random.uniform(-0.1, 0.1)))
+            else:
+                random_candidate[param] = random_candidate[param] * random.uniform(0.8, 1.2)
+        
+        candidates.append(random_candidate)
+        
+        # Add current configuration as a safe fallback
+        candidates.append(current_config)
+        
+        return candidates
+    
+    async def _evaluate_parameter_candidates(self, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Evaluate and select the most promising parameter configuration"""
+        best_candidate = None
+        best_score = float('-inf')
+        
+        for candidate in candidates:
+            # Evaluate candidate
+            score = self._evaluate_parameter_candidate(candidate)
+            
+            if score > best_score:
+                best_score = score
+                best_candidate = candidate
+        
+        # Log candidate evaluation
+        if not hasattr(self, '_parameter_evaluations'):
+            self._parameter_evaluations = []
+            
+        self._parameter_evaluations.append({
+            "timestamp": datetime.datetime.now().isoformat(),
+            "cycle": self.cognitive_cycle_count,
+            "candidates": candidates,
+            "best_candidate": best_candidate,
+            "best_score": best_score
+        })
+        
+        return best_candidate or self.meta_parameters.copy()
+    
+    def _evaluate_parameter_candidate(self, candidate: Dict[str, Any]) -> float:
+        """Evaluate a parameter candidate configuration"""
+        # Start with a base score
+        score = 0.0
+        
+        # Current performance metrics for reference
+        overall_effectiveness = self._calculate_overall_effectiveness()
+        avg_cycle_time = self.system_metrics["average_cycle_time"]
+        error_rate = self.system_metrics["error_rate"]
+        
+        # Check for valid ranges and penalize invalid configurations
+        if candidate.get("learning_rate", 0) > candidate.get("exploration_rate", 0) * 2:
+            score -= 1.0  # Learning rate should generally be lower than exploration rate
+        
+        # Check threshold parameters are in valid range
+        for param in candidate:
+            if param.endswith("threshold") and (candidate[param] < 0 or candidate[param] > 1):
+                return float('-inf')  # Invalid threshold
+                
+        # Reward configurations that might improve overall effectiveness
+        potential_improvement = 0.0
+        
+        # Check learning rate - higher can be good for low effectiveness, lower for high effectiveness
+        if overall_effectiveness < 0.5 and candidate.get("learning_rate", 0) > self.meta_parameters.get("learning_rate", 0):
+            potential_improvement += 0.3
+        elif overall_effectiveness > 0.8 and candidate.get("learning_rate", 0) < self.meta_parameters.get("learning_rate", 0):
+            potential_improvement += 0.2
+            
+        # Check evaluation interval - shorter can be good for high error rates
+        if error_rate > 0.3 and candidate.get("evaluation_interval", 100) < self.meta_parameters.get("evaluation_interval", 100):
+            potential_improvement += 0.4
+            
+        # Reflect potential improvement in score
+        score += potential_improvement
+        
+        # Reward balance between parameters
+        learning_to_exploration = candidate.get("learning_rate", 0.1) / max(0.05, candidate.get("exploration_rate", 0.2))
+        if 0.2 < learning_to_exploration < 1.0:
+            score += 0.2  # Good balance
+            
+        # Reward efficient evaluation intervals
+        if 3 <= candidate.get("evaluation_interval", 5) <= 10:
+            score += 0.2  # Reasonable interval
+            
+        # Penalize extremes
+        for param, value in candidate.items():
+            if param in ["learning_rate", "exploration_rate", "confidence_threshold", "resource_flexibility"]:
+                if value < 0.05 or value > 0.95:
+                    score -= 0.3  # Extreme value
+        
+        # Add some noise for exploration
+        score += random.uniform(-0.1, 0.1)
+        
+        return score
+    
+    def _apply_meta_parameters(self, selected_params: Dict[str, Any]) -> None:
+        """Apply the selected parameters"""
+        # Record the current state before applying changes
+        if not hasattr(self, '_parameter_history'):
+            self._parameter_history = []
+            
+        self._parameter_history.append({
+            "parameters": self.meta_parameters.copy(),
+            "timestamp": datetime.datetime.now().isoformat(),
+            "cycle": self.cognitive_cycle_count,
+            "metrics": {
+                "cycle_time": self.system_metrics["average_cycle_time"],
+                "error_rate": self.system_metrics["error_rate"],
+                "overall_effectiveness": self._calculate_overall_effectiveness()
+            }
+        })
+        
+        # Apply new configuration
+        for param, value in selected_params.items():
+            if param in self.meta_parameters:
+                self.meta_parameters[param] = value
+                
+        logger.info(f"Applied new meta-parameters at cycle {self.cognitive_cycle_count}")
     
     #--------------------------------------------------------------------------
     # Reflection and Improvement Methods
@@ -2122,7 +2886,10 @@ class MetaCore:
             "improvement_plans": len(self.improvement_plans),
             "cognitive_cycle_count": self.cognitive_cycle_count,
             "system_metrics": self.system_metrics,
-            "meta_parameters": self.meta_parameters
+            "meta_parameters": self.meta_parameters,
+            "error_logs": len(self.error_logs),
+            "attention_focus": self.attention_focus,
+            "overall_effectiveness": self._calculate_overall_effectiveness()
         }
     
     async def get_insights(self, limit: int = 10, system: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -2186,7 +2953,12 @@ class MetaCore:
                 "next_process_id": self.next_process_id,
                 "next_model_id": self.next_model_id,
                 "next_insight_id": self.next_insight_id,
-                "next_reflection_id": self.next_reflection_id
+                "next_reflection_id": self.next_reflection_id,
+                "error_logs": self.error_logs,
+                "attention_focus": self.attention_focus,
+                "last_evaluation_time": self.last_evaluation_time.isoformat() if self.last_evaluation_time else None,
+                "last_reflection_time": self.last_reflection_time.isoformat() if self.last_reflection_time else None,
+                "last_parameter_optimization_cycle": self.last_parameter_optimization_cycle
             }
             
             with open(file_path, 'w') as f:
@@ -2223,9 +2995,19 @@ class MetaCore:
             self.next_insight_id = state["next_insight_id"]
             self.next_reflection_id = state["next_reflection_id"]
             
+            # Load new components
+            self.error_logs = state.get("error_logs", [])
+            self.attention_focus = state.get("attention_focus")
+            self.last_parameter_optimization_cycle = state.get("last_parameter_optimization_cycle", 0)
+            
+            # Parse datetime objects
+            if "last_evaluation_time" in state and state["last_evaluation_time"]:
+                self.last_evaluation_time = datetime.datetime.fromisoformat(state["last_evaluation_time"])
+            if "last_reflection_time" in state and state["last_reflection_time"]:
+                self.last_reflection_time = datetime.datetime.fromisoformat(state["last_reflection_time"])
+            
             logger.info(f"MetaCore state loaded from {file_path}")
             return True
         except Exception as e:
             logger.error(f"Error loading MetaCore state: {str(e)}")
             return False
-
