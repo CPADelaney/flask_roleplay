@@ -950,3 +950,66 @@ class ExperienceEngine:
                 narrative += f" There were {len(experiences)-2} more related experiences after these."
             
             return narrative
+    # Add these methods to the ExperienceEngine class
+    
+    async def retrieve_experiences_enhanced(self, query: str, scenario_type: Optional[str] = None, 
+                                           limit: int = 3) -> List[Dict[str, Any]]:
+        """
+        Enhanced method for retrieving experiences with improved formatting.
+        
+        Args:
+            query: Search query
+            scenario_type: Optional scenario type
+            limit: Maximum number of results
+        
+        Returns:
+            List of formatted experiences
+        """
+        # Prepare context for experience retrieval
+        context = {
+            "query": query,
+            "scenario_type": scenario_type
+        }
+        
+        # Retrieve experiences
+        experiences = await self.retrieve_relevant_experiences(
+            current_context=context,
+            limit=limit
+        )
+        
+        # Format experiences for return
+        formatted_experiences = []
+        for exp in experiences:
+            formatted = {
+                "content": exp.get("content", ""),
+                "scenario_type": exp.get("scenario_type", ""),
+                "confidence_marker": exp.get("confidence_marker", ""),
+                "relevance_score": exp.get("relevance_score", 0.5),
+                "experiential_richness": exp.get("experiential_richness", 0.5)
+            }
+            formatted_experiences.append(formatted)
+        
+        return formatted_experiences
+    
+    async def share_experience_enhanced(self, query: str, context_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Enhanced method for sharing experiences with better context handling.
+        
+        Args:
+            query: User's query text
+            context_data: Additional context data
+        
+        Returns:
+            Formatted experience sharing result
+        """
+        result = await self.handle_experience_sharing_request(
+            user_query=query,
+            context_data=context_data
+        )
+        
+        return {
+            "success": result["success"],
+            "has_experience": result.get("has_experience", False),
+            "response_text": result.get("response_text", ""),
+            "experience_count": result.get("experience_count", 0)
+        }
