@@ -9,7 +9,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from nyx.core.emotional_core import EmotionalCore
 from nyx.core.memory_core import MemoryCore
 from nyx.core.reflection_engine import ReflectionEngine
-from nyx.core.experience_engine import ExperienceEngine
+from nyx.core.experience_interface import ExperienceInterface
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ class NyxBrain:
         self.emotional_core = EmotionalCore()
         self.memory_core = None  # Initialized in initialize()
         self.reflection_engine = ReflectionEngine()
-        self.experience_engine = None  # Initialized in initialize()
+        self.experience_interface = None  # Initialized in initialize()
         
         # State tracking
         self.initialized = False
@@ -83,8 +83,8 @@ class NyxBrain:
         self.memory_core = MemoryCore(self.user_id, self.conversation_id)
         await self.memory_core.initialize()
         
-        # Initialize experience engine
-        self.experience_engine = ExperienceEngine(self.user_id, self.conversation_id)
+        # Initialize experience interface with memory core
+        self.experience_interface = ExperienceInterface(self.memory_core)
         
         # Initialize emotional core with default state
         # No async initialization needed for emotional_core
@@ -151,7 +151,7 @@ class NyxBrain:
         
         if should_share_experience:
             # Retrieve and format experience
-            experience_result = await self.experience_engine.handle_experience_sharing_request(
+            experience_result = await self.experience_interface.handle_experience_sharing_request(
                 user_query=user_input,
                 context_data=context
             )
@@ -262,54 +262,11 @@ class NyxBrain:
         if not self.initialized:
             await self.initialize()
         
-        # Determine query for memory retrieval
-        query = topic if topic else "important memories"
-        
-        # Retrieve relevant memories
-        memories = await self.memory_core.retrieve_memories(
-            query=query,
-            memory_types=["observation", "experience"],
-            limit=5,
-            min_significance=4
-        )
-        
-        if not memories:
-            return {
-                "reflection": "I don't have enough memories to form a meaningful reflection yet.",
-                "confidence": 0.3,
-                "topic": topic
-            }
-        
-        # Generate reflection
-        reflection_text, confidence = await self.reflection_engine.generate_reflection(
-            memories=memories,
-            topic=topic
-        )
-        
-        # Store reflection as memory
-        reflection_id = await self.memory_core.add_memory(
-            memory_text=reflection_text,
-            memory_type="reflection",
-            memory_scope="game",
-            significance=6,
-            tags=["reflection"] + ([topic] if topic else []),
-            metadata={
-                "confidence": confidence,
-                "source_memory_ids": [m["id"] for m in memories],
-                "emotional_context": self.emotional_core.get_formatted_emotional_state(),
-                "timestamp": datetime.now().isoformat()
-            }
-        )
-        
+        # Use memory core's reflection creation
+        reflection_result = await self.memory_core.create_reflection_from_memories(topic=topic)
         self.performance_metrics["reflections_generated"] += 1
         
-        return {
-            "reflection": reflection_text,
-            "confidence": confidence,
-            "topic": topic,
-            "reflection_id": reflection_id,
-            "source_memory_count": len(memories)
-        }
+        return reflection_result
     
     async def create_abstraction(self,
                               memory_ids: List[str],
@@ -327,48 +284,11 @@ class NyxBrain:
         if not self.initialized:
             await self.initialize()
         
-        # Get the memories
-        memories = []
-        for memory_id in memory_ids:
-            memory = await self.memory_core.get_memory(memory_id)
-            if memory:
-                memories.append(memory)
-        
-        if not memories:
-            return {
-                "abstraction": "I couldn't find the specified memories to form an abstraction.",
-                "confidence": 0.1,
-                "pattern_type": pattern_type
-            }
-        
-        # Generate abstraction
-        abstraction_text, pattern_data = await self.reflection_engine.create_abstraction(
-            memories=memories,
+        # Use memory core's abstraction creation
+        return await self.memory_core.create_abstraction_from_memories(
+            memory_ids=memory_ids,
             pattern_type=pattern_type
         )
-        
-        # Store abstraction as memory
-        abstraction_id = await self.memory_core.add_memory(
-            memory_text=abstraction_text,
-            memory_type="abstraction",
-            memory_scope="game",
-            significance=7,
-            tags=["abstraction", pattern_type],
-            metadata={
-                "pattern_data": pattern_data,
-                "source_memory_ids": memory_ids,
-                "emotional_context": self.emotional_core.get_formatted_emotional_state(),
-                "timestamp": datetime.now().isoformat()
-            }
-        )
-        
-        return {
-            "abstraction": abstraction_text,
-            "pattern_type": pattern_type,
-            "confidence": pattern_data.get("confidence", 0.5),
-            "abstraction_id": abstraction_id,
-            "source_memory_count": len(memories)
-        }
     
     async def retrieve_experiences(self,
                                 query: str,
@@ -388,18 +308,10 @@ class NyxBrain:
         if not self.initialized:
             await self.initialize()
         
-        # Prepare context for experience retrieval
-        context = {
-            "query": query,
-            "emotional_state": self.emotional_core.get_formatted_emotional_state()
-        }
-        
-        if scenario_type:
-            context["scenario_type"] = scenario_type
-        
-        # Retrieve experiences
-        experiences = await self.experience_engine.retrieve_relevant_experiences(
-            current_context=context,
+        # Use experience interface for retrieving experiences
+        experiences = await self.experience_interface.retrieve_experiences_enhanced(
+            query=query,
+            scenario_type=scenario_type,
             limit=limit
         )
         
@@ -428,57 +340,12 @@ class NyxBrain:
         if not self.initialized:
             await self.initialize()
         
-        # Retrieve relevant experiences
-        experiences_result = await self.retrieve_experiences(
-            query=topic,
+        # Use memory core's narrative construction
+        return await self.memory_core.construct_narrative_from_memories(
+            topic=topic,
+            chronological=chronological,
             limit=limit
         )
-        
-        experiences = experiences_result["experiences"]
-        
-        # If no experiences found, try general memories
-        if not experiences:
-            memories = await self.memory_core.retrieve_memories(
-                query=topic,
-                memory_types=["observation", "reflection"],
-                limit=limit
-            )
-            
-            # Convert memories to experience format
-            experiences = []
-            for memory in memories:
-                experiences.append({
-                    "id": memory["id"],
-                    "content": memory["memory_text"],
-                    "emotional_context": memory.get("metadata", {}).get("emotional_context", {}),
-                    "scenario_type": "general",
-                    "relevance_score": memory.get("relevance", 0.5)
-                })
-        
-        # Generate narrative
-        if experiences:
-            # Use experience engine to construct narrative
-            narrative_result = await self.experience_engine.construct_narrative(
-                experiences=experiences,
-                topic=topic,
-                chronological=chronological
-            )
-            
-            return {
-                "narrative": narrative_result["narrative"],
-                "confidence": narrative_result["confidence"],
-                "experience_count": len(experiences),
-                "chronological": chronological,
-                "topic": topic
-            }
-        else:
-            return {
-                "narrative": f"I don't have enough memories about {topic} to construct a narrative.",
-                "confidence": 0.2,
-                "experience_count": 0,
-                "chronological": chronological,
-                "topic": topic
-            }
     
     async def run_maintenance(self) -> Dict[str, Any]:
         """Run maintenance on all subsystems"""
@@ -595,7 +462,8 @@ class NyxBrain:
                 impact[primary_emotion] += impact_value
         
         return impact
-    # Add these methods to the NyxBrain class
+    
+    # Enhanced system function implementations
     
     async def process_user_input_enhanced(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
