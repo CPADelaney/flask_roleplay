@@ -57,6 +57,60 @@ class MemoryCore:
         
         # Initialization timestamp
         self.init_time = datetime.datetime.now()
+        
+        # Template patterns for experience recall formatting
+        self.recall_templates = {
+            # Basic recall templates
+            "standard": [
+                "That reminds me of {timeframe} when {brief_summary}... {detail}",
+                "I recall {timeframe} when {brief_summary}. {reflection}",
+                "This is similar to {timeframe} when {brief_summary}... {detail}"
+            ],
+            
+            # For emotionally positive experiences
+            "positive": [
+                "Mmm, I remember {timeframe} when {brief_summary}. {reflection}",
+                "That brings back a delicious memory of {timeframe} when {brief_summary}... {detail}",
+                "I quite enjoyed {timeframe} when {brief_summary}. {reflection}"
+            ],
+            
+            # For emotionally negative experiences
+            "negative": [
+                "I recall {timeframe} dealing with someone who {brief_summary}. {reflection}",
+                "This reminds me of a frustrating time when {brief_summary}... {detail}",
+                "I once had to handle someone who {brief_summary}. {reflection}"
+            ],
+            
+            # For intense experiences
+            "intense": [
+                "Mmm, that reminds me of an *intense* experience where {brief_summary}... {detail}",
+                "I vividly remember when {brief_summary}. {reflection}",
+                "I'll never forget when {brief_summary}... {detail}"
+            ],
+            
+            # For teasing experiences
+            "teasing": [
+                "Oh, this reminds me of {timeframe} when I teased someone until {brief_summary}... {reflection}",
+                "I once had such fun teasing someone who {brief_summary}. {reflection}",
+                "There was this delicious time when I {brief_summary}... {detail}"
+            ],
+            
+            # For disciplinary experiences
+            "disciplinary": [
+                "I remember having to discipline someone who {brief_summary}. {reflection}",
+                "This reminds me of {timeframe} when I had to correct someone who {brief_summary}... {detail}",
+                "I once dealt with someone who needed strict handling when they {brief_summary}. {reflection}"
+            ]
+        }
+        
+        # Confidence marker mapping for experience relevance scores
+        self.confidence_markers = {
+            (0.8, 1.0): "vividly recall",
+            (0.6, 0.8): "clearly remember",
+            (0.4, 0.6): "remember",
+            (0.2, 0.4): "think I recall",
+            (0.0, 0.2): "vaguely remember"
+        }
     
     async def initialize(self):
         """Initialize memory system and load existing memories"""
@@ -316,6 +370,10 @@ class MemoryCore:
             if memory_id in self.memories:
                 memory = self.memories[memory_id].copy()
                 memory["relevance"] = relevance
+                
+                # Add confidence marker for experiences
+                if memory["memory_type"] == "experience":
+                    memory["confidence_marker"] = self._get_confidence_marker(relevance)
                 
                 # Update recall count
                 await self._update_memory_recall(memory_id)
@@ -1007,7 +1065,89 @@ class MemoryCore:
             }
         else:
             raise ValueError(f"Unsupported import format: {format_type}")
-    # Add these methods to the MemoryCore class
+
+    # Experience-related methods (integrated from Experience Engine)
+    
+    def _get_confidence_marker(self, relevance: float) -> str:
+        """Get confidence marker text based on relevance score"""
+        for (min_val, max_val), marker in self.confidence_markers.items():
+            if min_val <= relevance < max_val:
+                return marker
+        return "remember"  # Default
+    
+    def _get_timeframe_text(self, timestamp: Optional[str]) -> str:
+        """Get conversational timeframe text from timestamp"""
+        if not timestamp:
+            return "a while back"
+            
+        try:
+            if isinstance(timestamp, str):
+                memory_time = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            else:
+                memory_time = timestamp
+                
+            days_ago = (datetime.datetime.now() - memory_time).days
+            
+            if days_ago < 1:
+                return "earlier today"
+            elif days_ago < 2:
+                return "yesterday"
+            elif days_ago < 7:
+                return f"{days_ago} days ago"
+            elif days_ago < 14:
+                return "last week"
+            elif days_ago < 30:
+                return "a couple weeks ago"
+            elif days_ago < 60:
+                return "a month ago"
+            elif days_ago < 365:
+                return f"{days_ago // 30} months ago"
+            else:
+                return "a while back"
+                
+        except Exception as e:
+            logger.error(f"Error processing timestamp: {e}")
+            return "a while back"
+    
+    def _get_emotional_tone(self, emotional_context: Dict[str, Any]) -> str:
+        """Determine the emotional tone for recall based on the experience's emotions"""
+        if not emotional_context:
+            return "standard"
+            
+        primary = emotional_context.get("primary_emotion", "neutral")
+        intensity = emotional_context.get("primary_intensity", 0.5)
+        valence = emotional_context.get("valence", 0.0)
+        
+        # High intensity experiences
+        if intensity > 0.8:
+            return "intense"
+            
+        # Positive emotions
+        if valence > 0.3 or primary in ["Joy", "Anticipation", "Trust", "Love"]:
+            return "positive"
+            
+        # Negative emotions
+        if valence < -0.3 or primary in ["Anger", "Fear", "Disgust", "Sadness", "Frustration"]:
+            return "negative"
+            
+        # Default to standard
+        return "standard"
+    
+    def _get_scenario_tone(self, scenario_type: str) -> Optional[str]:
+        """Get tone based on scenario type"""
+        scenario_type = scenario_type.lower()
+        
+        if scenario_type in ["teasing", "indulgent"]:
+            return "teasing"
+        elif scenario_type in ["discipline", "punishment", "training"]:
+            return "disciplinary"
+        elif scenario_type in ["dark", "fear"]:
+            return "intense"
+        
+        # No specific tone for this scenario type
+        return None
+    
+    # API Functions
     
     async def retrieve_memories_with_formatting(self, query: str, memory_types: List[str] = None, 
                                               limit: int = 5) -> List[Dict[str, Any]]:
@@ -1071,11 +1211,11 @@ class MemoryCore:
                 "reflection_id": None
             }
         
-        # Generate reflection text
-        # This would normally call the reflection engine, but for compatibility we'll keep it here
+        # Import the reflection engine
         from nyx.core.reflection_engine import ReflectionEngine
         reflection_engine = ReflectionEngine()
         
+        # Generate reflection text
         reflection_text, confidence = await reflection_engine.generate_reflection(memories, topic)
         
         # Store reflection as a memory
@@ -1101,7 +1241,7 @@ class MemoryCore:
         }
         
     async def create_abstraction_from_memories(self, memory_ids: List[str], 
-                                            pattern_type: str = "behavior") -> Dict[str, Any]:
+                                             pattern_type: str = "behavior") -> Dict[str, Any]:
         """
         Create a higher-level abstraction from specific memories.
         
@@ -1209,3 +1349,128 @@ class MemoryCore:
             "confidence": min(1.0, confidence),
             "experience_count": len(memories)
         }
+    
+    # Experience retrieval methods
+    
+    async def retrieve_relevant_experiences(self, 
+                                          current_context: Dict[str, Any],
+                                          limit: int = 3,
+                                          min_relevance: float = 0.6) -> List[Dict[str, Any]]:
+        """
+        Retrieve experiences relevant to the current conversation context.
+        
+        Args:
+            current_context: Current conversation context including:
+                - query: Search query or current topic
+                - scenario_type: Type of scenario (e.g., "teasing", "dark")
+                - emotional_state: Current emotional state
+                - entities: Entities involved in current context
+            limit: Maximum number of experiences to return
+            min_relevance: Minimum relevance score (0.0-1.0)
+            
+        Returns:
+            List of relevant experiences with metadata
+        """
+        # Extract key information from context
+        query = current_context.get("query", "")
+        scenario_type = current_context.get("scenario_type", "")
+        emotional_state = current_context.get("emotional_state", {})
+        entities = current_context.get("entities", [])
+        
+        # Retrieve experiences using the memory system
+        experiences = await self.retrieve_memories(
+            query=query,
+            memory_types=["experience"],
+            limit=limit * 2,  # Get more to filter by relevance
+            context={
+                "emotional_state": emotional_state,
+                "entities": entities
+            }
+        )
+        
+        # Process top experiences
+        results = []
+        for memory in experiences:
+            if memory.get("relevance", 0) >= min_relevance:
+                # Get emotional context for this experience
+                emotional_context = memory.get("metadata", {}).get("emotional_context", {})
+                
+                # Add confidence marker
+                confidence_marker = self._get_confidence_marker(memory.get("relevance", 0.5))
+                
+                # Format the experience
+                experience = {
+                    "id": memory["id"],
+                    "content": memory["memory_text"],
+                    "relevance_score": memory.get("relevance", 0.5),
+                    "emotional_context": emotional_context,
+                    "scenario_type": memory.get("tags", ["general"])[0] if memory.get("tags") else "general",
+                    "confidence_marker": confidence_marker,
+                    "experiential_richness": min(1.0, memory.get("significance", 5) / 10.0)
+                }
+                
+                results.append(experience)
+                
+                if len(results) >= limit:
+                    break
+        
+        return results
+    
+    async def generate_conversational_recall(self, 
+                                           experience: Dict[str, Any],
+                                           context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Generate a natural, conversational recall of an experience.
+        
+        Args:
+            experience: The experience to recall
+            context: Current conversation context
+            
+        Returns:
+            Conversational recall with reflection
+        """
+        # Extract experience data
+        content = experience.get("content", experience.get("memory_text", ""))
+        emotional_context = experience.get("emotional_context", {})
+        scenario_type = experience.get("scenario_type", "general")
+        timestamp = experience.get("timestamp", experience.get("metadata", {}).get("timestamp"))
+        
+        # Get timeframe text
+        timeframe = self._get_timeframe_text(timestamp)
+        
+        # Determine tone for recall
+        emotional_tone = self._get_emotional_tone(emotional_context)
+        scenario_tone = self._get_scenario_tone(scenario_type)
+        
+        # Select tone (prioritize scenario tone if available)
+        tone = scenario_tone or emotional_tone
+        
+        # Get templates for this tone
+        templates = self.recall_templates.get(tone, self.recall_templates["standard"])
+        
+        # Select a random template
+        template = random.choice(templates)
+        
+        # Generate simple components for template filling
+        sentences = content.split(".")
+        brief_summary = sentences[0] if sentences else "something happened"
+        if len(brief_summary) > 50:
+            brief_summary = brief_summary[:47] + "..."
+        
+        detail = ""
+        if len(sentences) > 1:
+            detail = sentences[1]
+            if len(detail) > 60:
+                detail = detail[:57] + "..."
+        else:
+            detail = "It was quite memorable."
+        
+        # Generate a reflection based on scenario type and emotion
+        reflection = "I found it quite interesting to observe."
+        
+        # Fill in the template
+        recall_text = template.format(
+            timeframe=timeframe,
+            brief_summary=brief_summary,
+            detail=detail,
+            reflection=reflection
