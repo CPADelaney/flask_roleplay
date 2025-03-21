@@ -378,3 +378,89 @@ class EmotionalCore:
         except Exception as e:
             logger.error(f"Failed to load emotional state: {e}")
             return False
+    # Add these methods to the EmotionalCore class
+    
+    async def get_formatted_emotional_state_async(self) -> Dict[str, Any]:
+        """Async wrapper for get_formatted_emotional_state for function tool compatibility"""
+        return self.get_formatted_emotional_state()
+    
+    async def update_emotion_async(self, emotion: str, value: float) -> Dict[str, Any]:
+        """
+        Async wrapper for update_emotion with enhanced return format.
+        
+        Args:
+            emotion: The emotion to update
+            value: The delta change in emotion value (-1.0 to 1.0)
+        
+        Returns:
+            Dictionary with update results
+        """
+        # Validate input
+        if not -1.0 <= value <= 1.0:
+            return {
+                "error": "Value must be between -1.0 and 1.0"
+            }
+        
+        if emotion not in self.emotions:
+            return {
+                "error": f"Unknown emotion: {emotion}",
+                "available_emotions": list(self.emotions.keys())
+            }
+        
+        # Get pre-update value
+        old_value = self.emotions[emotion]
+        
+        # Update emotion
+        self.update_emotion(emotion, value)
+        
+        # Get updated state
+        updated_state = self.get_emotional_state()
+        
+        return {
+            "success": True,
+            "updated_emotion": emotion,
+            "change": value,
+            "old_value": old_value,
+            "new_value": updated_state[emotion],
+            "emotional_state": updated_state
+        }
+    
+    async def set_emotion_async(self, emotion: str, value: float) -> Dict[str, Any]:
+        """
+        Async wrapper for set_emotion with enhanced return format.
+        
+        Args:
+            emotion: The emotion to set
+            value: The absolute value (0.0 to 1.0)
+        
+        Returns:
+            Dictionary with update results
+        """
+        # Validate input
+        if not 0.0 <= value <= 1.0:
+            return {
+                "error": "Value must be between 0.0 and 1.0"
+            }
+        
+        if emotion not in self.emotions:
+            return {
+                "error": f"Unknown emotion: {emotion}",
+                "available_emotions": list(self.emotions.keys())
+            }
+        
+        # Get pre-update value
+        old_value = self.emotions[emotion]
+        
+        # Set emotion to absolute value
+        self.set_emotion(emotion, value)
+        
+        # Get updated state
+        updated_state = self.get_emotional_state()
+        
+        return {
+            "success": True,
+            "set_emotion": emotion,
+            "old_value": old_value,
+            "value": value,
+            "emotional_state": updated_state
+        }
