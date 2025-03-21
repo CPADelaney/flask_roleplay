@@ -1,4 +1,4 @@
-# nyx/core/integrated_reasoning_core.py
+# nyx/core/reasoning_core.py
 
 import asyncio
 import json
