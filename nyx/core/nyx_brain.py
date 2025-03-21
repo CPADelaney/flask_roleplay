@@ -595,3 +595,85 @@ class NyxBrain:
                 impact[primary_emotion] += impact_value
         
         return impact
+    # Add these methods to the NyxBrain class
+    
+    async def process_user_input_enhanced(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Enhanced processing of user input with comprehensive results.
+        
+        Args:
+            user_input: User's input text
+            context: Additional context information
+            
+        Returns:
+            Comprehensive processing results
+        """
+        # Use existing process_input but enhance the result
+        result = await self.process_input(user_input, context)
+        
+        # Add additional processing information
+        system_stats = await self.get_system_stats()
+        
+        # Return enhanced result
+        return {
+            "input": user_input,
+            "emotional_state": result["emotional_state"],
+            "memories": result["memories"],
+            "memory_count": result["memory_count"],
+            "has_experience": result["has_experience"],
+            "experience_response": result["experience_response"],
+            "memory_id": result["memory_id"],
+            "response_time": result["response_time"],
+            "system_stats": {
+                "memory_stats": system_stats["memory_stats"],
+                "emotional_state": system_stats["emotional_state"],
+                "performance_metrics": system_stats["performance_metrics"]
+            }
+        }
+    
+    async def generate_enhanced_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Generate an enhanced response to user input with adaptation.
+        
+        Args:
+            user_input: User's input text
+            context: Additional context information
+            
+        Returns:
+            Enhanced response data with adaptation
+        """
+        # Generate standard response
+        response_data = await self.generate_response(user_input, context)
+        
+        # Add adaptive behavior from dynamic adaptation system
+        if hasattr(self, 'dynamic_adaptation'):
+            # Create adaptable context
+            adaptable_context = {
+                "user_input": user_input,
+                "response": response_data["message"],
+                "interaction_type": context.get("interaction_type", "general") if context else "general",
+            }
+            
+            # Detect context change
+            change_result = await self.dynamic_adaptation.detect_context_change(adaptable_context)
+            
+            # Monitor performance
+            performance = await self.dynamic_adaptation.monitor_performance({
+                "success_rate": context.get("success_rate", 0.5) if context else 0.5,
+                "user_satisfaction": context.get("user_satisfaction", 0.5) if context else 0.5,
+                "efficiency": context.get("efficiency", 0.5) if context else 0.5,
+                "response_quality": context.get("response_quality", 0.5) if context else 0.5
+            })
+            
+            # Add adaptation data to response
+            response_data["adaptation"] = {
+                "context_change": change_result,
+                "performance": performance
+            }
+            
+            # If significant change, select strategy
+            if change_result[0]:  # significant change
+                strategy = await self.dynamic_adaptation.select_strategy(adaptable_context, performance)
+                response_data["adaptation"]["strategy"] = strategy
+        
+        return response_data
