@@ -1,4 +1,4 @@
-# nyx/core/api/function_tools.py
+# nyx/api/unified_function_tools.py
 
 import logging
 import json
@@ -160,8 +160,8 @@ async def retrieve_experiences(ctx: RunContextWrapper[Any],
     """
     brain = ctx.context
     
-    # Use the experience_engine's enhanced retrieval method
-    experiences = await brain.experience_engine.retrieve_experiences_enhanced(
+    # Use the experience_interface's retrieval method
+    experiences = await brain.experience_interface.retrieve_experiences_enhanced(
         query=query,
         scenario_type=scenario_type,
         limit=limit
@@ -188,8 +188,8 @@ async def share_experience(ctx: RunContextWrapper[Any],
     if "emotional_state" not in context_data:
         context_data["emotional_state"] = brain.emotional_core.get_formatted_emotional_state()
     
-    # Use the experience_engine's enhanced sharing method
-    result = await brain.experience_engine.share_experience_enhanced(
+    # Use the experience_interface's sharing method
+    result = await brain.experience_interface.share_experience_enhanced(
         query=query,
         context_data=context_data
     )
