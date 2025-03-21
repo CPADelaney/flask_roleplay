@@ -1007,205 +1007,205 @@ class MemoryCore:
             }
         else:
             raise ValueError(f"Unsupported import format: {format_type}")
-# Add these methods to the MemoryCore class
-
-async def retrieve_memories_with_formatting(self, query: str, memory_types: List[str] = None, 
-                                          limit: int = 5) -> List[Dict[str, Any]]:
-    """
-    Enhanced retrieval with formatted results for agent consumption.
+    # Add these methods to the MemoryCore class
     
-    Args:
-        query: Search query
-        memory_types: Types of memories to include
-        limit: Maximum number of results
-    
-    Returns:
-        List of formatted memories with confidence markers
-    """
-    memories = await self.retrieve_memories(
-        query=query,
-        memory_types=memory_types or ["observation", "reflection", "abstraction", "experience"],
-        limit=limit
-    )
-    
-    # Format memories with confidence markers
-    formatted_memories = []
-    for memory in memories:
-        confidence = memory.get("confidence_marker", "remember")
-        formatted = {
-            "id": memory["id"],
-            "text": memory["memory_text"],
-            "type": memory["memory_type"],
-            "significance": memory["significance"],
-            "confidence": confidence,
-            "relevance": memory.get("relevance", 0.5),
-            "tags": memory.get("tags", [])
-        }
-        formatted_memories.append(formatted)
-    
-    return formatted_memories
-    
-async def create_reflection_from_memories(self, topic: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Create a reflection on a specific topic using memories.
-    
-    Args:
-        topic: Optional topic to reflect on
-    
-    Returns:
-        Reflection result dictionary
-    """
-    # Get relevant memories for reflection
-    query = topic if topic else "important memories"
-    memories = await self.retrieve_memories(
-        query=query,
-        memory_types=["observation", "experience"],
-        limit=5
-    )
-    
-    if not memories:
-        return {
-            "reflection": "I don't have enough memories to form a meaningful reflection yet.",
-            "confidence": 0.3,
-            "topic": topic,
-            "reflection_id": None
-        }
-    
-    # Generate reflection text
-    # This would normally call the reflection engine, but for compatibility we'll keep it here
-    from nyx.core.reflection_engine import ReflectionEngine
-    reflection_engine = ReflectionEngine()
-    
-    reflection_text, confidence = await reflection_engine.generate_reflection(memories, topic)
-    
-    # Store reflection as a memory
-    reflection_id = await self.add_memory(
-        memory_text=reflection_text,
-        memory_type="reflection",
-        memory_scope="game",
-        significance=6,
-        tags=["reflection"] + ([topic] if topic else []),
-        metadata={
-            "confidence": confidence,
-            "source_memory_ids": [m["id"] for m in memories],
-            "emotional_context": {},  # This would normally come from emotional_core
-            "timestamp": datetime.datetime.now().isoformat()
-        }
-    )
-    
-    return {
-        "reflection": reflection_text,
-        "confidence": confidence,
-        "topic": topic,
-        "reflection_id": reflection_id
-    }
-    
-async def create_abstraction_from_memories(self, memory_ids: List[str], 
-                                        pattern_type: str = "behavior") -> Dict[str, Any]:
-    """
-    Create a higher-level abstraction from specific memories.
-    
-    Args:
-        memory_ids: IDs of memories to abstract from
-        pattern_type: Type of pattern to identify
+    async def retrieve_memories_with_formatting(self, query: str, memory_types: List[str] = None, 
+                                              limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Enhanced retrieval with formatted results for agent consumption.
         
-    Returns:
-        Abstraction result dictionary
-    """
-    # Retrieve the specified memories
-    memories = []
-    for memory_id in memory_ids:
-        memory = await self.get_memory(memory_id)
-        if memory:
-            memories.append(memory)
-    
-    if not memories:
+        Args:
+            query: Search query
+            memory_types: Types of memories to include
+            limit: Maximum number of results
+        
+        Returns:
+            List of formatted memories with confidence markers
+        """
+        memories = await self.retrieve_memories(
+            query=query,
+            memory_types=memory_types or ["observation", "reflection", "abstraction", "experience"],
+            limit=limit
+        )
+        
+        # Format memories with confidence markers
+        formatted_memories = []
+        for memory in memories:
+            confidence = memory.get("confidence_marker", "remember")
+            formatted = {
+                "id": memory["id"],
+                "text": memory["memory_text"],
+                "type": memory["memory_type"],
+                "significance": memory["significance"],
+                "confidence": confidence,
+                "relevance": memory.get("relevance", 0.5),
+                "tags": memory.get("tags", [])
+            }
+            formatted_memories.append(formatted)
+        
+        return formatted_memories
+        
+    async def create_reflection_from_memories(self, topic: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Create a reflection on a specific topic using memories.
+        
+        Args:
+            topic: Optional topic to reflect on
+        
+        Returns:
+            Reflection result dictionary
+        """
+        # Get relevant memories for reflection
+        query = topic if topic else "important memories"
+        memories = await self.retrieve_memories(
+            query=query,
+            memory_types=["observation", "experience"],
+            limit=5
+        )
+        
+        if not memories:
+            return {
+                "reflection": "I don't have enough memories to form a meaningful reflection yet.",
+                "confidence": 0.3,
+                "topic": topic,
+                "reflection_id": None
+            }
+        
+        # Generate reflection text
+        # This would normally call the reflection engine, but for compatibility we'll keep it here
+        from nyx.core.reflection_engine import ReflectionEngine
+        reflection_engine = ReflectionEngine()
+        
+        reflection_text, confidence = await reflection_engine.generate_reflection(memories, topic)
+        
+        # Store reflection as a memory
+        reflection_id = await self.add_memory(
+            memory_text=reflection_text,
+            memory_type="reflection",
+            memory_scope="game",
+            significance=6,
+            tags=["reflection"] + ([topic] if topic else []),
+            metadata={
+                "confidence": confidence,
+                "source_memory_ids": [m["id"] for m in memories],
+                "emotional_context": {},  # This would normally come from emotional_core
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+        )
+        
         return {
-            "abstraction": "I couldn't find the specified memories to form an abstraction.",
-            "confidence": 0.1,
-            "pattern_type": pattern_type
+            "reflection": reflection_text,
+            "confidence": confidence,
+            "topic": topic,
+            "reflection_id": reflection_id
         }
-    
-    # Generate abstraction
-    from nyx.core.reflection_engine import ReflectionEngine
-    reflection_engine = ReflectionEngine()
-    
-    abstraction_text, pattern_data = await reflection_engine.create_abstraction(
-        memories=memories,
-        pattern_type=pattern_type
-    )
-    
-    # Store abstraction as a memory
-    abstraction_id = await self.add_memory(
-        memory_text=abstraction_text,
-        memory_type="abstraction",
-        memory_scope="game",
-        significance=7,
-        tags=["abstraction", pattern_type],
-        metadata={
-            "pattern_data": pattern_data,
-            "source_memory_ids": memory_ids,
-            "emotional_context": {},  # This would normally come from emotional_core
-            "timestamp": datetime.datetime.now().isoformat()
-        }
-    )
-    
-    return {
-        "abstraction": abstraction_text,
-        "pattern_type": pattern_type,
-        "confidence": pattern_data.get("confidence", 0.5),
-        "abstraction_id": abstraction_id
-    }
-    
-async def construct_narrative_from_memories(self, topic: str, chronological: bool = True, 
-                                          limit: int = 5) -> Dict[str, Any]:
-    """
-    Construct a narrative from memories about a topic.
-    
-    Args:
-        topic: Topic for narrative construction
-        chronological: Whether to maintain chronological order
-        limit: Maximum number of memories to include
-    
-    Returns:
-        Narrative result dictionary
-    """
-    # Retrieve memories for the topic
-    memories = await self.retrieve_memories(
-        query=topic,
-        memory_types=["observation", "experience"],
-        limit=limit
-    )
-    
-    if not memories:
+        
+    async def create_abstraction_from_memories(self, memory_ids: List[str], 
+                                            pattern_type: str = "behavior") -> Dict[str, Any]:
+        """
+        Create a higher-level abstraction from specific memories.
+        
+        Args:
+            memory_ids: IDs of memories to abstract from
+            pattern_type: Type of pattern to identify
+            
+        Returns:
+            Abstraction result dictionary
+        """
+        # Retrieve the specified memories
+        memories = []
+        for memory_id in memory_ids:
+            memory = await self.get_memory(memory_id)
+            if memory:
+                memories.append(memory)
+        
+        if not memories:
+            return {
+                "abstraction": "I couldn't find the specified memories to form an abstraction.",
+                "confidence": 0.1,
+                "pattern_type": pattern_type
+            }
+        
+        # Generate abstraction
+        from nyx.core.reflection_engine import ReflectionEngine
+        reflection_engine = ReflectionEngine()
+        
+        abstraction_text, pattern_data = await reflection_engine.create_abstraction(
+            memories=memories,
+            pattern_type=pattern_type
+        )
+        
+        # Store abstraction as a memory
+        abstraction_id = await self.add_memory(
+            memory_text=abstraction_text,
+            memory_type="abstraction",
+            memory_scope="game",
+            significance=7,
+            tags=["abstraction", pattern_type],
+            metadata={
+                "pattern_data": pattern_data,
+                "source_memory_ids": memory_ids,
+                "emotional_context": {},  # This would normally come from emotional_core
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+        )
+        
         return {
-            "narrative": f"I don't have enough memories about {topic} to construct a narrative.",
-            "confidence": 0.2,
-            "experience_count": 0
+            "abstraction": abstraction_text,
+            "pattern_type": pattern_type,
+            "confidence": pattern_data.get("confidence", 0.5),
+            "abstraction_id": abstraction_id
         }
-    
-    # Sort memories chronologically if requested
-    if chronological:
-        memories.sort(key=lambda m: m.get("metadata", {}).get("timestamp", ""))
-    
-    # In a real implementation, we would use a more sophisticated narrative generation
-    # For now, a simple concatenation with transitions
-    narrative_parts = []
-    for i, memory in enumerate(memories):
-        if i == 0:
-            narrative_parts.append(f"I remember that {memory['memory_text']}")
-        else:
-            transition = "After that" if chronological else "Also"
-            narrative_parts.append(f"{transition}, {memory['memory_text']}")
-    
-    narrative = " ".join(narrative_parts)
-    
-    # Calculate confidence based on memory count and relevance
-    avg_relevance = sum(m.get("relevance", 0.5) for m in memories) / len(memories)
-    confidence = 0.4 + (len(memories) / 10) + (avg_relevance * 0.3)  # Scale based on count and relevance
-    
-    return {
-        "narrative": narrative,
-        "confidence": min(1.0, confidence),
-        "experience_count": len(memories)
-    }
+        
+    async def construct_narrative_from_memories(self, topic: str, chronological: bool = True, 
+                                              limit: int = 5) -> Dict[str, Any]:
+        """
+        Construct a narrative from memories about a topic.
+        
+        Args:
+            topic: Topic for narrative construction
+            chronological: Whether to maintain chronological order
+            limit: Maximum number of memories to include
+        
+        Returns:
+            Narrative result dictionary
+        """
+        # Retrieve memories for the topic
+        memories = await self.retrieve_memories(
+            query=topic,
+            memory_types=["observation", "experience"],
+            limit=limit
+        )
+        
+        if not memories:
+            return {
+                "narrative": f"I don't have enough memories about {topic} to construct a narrative.",
+                "confidence": 0.2,
+                "experience_count": 0
+            }
+        
+        # Sort memories chronologically if requested
+        if chronological:
+            memories.sort(key=lambda m: m.get("metadata", {}).get("timestamp", ""))
+        
+        # In a real implementation, we would use a more sophisticated narrative generation
+        # For now, a simple concatenation with transitions
+        narrative_parts = []
+        for i, memory in enumerate(memories):
+            if i == 0:
+                narrative_parts.append(f"I remember that {memory['memory_text']}")
+            else:
+                transition = "After that" if chronological else "Also"
+                narrative_parts.append(f"{transition}, {memory['memory_text']}")
+        
+        narrative = " ".join(narrative_parts)
+        
+        # Calculate confidence based on memory count and relevance
+        avg_relevance = sum(m.get("relevance", 0.5) for m in memories) / len(memories)
+        confidence = 0.4 + (len(memories) / 10) + (avg_relevance * 0.3)  # Scale based on count and relevance
+        
+        return {
+            "narrative": narrative,
+            "confidence": min(1.0, confidence),
+            "experience_count": len(memories)
+        }
