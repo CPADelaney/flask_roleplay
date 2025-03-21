@@ -50,6 +50,14 @@ class NyxBrain:
             "experiences_shared": 0,
             "response_times": []
         }
+
+        self.meta_core = MetaCore()
+        await self.meta_core.initialize({
+            "memory": self.memory_core,
+            "emotion": self.emotional_core,
+            "reasoning": self.reasoning_core,
+            "reflection": self.reflection_engine
+        })    
         
         # Caching
         self.context_cache = {}
@@ -116,6 +124,7 @@ class NyxBrain:
             await self.initialize()
         
         start_time = datetime.now()
+        meta_result = await self.meta_core.cognitive_cycle(context)
         
         # Update interaction tracking
         self.last_interaction = datetime.now()
