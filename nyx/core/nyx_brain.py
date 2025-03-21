@@ -106,7 +106,7 @@ class NyxBrain:
         
         self.initialized = True
         logger.info(f"NyxBrain initialized for user {self.user_id}")
-    
+
     async def process_input(self, 
                           user_input: str, 
                           context: Dict[str, Any] = None) -> Dict[str, Any]:
