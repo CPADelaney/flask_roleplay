@@ -10,6 +10,7 @@ from nyx.core.emotional_core import EmotionalCore
 from nyx.core.memory_core import MemoryCore
 from nyx.core.reflection_engine import ReflectionEngine
 from nyx.core.experience_interface import ExperienceInterface
+from nyx.core.dynamic_adaptation_system import DynamicAdaptationSystem
 from nyx.core.internal_feedback_system import InternalFeedbackSystem
 
 logger = logging.getLogger(__name__)
