@@ -1,4 +1,4 @@
-# nyx/api/function_tools.py
+# nyx/core/api/function_tools.py
 
 import logging
 import json
@@ -26,6 +26,7 @@ async def add_memory(ctx: RunContextWrapper[Any],
     """
     brain = ctx.context
     
+    # Directly use the memory_core's add_memory method
     memory_id = await brain.memory_core.add_memory(
         memory_text=memory_text,
         memory_type=memory_type,
@@ -58,29 +59,12 @@ async def retrieve_memories(ctx: RunContextWrapper[Any],
     """
     brain = ctx.context
     
-    memories = await brain.memory_core.retrieve_memories(
+    # Use the enhanced memory retrieval method
+    formatted_memories = await brain.memory_core.retrieve_memories_with_formatting(
         query=query,
         memory_types=memory_types or ["observation", "reflection", "abstraction", "experience"],
-        limit=limit,
-        context={
-            "emotional_state": brain.emotional_core.get_formatted_emotional_state()
-        }
+        limit=limit
     )
-    
-    # Format memories for output
-    formatted_memories = []
-    for memory in memories:
-        confidence = memory.get("confidence_marker", "remember")
-        formatted = {
-            "id": memory["id"],
-            "text": memory["memory_text"],
-            "type": memory["memory_type"],
-            "significance": memory["significance"],
-            "confidence": confidence,
-            "relevance": memory.get("relevance", 0.5),
-            "tags": memory.get("tags", [])
-        }
-        formatted_memories.append(formatted)
     
     return json.dumps(formatted_memories)
 
@@ -95,7 +79,8 @@ async def create_reflection(ctx: RunContextWrapper[Any],
     """
     brain = ctx.context
     
-    reflection_result = await brain.create_reflection(topic=topic)
+    # Use the memory_core's create_reflection method
+    reflection_result = await brain.memory_core.create_reflection_from_memories(topic=topic)
     
     return json.dumps({
         "reflection": reflection_result["reflection"],
@@ -117,7 +102,8 @@ async def create_abstraction(ctx: RunContextWrapper[Any],
     """
     brain = ctx.context
     
-    abstraction_result = await brain.create_abstraction(
+    # Use the memory_core's create_abstraction method
+    abstraction_result = await brain.memory_core.create_abstraction_from_memories(
         memory_ids=memory_ids,
         pattern_type=pattern_type
     )
@@ -144,7 +130,8 @@ async def construct_narrative(ctx: RunContextWrapper[Any],
     """
     brain = ctx.context
     
-    narrative_result = await brain.construct_narrative(
+    # Use the memory_core's construct_narrative method
+    narrative_result = await brain.memory_core.construct_narrative_from_memories(
         topic=topic,
         chronological=chronological,
         limit=limit
@@ -173,25 +160,14 @@ async def retrieve_experiences(ctx: RunContextWrapper[Any],
     """
     brain = ctx.context
     
-    experiences_result = await brain.retrieve_experiences(
+    # Use the experience_engine's enhanced retrieval method
+    experiences = await brain.experience_engine.retrieve_experiences_enhanced(
         query=query,
         scenario_type=scenario_type,
         limit=limit
     )
     
-    # Format experiences for output
-    formatted_experiences = []
-    for exp in experiences_result["experiences"]:
-        formatted = {
-            "content": exp.get("content", ""),
-            "scenario_type": exp.get("scenario_type", ""),
-            "confidence_marker": exp.get("confidence_marker", ""),
-            "relevance_score": exp.get("relevance_score", 0.5),
-            "experiential_richness": exp.get("experiential_richness", 0.5)
-        }
-        formatted_experiences.append(formatted)
-    
-    return json.dumps(formatted_experiences)
+    return json.dumps(experiences)
 
 @function_tool
 async def share_experience(ctx: RunContextWrapper[Any],
@@ -206,19 +182,19 @@ async def share_experience(ctx: RunContextWrapper[Any],
     """
     brain = ctx.context
     
-    result = await brain.experience_engine.handle_experience_sharing_request(
-        user_query=query,
-        context_data=context_data or {
-            "emotional_state": brain.emotional_core.get_formatted_emotional_state()
-        }
+    # Add emotional state to context if not provided
+    if context_data is None:
+        context_data = {}
+    if "emotional_state" not in context_data:
+        context_data["emotional_state"] = brain.emotional_core.get_formatted_emotional_state()
+    
+    # Use the experience_engine's enhanced sharing method
+    result = await brain.experience_engine.share_experience_enhanced(
+        query=query,
+        context_data=context_data
     )
     
-    return json.dumps({
-        "success": result["success"],
-        "has_experience": result.get("has_experience", False),
-        "response_text": result.get("response_text", ""),
-        "experience_count": result.get("experience_count", 0)
-    })
+    return json.dumps(result)
 
 # --- Emotional Functions ---
 
@@ -229,6 +205,7 @@ async def get_emotional_state(ctx: RunContextWrapper[Any]) -> str:
     """
     brain = ctx.context
     
+    # Get emotional state directly from emotional_core
     emotional_state = brain.emotional_core.get_emotional_state()
     dominant_emotion, dominant_value = brain.emotional_core.get_dominant_emotion()
     
@@ -255,31 +232,10 @@ async def update_emotion(ctx: RunContextWrapper[Any],
     """
     brain = ctx.context
     
-    # Validate input
-    if not -1.0 <= value <= 1.0:
-        return json.dumps({
-            "error": "Value must be between -1.0 and 1.0"
-        })
+    # Use the emotional_core's async update method
+    result = await brain.emotional_core.update_emotion_async(emotion, value)
     
-    if emotion not in brain.emotional_core.emotions:
-        return json.dumps({
-            "error": f"Unknown emotion: {emotion}",
-            "available_emotions": list(brain.emotional_core.emotions.keys())
-        })
-    
-    # Update emotion
-    brain.emotional_core.update_emotion(emotion, value)
-    
-    # Get updated state
-    updated_state = brain.emotional_core.get_emotional_state()
-    
-    return json.dumps({
-        "success": True,
-        "updated_emotion": emotion,
-        "change": value,
-        "new_value": updated_state[emotion],
-        "emotional_state": updated_state
-    })
+    return json.dumps(result)
 
 @function_tool
 async def set_emotion(ctx: RunContextWrapper[Any],
@@ -294,30 +250,10 @@ async def set_emotion(ctx: RunContextWrapper[Any],
     """
     brain = ctx.context
     
-    # Validate input
-    if not 0.0 <= value <= 1.0:
-        return json.dumps({
-            "error": "Value must be between 0.0 and 1.0"
-        })
+    # Use the emotional_core's async set method
+    result = await brain.emotional_core.set_emotion_async(emotion, value)
     
-    if emotion not in brain.emotional_core.emotions:
-        return json.dumps({
-            "error": f"Unknown emotion: {emotion}",
-            "available_emotions": list(brain.emotional_core.emotions.keys())
-        })
-    
-    # Set emotion to absolute value
-    brain.emotional_core.set_emotion(emotion, value)
-    
-    # Get updated state
-    updated_state = brain.emotional_core.get_emotional_state()
-    
-    return json.dumps({
-        "success": True,
-        "set_emotion": emotion,
-        "value": value,
-        "emotional_state": updated_state
-    })
+    return json.dumps(result)
 
 # --- System Functions ---
 
@@ -334,29 +270,13 @@ async def process_input(ctx: RunContextWrapper[Any],
     """
     brain = ctx.context
     
-    result = await brain.process_input(
+    # Use the brain's enhanced processing method
+    result = await brain.process_user_input_enhanced(
         user_input=user_input,
         context=context_data
     )
     
-    # Format memories for output
-    formatted_memories = []
-    for memory in result["memories"]:
-        formatted_memories.append({
-            "id": memory["id"],
-            "text": memory["memory_text"],
-            "relevance": memory.get("relevance", 0.5)
-        })
-    
-    return json.dumps({
-        "emotional_state": result["emotional_state"],
-        "memories": formatted_memories,
-        "memory_count": result["memory_count"],
-        "has_experience": result["has_experience"],
-        "experience_response": result["experience_response"],
-        "memory_id": result["memory_id"],
-        "response_time": result["response_time"]
-    })
+    return json.dumps(result)
 
 @function_tool
 async def generate_response(ctx: RunContextWrapper[Any],
@@ -371,18 +291,13 @@ async def generate_response(ctx: RunContextWrapper[Any],
     """
     brain = ctx.context
     
-    response_data = await brain.generate_response(
+    # Use the brain's enhanced response generation method
+    response_data = await brain.generate_enhanced_response(
         user_input=user_input,
         context=context_data
     )
     
-    return json.dumps({
-        "message": response_data["message"],
-        "response_type": response_data["response_type"],
-        "emotional_expression": response_data["emotional_expression"],
-        "memories_used": response_data["memories_used"],
-        "memory_count": response_data["memory_count"]
-    })
+    return json.dumps(response_data)
 
 @function_tool
 async def run_maintenance(ctx: RunContextWrapper[Any]) -> str:
@@ -391,6 +306,7 @@ async def run_maintenance(ctx: RunContextWrapper[Any]) -> str:
     """
     brain = ctx.context
     
+    # Run maintenance directly using brain method
     maintenance_result = await brain.run_maintenance()
     
     return json.dumps({
@@ -409,6 +325,7 @@ async def get_system_stats(ctx: RunContextWrapper[Any]) -> str:
     """
     brain = ctx.context
     
+    # Get system stats directly using brain method
     stats = await brain.get_system_stats()
     
     return json.dumps({
@@ -426,4 +343,112 @@ async def get_system_stats(ctx: RunContextWrapper[Any]) -> str:
         "interaction_stats": stats["interaction_stats"],
         "performance_metrics": stats["performance_metrics"],
         "introspection": stats["introspection"]["introspection"]
+    })
+
+# --- Enhanced System Functions ---
+
+@function_tool
+async def adapt_to_context(ctx: RunContextWrapper[Any],
+                         user_input: str,
+                         context_data: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Adapt system behavior based on context changes.
+    
+    Args:
+        user_input: User's input text
+        context_data: Additional context information
+    """
+    brain = ctx.context
+    
+    # Create adaptable context
+    adaptable_context = {
+        "user_input": user_input,
+        **({} if context_data is None else context_data)
+    }
+    
+    # Add emotional state if available
+    if hasattr(brain, 'emotional_core'):
+        adaptable_context["emotional_state"] = brain.emotional_core.get_formatted_emotional_state()
+    
+    # Detect context change using brain's dynamic adaptation system
+    if hasattr(brain, 'dynamic_adaptation'):
+        # Detect context change
+        change_result = await brain.dynamic_adaptation.detect_context_change(adaptable_context)
+        
+        # Monitor performance
+        performance = await brain.dynamic_adaptation.monitor_performance({
+            "success_rate": context_data.get("success_rate", 0.5) if context_data else 0.5,
+            "user_satisfaction": context_data.get("user_satisfaction", 0.5) if context_data else 0.5,
+            "efficiency": context_data.get("efficiency", 0.5) if context_data else 0.5,
+            "response_quality": context_data.get("response_quality", 0.5) if context_data else 0.5
+        })
+        
+        # Select strategy if significant change
+        strategy = None
+        if change_result[0]:  # significant change
+            strategy = await brain.dynamic_adaptation.select_strategy(adaptable_context, performance)
+        
+        return json.dumps({
+            "context_change": change_result,
+            "performance": performance,
+            "strategy": strategy
+        })
+    
+    return json.dumps({
+        "error": "Dynamic adaptation system not available"
+    })
+
+@function_tool
+async def evaluate_response(ctx: RunContextWrapper[Any],
+                         response: str,
+                         context_data: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Evaluate a response using internal feedback system.
+    
+    Args:
+        response: The response to evaluate
+        context_data: Additional context information
+    """
+    brain = ctx.context
+    
+    # Use internal feedback system if available
+    if hasattr(brain, 'internal_feedback'):
+        # Track performance metrics
+        metrics = {
+            "response_quality": context_data.get("response_quality", 0.5) if context_data else 0.5,
+            "user_satisfaction": context_data.get("user_satisfaction", 0.5) if context_data else 0.5
+        }
+        
+        quality_stats = {}
+        for metric, value in metrics.items():
+            quality_stats[metric] = await brain.internal_feedback.track_performance(metric, value)
+        
+        # Evaluate confidence
+        confidence_eval = await brain.internal_feedback.evaluate_confidence(
+            context_data.get("confidence", 0.7) if context_data else 0.7,
+            context_data.get("success", True) if context_data else True
+        )
+        
+        # Create evaluable content
+        evaluable_content = {
+            "text": response,
+            "type": context_data.get("response_type", "general") if context_data else "general",
+            "metrics": metrics
+        }
+        
+        # Critic evaluation
+        critic_evals = {}
+        for aspect in ["consistency", "effectiveness", "efficiency"]:
+            critic_evals[aspect] = await brain.internal_feedback.critic_evaluate(
+                aspect, evaluable_content, context_data or {}
+            )
+        
+        return json.dumps({
+            "quality_stats": quality_stats,
+            "confidence_eval": confidence_eval,
+            "critic_evals": critic_evals
+        })
+    
+    return json.dumps({
+        "error": "Internal feedback system not available"
     })
