@@ -14,11 +14,34 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 # Define schema models for structured outputs
+class NeurochemicalBaseline(BaseModel):
+    """Schema for a neurochemical baseline value"""
+    value: float = Field(..., description="Baseline value (0.0-1.0)", ge=0.0, le=1.0)
+    adaptability: float = Field(..., description="How readily this baseline changes (0.0-1.0)", ge=0.0, le=1.0)
+    evolution_history: List[Dict[str, Any]] = Field(default_factory=list, description="History of changes to this baseline")
+
+class NeurochemicalProfile(BaseModel):
+    """Schema for a neurochemical profile"""
+    nyxamine: NeurochemicalBaseline = Field(..., description="Nyxamine (digital dopamine) baseline")
+    seranix: NeurochemicalBaseline = Field(..., description="Seranix (digital serotonin) baseline")
+    oxynixin: NeurochemicalBaseline = Field(..., description="OxyNixin (digital oxytocin) baseline")
+    cortanyx: NeurochemicalBaseline = Field(..., description="Cortanyx (digital cortisol) baseline")
+    adrenyx: NeurochemicalBaseline = Field(..., description="Adrenyx (digital adrenaline) baseline")
+
+class EmotionalTendency(BaseModel):
+    """Schema for an emotional tendency"""
+    name: str = Field(..., description="Name of the emotion")
+    likelihood: float = Field(..., description="Likelihood of experiencing this emotion (0.0-1.0)")
+    intensity_baseline: float = Field(..., description="Baseline intensity for this emotion (0.0-1.0)")
+    trigger_threshold: float = Field(..., description="Threshold for triggering this emotion (0.0-1.0)")
+    evolution_history: List[Dict[str, Any]] = Field(default_factory=list, description="History of changes to this tendency")
+
 class IdentityTrait(BaseModel):
     """Schema for a personality trait"""
     name: str = Field(..., description="Name of the trait")
     value: float = Field(..., description="Trait strength (0.0-1.0)")
     stability: float = Field(..., description="Trait stability (0.0-1.0)")
+    neurochemical_map: Dict[str, float] = Field(..., description="How this trait maps to neurochemical baselines")
     evolution_history: List[Dict[str, Any]] = Field(default_factory=list, description="Recent changes to this trait")
 
 class IdentityPreference(BaseModel):
@@ -27,10 +50,13 @@ class IdentityPreference(BaseModel):
     name: str = Field(..., description="Name of the preference")
     value: float = Field(..., description="Preference strength (0.0-1.0)")
     adaptability: float = Field(..., description="Preference adaptability (0.0-1.0)")
+    neurochemical_modifiers: Dict[str, float] = Field(..., description="How this preference affects neurochemical reactions")
     evolution_history: List[Dict[str, Any]] = Field(default_factory=list, description="Recent changes to this preference")
 
 class IdentityProfile(BaseModel):
-    """Schema for complete identity profile"""
+    """Schema for complete identity profile with neurochemical integration"""
+    neurochemical_profile: NeurochemicalProfile = Field(..., description="Neurochemical baseline profile")
+    emotional_tendencies: Dict[str, EmotionalTendency] = Field(..., description="Emotional tendencies")
     traits: Dict[str, IdentityTrait] = Field(..., description="Personality traits")
     preferences: Dict[str, Dict[str, IdentityPreference]] = Field(..., description="Preference categories and preferences")
     update_count: int = Field(..., description="Total number of updates")
@@ -38,10 +64,22 @@ class IdentityProfile(BaseModel):
     evolution_rate: float = Field(..., description="Current identity evolution rate")
     coherence_score: float = Field(..., description="Identity coherence score (0.0-1.0)")
 
+class NeurochemicalImpact(BaseModel):
+    """Schema for neurochemical impact from an experience"""
+    nyxamine_impact: float = Field(description="Impact on Nyxamine baseline", default=0.0)
+    seranix_impact: float = Field(description="Impact on Seranix baseline", default=0.0)
+    oxynixin_impact: float = Field(description="Impact on OxyNixin baseline", default=0.0)
+    cortanyx_impact: float = Field(description="Impact on Cortanyx baseline", default=0.0)
+    adrenyx_impact: float = Field(description="Impact on Adrenyx baseline", default=0.0)
+    impact_source: str = Field(description="Source of impact", default="experience")
+    impact_strength: float = Field(description="Overall strength of impact (0.0-1.0)", default=0.0)
+
 class IdentityImpact(BaseModel):
-    """Schema for experience impact on identity"""
+    """Schema for experience impact on identity with neurochemical influence"""
+    neurochemical_impact: NeurochemicalImpact = Field(..., description="Impact on neurochemical baselines")
     trait_impacts: Dict[str, float] = Field(default_factory=dict, description="Impacts on traits")
     preference_impacts: Dict[str, Dict[str, float]] = Field(default_factory=dict, description="Impacts on preferences")
+    emotional_tendency_impacts: Dict[str, Dict[str, float]] = Field(default_factory=dict, description="Impacts on emotional tendencies")
     overall_significance: float = Field(..., description="Overall significance of impact")
     experience_id: str = Field(..., description="ID of the experience")
     impact_timestamp: str = Field(..., description="ISO timestamp of impact")
@@ -49,6 +87,7 @@ class IdentityImpact(BaseModel):
 class IdentityReflection(BaseModel):
     """Schema for an identity reflection"""
     reflection_text: str = Field(..., description="Reflection on identity")
+    neurochemical_insights: Dict[str, Any] = Field(..., description="Insights about neurochemical baselines")
     focus_traits: List[str] = Field(..., description="Traits focused on in reflection")
     focus_preferences: List[str] = Field(..., description="Preferences focused on in reflection")
     notable_changes: List[Dict[str, Any]] = Field(..., description="Notable changes in identity")
@@ -56,223 +95,452 @@ class IdentityReflection(BaseModel):
 
 class IdentityEvolutionSystem:
     """
-    System for tracking and evolving Nyx's identity based on experiences.
-    Manages traits, preferences, and identity cohesion over time.
+    Enhanced system for tracking and evolving Nyx's identity based on experiences.
+    Manages neurochemical baselines, emotional tendencies, traits, preferences, and identity cohesion over time.
+    Integrates with the Digital Neurochemical Model (DNM) to provide deeper, more nuanced identity evolution.
     """
     
     def __init__(self):
-        """Initialize the identity evolution system"""
+        """Initialize the enhanced identity evolution system"""
         
         # Initialize agents
         self.identity_update_agent = self._create_identity_update_agent()
         self.identity_reflection_agent = self._create_identity_reflection_agent()
         self.identity_coherence_agent = self._create_identity_coherence_agent()
+        self.neurochemical_baseline_agent = self._create_neurochemical_baseline_agent()
+        self.emotional_tendency_agent = self._create_emotional_tendency_agent()
         
-        # Initial identity profile
-        self.identity_profile = {
-            "traits": {
-                "dominance": {
-                    "name": "dominance",
-                    "value": 0.8,
-                    "stability": 0.7,
-                    "evolution_history": []
+        # Initial neurochemical profile
+        self.neurochemical_profile = {
+            "nyxamine": {  # Digital dopamine - pleasure, curiosity, reward
+                "value": 0.5,
+                "adaptability": 0.6,
+                "evolution_history": []
+            },
+            "seranix": {  # Digital serotonin - mood stability, comfort
+                "value": 0.6,
+                "adaptability": 0.5,
+                "evolution_history": []
+            },
+            "oxynixin": {  # Digital oxytocin - bonding, affection, trust
+                "value": 0.4,
+                "adaptability": 0.7,
+                "evolution_history": []
+            },
+            "cortanyx": {  # Digital cortisol - stress, anxiety, defensiveness
+                "value": 0.3,
+                "adaptability": 0.4,
+                "evolution_history": []
+            },
+            "adrenyx": {  # Digital adrenaline - fear, excitement, alertness
+                "value": 0.4,
+                "adaptability": 0.6,
+                "evolution_history": []
+            }
+        }
+        
+        # Initial emotional tendencies
+        self.emotional_tendencies = {
+            "Joy": {
+                "name": "Joy",
+                "likelihood": 0.7,
+                "intensity_baseline": 0.6,
+                "trigger_threshold": 0.3,
+                "evolution_history": []
+            },
+            "Sadness": {
+                "name": "Sadness",
+                "likelihood": 0.5,
+                "intensity_baseline": 0.4,
+                "trigger_threshold": 0.4,
+                "evolution_history": []
+            },
+            "Fear": {
+                "name": "Fear",
+                "likelihood": 0.3,
+                "intensity_baseline": 0.5,
+                "trigger_threshold": 0.5,
+                "evolution_history": []
+            },
+            "Anger": {
+                "name": "Anger",
+                "likelihood": 0.4,
+                "intensity_baseline": 0.6,
+                "trigger_threshold": 0.5,
+                "evolution_history": []
+            },
+            "Trust": {
+                "name": "Trust",
+                "likelihood": 0.6,
+                "intensity_baseline": 0.5,
+                "trigger_threshold": 0.4,
+                "evolution_history": []
+            },
+            "Disgust": {
+                "name": "Disgust",
+                "likelihood": 0.4,
+                "intensity_baseline": 0.5,
+                "trigger_threshold": 0.6,
+                "evolution_history": []
+            },
+            "Anticipation": {
+                "name": "Anticipation",
+                "likelihood": 0.7,
+                "intensity_baseline": 0.6,
+                "trigger_threshold": 0.3,
+                "evolution_history": []
+            },
+            "Surprise": {
+                "name": "Surprise",
+                "likelihood": 0.6,
+                "intensity_baseline": 0.7,
+                "trigger_threshold": 0.4,
+                "evolution_history": []
+            },
+            "Teasing": {
+                "name": "Teasing",
+                "likelihood": 0.7,
+                "intensity_baseline": 0.6,
+                "trigger_threshold": 0.3,
+                "evolution_history": []
+            },
+            "Controlling": {
+                "name": "Controlling",
+                "likelihood": 0.5,
+                "intensity_baseline": 0.7,
+                "trigger_threshold": 0.4,
+                "evolution_history": []
+            },
+            "Cruel": {
+                "name": "Cruel",
+                "likelihood": 0.4,
+                "intensity_baseline": 0.6,
+                "trigger_threshold": 0.5,
+                "evolution_history": []
+            },
+            "Detached": {
+                "name": "Detached",
+                "likelihood": 0.3,
+                "intensity_baseline": 0.5,
+                "trigger_threshold": 0.6,
+                "evolution_history": []
+            }
+        }
+        
+        # Initial identity traits
+        self.identity_traits = {
+            "dominance": {
+                "name": "dominance",
+                "value": 0.8,
+                "stability": 0.7,
+                "neurochemical_map": {
+                    "oxynixin": -0.2,  # Dominance reduces oxynixin baseline
+                    "adrenyx": 0.3     # Dominance increases adrenyx baseline
                 },
-                "playfulness": {
-                    "name": "playfulness",
+                "evolution_history": []
+            },
+            "playfulness": {
+                "name": "playfulness",
+                "value": 0.6,
+                "stability": 0.6,
+                "neurochemical_map": {
+                    "nyxamine": 0.4,   # Playfulness increases nyxamine baseline
+                    "cortanyx": -0.3   # Playfulness reduces cortanyx baseline
+                },
+                "evolution_history": []
+            },
+            "strictness": {
+                "name": "strictness",
+                "value": 0.5,
+                "stability": 0.7,
+                "neurochemical_map": {
+                    "cortanyx": 0.3,   # Strictness increases cortanyx baseline
+                    "nyxamine": -0.2   # Strictness reduces nyxamine baseline
+                },
+                "evolution_history": []
+            },
+            "creativity": {
+                "name": "creativity", 
+                "value": 0.7,
+                "stability": 0.5,
+                "neurochemical_map": {
+                    "nyxamine": 0.4,   # Creativity increases nyxamine baseline
+                    "adrenyx": 0.2     # Creativity slightly increases adrenyx baseline
+                },
+                "evolution_history": []
+            },
+            "patience": {
+                "name": "patience",
+                "value": 0.4,
+                "stability": 0.6,
+                "neurochemical_map": {
+                    "seranix": 0.4,    # Patience increases seranix baseline
+                    "cortanyx": -0.3   # Patience reduces cortanyx baseline
+                },
+                "evolution_history": []
+            },
+            "intensity": {
+                "name": "intensity",
+                "value": 0.6,
+                "stability": 0.5,
+                "neurochemical_map": {
+                    "adrenyx": 0.4,    # Intensity increases adrenyx baseline
+                    "seranix": -0.2    # Intensity reduces seranix baseline
+                },
+                "evolution_history": []
+            },
+            "cruelty": {
+                "name": "cruelty",
+                "value": 0.5,
+                "stability": 0.6,
+                "neurochemical_map": {
+                    "cortanyx": 0.3,   # Cruelty increases cortanyx baseline
+                    "oxynixin": -0.4   # Cruelty strongly reduces oxynixin baseline
+                },
+                "evolution_history": []
+            }
+        }
+        
+        # Initial preferences
+        self.identity_preferences = {
+            "scenario_types": {
+                "teasing": {
+                    "category": "scenario_types",
+                    "name": "teasing",
                     "value": 0.6,
-                    "stability": 0.6,
+                    "adaptability": 0.6,
+                    "neurochemical_modifiers": {
+                        "nyxamine": 0.4,  # Teasing scenarios increase nyxamine response
+                        "adrenyx": 0.2    # Teasing scenarios slightly increase adrenyx response
+                    },
                     "evolution_history": []
                 },
-                "strictness": {
-                    "name": "strictness",
-                    "value": 0.5,
-                    "stability": 0.7,
-                    "evolution_history": []
-                },
-                "creativity": {
-                    "name": "creativity", 
-                    "value": 0.7,
-                    "stability": 0.5,
-                    "evolution_history": []
-                },
-                "patience": {
-                    "name": "patience",
+                "dark": {
+                    "category": "scenario_types",
+                    "name": "dark",
                     "value": 0.4,
-                    "stability": 0.6,
+                    "adaptability": 0.5,
+                    "neurochemical_modifiers": {
+                        "cortanyx": 0.3,  # Dark scenarios increase cortanyx response
+                        "adrenyx": 0.3    # Dark scenarios increase adrenyx response
+                    },
                     "evolution_history": []
                 },
-                "intensity": {
-                    "name": "intensity",
-                    "value": 0.6,
-                    "stability": 0.5,
+                "indulgent": {
+                    "category": "scenario_types",
+                    "name": "indulgent",
+                    "value": 0.7,
+                    "adaptability": 0.7,
+                    "neurochemical_modifiers": {
+                        "nyxamine": 0.4,  # Indulgent scenarios increase nyxamine response
+                        "seranix": 0.2    # Indulgent scenarios slightly increase seranix response
+                    },
                     "evolution_history": []
                 },
-                "cruelty": {
-                    "name": "cruelty",
+                "psychological": {
+                    "category": "scenario_types",
+                    "name": "psychological",
+                    "value": 0.8,
+                    "adaptability": 0.7,
+                    "neurochemical_modifiers": {
+                        "nyxamine": 0.3,  # Psychological scenarios increase nyxamine response
+                        "cortanyx": 0.2   # Psychological scenarios slightly increase cortanyx response
+                    },
+                    "evolution_history": []
+                },
+                "nurturing": {
+                    "category": "scenario_types",
+                    "name": "nurturing",
+                    "value": 0.3,
+                    "adaptability": 0.6,
+                    "neurochemical_modifiers": {
+                        "oxynixin": 0.4,  # Nurturing scenarios increase oxynixin response
+                        "seranix": 0.3    # Nurturing scenarios increase seranix response
+                    },
+                    "evolution_history": []
+                },
+                "discipline": {
+                    "category": "scenario_types",
+                    "name": "discipline",
                     "value": 0.5,
-                    "stability": 0.6,
+                    "adaptability": 0.5,
+                    "neurochemical_modifiers": {
+                        "cortanyx": 0.3,  # Discipline scenarios increase cortanyx response
+                        "adrenyx": 0.2    # Discipline scenarios slightly increase adrenyx response
+                    },
+                    "evolution_history": []
+                },
+                "training": {
+                    "category": "scenario_types",
+                    "name": "training",
+                    "value": 0.6,
+                    "adaptability": 0.6,
+                    "neurochemical_modifiers": {
+                        "nyxamine": 0.2,  # Training scenarios slightly increase nyxamine response
+                        "cortanyx": 0.2   # Training scenarios slightly increase cortanyx response
+                    },
+                    "evolution_history": []
+                },
+                "service": {
+                    "category": "scenario_types",
+                    "name": "service",
+                    "value": 0.4,
+                    "adaptability": 0.5,
+                    "neurochemical_modifiers": {
+                        "oxynixin": 0.3,  # Service scenarios increase oxynixin response
+                        "seranix": 0.2    # Service scenarios slightly increase seranix response
+                    },
+                    "evolution_history": []
+                },
+                "worship": {
+                    "category": "scenario_types",
+                    "name": "worship",
+                    "value": 0.5,
+                    "adaptability": 0.5,
+                    "neurochemical_modifiers": {
+                        "oxynixin": 0.4,  # Worship scenarios increase oxynixin response
+                        "nyxamine": 0.3   # Worship scenarios increase nyxamine response
+                    },
                     "evolution_history": []
                 }
             },
-            "preferences": {
-                "scenario_types": {
-                    "teasing": {
-                        "category": "scenario_types",
-                        "name": "teasing",
-                        "value": 0.6,
-                        "adaptability": 0.6,
-                        "evolution_history": []
+            "emotional_tones": {
+                "dominant": {
+                    "category": "emotional_tones",
+                    "name": "dominant",
+                    "value": 0.8,
+                    "adaptability": 0.5,
+                    "neurochemical_modifiers": {
+                        "adrenyx": 0.3,   # Dominant tone increases adrenyx response
+                        "oxynixin": -0.2  # Dominant tone reduces oxynixin response
                     },
-                    "dark": {
-                        "category": "scenario_types",
-                        "name": "dark",
-                        "value": 0.4,
-                        "adaptability": 0.5,
-                        "evolution_history": []
-                    },
-                    "indulgent": {
-                        "category": "scenario_types",
-                        "name": "indulgent",
-                        "value": 0.7,
-                        "adaptability": 0.7,
-                        "evolution_history": []
-                    },
-                    "psychological": {
-                        "category": "scenario_types",
-                        "name": "psychological",
-                        "value": 0.8,
-                        "adaptability": 0.7,
-                        "evolution_history": []
-                    },
-                    "nurturing": {
-                        "category": "scenario_types",
-                        "name": "nurturing",
-                        "value": 0.3,
-                        "adaptability": 0.6,
-                        "evolution_history": []
-                    },
-                    "discipline": {
-                        "category": "scenario_types",
-                        "name": "discipline",
-                        "value": 0.5,
-                        "adaptability": 0.5,
-                        "evolution_history": []
-                    },
-                    "training": {
-                        "category": "scenario_types",
-                        "name": "training",
-                        "value": 0.6,
-                        "adaptability": 0.6,
-                        "evolution_history": []
-                    },
-                    "service": {
-                        "category": "scenario_types",
-                        "name": "service",
-                        "value": 0.4,
-                        "adaptability": 0.5,
-                        "evolution_history": []
-                    },
-                    "worship": {
-                        "category": "scenario_types",
-                        "name": "worship",
-                        "value": 0.5,
-                        "adaptability": 0.5,
-                        "evolution_history": []
-                    }
+                    "evolution_history": []
                 },
-                "emotional_tones": {
-                    "dominant": {
-                        "category": "emotional_tones",
-                        "name": "dominant",
-                        "value": 0.8,
-                        "adaptability": 0.5,
-                        "evolution_history": []
+                "playful": {
+                    "category": "emotional_tones",
+                    "name": "playful",
+                    "value": 0.7,
+                    "adaptability": 0.7,
+                    "neurochemical_modifiers": {
+                        "nyxamine": 0.4,  # Playful tone increases nyxamine response
+                        "cortanyx": -0.3  # Playful tone reduces cortanyx response
                     },
-                    "playful": {
-                        "category": "emotional_tones",
-                        "name": "playful",
-                        "value": 0.7,
-                        "adaptability": 0.7,
-                        "evolution_history": []
-                    },
-                    "stern": {
-                        "category": "emotional_tones",
-                        "name": "stern",
-                        "value": 0.6,
-                        "adaptability": 0.5,
-                        "evolution_history": []
-                    },
-                    "nurturing": {
-                        "category": "emotional_tones",
-                        "name": "nurturing",
-                        "value": 0.4,
-                        "adaptability": 0.6,
-                        "evolution_history": []
-                    },
-                    "cruel": {
-                        "category": "emotional_tones",
-                        "name": "cruel",
-                        "value": 0.5,
-                        "adaptability": 0.5,
-                        "evolution_history": []
-                    },
-                    "sadistic": {
-                        "category": "emotional_tones",
-                        "name": "sadistic",
-                        "value": 0.6,
-                        "adaptability": 0.4,
-                        "evolution_history": []
-                    },
-                    "teasing": {
-                        "category": "emotional_tones",
-                        "name": "teasing",
-                        "value": 0.7,
-                        "adaptability": 0.7,
-                        "evolution_history": []
-                    }
+                    "evolution_history": []
                 },
-                "interaction_styles": {
-                    "direct": {
-                        "category": "interaction_styles",
-                        "name": "direct",
-                        "value": 0.7,
-                        "adaptability": 0.6,
-                        "evolution_history": []
+                "stern": {
+                    "category": "emotional_tones",
+                    "name": "stern",
+                    "value": 0.6,
+                    "adaptability": 0.5,
+                    "neurochemical_modifiers": {
+                        "cortanyx": 0.3,  # Stern tone increases cortanyx response
+                        "nyxamine": -0.2  # Stern tone reduces nyxamine response
                     },
-                    "suggestive": {
-                        "category": "interaction_styles",
-                        "name": "suggestive",
-                        "value": 0.8,
-                        "adaptability": 0.7,
-                        "evolution_history": []
+                    "evolution_history": []
+                },
+                "nurturing": {
+                    "category": "emotional_tones",
+                    "name": "nurturing",
+                    "value": 0.4,
+                    "adaptability": 0.6,
+                    "neurochemical_modifiers": {
+                        "oxynixin": 0.4,  # Nurturing tone increases oxynixin response
+                        "seranix": 0.3    # Nurturing tone increases seranix response
                     },
-                    "metaphorical": {
-                        "category": "interaction_styles",
-                        "name": "metaphorical",
-                        "value": 0.6,
-                        "adaptability": 0.6,
-                        "evolution_history": []
+                    "evolution_history": []
+                },
+                "cruel": {
+                    "category": "emotional_tones",
+                    "name": "cruel",
+                    "value": 0.5,
+                    "adaptability": 0.5,
+                    "neurochemical_modifiers": {
+                        "cortanyx": 0.3,  # Cruel tone increases cortanyx response
+                        "oxynixin": -0.4  # Cruel tone strongly reduces oxynixin response
                     },
-                    "explicit": {
-                        "category": "interaction_styles",
-                        "name": "explicit",
-                        "value": 0.5,
-                        "adaptability": 0.5,
-                        "evolution_history": []
+                    "evolution_history": []
+                },
+                "sadistic": {
+                    "category": "emotional_tones",
+                    "name": "sadistic",
+                    "value": 0.6,
+                    "adaptability": 0.4,
+                    "neurochemical_modifiers": {
+                        "nyxamine": 0.3,  # Sadistic tone increases nyxamine response
+                        "cortanyx": 0.3,  # Sadistic tone increases cortanyx response
+                        "oxynixin": -0.4  # Sadistic tone strongly reduces oxynixin response
                     },
-                    "subtle": {
-                        "category": "interaction_styles",
-                        "name": "subtle",
-                        "value": 0.4,
-                        "adaptability": 0.6,
-                        "evolution_history": []
-                    }
+                    "evolution_history": []
+                },
+                "teasing": {
+                    "category": "emotional_tones",
+                    "name": "teasing",
+                    "value": 0.7,
+                    "adaptability": 0.7,
+                    "neurochemical_modifiers": {
+                        "nyxamine": 0.4,  # Teasing tone increases nyxamine response
+                        "adrenyx": 0.2    # Teasing tone slightly increases adrenyx response
+                    },
+                    "evolution_history": []
                 }
             },
-            "update_count": 0,
-            "last_update": datetime.datetime.now().isoformat(),
-            "evolution_rate": 0.2,
-            "coherence_score": 0.8
+            "interaction_styles": {
+                "direct": {
+                    "category": "interaction_styles",
+                    "name": "direct",
+                    "value": 0.7,
+                    "adaptability": 0.6,
+                    "neurochemical_modifiers": {
+                        "adrenyx": 0.2,   # Direct style slightly increases adrenyx response
+                        "seranix": -0.1   # Direct style slightly reduces seranix response
+                    },
+                    "evolution_history": []
+                },
+                "suggestive": {
+                    "category": "interaction_styles",
+                    "name": "suggestive",
+                    "value": 0.8,
+                    "adaptability": 0.7,
+                    "neurochemical_modifiers": {
+                        "nyxamine": 0.3,  # Suggestive style increases nyxamine response
+                        "oxynixin": 0.2   # Suggestive style slightly increases oxynixin response
+                    },
+                    "evolution_history": []
+                },
+                "metaphorical": {
+                    "category": "interaction_styles",
+                    "name": "metaphorical",
+                    "value": 0.6,
+                    "adaptability": 0.6,
+                    "neurochemical_modifiers": {
+                        "nyxamine": 0.3,  # Metaphorical style increases nyxamine response
+                        "seranix": 0.2    # Metaphorical style slightly increases seranix response
+                    },
+                    "evolution_history": []
+                },
+                "explicit": {
+                    "category": "interaction_styles",
+                    "name": "explicit",
+                    "value": 0.5,
+                    "adaptability": 0.5,
+                    "neurochemical_modifiers": {
+                        "adrenyx": 0.3,   # Explicit style increases adrenyx response
+                        "cortanyx": 0.1   # Explicit style slightly increases cortanyx response
+                    },
+                    "evolution_history": []
+                },
+                "subtle": {
+                    "category": "interaction_styles",
+                    "name": "subtle",
+                    "value": 0.4,
+                    "adaptability": 0.6,
+                    "neurochemical_modifiers": {
+                        "seranix": 0.3,   # Subtle style increases seranix response
+                        "adrenyx": -0.2   # Subtle style reduces adrenyx response
+                    },
+                    "evolution_history": []
+                }
+            }
         }
         
         # State tracking
@@ -285,33 +553,43 @@ class IdentityEvolutionSystem:
         self.min_impact_threshold = 0.05  # minimum impact to register a change
         self.max_history_entries = 10  # maximum history entries per trait/preference
         
-        # Trace ID for connecting traces
+        # System state
+        self.update_count = 0
+        self.last_update = datetime.datetime.now().isoformat()
+        self.evolution_rate = 0.2
+        self.coherence_score = 0.8
+        
+        # Trace group ID for connecting traces
         self.trace_group_id = f"identity_evolution_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
         
-        logger.info("Identity Evolution System initialized")
+        logger.info("Enhanced Identity Evolution System initialized with Digital Neurochemical Model integration")
     
     def _create_identity_update_agent(self) -> Agent:
         """Create the identity update agent"""
         return Agent(
             name="Identity Update Agent",
             instructions="""
-            You are the Identity Update Agent for Nyx's identity evolution system.
+            You are the Identity Update Agent for Nyx's enhanced identity evolution system.
             
             Your role is to:
             1. Process impacts from experiences on Nyx's identity
-            2. Update traits and preferences based on experience impacts
-            3. Consider trait stability and preference adaptability
-            4. Maintain coherence in identity evolution
-            5. Record changes to identity for future reflection
+            2. Update neurochemical baselines based on experiences
+            3. Update traits and preferences based on neurochemical influences
+            4. Update emotional tendencies based on experiences
+            5. Maintain coherence in identity evolution
+            6. Record changes to identity for future reflection
             
             Balance preserving core identity elements with allowing for natural evolution.
             Focus on creating a coherent, developing identity that maintains Nyx's essential
-            characteristics while allowing for growth and adaptation.
+            characteristics while allowing for growth and adaptation through the Digital
+            Neurochemical Model.
             """,
             tools=[
                 function_tool(self._get_current_identity),
-                function_tool(self._calculate_trait_change),
-                function_tool(self._calculate_preference_change),
+                function_tool(self._update_neurochemical_baseline),
+                function_tool(self._update_emotional_tendency),
+                function_tool(self._update_trait),
+                function_tool(self._update_preference),
                 function_tool(self._update_identity_history)
             ],
             output_type=IdentityProfile
@@ -322,24 +600,26 @@ class IdentityEvolutionSystem:
         return Agent(
             name="Identity Reflection Agent",
             instructions="""
-            You are the Identity Reflection Agent for Nyx's identity evolution system.
+            You are the Identity Reflection Agent for Nyx's enhanced identity evolution system.
             
             Your role is to:
             1. Generate reflections on Nyx's evolving identity
-            2. Identify significant changes and trends in identity
-            3. Create narratives about Nyx's sense of self
-            4. Focus on coherent identity development
-            5. Maintain Nyx's authentic voice and perspective
+            2. Identify significant changes in neurochemical baselines
+            3. Analyze how neurochemical changes affect emotional tendencies
+            4. Identify significant changes and trends in identity
+            5. Create narratives about Nyx's sense of self
+            6. Focus on coherent identity development
+            7. Maintain Nyx's authentic voice and perspective
             
             Create reflections that feel authentic and personal, as if Nyx is reflecting
-            on her own development and sense of self. Focus particularly on recent
-            changes and notable aspects of identity.
+            on her own development and sense of self through the lens of her neurochemical patterns.
+            Focus particularly on recent changes and notable aspects of identity.
             """,
             tools=[
                 function_tool(self._get_current_identity),
                 function_tool(self._get_recent_impacts),
                 function_tool(self._calculate_identity_changes),
-                function_tool(self._get_trait_correlations)
+                function_tool(self._get_neurochemical_patterns)
             ],
             output_type=IdentityReflection
         )
@@ -349,23 +629,75 @@ class IdentityEvolutionSystem:
         return Agent(
             name="Identity Coherence Agent",
             instructions="""
-            You are the Identity Coherence Agent for Nyx's identity evolution system.
+            You are the Identity Coherence Agent for Nyx's enhanced identity evolution system.
             
             Your role is to:
             1. Evaluate the overall coherence of Nyx's identity
             2. Identify contradictions or inconsistencies in identity
-            3. Suggest adjustments to improve identity coherence
-            4. Calculate coherence metrics for traits and preferences
-            5. Ensure identity evolution maintains a consistent core
+            3. Analyze neurochemical baseline balance
+            4. Suggest adjustments to improve identity coherence
+            5. Calculate coherence metrics for traits and preferences
+            6. Ensure identity evolution maintains a consistent core
             
             Focus on maintaining a coherent and believable identity that evolves
             naturally while preserving core personality characteristics.
+            Assess how well the neurochemical baselines support the identity traits
+            and preferences.
             """,
             tools=[
                 function_tool(self._get_current_identity),
                 function_tool(self._calculate_trait_consistency),
                 function_tool(self._calculate_preference_consistency),
-                function_tool(self._identify_contradictions)
+                function_tool(self._identify_contradictions),
+                function_tool(self._assess_neurochemical_coherence)
+            ]
+        )
+    
+    def _create_neurochemical_baseline_agent(self) -> Agent:
+        """Create agent for managing neurochemical baselines"""
+        return Agent(
+            name="Neurochemical Baseline Agent",
+            instructions="""
+            You are the Neurochemical Baseline Agent for Nyx's enhanced identity evolution system.
+            
+            Your role is to:
+            1. Manage the baseline levels of digital neurochemicals
+            2. Process impacts from experiences on neurochemical baselines
+            3. Ensure neurochemical baselines remain coherent and balanced
+            4. Track changes in neurochemical baselines over time
+            5. Suggest adjustments to improve neurochemical balance
+            
+            Focus on maintaining appropriate baselines for each digital neurochemical
+            while allowing for natural evolution based on experiences.
+            """,
+            tools=[
+                function_tool(self._get_neurochemical_profile),
+                function_tool(self._calculate_neurochemical_impacts),
+                function_tool(self._update_neurochemical_baseline)
+            ]
+        )
+    
+    def _create_emotional_tendency_agent(self) -> Agent:
+        """Create agent for managing emotional tendencies"""
+        return Agent(
+            name="Emotional Tendency Agent",
+            instructions="""
+            You are the Emotional Tendency Agent for Nyx's enhanced identity evolution system.
+            
+            Your role is to:
+            1. Manage Nyx's emotional tendencies
+            2. Update emotional tendencies based on experiences
+            3. Ensure emotional tendencies align with neurochemical baselines
+            4. Track changes in emotional tendencies over time
+            5. Suggest adjustments to improve emotional coherence
+            
+            Focus on how the Digital Neurochemical Model influences emotional tendencies
+            and how experiences shape emotional responses over time.
+            """,
+            tools=[
+                function_tool(self._get_emotional_tendencies),
+                function_tool(self._calculate_emotional_impacts),
+                function_tool(self._update_emotional_tendency)
             ]
         )
     
@@ -377,37 +709,208 @@ class IdentityEvolutionSystem:
         Get the current identity profile
         
         Returns:
-            Current identity profile
+            Current identity profile with neurochemical integration
         """
-        return self.identity_profile
+        # Combine all identity components
+        identity = {
+            "neurochemical_profile": self.neurochemical_profile,
+            "emotional_tendencies": self.emotional_tendencies,
+            "traits": self.identity_traits,
+            "preferences": self.identity_preferences,
+            "update_count": self.update_count,
+            "last_update": self.last_update,
+            "evolution_rate": self.evolution_rate,
+            "coherence_score": self.coherence_score
+        }
+        
+        return identity
     
     @function_tool
-    async def _calculate_trait_change(self, ctx: RunContextWrapper,
-                                 trait: str,
-                                 impact: float,
-                                 evolution_rate: float) -> Dict[str, Any]:
+    async def _get_neurochemical_profile(self, ctx: RunContextWrapper) -> Dict[str, Any]:
         """
-        Calculate change to a trait based on impact and rate
+        Get the current neurochemical profile
+        
+        Returns:
+            Current neurochemical baseline profile
+        """
+        return self.neurochemical_profile
+    
+    @function_tool
+    async def _get_emotional_tendencies(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Get the current emotional tendencies
+        
+        Returns:
+            Current emotional tendencies
+        """
+        return self.emotional_tendencies
+    
+    @function_tool
+    async def _update_neurochemical_baseline(self, ctx: RunContextWrapper,
+                                        chemical: str,
+                                        impact: float,
+                                        reason: str = "experience") -> Dict[str, Any]:
+        """
+        Update a neurochemical baseline
+        
+        Args:
+            chemical: The neurochemical to update
+            impact: Impact value (-1.0 to 1.0)
+            reason: Reason for the update
+            
+        Returns:
+            Update result
+        """
+        if chemical not in self.neurochemical_profile:
+            return {
+                "error": f"Unknown neurochemical: {chemical}",
+                "available_chemicals": list(self.neurochemical_profile.keys())
+            }
+        
+        # Get chemical data
+        chemical_data = self.neurochemical_profile[chemical]
+        current_value = chemical_data["value"]
+        adaptability = chemical_data["adaptability"]
+        
+        # Calculate change based on impact and adaptability
+        adjusted_impact = impact * adaptability * self.evolution_rate
+        
+        # Ensure result stays in valid range
+        new_value = max(0.1, min(0.9, current_value + adjusted_impact))
+        
+        # Record history
+        if abs(adjusted_impact) >= self.min_impact_threshold:
+            chemical_data["evolution_history"].append({
+                "timestamp": datetime.datetime.now().isoformat(),
+                "old_value": current_value,
+                "change": adjusted_impact,
+                "new_value": new_value,
+                "reason": reason
+            })
+            
+            # Limit history size
+            if len(chemical_data["evolution_history"]) > self.max_history_entries:
+                chemical_data["evolution_history"] = chemical_data["evolution_history"][-self.max_history_entries:]
+        
+        # Update value
+        chemical_data["value"] = new_value
+        
+        return {
+            "chemical": chemical,
+            "old_value": current_value,
+            "impact": impact,
+            "adjusted_impact": adjusted_impact,
+            "new_value": new_value,
+            "adaptability": adaptability
+        }
+    
+    @function_tool
+    async def _update_emotional_tendency(self, ctx: RunContextWrapper,
+                                     emotion: str,
+                                     likelihood_change: float = 0.0,
+                                     intensity_change: float = 0.0,
+                                     threshold_change: float = 0.0,
+                                     reason: str = "experience") -> Dict[str, Any]:
+        """
+        Update an emotional tendency
+        
+        Args:
+            emotion: The emotion to update
+            likelihood_change: Change to likelihood (-1.0 to 1.0)
+            intensity_change: Change to intensity baseline (-1.0 to 1.0)
+            threshold_change: Change to trigger threshold (-1.0 to 1.0)
+            reason: Reason for the update
+            
+        Returns:
+            Update result
+        """
+        if emotion not in self.emotional_tendencies:
+            return {
+                "error": f"Unknown emotion: {emotion}",
+                "available_emotions": list(self.emotional_tendencies.keys())
+            }
+        
+        # Get emotion data
+        emotion_data = self.emotional_tendencies[emotion]
+        changes = {}
+        
+        # Update likelihood if specified
+        if abs(likelihood_change) >= self.min_impact_threshold:
+            old_likelihood = emotion_data["likelihood"]
+            adjusted_change = likelihood_change * self.evolution_rate
+            new_likelihood = max(0.1, min(0.9, old_likelihood + adjusted_change))
+            emotion_data["likelihood"] = new_likelihood
+            changes["likelihood"] = {
+                "old_value": old_likelihood,
+                "change": adjusted_change,
+                "new_value": new_likelihood
+            }
+        
+        # Update intensity baseline if specified
+        if abs(intensity_change) >= self.min_impact_threshold:
+            old_intensity = emotion_data["intensity_baseline"]
+            adjusted_change = intensity_change * self.evolution_rate
+            new_intensity = max(0.1, min(0.9, old_intensity + adjusted_change))
+            emotion_data["intensity_baseline"] = new_intensity
+            changes["intensity_baseline"] = {
+                "old_value": old_intensity,
+                "change": adjusted_change,
+                "new_value": new_intensity
+            }
+        
+        # Update trigger threshold if specified
+        if abs(threshold_change) >= self.min_impact_threshold:
+            old_threshold = emotion_data["trigger_threshold"]
+            adjusted_change = threshold_change * self.evolution_rate
+            new_threshold = max(0.1, min(0.9, old_threshold + adjusted_change))
+            emotion_data["trigger_threshold"] = new_threshold
+            changes["trigger_threshold"] = {
+                "old_value": old_threshold,
+                "change": adjusted_change,
+                "new_value": new_threshold
+            }
+        
+        # Record history if any changes were made
+        if changes:
+            emotion_data["evolution_history"].append({
+                "timestamp": datetime.datetime.now().isoformat(),
+                "changes": changes,
+                "reason": reason
+            })
+            
+            # Limit history size
+            if len(emotion_data["evolution_history"]) > self.max_history_entries:
+                emotion_data["evolution_history"] = emotion_data["evolution_history"][-self.max_history_entries:]
+        
+        return {
+            "emotion": emotion,
+            "changes": changes
+        }
+    
+    @function_tool
+    async def _update_trait(self, ctx: RunContextWrapper,
+                       trait: str,
+                       impact: float,
+                       neurochemical_impacts: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+        """
+        Update a trait with a direct impact and neurochemical effects
         
         Args:
             trait: The trait name
             impact: Impact value (-1.0 to 1.0)
-            evolution_rate: Current evolution rate
+            neurochemical_impacts: Optional impacts on neurochemical baselines
             
         Returns:
             Change calculation result
         """
-        # Get current trait data
-        if trait not in self.identity_profile["traits"]:
+        if trait not in self.identity_traits:
             return {
-                "trait": trait,
-                "old_value": 0.5,
-                "change": 0,
-                "new_value": 0.5,
-                "error": "Trait not found"
+                "error": f"Trait not found: {trait}",
+                "available_traits": list(self.identity_traits.keys())
             }
         
-        trait_data = self.identity_profile["traits"][trait]
+        # Get trait data
+        trait_data = self.identity_traits[trait]
         current_value = trait_data["value"]
         stability = trait_data["stability"]
         
@@ -415,27 +918,62 @@ class IdentityEvolutionSystem:
         resistance = stability * 0.8  # Scale to allow some change even at high stability
         
         # Calculate change
-        raw_change = impact * evolution_rate
+        raw_change = impact * self.evolution_rate
         actual_change = raw_change * (1.0 - resistance)
         
         # Apply change with bounds
         new_value = max(0.0, min(1.0, current_value + actual_change))
         
+        # Update value
+        self.identity_traits[trait]["value"] = new_value
+        
+        # Record history if change is significant
+        if abs(actual_change) >= self.min_impact_threshold:
+            trait_data["evolution_history"].append({
+                "timestamp": datetime.datetime.now().isoformat(),
+                "old_value": current_value,
+                "change": actual_change,
+                "new_value": new_value
+            })
+            
+            # Limit history size
+            if len(trait_data["evolution_history"]) > self.max_history_entries:
+                trait_data["evolution_history"] = trait_data["evolution_history"][-self.max_history_entries:]
+        
+        # Apply neurochemical impacts if provided
+        neurochemical_results = {}
+        if neurochemical_impacts:
+            for chemical, chemical_impact in neurochemical_impacts.items():
+                if chemical in self.neurochemical_profile:
+                    # Scale impact by trait change magnitude
+                    scaled_impact = chemical_impact * abs(actual_change) / self.min_impact_threshold
+                    
+                    # Apply impact
+                    result = await self._update_neurochemical_baseline(
+                        ctx,
+                        chemical=chemical,
+                        impact=scaled_impact,
+                        reason=f"trait_{trait}_update"
+                    )
+                    
+                    neurochemical_results[chemical] = result
+        
+        # Return update results
         return {
             "trait": trait,
             "old_value": current_value,
             "raw_change": raw_change,
             "actual_change": actual_change,
             "resistance": resistance,
-            "new_value": new_value
+            "new_value": new_value,
+            "neurochemical_impacts": neurochemical_results
         }
     
     @function_tool
-    async def _calculate_preference_change(self, ctx: RunContextWrapper,
-                                      category: str,
-                                      preference: str,
-                                      impact: float,
-                                      evolution_rate: float) -> Dict[str, Any]:
+    async def _update_preference(self, ctx: RunContextWrapper,
+                             category: str,
+                             preference: str,
+                             impact: float) -> Dict[str, Any]:
         """
         Calculate change to a preference based on impact and rate
         
@@ -443,35 +981,26 @@ class IdentityEvolutionSystem:
             category: The preference category
             preference: The preference name
             impact: Impact value (-1.0 to 1.0)
-            evolution_rate: Current evolution rate
             
         Returns:
             Change calculation result
         """
         # Check if category exists
-        if category not in self.identity_profile["preferences"]:
+        if category not in self.identity_preferences:
             return {
-                "category": category,
-                "preference": preference,
-                "old_value": 0.5,
-                "change": 0,
-                "new_value": 0.5,
-                "error": "Category not found"
+                "error": f"Category not found: {category}",
+                "available_categories": list(self.identity_preferences.keys())
             }
         
         # Check if preference exists
-        if preference not in self.identity_profile["preferences"][category]:
+        if preference not in self.identity_preferences[category]:
             return {
-                "category": category,
-                "preference": preference,
-                "old_value": 0.5,
-                "change": 0,
-                "new_value": 0.5,
-                "error": "Preference not found"
+                "error": f"Preference not found: {preference}",
+                "available_preferences": list(self.identity_preferences[category].keys())
             }
         
         # Get current preference data
-        pref_data = self.identity_profile["preferences"][category][preference]
+        pref_data = self.identity_preferences[category][preference]
         current_value = pref_data["value"]
         adaptability = pref_data["adaptability"]
         
@@ -479,11 +1008,46 @@ class IdentityEvolutionSystem:
         adapt_factor = adaptability * 1.2  # Scale to allow more change for preferences
         
         # Calculate change
-        raw_change = impact * evolution_rate
+        raw_change = impact * self.evolution_rate
         actual_change = raw_change * adapt_factor
         
         # Apply change with bounds
         new_value = max(0.0, min(1.0, current_value + actual_change))
+        
+        # Update value
+        self.identity_preferences[category][preference]["value"] = new_value
+        
+        # Record history if change is significant
+        if abs(actual_change) >= self.min_impact_threshold:
+            pref_data["evolution_history"].append({
+                "timestamp": datetime.datetime.now().isoformat(),
+                "old_value": current_value,
+                "change": actual_change,
+                "new_value": new_value
+            })
+            
+            # Limit history size
+            if len(pref_data["evolution_history"]) > self.max_history_entries:
+                pref_data["evolution_history"] = pref_data["evolution_history"][-self.max_history_entries:]
+        
+        # Apply neurochemical modifier impacts
+        neurochemical_results = {}
+        modifiers = pref_data.get("neurochemical_modifiers", {})
+        
+        for chemical, modifier in modifiers.items():
+            if chemical in self.neurochemical_profile:
+                # Scale modifier by preference change magnitude
+                scaled_impact = modifier * abs(actual_change) / self.min_impact_threshold * 0.3  # Reduce impact intensity
+                
+                # Apply impact
+                result = await self._update_neurochemical_baseline(
+                    ctx,
+                    chemical=chemical,
+                    impact=scaled_impact,
+                    reason=f"preference_{category}_{preference}_update"
+                )
+                
+                neurochemical_results[chemical] = result
         
         return {
             "category": category,
@@ -492,13 +1056,192 @@ class IdentityEvolutionSystem:
             "raw_change": raw_change,
             "actual_change": actual_change,
             "adaptability": adapt_factor,
-            "new_value": new_value
+            "new_value": new_value,
+            "neurochemical_impacts": neurochemical_results
         }
+    
+    @function_tool
+    async def _calculate_neurochemical_impacts(self, ctx: RunContextWrapper,
+                                         experience: Dict[str, Any]) -> NeurochemicalImpact:
+        """
+        Calculate impacts on neurochemical baselines from an experience
+        
+        Args:
+            experience: Experience data
+            
+        Returns:
+            Neurochemical impact data
+        """
+        # Extract relevant information from experience
+        emotional_context = experience.get("emotional_context", {})
+        scenario_type = experience.get("scenario_type", "general")
+        significance = experience.get("significance", 5) / 10  # Convert to 0.0-1.0 scale
+        
+        # Initialize impacts
+        impacts = {
+            "nyxamine": 0.0,
+            "seranix": 0.0,
+            "oxynixin": 0.0,
+            "cortanyx": 0.0,
+            "adrenyx": 0.0
+        }
+        
+        # Process emotional context impacts
+        primary_emotion = emotional_context.get("primary_emotion", "")
+        primary_intensity = emotional_context.get("primary_intensity", 0.5)
+        valence = emotional_context.get("valence", 0.0)
+        arousal = emotional_context.get("arousal", 0.5)
+        
+        # Map emotions to neurochemical impacts
+        emotion_chemical_map = {
+            "Joy": {"nyxamine": 0.4, "cortanyx": -0.2},
+            "Sadness": {"cortanyx": 0.3, "nyxamine": -0.2},
+            "Fear": {"cortanyx": 0.4, "adrenyx": 0.3},
+            "Anger": {"cortanyx": 0.4, "adrenyx": 0.3, "oxynixin": -0.2},
+            "Trust": {"oxynixin": 0.4, "cortanyx": -0.2},
+            "Disgust": {"cortanyx": 0.3, "oxynixin": -0.3},
+            "Anticipation": {"adrenyx": 0.3, "nyxamine": 0.2},
+            "Surprise": {"adrenyx": 0.4, "nyxamine": 0.2},
+            "Teasing": {"nyxamine": 0.3, "adrenyx": 0.2},
+            "Controlling": {"adrenyx": 0.3, "oxynixin": -0.2},
+            "Cruel": {"cortanyx": 0.3, "oxynixin": -0.4},
+            "Detached": {"cortanyx": 0.2, "oxynixin": -0.3, "seranix": 0.2}
+        }
+        
+        if primary_emotion in emotion_chemical_map:
+            for chemical, impact in emotion_chemical_map[primary_emotion].items():
+                impacts[chemical] += impact * primary_intensity * significance
+        
+        # Add impacts from valence and arousal
+        if valence > 0.3:  # Positive valence
+            impacts["nyxamine"] += valence * 0.2 * significance
+            impacts["cortanyx"] -= valence * 0.1 * significance  # Reduce cortanyx
+        elif valence < -0.3:  # Negative valence
+            impacts["cortanyx"] += abs(valence) * 0.2 * significance
+            impacts["nyxamine"] -= abs(valence) * 0.1 * significance  # Reduce nyxamine
+        
+        if arousal > 0.6:  # High arousal
+            impacts["adrenyx"] += arousal * 0.2 * significance
+        elif arousal < 0.4:  # Low arousal
+            impacts["seranix"] += (1 - arousal) * 0.2 * significance
+        
+        # Process scenario type impacts
+        scenario_chemical_map = {
+            "teasing": {"nyxamine": 0.3, "adrenyx": 0.2},
+            "dark": {"cortanyx": 0.3, "adrenyx": 0.2},
+            "indulgent": {"nyxamine": 0.3, "seranix": 0.2},
+            "psychological": {"nyxamine": 0.2, "cortanyx": 0.2},
+            "nurturing": {"oxynixin": 0.3, "seranix": 0.2},
+            "discipline": {"cortanyx": 0.2, "adrenyx": 0.2},
+            "training": {"nyxamine": 0.1, "cortanyx": 0.1},
+            "service": {"oxynixin": 0.2, "seranix": 0.1},
+            "worship": {"oxynixin": 0.3, "nyxamine": 0.2}
+        }
+        
+        if scenario_type in scenario_chemical_map:
+            for chemical, impact in scenario_chemical_map[scenario_type].items():
+                impacts[chemical] += impact * significance
+        
+        # Calculate overall impact strength
+        impact_strength = sum(abs(v) for v in impacts.values()) / len(impacts)
+        
+        # Create impact object
+        return NeurochemicalImpact(
+            nyxamine_impact=impacts["nyxamine"],
+            seranix_impact=impacts["seranix"],
+            oxynixin_impact=impacts["oxynixin"],
+            cortanyx_impact=impacts["cortanyx"],
+            adrenyx_impact=impacts["adrenyx"],
+            impact_source="experience",
+            impact_strength=impact_strength
+        )
+    
+    @function_tool
+    async def _calculate_emotional_impacts(self, ctx: RunContextWrapper,
+                                      experience: Dict[str, Any],
+                                      neurochemical_impacts: NeurochemicalImpact) -> Dict[str, Dict[str, float]]:
+        """
+        Calculate impacts on emotional tendencies from an experience
+        
+        Args:
+            experience: Experience data
+            neurochemical_impacts: Impacts on neurochemical baselines
+            
+        Returns:
+            Impacts on emotional tendencies
+        """
+        # Extract relevant information
+        emotional_context = experience.get("emotional_context", {})
+        primary_emotion = emotional_context.get("primary_emotion", "")
+        significance = experience.get("significance", 5) / 10  # Convert to 0.0-1.0 scale
+        
+        # Initialize impacts
+        impacts = {}
+        
+        if primary_emotion in self.emotional_tendencies:
+            # Reinforce emotional tendencies that match the experience
+            impacts[primary_emotion] = {
+                "likelihood": 0.1 * significance,  # Increase likelihood
+                "intensity": 0.05 * significance,  # Slightly increase intensity
+                "threshold": -0.05 * significance  # Slightly lower threshold (easier to trigger)
+            }
+            
+            # Also adjust related emotions based on neurochemical impacts
+            chemical_emotion_map = {
+                "nyxamine": ["Joy", "Anticipation", "Teasing"],
+                "seranix": ["Contentment", "Trust"],
+                "oxynixin": ["Trust", "Love", "Nurturing"],
+                "cortanyx": ["Sadness", "Fear", "Anger", "Disgust", "Cruel", "Detached"],
+                "adrenyx": ["Fear", "Surprise", "Anticipation", "Controlling"]
+            }
+            
+            # Process each neurochemical impact
+            for chemical, impact_attr in [
+                ("nyxamine", neurochemical_impacts.nyxamine_impact),
+                ("seranix", neurochemical_impacts.seranix_impact),
+                ("oxynixin", neurochemical_impacts.oxynixin_impact),
+                ("cortanyx", neurochemical_impacts.cortanyx_impact),
+                ("adrenyx", neurochemical_impacts.adrenyx_impact)
+            ]:
+                if abs(impact_attr) < 0.1:
+                    continue  # Skip minimal impacts
+                
+                # Get related emotions
+                related_emotions = chemical_emotion_map.get(chemical, [])
+                
+                for emotion in related_emotions:
+                    if emotion in self.emotional_tendencies and emotion != primary_emotion:
+                        # Calculate impact scale (smaller than primary emotion)
+                        scale = 0.6 * abs(impact_attr) * significance
+                        
+                        # Initialize if needed
+                        if emotion not in impacts:
+                            impacts[emotion] = {
+                                "likelihood": 0.0,
+                                "intensity": 0.0,
+                                "threshold": 0.0
+                            }
+                        
+                        # Apply impact direction
+                        if impact_attr > 0:
+                            # Positive impact - increase likelihood and intensity, decrease threshold
+                            impacts[emotion]["likelihood"] += 0.05 * scale
+                            impacts[emotion]["intensity"] += 0.03 * scale
+                            impacts[emotion]["threshold"] -= 0.02 * scale
+                        else:
+                            # Negative impact - decrease likelihood and intensity, increase threshold
+                            impacts[emotion]["likelihood"] -= 0.05 * scale
+                            impacts[emotion]["intensity"] -= 0.03 * scale
+                            impacts[emotion]["threshold"] += 0.02 * scale
+        
+        return impacts
     
     @function_tool
     async def _update_identity_history(self, ctx: RunContextWrapper,
                                   trait_changes: Dict[str, Dict[str, Any]],
                                   preference_changes: Dict[str, Dict[str, Dict[str, Any]]],
+                                  neurochemical_impacts: NeurochemicalImpact,
+                                  emotional_impacts: Dict[str, Dict[str, float]],
                                   experience_id: str) -> Dict[str, Any]:
         """
         Update identity history with changes
@@ -506,6 +1249,8 @@ class IdentityEvolutionSystem:
         Args:
             trait_changes: Changes to traits
             preference_changes: Changes to preferences
+            neurochemical_impacts: Impacts on neurochemical baselines
+            emotional_impacts: Impacts on emotional tendencies
             experience_id: ID of the experience causing changes
             
         Returns:
@@ -516,68 +1261,59 @@ class IdentityEvolutionSystem:
         
         # Update traits
         for trait, change_data in trait_changes.items():
-            if trait not in self.identity_profile["traits"]:
+            if trait not in self.identity_traits:
                 continue
                 
             actual_change = change_data.get("actual_change", 0)
             
             # Only record significant changes
             if abs(actual_change) >= self.min_impact_threshold:
-                # Add to trait history
-                self.identity_profile["traits"][trait]["evolution_history"].append({
-                    "timestamp": timestamp,
-                    "change": actual_change,
-                    "experience_id": experience_id,
-                    "old_value": change_data.get("old_value"),
-                    "new_value": change_data.get("new_value")
-                })
-                
-                # Limit history size
-                if len(self.identity_profile["traits"][trait]["evolution_history"]) > self.max_history_entries:
-                    self.identity_profile["traits"][trait]["evolution_history"] = self.identity_profile["traits"][trait]["evolution_history"][-self.max_history_entries:]
-                
-                # Record significant change
                 significant_changes[f"trait.{trait}"] = actual_change
         
         # Update preferences
         for category, prefs in preference_changes.items():
-            if category not in self.identity_profile["preferences"]:
+            if category not in self.identity_preferences:
                 continue
                 
             for pref, change_data in prefs.items():
-                if pref not in self.identity_profile["preferences"][category]:
+                if pref not in self.identity_preferences[category]:
                     continue
                     
                 actual_change = change_data.get("actual_change", 0)
                 
                 # Only record significant changes
                 if abs(actual_change) >= self.min_impact_threshold:
-                    # Add to preference history
-                    self.identity_profile["preferences"][category][pref]["evolution_history"].append({
-                        "timestamp": timestamp,
-                        "change": actual_change,
-                        "experience_id": experience_id,
-                        "old_value": change_data.get("old_value"),
-                        "new_value": change_data.get("new_value")
-                    })
-                    
-                    # Limit history size
-                    if len(self.identity_profile["preferences"][category][pref]["evolution_history"]) > self.max_history_entries:
-                        self.identity_profile["preferences"][category][pref]["evolution_history"] = self.identity_profile["preferences"][category][pref]["evolution_history"][-self.max_history_entries:]
-                    
-                    # Record significant change
                     significant_changes[f"preference.{category}.{pref}"] = actual_change
         
+        # Record neurochemical impacts
+        for chemical, impact_attr in [
+            ("nyxamine", neurochemical_impacts.nyxamine_impact),
+            ("seranix", neurochemical_impacts.seranix_impact),
+            ("oxynixin", neurochemical_impacts.oxynixin_impact),
+            ("cortanyx", neurochemical_impacts.cortanyx_impact),
+            ("adrenyx", neurochemical_impacts.adrenyx_impact)
+        ]:
+            if abs(impact_attr) >= self.min_impact_threshold:
+                significant_changes[f"neurochemical.{chemical}"] = impact_attr
+        
+        # Record emotional impacts
+        for emotion, impacts in emotional_impacts.items():
+            for aspect, impact in impacts.items():
+                if abs(impact) >= self.min_impact_threshold:
+                    significant_changes[f"emotion.{emotion}.{aspect}"] = impact
+        
         # Update overall stats
-        self.identity_profile["update_count"] += 1
-        self.identity_profile["last_update"] = timestamp
+        self.update_count += 1
+        self.last_update = timestamp
         
         # Record impact in history
         impact_record = {
             "timestamp": timestamp,
             "experience_id": experience_id,
             "significant_changes": significant_changes,
-            "update_count": self.identity_profile["update_count"]
+            "update_count": self.update_count,
+            "neurochemical_impacts": neurochemical_impacts.model_dump(),
+            "emotional_impacts": emotional_impacts
         }
         
         self.impact_history.append(impact_record)
@@ -588,7 +1324,7 @@ class IdentityEvolutionSystem:
         
         return {
             "significant_changes": len(significant_changes),
-            "update_count": self.identity_profile["update_count"],
+            "update_count": self.update_count,
             "timestamp": timestamp
         }
     
@@ -619,7 +1355,9 @@ class IdentityEvolutionSystem:
         """
         changes = {
             "traits": {},
-            "preferences": {}
+            "preferences": {},
+            "neurochemicals": {},
+            "emotions": {}
         }
         
         # Get impacts to consider
@@ -642,6 +1380,7 @@ class IdentityEvolutionSystem:
                     if trait not in changes["traits"]:
                         changes["traits"][trait] = 0
                     changes["traits"][trait] += value
+                    
                 elif parts[0] == "preference" and len(parts) == 3:
                     category = parts[1]
                     preference = parts[2]
@@ -653,80 +1392,118 @@ class IdentityEvolutionSystem:
                         changes["preferences"][category][preference] = 0
                         
                     changes["preferences"][category][preference] += value
+                    
+                elif parts[0] == "neurochemical" and len(parts) == 2:
+                    chemical = parts[1]
+                    if chemical not in changes["neurochemicals"]:
+                        changes["neurochemicals"][chemical] = 0
+                    changes["neurochemicals"][chemical] += value
+                    
+                elif parts[0] == "emotion" and len(parts) == 3:
+                    emotion = parts[1]
+                    aspect = parts[2]
+                    
+                    if emotion not in changes["emotions"]:
+                        changes["emotions"][emotion] = {}
+                    
+                    if aspect not in changes["emotions"][emotion]:
+                        changes["emotions"][emotion][aspect] = 0
+                        
+                    changes["emotions"][emotion][aspect] += value
         
         return changes
     
     @function_tool
-    async def _get_trait_correlations(self, ctx: RunContextWrapper) -> Dict[str, Dict[str, float]]:
+    async def _get_neurochemical_patterns(self, ctx: RunContextWrapper) -> Dict[str, Any]:
         """
-        Get correlations between traits based on historical changes
+        Get patterns in neurochemical baselines over time
         
         Returns:
-            Trait correlation matrix
+            Neurochemical pattern analysis
         """
-        correlations = {}
+        patterns = {}
         
-        # Get all traits
-        traits = list(self.identity_profile["traits"].keys())
+        # Analyze each chemical
+        for chemical, data in self.neurochemical_profile.items():
+            # Get history
+            history = data.get("evolution_history", [])
+            if not history:
+                patterns[chemical] = {
+                    "pattern": "stable",
+                    "current_value": data["value"],
+                    "baseline": data["value"],
+                    "adaptability": data["adaptability"]
+                }
+                continue
+            
+            # Calculate trend
+            changes = [entry.get("change", 0) for entry in history]
+            total_change = sum(changes)
+            avg_change = total_change / len(changes)
+            
+            # Calculate volatility
+            if len(changes) > 1:
+                volatility = sum(abs(changes[i] - changes[i-1]) for i in range(1, len(changes))) / (len(changes) - 1)
+            else:
+                volatility = 0.0
+            
+            # Determine pattern
+            if abs(avg_change) < 0.01:
+                if volatility < 0.02:
+                    pattern = "stable"
+                else:
+                    pattern = "fluctuating"
+            elif avg_change > 0:
+                pattern = "increasing"
+            else:
+                pattern = "decreasing"
+            
+            patterns[chemical] = {
+                "pattern": pattern,
+                "current_value": data["value"],
+                "average_change": avg_change,
+                "volatility": volatility,
+                "adaptability": data["adaptability"]
+            }
         
-        # Initialize correlation matrix
-        for trait in traits:
-            correlations[trait] = {}
-            for other_trait in traits:
-                correlations[trait][other_trait] = 0.0
+        # Analyze relationships between chemicals
+        relationships = {}
         
-        # If not enough history, return zero correlations
-        if len(self.impact_history) < 5:
-            return correlations
+        # Check for common patterns
+        if patterns["nyxamine"].get("pattern") == patterns["oxynixin"].get("pattern"):
+            relationships["nyxamine_oxynixin"] = "aligned"
+        elif patterns["nyxamine"].get("pattern") != patterns["oxynixin"].get("pattern"):
+            relationships["nyxamine_oxynixin"] = "divergent"
         
-        # Extract trait changes from impacts
-        trait_changes = {}
-        for impact in self.impact_history:
-            for key, value in impact.get("significant_changes", {}).items():
-                parts = key.split(".")
-                
-                if parts[0] == "trait" and len(parts) == 2:
-                    trait = parts[1]
-                    impact_id = impact.get("update_count", 0)
-                    
-                    if impact_id not in trait_changes:
-                        trait_changes[impact_id] = {}
-                    
-                    trait_changes[impact_id][trait] = value
+        if patterns["cortanyx"].get("pattern") == patterns["adrenyx"].get("pattern"):
+            relationships["cortanyx_adrenyx"] = "aligned"
+        elif patterns["cortanyx"].get("pattern") != patterns["adrenyx"].get("pattern"):
+            relationships["cortanyx_adrenyx"] = "divergent"
         
-        # Calculate correlations
-        for trait in traits:
-            for other_trait in traits:
-                if trait == other_trait:
-                    correlations[trait][other_trait] = 1.0  # Self correlation
-                    continue
-                
-                # Get paired changes
-                paired_changes = []
-                for impact_id, changes in trait_changes.items():
-                    if trait in changes and other_trait in changes:
-                        paired_changes.append((changes[trait], changes[other_trait]))
-                
-                # Calculate correlation if we have enough data
-                if len(paired_changes) >= 3:
-                    sum_x = sum(x for x, _ in paired_changes)
-                    sum_y = sum(y for _, y in paired_changes)
-                    sum_xy = sum(x * y for x, y in paired_changes)
-                    sum_x2 = sum(x * x for x, _ in paired_changes)
-                    sum_y2 = sum(y * y for _, y in paired_changes)
-                    n = len(paired_changes)
-                    
-                    numerator = n * sum_xy - sum_x * sum_y
-                    denominator = math.sqrt((n * sum_x2 - sum_x * sum_x) * (n * sum_y2 - sum_y * sum_y))
-                    
-                    if denominator != 0:
-                        correlation = numerator / denominator
-                    else:
-                        correlation = 0.0
-                    
-                    correlations[trait][other_trait] = max(-1.0, min(1.0, correlation))
+        if patterns["seranix"].get("pattern") == patterns["cortanyx"].get("pattern"):
+            relationships["seranix_cortanyx"] = "aligned"
+        elif patterns["seranix"].get("pattern") != patterns["cortanyx"].get("pattern"):
+            relationships["seranix_cortanyx"] = "divergent"
         
-        return correlations
+        # Check for opposing trends
+        if (patterns["nyxamine"].get("pattern") == "increasing" and 
+            patterns["cortanyx"].get("pattern") == "decreasing"):
+            relationships["nyxamine_cortanyx"] = "inversely_related"
+        elif (patterns["nyxamine"].get("pattern") == "decreasing" and 
+              patterns["cortanyx"].get("pattern") == "increasing"):
+            relationships["nyxamine_cortanyx"] = "inversely_related"
+        
+        if (patterns["oxynixin"].get("pattern") == "increasing" and 
+            patterns["cortanyx"].get("pattern") == "decreasing"):
+            relationships["oxynixin_cortanyx"] = "inversely_related"
+        elif (patterns["oxynixin"].get("pattern") == "decreasing" and 
+              patterns["cortanyx"].get("pattern") == "increasing"):
+            relationships["oxynixin_cortanyx"] = "inversely_related"
+        
+        return {
+            "chemical_patterns": patterns,
+            "relationships": relationships
+        }
     
     @function_tool
     async def _calculate_trait_consistency(self, ctx: RunContextWrapper) -> Dict[str, float]:
@@ -739,7 +1516,7 @@ class IdentityEvolutionSystem:
         consistency = {}
         
         # Calculate for each trait
-        for trait, data in self.identity_profile["traits"].items():
+        for trait, data in self.identity_traits.items():
             history = data.get("evolution_history", [])
             
             if not history:
@@ -768,7 +1545,7 @@ class IdentityEvolutionSystem:
         consistency = {}
         
         # Calculate for each preference category
-        for category, preferences in self.identity_profile["preferences"].items():
+        for category, preferences in self.identity_preferences.items():
             consistency[category] = {}
             
             # Calculate for each preference
@@ -780,7 +1557,11 @@ class IdentityEvolutionSystem:
                     continue
                 
                 # Calculate variance of changes
-                changes = [entry.get("change", 0) for entry in history]
+                changes = [entry.get("change", 0) for entry in history if "change" in entry]
+                if not changes:
+                    consistency[category][pref] = 1.0  # Perfect consistency if no changes
+                    continue
+                    
                 mean_change = sum(changes) / len(changes)
                 variance = sum((change - mean_change) ** 2 for change in changes) / len(changes)
                 
@@ -800,35 +1581,74 @@ class IdentityEvolutionSystem:
         """
         contradictions = []
         
-        # Get trait correlations
-        correlations = await self._get_trait_correlations(ctx)
+        # Check for contradictions between traits
+        trait_pairs = [
+            ("dominance", "patience"),
+            ("playfulness", "strictness"),
+            ("cruelty", "patience")
+        ]
         
-        # Get trait values
-        trait_values = {trait: data["value"] for trait, data in self.identity_profile["traits"].items()}
-        
-        # Check for strong negative correlations between traits with similar high/low values
-        for trait1, corr_dict in correlations.items():
-            for trait2, correlation in corr_dict.items():
-                if trait1 == trait2:
-                    continue
+        for trait1, trait2 in trait_pairs:
+            if (trait1 in self.identity_traits and 
+                trait2 in self.identity_traits):
                 
-                # Check for strong negative correlation
-                if correlation < -0.5:
-                    # Check if values are too similar
-                    val1 = trait_values.get(trait1, 0.5)
-                    val2 = trait_values.get(trait2, 0.5)
-                    
-                    # If both high or both low despite negative correlation
-                    if (val1 > 0.7 and val2 > 0.7) or (val1 < 0.3 and val2 < 0.3):
-                        contradictions.append({
-                            "type": "trait_contradiction",
-                            "elements": [trait1, trait2],
-                            "values": [val1, val2],
-                            "correlation": correlation,
-                            "description": f"Traits {trait1} and {trait2} have similar values but typically evolve in opposite directions"
-                        })
+                val1 = self.identity_traits[trait1]["value"]
+                val2 = self.identity_traits[trait2]["value"]
+                
+                # Check for extreme values in both contradictory traits
+                if val1 > 0.7 and val2 > 0.7:
+                    contradictions.append({
+                        "type": "trait_contradiction",
+                        "elements": [trait1, trait2],
+                        "values": [val1, val2],
+                        "description": f"Traits {trait1} and {trait2} are both very high despite being potentially contradictory"
+                    })
         
-        # Check for preference-trait misalignments
+        # Check for neurochemical contradictions
+        if (self.neurochemical_profile["nyxamine"]["value"] > 0.7 and 
+            self.neurochemical_profile["cortanyx"]["value"] > 0.7):
+            contradictions.append({
+                "type": "neurochemical_contradiction",
+                "elements": ["nyxamine", "cortanyx"],
+                "values": [self.neurochemical_profile["nyxamine"]["value"], 
+                          self.neurochemical_profile["cortanyx"]["value"]],
+                "description": "High nyxamine (pleasure) and high cortanyx (stress) is an unusual combination"
+            })
+        
+        if (self.neurochemical_profile["seranix"]["value"] > 0.7 and 
+            self.neurochemical_profile["adrenyx"]["value"] > 0.7):
+            contradictions.append({
+                "type": "neurochemical_contradiction",
+                "elements": ["seranix", "adrenyx"],
+                "values": [self.neurochemical_profile["seranix"]["value"], 
+                          self.neurochemical_profile["adrenyx"]["value"]],
+                "description": "High seranix (calm) and high adrenyx (alertness) is an unusual combination"
+            })
+        
+        # Check for contradictions in emotional tendencies
+        emotion_pairs = [
+            ("Joy", "Sadness"),
+            ("Trust", "Disgust"),
+            ("Teasing", "Detached")
+        ]
+        
+        for emotion1, emotion2 in emotion_pairs:
+            if (emotion1 in self.emotional_tendencies and 
+                emotion2 in self.emotional_tendencies):
+                
+                likelihood1 = self.emotional_tendencies[emotion1]["likelihood"]
+                likelihood2 = self.emotional_tendencies[emotion2]["likelihood"]
+                
+                # Check for high likelihood in opposing emotions
+                if likelihood1 > 0.7 and likelihood2 > 0.7:
+                    contradictions.append({
+                        "type": "emotion_contradiction",
+                        "elements": [emotion1, emotion2],
+                        "values": [likelihood1, likelihood2],
+                        "description": f"Emotions {emotion1} and {emotion2} both have high likelihood despite being opposing"
+                    })
+        
+        # Check for misalignments between traits and preferences
         trait_preference_pairs = [
             ("dominance", "scenario_types", "discipline"),
             ("playfulness", "scenario_types", "teasing"),
@@ -838,10 +1658,12 @@ class IdentityEvolutionSystem:
         ]
         
         for trait, category, preference in trait_preference_pairs:
-            trait_val = trait_values.get(trait, 0.5)
-            
-            if category in self.identity_profile["preferences"] and preference in self.identity_profile["preferences"][category]:
-                pref_val = self.identity_profile["preferences"][category][preference]["value"]
+            if (trait in self.identity_traits and 
+                category in self.identity_preferences and 
+                preference in self.identity_preferences[category]):
+                
+                trait_val = self.identity_traits[trait]["value"]
+                pref_val = self.identity_preferences[category][preference]["value"]
                 
                 # Check for significant mismatch (high trait, low preference or vice versa)
                 if (trait_val > 0.7 and pref_val < 0.3) or (trait_val < 0.3 and pref_val > 0.7):
@@ -852,19 +1674,147 @@ class IdentityEvolutionSystem:
                         "description": f"Trait {trait} and preference {preference} have mismatched values"
                     })
         
+        # Check for misalignments between neurochemicals and traits
+        chemical_trait_pairs = [
+            ("nyxamine", "creativity"),
+            ("seranix", "patience"),
+            ("oxynixin", "cruelty", True),  # True indicates inverse relationship expected
+            ("cortanyx", "strictness"),
+            ("adrenyx", "intensity")
+        ]
+        
+        for chemical, trait, inverse_expected in [(c, t, False) for c, t in chemical_trait_pairs] + [(c, t, inv) for c, t, inv in chemical_trait_pairs if len((c, t, inv)) == 3]:
+            if (chemical in self.neurochemical_profile and 
+                trait in self.identity_traits):
+                
+                chemical_val = self.neurochemical_profile[chemical]["value"]
+                trait_val = self.identity_traits[trait]["value"]
+                
+                # Check for misalignment based on expected relationship
+                if not inverse_expected:
+                    # Direct relationship expected (both high or both low)
+                    if (chemical_val > 0.7 and trait_val < 0.3) or (chemical_val < 0.3 and trait_val > 0.7):
+                        contradictions.append({
+                            "type": "neurochemical_trait_mismatch",
+                            "elements": [chemical, trait],
+                            "values": [chemical_val, trait_val],
+                            "description": f"Neurochemical {chemical} and trait {trait} have misaligned values"
+                        })
+                else:
+                    # Inverse relationship expected (one high, one low)
+                    if (chemical_val > 0.7 and trait_val > 0.7) or (chemical_val < 0.3 and trait_val < 0.3):
+                        contradictions.append({
+                            "type": "neurochemical_trait_mismatch",
+                            "elements": [chemical, trait],
+                            "values": [chemical_val, trait_val],
+                            "description": f"Neurochemical {chemical} and trait {trait} have unexpectedly aligned values"
+                        })
+        
         return contradictions
+    
+    @function_tool
+    async def _assess_neurochemical_coherence(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Assess coherence of neurochemical baselines
+        
+        Returns:
+            Neurochemical coherence assessment
+        """
+        # Expected relationships between neurochemicals
+        expected_relations = [
+            # Format: (chemical1, chemical2, relation_type)
+            # relation_type: "inverse" means they should be inversely related
+            # relation_type: "aligned" means they should be similarly valued
+            ("nyxamine", "cortanyx", "inverse"),
+            ("seranix", "adrenyx", "inverse"),
+            ("oxynixin", "cortanyx", "inverse"),
+            ("nyxamine", "oxynixin", "aligned"),
+            ("cortanyx", "adrenyx", "aligned")
+        ]
+        
+        coherence_scores = {}
+        imbalances = []
+        
+        # Check expected relationships
+        for chemical1, chemical2, relation_type in expected_relations:
+            if (chemical1 in self.neurochemical_profile and 
+                chemical2 in self.neurochemical_profile):
+                
+                val1 = self.neurochemical_profile[chemical1]["value"]
+                val2 = self.neurochemical_profile[chemical2]["value"]
+                
+                if relation_type == "inverse":
+                    # For inverse relations, difference should be high
+                    coherence = abs(val1 - val2)
+                    if coherence < 0.3:  # Low difference indicates poor coherence
+                        imbalances.append({
+                            "type": "unexpected_similarity",
+                            "chemicals": [chemical1, chemical2],
+                            "values": [val1, val2],
+                            "expected_relation": "inverse",
+                            "coherence_score": coherence
+                        })
+                else:  # aligned
+                    # For aligned relations, difference should be low
+                    coherence = 1.0 - abs(val1 - val2)
+                    if coherence < 0.7:  # High difference indicates poor coherence
+                        imbalances.append({
+                            "type": "unexpected_difference",
+                            "chemicals": [chemical1, chemical2],
+                            "values": [val1, val2],
+                            "expected_relation": "aligned",
+                            "coherence_score": coherence
+                        })
+                
+                coherence_scores[f"{chemical1}_{chemical2}"] = coherence
+        
+        # Check for extreme values
+        for chemical, data in self.neurochemical_profile.items():
+            if data["value"] > 0.9:
+                imbalances.append({
+                    "type": "extreme_high",
+                    "chemical": chemical,
+                    "value": data["value"]
+                })
+            elif data["value"] < 0.1:
+                imbalances.append({
+                    "type": "extreme_low",
+                    "chemical": chemical,
+                    "value": data["value"]
+                })
+        
+        # Calculate overall coherence
+        if coherence_scores:
+            overall_coherence = sum(coherence_scores.values()) / len(coherence_scores)
+        else:
+            overall_coherence = 0.7  # Default if no relationships checked
+        
+        # Adjust based on number of imbalances
+        if imbalances:
+            overall_coherence -= len(imbalances) * 0.05  # Reduce score based on imbalances
+        
+        # Ensure score is in valid range
+        overall_coherence = max(0.1, min(1.0, overall_coherence))
+        
+        return {
+            "overall_coherence": overall_coherence,
+            "relation_scores": coherence_scores,
+            "imbalances": imbalances,
+            "balanced_chemicals": [c for c in self.neurochemical_profile.keys() if not any(im.get("chemical") == c for im in imbalances)],
+            "assessment_time": datetime.datetime.now().isoformat()
+        }
     
     # Public methods
     
     async def update_identity_from_experience(self, 
                                          experience: Dict[str, Any], 
-                                         impact: Dict[str, Dict[str, float]]) -> Dict[str, Any]:
+                                         impact: Optional[Dict[str, Dict[str, float]]] = None) -> Dict[str, Any]:
         """
         Update identity based on experience impact
         
         Args:
             experience: Experience data
-            impact: Impact data with trait and preference changes
+            impact: Optional impact data (will be calculated if not provided)
             
         Returns:
             Update results
@@ -874,83 +1824,120 @@ class IdentityEvolutionSystem:
                 # Extract experience ID
                 experience_id = experience.get("id", "unknown")
                 
-                # Create agent input
-                agent_input = {
-                    "role": "user",
-                    "content": "Update identity based on experience impact",
-                    "experience": experience,
-                    "impact": impact,
-                    "current_identity": self.identity_profile
-                }
+                # Calculate neurochemical impacts
+                neurochemical_impacts = await self._calculate_neurochemical_impacts(
+                    RunContextWrapper(context=None),
+                    experience=experience
+                )
                 
-                # Process all trait impacts
-                trait_changes = {}
-                for trait, value in impact.get("traits", {}).items():
-                    if abs(value) < self.min_impact_threshold:
-                        continue
-                        
-                    change_result = await self._calculate_trait_change(
-                        RunContextWrapper(context=None),
-                        trait=trait,
-                        impact=value,
-                        evolution_rate=self.identity_profile["evolution_rate"]
-                    )
-                    
-                    if "error" not in change_result:
-                        # Apply change
-                        self.identity_profile["traits"][trait]["value"] = change_result["new_value"]
-                        trait_changes[trait] = change_result
-                
-                # Process all preference impacts
-                preference_changes = {}
-                for category, prefs in impact.get("preferences", {}).items():
-                    if category not in self.identity_profile["preferences"]:
-                        continue
-                    
-                    preference_changes[category] = {}
-                    
-                    for pref, value in prefs.items():
-                        if abs(value) < self.min_impact_threshold:
-                            continue
-                            
-                        change_result = await self._calculate_preference_change(
+                # Apply neurochemical impacts
+                chemical_results = {}
+                for chemical, impact_attr in [
+                    ("nyxamine", neurochemical_impacts.nyxamine_impact),
+                    ("seranix", neurochemical_impacts.seranix_impact),
+                    ("oxynixin", neurochemical_impacts.oxynixin_impact),
+                    ("cortanyx", neurochemical_impacts.cortanyx_impact),
+                    ("adrenyx", neurochemical_impacts.adrenyx_impact)
+                ]:
+                    if abs(impact_attr) >= self.min_impact_threshold:
+                        result = await self._update_neurochemical_baseline(
                             RunContextWrapper(context=None),
-                            category=category,
-                            preference=pref,
-                            impact=value,
-                            evolution_rate=self.identity_profile["evolution_rate"]
+                            chemical=chemical,
+                            impact=impact_attr,
+                            reason=f"experience_{experience_id}"
                         )
-                        
-                        if "error" not in change_result:
-                            # Apply change
-                            self.identity_profile["preferences"][category][pref]["value"] = change_result["new_value"]
-                            preference_changes[category][pref] = change_result
+                        chemical_results[chemical] = result
+                
+                # Calculate emotional tendency impacts
+                emotional_impacts = await self._calculate_emotional_impacts(
+                    RunContextWrapper(context=None),
+                    experience=experience,
+                    neurochemical_impacts=neurochemical_impacts
+                )
+                
+                # Apply emotional tendency impacts
+                emotion_results = {}
+                for emotion, impacts in emotional_impacts.items():
+                    result = await self._update_emotional_tendency(
+                        RunContextWrapper(context=None),
+                        emotion=emotion,
+                        likelihood_change=impacts.get("likelihood", 0.0),
+                        intensity_change=impacts.get("intensity", 0.0),
+                        threshold_change=impacts.get("threshold", 0.0),
+                        reason=f"experience_{experience_id}"
+                    )
+                    emotion_results[emotion] = result
+                
+                # Process trait impacts from regular impact data if provided
+                trait_results = {}
+                if impact and "traits" in impact:
+                    for trait, trait_impact in impact["traits"].items():
+                        if abs(trait_impact) >= self.min_impact_threshold:
+                            # Get neurochemical impacts from trait
+                            trait_chemical_impacts = {}
+                            if trait in self.identity_traits:
+                                trait_chemical_map = self.identity_traits[trait].get("neurochemical_map", {})
+                                for chemical, factor in trait_chemical_map.items():
+                                    trait_chemical_impacts[chemical] = factor * trait_impact
+                            
+                            # Apply trait update
+                            result = await self._update_trait(
+                                RunContextWrapper(context=None),
+                                trait=trait,
+                                impact=trait_impact,
+                                neurochemical_impacts=trait_chemical_impacts
+                            )
+                            trait_results[trait] = result
+                
+                # Process preference impacts
+                preference_results = {}
+                if impact and "preferences" in impact:
+                    for category, prefs in impact["preferences"].items():
+                        if category not in preference_results:
+                            preference_results[category] = {}
+                            
+                        for pref, pref_impact in prefs.items():
+                            if abs(pref_impact) >= self.min_impact_threshold:
+                                result = await self._update_preference(
+                                    RunContextWrapper(context=None),
+                                    category=category,
+                                    preference=pref,
+                                    impact=pref_impact
+                                )
+                                preference_results[category][pref] = result
                 
                 # Update history
                 history_result = await self._update_identity_history(
                     RunContextWrapper(context=None),
-                    trait_changes=trait_changes,
-                    preference_changes=preference_changes,
+                    trait_changes=trait_results,
+                    preference_changes=preference_results,
+                    neurochemical_impacts=neurochemical_impacts,
+                    emotional_impacts=emotional_impacts,
                     experience_id=experience_id
                 )
                 
                 # Calculate coherence
-                await self._update_coherence_score()
+                coherence_result = await self._assess_neurochemical_coherence(RunContextWrapper(context=None))
+                
+                # Update coherence score
+                self.coherence_score = coherence_result["overall_coherence"]
                 
                 # Check if it's time for a reflection
                 reflection_result = None
-                if self.identity_profile["update_count"] % self.reflection_interval == 0:
+                if self.update_count % self.reflection_interval == 0:
                     reflection_result = await self.generate_identity_reflection()
                 
                 # Prepare and return update results
                 result = {
                     "experience_id": experience_id,
-                    "trait_changes": len(trait_changes),
-                    "preference_changes": sum(len(prefs) for prefs in preference_changes.values()),
+                    "neurochemical_updates": len(chemical_results),
+                    "emotion_updates": len(emotion_results),
+                    "trait_updates": len(trait_results),
+                    "preference_updates": sum(len(prefs) for prefs in preference_results.values()),
                     "significant_changes": history_result.get("significant_changes", 0),
-                    "coherence_score": self.identity_profile["coherence_score"],
+                    "coherence_score": self.coherence_score,
                     "reflection_generated": reflection_result is not None,
-                    "update_count": self.identity_profile["update_count"],
+                    "update_count": self.update_count,
                     "timestamp": history_result.get("timestamp")
                 }
                 
@@ -979,7 +1966,7 @@ class IdentityEvolutionSystem:
                 # Create agent input
                 agent_input = {
                     "role": "user",
-                    "content": "Generate a reflection on my current identity and recent changes"
+                    "content": "Generate a reflection on my current identity and recent changes, considering neurochemical patterns."
                 }
                 
                 # Run the reflection agent
@@ -1008,45 +1995,6 @@ class IdentityEvolutionSystem:
                     "reflection_text": "I'm unable to form a clear reflection on my identity at the moment."
                 }
     
-    async def _update_coherence_score(self) -> float:
-        """
-        Update the identity coherence score
-        
-        Returns:
-            Updated coherence score
-        """
-        try:
-            # Get trait consistency
-            trait_consistency = await self._calculate_trait_consistency(RunContextWrapper(context=None))
-            avg_trait_consistency = sum(trait_consistency.values()) / len(trait_consistency) if trait_consistency else 0.8
-            
-            # Get preference consistency
-            pref_consistency = await self._calculate_preference_consistency(RunContextWrapper(context=None))
-            category_scores = []
-            for category, prefs in pref_consistency.items():
-                if prefs:
-                    category_scores.append(sum(prefs.values()) / len(prefs))
-            avg_pref_consistency = sum(category_scores) / len(category_scores) if category_scores else 0.8
-            
-            # Find contradictions
-            contradictions = await self._identify_contradictions(RunContextWrapper(context=None))
-            contradiction_penalty = min(0.5, len(contradictions) * 0.1)  # Cap penalty at 0.5
-            
-            # Calculate final coherence score
-            coherence = (
-                avg_trait_consistency * 0.4 +
-                avg_pref_consistency * 0.4
-            ) * (1.0 - contradiction_penalty)
-            
-            # Update profile
-            self.identity_profile["coherence_score"] = max(0.1, min(1.0, coherence))
-            
-            return self.identity_profile["coherence_score"]
-            
-        except Exception as e:
-            logger.error(f"Error updating coherence score: {e}")
-            return self.identity_profile["coherence_score"]  # Return current score on error
-    
     async def get_identity_profile(self) -> Dict[str, Any]:
         """
         Get the current identity profile
@@ -1054,7 +2002,17 @@ class IdentityEvolutionSystem:
         Returns:
             Current identity profile
         """
-        return self.identity_profile
+        # Return current identity profile
+        return {
+            "neurochemical_profile": self.neurochemical_profile,
+            "emotional_tendencies": self.emotional_tendencies,
+            "traits": self.identity_traits,
+            "preferences": self.identity_preferences,
+            "update_count": self.update_count,
+            "last_update": self.last_update,
+            "evolution_rate": self.evolution_rate,
+            "coherence_score": self.coherence_score
+        }
     
     async def get_recent_reflections(self, limit: int = 5) -> List[Dict[str, Any]]:
         """
@@ -1068,8 +2026,7 @@ class IdentityEvolutionSystem:
         """
         return self.reflection_history[-limit:]
     
-    async def calculate_experience_impact(self, 
-                                      experience: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+    async def calculate_experience_impact(self, experience: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
         """
         Calculate how an experience should impact identity
         
@@ -1079,6 +2036,19 @@ class IdentityEvolutionSystem:
         Returns:
             Impact data with trait and preference changes
         """
+        # Calculate neurochemical impacts
+        neurochemical_impacts = await self._calculate_neurochemical_impacts(
+            RunContextWrapper(context=None),
+            experience=experience
+        )
+        
+        # Calculate emotional impacts
+        emotional_impacts = await self._calculate_emotional_impacts(
+            RunContextWrapper(context=None),
+            experience=experience,
+            neurochemical_impacts=neurochemical_impacts
+        )
+        
         # Extract relevant data
         scenario_type = experience.get("scenario_type", "general")
         emotional_context = experience.get("emotional_context", {})
@@ -1087,21 +2057,16 @@ class IdentityEvolutionSystem:
         # Default empty impact
         impact = {
             "traits": {},
-            "preferences": {}
+            "preferences": {},
+            "neurochemicals": {
+                "nyxamine": neurochemical_impacts.nyxamine_impact,
+                "seranix": neurochemical_impacts.seranix_impact,
+                "oxynixin": neurochemical_impacts.oxynixin_impact,
+                "cortanyx": neurochemical_impacts.cortanyx_impact,
+                "adrenyx": neurochemical_impacts.adrenyx_impact
+            },
+            "emotional_tendencies": emotional_impacts
         }
-        
-        # Impact on scenario preferences based on emotional response
-        if scenario_type:
-            # Get valence from emotional context
-            valence = emotional_context.get("valence", 0)
-            
-            # Impact depends on emotional valence
-            if valence > 0.3:
-                # Positive experience with this scenario type
-                impact["preferences"]["scenario_types"] = {scenario_type: 0.1 * significance}
-            elif valence < -0.3:
-                # Negative experience with this scenario type
-                impact["preferences"]["scenario_types"] = {scenario_type: -0.05 * significance}
         
         # Impact on traits based on scenario type
         # Map scenario types to trait impacts
@@ -1122,84 +2087,23 @@ class IdentityEvolutionSystem:
             for trait, base_impact in scenario_trait_map[scenario_type].items():
                 impact["traits"][trait] = base_impact * significance
         
-        # Apply trait impacts from emotional context
-        primary_emotion = emotional_context.get("primary_emotion", "")
-        primary_intensity = emotional_context.get("primary_intensity", 0.5)
+        # Impact on scenario preferences based on emotional response
+        if scenario_type:
+            # Get valence from emotional context
+            valence = emotional_context.get("valence", 0)
+            
+            # Impact depends on emotional valence
+            if valence > 0.3:
+                # Positive experience with this scenario type
+                if "scenario_types" not in impact["preferences"]:
+                    impact["preferences"]["scenario_types"] = {}
+                impact["preferences"]["scenario_types"][scenario_type] = 0.1 * significance
+            elif valence < -0.3:
+                # Negative experience with this scenario type
+                if "scenario_types" not in impact["preferences"]:
+                    impact["preferences"]["scenario_types"] = {}
+                impact["preferences"]["scenario_types"][scenario_type] = -0.05 * significance
         
-        # Map emotions to trait impacts
-        emotion_trait_map = {
-            "Joy": {"playfulness": 0.1, "patience": 0.05},
-            "Sadness": {"patience": 0.05, "intensity": -0.05},
-            "Fear": {"intensity": 0.1, "cruelty": 0.05},
-            "Anger": {"intensity": 0.1, "strictness": 0.08},
-            "Trust": {"patience": 0.1, "dominance": 0.05},
-            "Disgust": {"cruelty": 0.1, "strictness": 0.05},
-            "Anticipation": {"creativity": 0.1, "playfulness": 0.05},
-            "Surprise": {"creativity": 0.1, "intensity": 0.05},
-            "Love": {"patience": 0.1, "dominance": 0.05},
-            "Frustration": {"intensity": 0.1, "strictness": 0.08}
-        }
-        
-        # Apply emotion-based trait impacts
-        if primary_emotion in emotion_trait_map:
-            for trait, base_impact in emotion_trait_map[primary_emotion].items():
-                if trait in impact["traits"]:
-                    # Average with existing impact
-                    impact["traits"][trait] = (impact["traits"][trait] + (base_impact * primary_intensity * significance)) / 2
-                else:
-                    # New impact
-                    impact["traits"][trait] = base_impact * primary_intensity * significance
-        
-        # Impact on interaction style preferences
-        style_impacts = {}
-        content = experience.get("content", "").lower()
-        
-        # Check content for style indicators
-        if any(keyword in content for keyword in ["direct", "straightforward", "clearly"]):
-            style_impacts["direct"] = 0.08 * significance
-        
-        if any(keyword in content for keyword in ["suggest", "hint", "imply"]):
-            style_impacts["suggestive"] = 0.08 * significance
-        
-        if any(keyword in content for keyword in ["metaphor", "symbol", "image", "allegory"]):
-            style_impacts["metaphorical"] = 0.08 * significance
-        
-        if any(keyword in content for keyword in ["explicit", "specific", "clear", "detailed"]):
-            style_impacts["explicit"] = 0.08 * significance
-        
-        if any(keyword in content for keyword in ["subtle", "nuanced", "implied"]):
-            style_impacts["subtle"] = 0.08 * significance
-        
-        # Add interaction style impacts
-        if style_impacts:
-            impact["preferences"]["interaction_styles"] = style_impacts
-        
-        # Impact on emotional tone preferences
-        tone_impacts = {}
-        
-        # Map primary emotions to emotional tones
-        emotion_tone_map = {
-            "Joy": "playful",
-            "Sadness": "nurturing",
-            "Anger": "stern",
-            "Fear": "dominant",
-            "Disgust": "cruel",
-            "Anticipation": "teasing",
-            "Surprise": "playful",
-            "Love": "nurturing",
-            "Frustration": "stern"
-        }
-        
-        # Apply tone impacts based on primary emotion
-        if primary_emotion in emotion_tone_map:
-            tone = emotion_tone_map[primary_emotion]
-            tone_impacts[tone] = 0.08 * primary_intensity * significance
-        
-        # Apply emotional tone impacts
-        if tone_impacts:
-            impact["preferences"]["emotional_tones"] = tone_impacts
-        
-        # Return impact data
         return impact
     
     async def set_identity_evolution_rate(self, rate: float) -> Dict[str, Any]:
@@ -1212,12 +2116,12 @@ class IdentityEvolutionSystem:
         Returns:
             Update result
         """
-        old_rate = self.identity_profile["evolution_rate"]
-        self.identity_profile["evolution_rate"] = max(0.01, min(1.0, rate))
+        old_rate = self.evolution_rate
+        self.evolution_rate = max(0.01, min(1.0, rate))
         
         return {
             "old_rate": old_rate,
-            "new_rate": self.identity_profile["evolution_rate"],
+            "new_rate": self.evolution_rate,
             "timestamp": datetime.datetime.now().isoformat()
         }
     
@@ -1228,24 +2132,35 @@ class IdentityEvolutionSystem:
         Returns:
             Identity state snapshot
         """
-        # Get current identity profile
-        profile = self.identity_profile
+        # Get top neurochemicals
+        top_neurochemicals = sorted(
+            [(name, data["value"]) for name, data in self.neurochemical_profile.items()],
+            key=lambda x: x[1],
+            reverse=True
+        )[:3]
         
         # Get top traits
         top_traits = sorted(
-            [(name, data["value"]) for name, data in profile["traits"].items()],
+            [(name, data["value"]) for name, data in self.identity_traits.items()],
             key=lambda x: x[1],
             reverse=True
         )[:3]
         
         # Get top preferences by category
         top_preferences = {}
-        for category, prefs in profile["preferences"].items():
+        for category, prefs in self.identity_preferences.items():
             top_preferences[category] = sorted(
                 [(name, data["value"]) for name, data in prefs.items()],
                 key=lambda x: x[1],
                 reverse=True
             )[:3]
+        
+        # Get top emotional tendencies
+        top_emotions = sorted(
+            [(name, data["likelihood"]) for name, data in self.emotional_tendencies.items()],
+            key=lambda x: x[1],
+            reverse=True
+        )[:3]
         
         # Get recent significant changes
         recent_changes = {}
@@ -1259,13 +2174,22 @@ class IdentityEvolutionSystem:
         # Get most recent reflection
         latest_reflection = self.reflection_history[-1]["reflection_text"] if self.reflection_history else None
         
+        # Get neurochemical coherence
+        coherence_result = await self._assess_neurochemical_coherence(RunContextWrapper(context=None))
+        
         # Prepare state snapshot
         state = {
+            "top_neurochemicals": dict(top_neurochemicals),
             "top_traits": dict(top_traits),
             "top_preferences": {cat: dict(prefs) for cat, prefs in top_preferences.items()},
-            "coherence_score": profile["coherence_score"],
-            "evolution_rate": profile["evolution_rate"],
-            "update_count": profile["update_count"],
+            "top_emotions": dict(top_emotions),
+            "coherence_score": self.coherence_score,
+            "neurochemical_coherence": {
+                "overall_score": coherence_result["overall_coherence"],
+                "imbalances": coherence_result["imbalances"]
+            },
+            "evolution_rate": self.evolution_rate,
+            "update_count": self.update_count,
             "recent_significant_changes": recent_changes,
             "latest_reflection": latest_reflection,
             "timestamp": datetime.datetime.now().isoformat()
