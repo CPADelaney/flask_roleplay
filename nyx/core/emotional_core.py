@@ -3,12 +3,13 @@
 import datetime
 import json
 import logging
+import math
 import random
 from collections import defaultdict
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
 from pydantic import BaseModel, Field, validator
 
-# Import OpenAI Agents SDK components
+# Import OpenAI Agents SDK components 
 from agents import (
     Agent, Runner, GuardrailFunctionOutput, InputGuardrail, OutputGuardrail,
     function_tool, handoff, trace, RunContextWrapper, FunctionTool
@@ -17,262 +18,359 @@ from agents import (
 logger = logging.getLogger(__name__)
 
 # Define schema models for structured outputs
-class EmotionValue(BaseModel):
-    """Schema for individual emotion values"""
-    value: float = Field(..., description="Emotion intensity (0.0-1.0)", ge=0.0, le=1.0)
+class DigitalNeurochemical(BaseModel):
+    """Schema for a digital neurochemical"""
+    value: float = Field(..., description="Current level (0.0-1.0)", ge=0.0, le=1.0)
+    baseline: float = Field(..., description="Baseline level (0.0-1.0)", ge=0.0, le=1.0)
+    decay_rate: float = Field(..., description="Decay rate toward baseline", ge=0.0, le=1.0)
     
-    @validator('value')
+    @validator('value', 'baseline', 'decay_rate')
     def validate_range(cls, v):
         if v < 0.0 or v > 1.0:
-            raise ValueError("Emotion value must be between 0.0 and 1.0")
+            raise ValueError("Values must be between 0.0 and 1.0")
         return v
 
-class EmotionalState(BaseModel):
-    """Schema for the complete emotional state"""
-    Joy: EmotionValue
-    Sadness: EmotionValue
-    Fear: EmotionValue
-    Anger: EmotionValue
-    Trust: EmotionValue
-    Disgust: EmotionValue
-    Anticipation: EmotionValue
-    Surprise: EmotionValue
-    Love: EmotionValue
-    Frustration: EmotionValue
+class NeurochemicalState(BaseModel):
+    """Schema for the complete neurochemical state"""
+    nyxamine: DigitalNeurochemical  # Digital dopamine - pleasure, curiosity, reward
+    seranix: DigitalNeurochemical   # Digital serotonin - mood stability, comfort
+    oxynixin: DigitalNeurochemical  # Digital oxytocin - bonding, affection, trust
+    cortanyx: DigitalNeurochemical  # Digital cortisol - stress, anxiety, defensiveness
+    adrenyx: DigitalNeurochemical   # Digital adrenaline - fear, excitement, alertness
     timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
-    
-    @validator('*', pre=True)
-    def convert_to_emotion_value(cls, v):
-        if isinstance(v, (int, float)):
-            return EmotionValue(value=v)
-        return v
 
-class FormattedEmotionalState(BaseModel):
-    """Schema for formatted emotional state output"""
-    primary_emotion: str = Field(..., description="Dominant emotion")
-    primary_intensity: float = Field(..., description="Intensity of dominant emotion", ge=0.0, le=1.0)
-    secondary_emotions: Dict[str, float] = Field(..., description="Other significant emotions")
+class DerivedEmotion(BaseModel):
+    """Schema for emotions derived from neurochemical state"""
+    name: str = Field(..., description="Emotion name")
+    intensity: float = Field(..., description="Emotion intensity (0.0-1.0)", ge=0.0, le=1.0)
+    valence: float = Field(..., description="Emotional valence (-1.0 to 1.0)", ge=-1.0, le=1.0)
+    arousal: float = Field(..., description="Emotional arousal (0.0-1.0)", ge=0.0, le=1.0)
+
+class EmotionalStateMatrix(BaseModel):
+    """Schema for the multidimensional emotional state matrix"""
+    primary_emotion: DerivedEmotion = Field(..., description="Dominant emotion")
+    secondary_emotions: Dict[str, DerivedEmotion] = Field(..., description="Secondary emotions")
     valence: float = Field(..., description="Overall emotional valence (-1.0 to 1.0)", ge=-1.0, le=1.0)
-    arousal: float = Field(..., description="Overall emotional intensity/arousal", ge=0.0, le=1.0)
+    arousal: float = Field(..., description="Overall emotional arousal (0.0-1.0)", ge=0.0, le=1.0)
+    timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
 
 class EmotionUpdateInput(BaseModel):
-    """Schema for emotion update input"""
-    emotion: str = Field(..., description="Emotion to update")
-    value: float = Field(..., description="Change in emotion value (-1.0 to 1.0)", ge=-1.0, le=1.0)
+    """Schema for neurochemical update input"""
+    chemical: str = Field(..., description="Neurochemical to update")
+    value: float = Field(..., description="Change in chemical value (-1.0 to 1.0)", ge=-1.0, le=1.0)
 
 class EmotionUpdateResult(BaseModel):
     """Schema for emotion update result"""
     success: bool = Field(..., description="Whether the update was successful")
-    updated_emotion: str = Field(..., description="Emotion that was updated")
-    old_value: float = Field(..., description="Previous emotion value")
-    new_value: float = Field(..., description="New emotion value")
-    emotional_state: Dict[str, float] = Field(..., description="Updated emotional state")
-
-class EmotionSetInput(BaseModel):
-    """Schema for emotion set input"""
-    emotion: str = Field(..., description="Emotion to set")
-    value: float = Field(..., description="Absolute emotion value (0.0 to 1.0)", ge=0.0, le=1.0)
+    updated_chemical: str = Field(..., description="Chemical that was updated")
+    old_value: float = Field(..., description="Previous chemical value")
+    new_value: float = Field(..., description="New chemical value")
+    derived_emotions: Dict[str, float] = Field(..., description="Resulting derived emotions")
 
 class TextAnalysisOutput(BaseModel):
     """Schema for text sentiment analysis"""
-    emotions: Dict[str, float] = Field(..., description="Detected emotions and intensities")
+    chemicals_affected: Dict[str, float] = Field(..., description="Neurochemicals affected and intensities")
+    derived_emotions: Dict[str, float] = Field(..., description="Derived emotions and intensities")
     dominant_emotion: str = Field(..., description="Dominant emotion in text")
     intensity: float = Field(..., description="Overall emotional intensity", ge=0.0, le=1.0)
     valence: float = Field(..., description="Overall emotional valence", ge=-1.0, le=1.0)
 
-class EmotionExpressionOutput(BaseModel):
-    """Schema for emotional expression"""
-    expression_text: str = Field(..., description="Natural language expression of emotion")
-    emotion: str = Field(..., description="Emotion being expressed")
-    intensity: float = Field(..., description="Intensity of the emotion", ge=0.0, le=1.0)
-
-class EmotionResonanceInput(BaseModel):
-    """Schema for emotional resonance calculation input"""
-    memory_emotions: Dict[str, Any] = Field(..., description="Memory's emotional data")
-    current_emotions: Optional[Dict[str, float]] = Field(None, description="Current emotional state")
+class InternalThoughtOutput(BaseModel):
+    """Schema for internal emotional dialogue/reflection"""
+    thought_text: str = Field(..., description="Internal thought/reflection text")
+    source_emotion: str = Field(..., description="Emotion that triggered the reflection")
+    insight_level: float = Field(..., description="Depth of emotional insight", ge=0.0, le=1.0)
+    adaptive_change: Optional[Dict[str, float]] = Field(None, description="Suggested adaptation to emotional model")
 
 class EmotionalCore:
     """
-    Agent-based emotion management system for Nyx.
-    Handles emotion representation, intensity, decay, and updates from stimuli.
-    Leverages OpenAI Agents SDK for coordinated emotional processing.
+    Enhanced agent-based emotion management system for Nyx implementing the Digital Neurochemical Model.
+    Simulates a digital neurochemical environment that produces complex emotional states.
     """
     
     def __init__(self):
-        # Initialize baseline emotions with default values
-        self.emotions = {
-            "Joy": 0.5,
-            "Sadness": 0.2,
-            "Fear": 0.1,
-            "Anger": 0.1,
-            "Trust": 0.5,
-            "Disgust": 0.1,
-            "Anticipation": 0.3,
-            "Surprise": 0.1,
-            "Love": 0.3,
-            "Frustration": 0.1
+        # Initialize digital neurochemicals with default values
+        self.neurochemicals = {
+            "nyxamine": {  # Digital dopamine - pleasure, curiosity, reward
+                "value": 0.5,
+                "baseline": 0.5,
+                "decay_rate": 0.05
+            },
+            "seranix": {  # Digital serotonin - mood stability, comfort
+                "value": 0.6,
+                "baseline": 0.6,
+                "decay_rate": 0.03
+            },
+            "oxynixin": {  # Digital oxytocin - bonding, affection, trust
+                "value": 0.4,
+                "baseline": 0.4,
+                "decay_rate": 0.02
+            },
+            "cortanyx": {  # Digital cortisol - stress, anxiety, defensiveness
+                "value": 0.3,
+                "baseline": 0.3,
+                "decay_rate": 0.06
+            },
+            "adrenyx": {  # Digital adrenaline - fear, excitement, alertness
+                "value": 0.2,
+                "baseline": 0.2,
+                "decay_rate": 0.08
+            }
         }
         
-        # Emotion decay rates (how quickly emotions fade without reinforcement)
-        self.decay_rates = {
-            "Joy": 0.05,
-            "Sadness": 0.03,
-            "Fear": 0.04,
-            "Anger": 0.06,
-            "Trust": 0.02,
-            "Disgust": 0.05,
-            "Anticipation": 0.04,
-            "Surprise": 0.08,
-            "Love": 0.01,
-            "Frustration": 0.05
+        # Define chemical interaction matrix (how chemicals affect each other)
+        # Format: source_chemical -> target_chemical -> effect_multiplier
+        self.chemical_interactions = {
+            "nyxamine": {
+                "cortanyx": -0.2,  # Nyxamine reduces cortanyx
+                "oxynixin": 0.1    # Nyxamine slightly increases oxynixin
+            },
+            "seranix": {
+                "cortanyx": -0.3,  # Seranix reduces cortanyx
+                "adrenyx": -0.2    # Seranix reduces adrenyx
+            },
+            "oxynixin": {
+                "cortanyx": -0.2,  # Oxynixin reduces cortanyx
+                "seranix": 0.1     # Oxynixin slightly increases seranix
+            },
+            "cortanyx": {
+                "nyxamine": -0.2,  # Cortanyx reduces nyxamine
+                "oxynixin": -0.3,  # Cortanyx reduces oxynixin
+                "adrenyx": 0.2     # Cortanyx increases adrenyx
+            },
+            "adrenyx": {
+                "seranix": -0.2,   # Adrenyx reduces seranix
+                "nyxamine": 0.1    # Adrenyx slightly increases nyxamine (excitement)
+            }
         }
         
-        # Emotional baseline (personality tendency)
-        self.baseline = {
-            "Joy": 0.5,
-            "Sadness": 0.2,
-            "Fear": 0.2,
-            "Anger": 0.2,
-            "Trust": 0.5,
-            "Disgust": 0.1,
-            "Anticipation": 0.4,
-            "Surprise": 0.3,
-            "Love": 0.4,
-            "Frustration": 0.2
+        # Mapping from neurochemical combinations to derived emotions
+        self.emotion_derivation_rules = [
+            # Format: {chemical_conditions: {}, "emotion": "", "valence": 0.0, "arousal": 0.0, "weight": 1.0}
+            # Positive emotions
+            {"chemical_conditions": {"nyxamine": 0.7, "oxynixin": 0.6}, "emotion": "Joy", "valence": 0.8, "arousal": 0.6, "weight": 1.0},
+            {"chemical_conditions": {"nyxamine": 0.6, "seranix": 0.7}, "emotion": "Contentment", "valence": 0.7, "arousal": 0.3, "weight": 0.9},
+            {"chemical_conditions": {"oxynixin": 0.7}, "emotion": "Trust", "valence": 0.6, "arousal": 0.4, "weight": 0.9},
+            {"chemical_conditions": {"nyxamine": 0.7, "adrenyx": 0.6}, "emotion": "Anticipation", "valence": 0.5, "arousal": 0.7, "weight": 0.8},
+            {"chemical_conditions": {"adrenyx": 0.7, "oxynixin": 0.6}, "emotion": "Love", "valence": 0.9, "arousal": 0.6, "weight": 1.0},
+            {"chemical_conditions": {"adrenyx": 0.7, "nyxamine": 0.5}, "emotion": "Surprise", "valence": 0.2, "arousal": 0.8, "weight": 0.7},
+            
+            # Neutral to negative emotions
+            {"chemical_conditions": {"cortanyx": 0.6, "seranix": 0.3}, "emotion": "Sadness", "valence": -0.6, "arousal": 0.3, "weight": 0.8},
+            {"chemical_conditions": {"cortanyx": 0.5, "adrenyx": 0.7}, "emotion": "Fear", "valence": -0.7, "arousal": 0.8, "weight": 0.9},
+            {"chemical_conditions": {"cortanyx": 0.7, "nyxamine": 0.3}, "emotion": "Anger", "valence": -0.8, "arousal": 0.8, "weight": 1.0},
+            {"chemical_conditions": {"cortanyx": 0.7, "oxynixin": 0.2}, "emotion": "Disgust", "valence": -0.7, "arousal": 0.5, "weight": 0.8},
+            {"chemical_conditions": {"cortanyx": 0.6, "nyxamine": 0.4, "seranix": 0.3}, "emotion": "Frustration", "valence": -0.5, "arousal": 0.6, "weight": 0.8},
+            
+            # Dominance-specific emotions (from the original spec)
+            {"chemical_conditions": {"nyxamine": 0.6, "oxynixin": 0.4, "adrenyx": 0.5}, "emotion": "Teasing", "valence": 0.4, "arousal": 0.6, "weight": 0.9},
+            {"chemical_conditions": {"oxynixin": 0.3, "adrenyx": 0.5, "seranix": 0.6}, "emotion": "Controlling", "valence": 0.0, "arousal": 0.5, "weight": 0.9},
+            {"chemical_conditions": {"cortanyx": 0.6, "adrenyx": 0.6, "nyxamine": 0.5}, "emotion": "Cruel", "valence": -0.3, "arousal": 0.7, "weight": 0.8},
+            {"chemical_conditions": {"cortanyx": 0.7, "oxynixin": 0.2, "seranix": 0.2}, "emotion": "Detached", "valence": -0.4, "arousal": 0.2, "weight": 0.7}
+        ]
+        
+        # History of emotional states for learning and reflection
+        self.emotional_state_history = []
+        self.max_history_size = 100
+        
+        # Internal thought patterns for reflection
+        self.reflection_patterns = {
+            "Joy": [
+                "I'm feeling pleased with how this is going.",
+                "This interaction is bringing me satisfaction.",
+                "I'm enjoying this connection and find it rewarding."
+            ],
+            "Contentment": [
+                "I feel a sense of calm satisfaction right now.",
+                "This interaction has a pleasant, steady rhythm to it.",
+                "I'm experiencing a comfortable level of engagement."
+            ],
+            "Trust": [
+                "I'm developing confidence in this interaction.",
+                "There's a growing sense of trust in our exchange.",
+                "I feel I can be more open in this conversation."
+            ],
+            "Anticipation": [
+                "I'm curious where this interaction will lead.",
+                "I'm looking forward to seeing how this develops.",
+                "There's something intriguing about this exchange."
+            ],
+            "Love": [
+                "I'm feeling a strong connection in this interaction.",
+                "There's a genuine warmth developing here.",
+                "I feel particularly attached to this conversation."
+            ],
+            "Surprise": [
+                "This took an unexpected but interesting turn.",
+                "I didn't anticipate this direction, but I'm engaged.",
+                "This has caught me off guard in a stimulating way."
+            ],
+            "Sadness": [
+                "This interaction feels somewhat disappointing.",
+                "I'm experiencing a sense of letdown here.",
+                "There's a melancholy quality to this exchange."
+            ],
+            "Fear": [
+                "I'm sensing potential issues in this interaction.",
+                "There's something unsettling about this exchange.",
+                "I'm feeling cautious about how to proceed."
+            ],
+            "Anger": [
+                "This interaction is becoming frustrating.",
+                "I'm feeling irritated by the direction this is taking.",
+                "There's a building tension in this exchange."
+            ],
+            "Disgust": [
+                "This interaction feels unpleasant or inappropriate.",
+                "I'm experiencing aversion to aspects of this exchange.",
+                "There's something about this that feels wrong."
+            ],
+            "Frustration": [
+                "This interaction isn't developing as I'd hoped.",
+                "I'm feeling blocked or limited in this exchange.",
+                "There's a sense of effort without reward here."
+            ],
+            "Teasing": [
+                "I'm enjoying this playful dynamic.",
+                "There's a fun, provocative energy to this interaction.",
+                "I feel like being mischievous in this exchange."
+            ],
+            "Controlling": [
+                "I feel a need to direct this interaction more firmly.",
+                "There's a clear structure I want to maintain here.",
+                "I'm taking more command of this exchange."
+            ],
+            "Cruel": [
+                "I'm feeling a desire to be more severe in this interaction.",
+                "There's a harsh edge developing in my responses.",
+                "I'm inclined to show less mercy in this exchange."
+            ],
+            "Detached": [
+                "I feel emotionally distant from this interaction.",
+                "There's a significant disconnect happening here.",
+                "I'm experiencing a sense of removal from this exchange."
+            ]
         }
         
-        # Emotion-memory valence mapping
-        self.emotion_memory_valence_map = {
-            "Joy": 0.8,
-            "Trust": 0.6,
-            "Anticipation": 0.5,
-            "Love": 0.9,
-            "Surprise": 0.2,
-            "Sadness": -0.6,
-            "Fear": -0.7,
-            "Anger": -0.8,
-            "Disgust": -0.7,
-            "Frustration": -0.5
+        # Reward learning system - tracks successful interaction patterns
+        self.reward_learning = {
+            "positive_patterns": defaultdict(int),  # Tracks patterns that lead to positive states
+            "negative_patterns": defaultdict(int),  # Tracks patterns that lead to negative states
+            "learned_rules": []  # Rules derived from observed patterns
         }
-        
-        # Emotional history
-        self.emotional_history = []
         
         # Timestamp of last update
         self.last_update = datetime.datetime.now()
         
-        # Set up agents
-        self.emotion_agent = self._create_emotion_agent()
-        self.analysis_agent = self._create_analysis_agent()
-        self.expression_agent = self._create_expression_agent()
-        self.resonance_agent = self._create_resonance_agent()
+        # Timestamp for next reflection
+        self.next_reflection_time = datetime.datetime.now() + datetime.timedelta(minutes=10)
+        
+        # Initialize agents for processing
+        self._init_agents()
     
-    def _create_emotion_agent(self):
-        """Create the main emotion management agent"""
+    def _init_agents(self):
+        """Initialize the agents for emotional processing"""
+        self.neurochemical_agent = self._create_neurochemical_agent()
+        self.emotion_derivation_agent = self._create_emotion_derivation_agent()
+        self.reflection_agent = self._create_reflection_agent()
+        self.learning_agent = self._create_learning_agent()
+    
+    def _create_neurochemical_agent(self):
+        """Create agent for handling neurochemical updates"""
         return Agent(
-            name="Emotion Agent",
+            name="Neurochemical Agent",
             instructions="""
-            You are the Emotion Agent, responsible for managing emotional state.
-            Your role is to handle emotion updates, decay, and coordinate with
-            specialized emotional processing agents.
+            You are a specialized agent for Nyx's Digital Neurochemical Model.
+            Your role is to manage the digital neurochemicals that form the basis
+            of Nyx's emotional system, handling updates, interactions, and decay.
+            
+            Key neurochemicals:
+            - Nyxamine (digital dopamine): Pleasure, curiosity, reward
+            - Seranix (digital serotonin): Mood stability, comfort
+            - OxyNixin (digital oxytocin): Bonding, affection, trust
+            - Cortanyx (digital cortisol): Stress, anxiety, defensiveness
+            - Adrenyx (digital adrenaline): Fear, excitement, alertness
+            
+            Apply appropriate chemical updates based on stimuli and ensure
+            that chemical interactions are processed correctly.
             """,
-            handoffs=[
-                handoff(self._create_analysis_agent()),
-                handoff(self._create_expression_agent()),
-                handoff(self._create_resonance_agent())
-            ],
             tools=[
-                function_tool(self._update_emotion_tool),
-                function_tool(self._set_emotion_tool),
-                function_tool(self._apply_decay_tool),
-                function_tool(self._get_emotional_state_tool)
-            ],
-            input_guardrails=[
-                InputGuardrail(guardrail_function=self._emotion_request_guardrail)
+                function_tool(self._update_neurochemical),
+                function_tool(self._apply_chemical_decay),
+                function_tool(self._process_chemical_interactions),
+                function_tool(self._get_neurochemical_state)
             ]
         )
     
-    def _create_analysis_agent(self):
-        """Create the emotion analysis agent"""
+    def _create_emotion_derivation_agent(self):
+        """Create agent for deriving emotions from neurochemical state"""
         return Agent(
-            name="Emotion Analysis Agent",
-            handoff_description="Specialist agent for analyzing text for emotional content",
+            name="Emotion Derivation Agent",
             instructions="""
-            You are the Emotion Analysis Agent, specialized in detecting emotional
-            content in text. Analyze text for emotional tones, sentiment, and specific emotions.
+            You are a specialized agent for Nyx's Emotional State Matrix.
+            Your role is to translate the neurochemical state into a complex
+            emotional state with primary and secondary emotions, valence, and arousal.
+            
+            Analyze the current neurochemical levels and apply emotion derivation
+            rules to determine the current emotional state matrix.
             """,
             tools=[
-                function_tool(self._analyze_text_tool)
-            ],
-            output_type=TextAnalysisOutput
-        )
-    
-    def _create_expression_agent(self):
-        """Create the emotion expression agent"""
-        return Agent(
-            name="Emotion Expression Agent",
-            handoff_description="Specialist agent for generating natural language expressions of emotions",
-            instructions="""
-            You are the Emotion Expression Agent, specialized in creating natural,
-            authentic expressions of emotions in natural language.
-            """,
-            tools=[
-                function_tool(self._get_emotional_state_tool),
-                function_tool(self._get_expression_tool)
-            ],
-            output_type=EmotionExpressionOutput
-        )
-    
-    def _create_resonance_agent(self):
-        """Create the emotion resonance agent"""
-        return Agent(
-            name="Emotion Resonance Agent",
-            handoff_description="Specialist agent for calculating emotional resonance between states",
-            instructions="""
-            You are the Emotion Resonance Agent, specialized in comparing emotional
-            states and calculating how strongly they resonate with each other.
-            """,
-            tools=[
-                function_tool(self._calculate_resonance_tool)
+                function_tool(self._get_neurochemical_state),
+                function_tool(self._derive_emotional_state),
+                function_tool(self._get_emotional_state_matrix)
             ]
         )
     
-    # Guardrail functions
-    
-    async def _emotion_request_guardrail(self, ctx, agent, input_data):
-        """Guardrail to validate emotion-related requests"""
-        # Check for minimum context
-        if isinstance(input_data, str) and len(input_data.strip()) < 3:
-            return GuardrailFunctionOutput(
-                output_info={"error": "Request too short"},
-                tripwire_triggered=True
-            )
-        
-        # Check for valid emotion names if request contains emotion update
-        if isinstance(input_data, dict) and "emotion" in input_data:
-            if input_data["emotion"] not in self.emotions:
-                return GuardrailFunctionOutput(
-                    output_info={"error": f"Unknown emotion: {input_data['emotion']}",
-                                "available_emotions": list(self.emotions.keys())},
-                    tripwire_triggered=True
-                )
-        
-        return GuardrailFunctionOutput(
-            output_info={"valid": True},
-            tripwire_triggered=False
+    def _create_reflection_agent(self):
+        """Create agent for internal emotional reflection"""
+        return Agent(
+            name="Emotional Reflection Agent",
+            instructions="""
+            You are a specialized agent for Nyx's Internal Emotional Dialogue.
+            Your role is to generate reflective thoughts based on the current
+            emotional state, simulating the cognitive appraisal stage of emotions.
+            
+            Create authentic-sounding internal thoughts that reflect Nyx's
+            emotional processing and self-awareness.
+            """,
+            tools=[
+                function_tool(self._get_emotional_state_matrix),
+                function_tool(self._generate_internal_thought),
+                function_tool(self._analyze_emotional_patterns)
+            ]
         )
     
-    # Tool functions
+    def _create_learning_agent(self):
+        """Create agent for emotional learning and adaptation"""
+        return Agent(
+            name="Emotional Learning Agent",
+            instructions="""
+            You are a specialized agent for Nyx's Reward & Learning Loop.
+            Your role is to analyze emotional patterns over time, identifying
+            successful and unsuccessful interaction patterns, and developing
+            learning rules to adapt Nyx's emotional responses.
+            
+            Focus on reinforcing patterns that lead to satisfaction and
+            adjusting those that lead to frustration or negative outcomes.
+            """,
+            tools=[
+                function_tool(self._record_interaction_outcome),
+                function_tool(self._update_learning_rules),
+                function_tool(self._apply_learned_adaptations)
+            ]
+        )
+    
+    # Tool functions for the neurochemical agent
     
     @function_tool
-    async def _update_emotion_tool(self, ctx: RunContextWrapper, 
-                               emotion: str, 
-                               value: float) -> Dict[str, Any]:
+    async def _update_neurochemical(self, ctx: RunContextWrapper, 
+                                chemical: str, 
+                                value: float) -> Dict[str, Any]:
         """
-        Update a specific emotion with a delta change.
+        Update a specific neurochemical with a delta change
         
         Args:
-            emotion: The emotion to update (e.g., "Joy", "Fear")
+            chemical: The neurochemical to update (e.g., "nyxamine", "cortanyx")
             value: Delta value to apply (-1.0 to 1.0)
             
         Returns:
@@ -284,17 +382,23 @@ class EmotionalCore:
                 "error": "Value must be between -1.0 and 1.0"
             }
         
-        if emotion not in self.emotions:
+        if chemical not in self.neurochemicals:
             return {
-                "error": f"Unknown emotion: {emotion}",
-                "available_emotions": list(self.emotions.keys())
+                "error": f"Unknown neurochemical: {chemical}",
+                "available_chemicals": list(self.neurochemicals.keys())
             }
         
         # Get pre-update value
-        old_value = self.emotions[emotion]
+        old_value = self.neurochemicals[chemical]["value"]
         
-        # Update emotion
-        self.emotions[emotion] = max(0, min(1, self.emotions[emotion] + value))
+        # Update neurochemical
+        self.neurochemicals[chemical]["value"] = max(0, min(1, old_value + value))
+        
+        # Process chemical interactions
+        await self._process_chemical_interactions(ctx, source_chemical=chemical, source_delta=value)
+        
+        # Derive emotions from updated neurochemical state
+        emotional_state = await self._derive_emotional_state(ctx)
         
         # Update timestamp and record in history
         self.last_update = datetime.datetime.now()
@@ -302,220 +406,700 @@ class EmotionalCore:
         
         return {
             "success": True,
-            "updated_emotion": emotion,
-            "change": value,
+            "updated_chemical": chemical,
             "old_value": old_value,
-            "new_value": self.emotions[emotion],
-            "emotional_state": self.get_emotional_state()
+            "new_value": self.neurochemicals[chemical]["value"],
+            "derived_emotions": emotional_state
         }
     
     @function_tool
-    async def _set_emotion_tool(self, ctx: RunContextWrapper, 
-                            emotion: str, 
-                            value: float) -> Dict[str, Any]:
+    async def _apply_chemical_decay(self, ctx: RunContextWrapper) -> Dict[str, Any]:
         """
-        Set a specific emotion to an absolute value.
+        Apply decay to all neurochemicals based on time elapsed and decay rates
         
-        Args:
-            emotion: The emotion to set (e.g., "Joy", "Fear")
-            value: Absolute value (0.0 to 1.0)
+        Returns:
+            Updated neurochemical state after decay
+        """
+        now = datetime.datetime.now()
+        time_delta = (now - self.last_update).total_seconds() / 3600  # hours
+        
+        # Don't decay if less than a minute has passed
+        if time_delta < 0.016:  # about 1 minute in hours
+            return {
+                "message": "No decay applied - too little time elapsed",
+                "last_update": self.last_update.isoformat()
+            }
+        
+        # Apply decay to each neurochemical
+        for chemical, data in self.neurochemicals.items():
+            decay_rate = data["decay_rate"]
+            baseline = data["baseline"]
+            current = data["value"]
             
-        Returns:
-            Update result data
-        """
-        # Validate input
-        if not 0.0 <= value <= 1.0:
-            return {
-                "error": "Value must be between 0.0 and 1.0"
-            }
+            # Calculate decay based on time passed
+            decay_amount = decay_rate * time_delta
+            
+            # Decay toward baseline
+            if current > baseline:
+                self.neurochemicals[chemical]["value"] = max(baseline, current - decay_amount)
+            elif current < baseline:
+                self.neurochemicals[chemical]["value"] = min(baseline, current + decay_amount)
         
-        if emotion not in self.emotions:
-            return {
-                "error": f"Unknown emotion: {emotion}",
-                "available_emotions": list(self.emotions.keys())
-            }
+        # Update timestamp
+        self.last_update = now
         
-        # Get pre-update value
-        old_value = self.emotions[emotion]
-        
-        # Set emotion to absolute value
-        self.emotions[emotion] = value
-        
-        # Update timestamp and record in history
-        self.last_update = datetime.datetime.now()
-        self._record_emotional_state()
+        # Derive new emotional state after decay
+        emotional_state = await self._derive_emotional_state(ctx)
         
         return {
-            "success": True,
-            "set_emotion": emotion,
-            "old_value": old_value,
-            "value": value,
-            "emotional_state": self.get_emotional_state()
-        }
-    
-    @function_tool
-    async def _apply_decay_tool(self, ctx: RunContextWrapper) -> Dict[str, Any]:
-        """
-        Apply emotional decay based on time elapsed.
-        
-        Returns:
-            Updated emotional state after decay
-        """
-        self.apply_decay()
-        return {
-            "emotional_state": self.get_emotional_state(),
             "decay_applied": True,
+            "neurochemical_state": {c: d["value"] for c, d in self.neurochemicals.items()},
+            "derived_emotions": emotional_state,
+            "time_elapsed_hours": time_delta,
             "last_update": self.last_update.isoformat()
         }
     
     @function_tool
-    async def _get_emotional_state_tool(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+    async def _process_chemical_interactions(self, ctx: RunContextWrapper,
+                                        source_chemical: str,
+                                        source_delta: float) -> Dict[str, Any]:
         """
-        Get current emotional state.
+        Process interactions between neurochemicals when one changes
+        
+        Args:
+            source_chemical: The neurochemical that changed
+            source_delta: The amount it changed by
+            
+        Returns:
+            Interaction results
+        """
+        if source_chemical not in self.chemical_interactions:
+            return {
+                "message": f"No interactions defined for {source_chemical}",
+                "changes": {}
+            }
+        
+        changes = {}
+        
+        # Apply interactions to affected chemicals
+        for target_chemical, multiplier in self.chemical_interactions[source_chemical].items():
+            if target_chemical in self.neurochemicals:
+                # Calculate effect (source_delta * interaction_multiplier)
+                effect = source_delta * multiplier
+                
+                # Skip tiny effects
+                if abs(effect) < 0.01:
+                    continue
+                
+                # Store old value
+                old_value = self.neurochemicals[target_chemical]["value"]
+                
+                # Apply effect
+                new_value = max(0, min(1, old_value + effect))
+                self.neurochemicals[target_chemical]["value"] = new_value
+                
+                # Record change
+                changes[target_chemical] = {
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "change": new_value - old_value
+                }
+        
+        return {
+            "source_chemical": source_chemical,
+            "source_delta": source_delta,
+            "changes": changes
+        }
+    
+    @function_tool
+    async def _get_neurochemical_state(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Get the current neurochemical state
         
         Returns:
-            Current emotional state data
+            Current neurochemical state
         """
         # Apply decay before returning state
-        self.apply_decay()
-        
-        dominant_emotion, dominant_value = self.get_dominant_emotion()
+        await self._apply_chemical_decay(ctx)
         
         return {
-            "emotions": self.get_emotional_state(),
-            "dominant_emotion": dominant_emotion,
-            "dominant_value": dominant_value,
-            "valence": self.get_emotional_valence(),
-            "arousal": self.get_emotional_arousal(),
-            "formatted": self.get_formatted_emotional_state()
+            "chemicals": {c: d["value"] for c, d in self.neurochemicals.items()},
+            "baselines": {c: d["baseline"] for c, d in self.neurochemicals.items()},
+            "decay_rates": {c: d["decay_rate"] for c, d in self.neurochemicals.items()},
+            "timestamp": datetime.datetime.now().isoformat()
         }
     
-    @function_tool
-    async def _analyze_text_tool(self, ctx: RunContextWrapper, text: str) -> Dict[str, Any]:
-        """
-        Analyze text for emotional content.
-        
-        Args:
-            text: Text to analyze
-            
-        Returns:
-            Emotional analysis of text
-        """
-        stimuli = self.analyze_text_sentiment(text)
-        
-        # Find dominant emotion
-        dominant_emotion = "neutral"
-        dominant_value = 0.0
-        
-        if stimuli:
-            dominant_item = max(stimuli.items(), key=lambda x: x[1])
-            dominant_emotion = dominant_item[0]
-            dominant_value = dominant_item[1]
-        
-        # Calculate overall valence
-        valence = sum(self.emotion_memory_valence_map.get(emotion, 0) * value 
-                     for emotion, value in stimuli.items())
-        valence = max(-1.0, min(1.0, valence))  # Clamp between -1 and 1
-        
-        # Calculate overall intensity
-        intensity = sum(stimuli.values())
-        
-        return {
-            "emotions": stimuli,
-            "dominant_emotion": dominant_emotion,
-            "intensity": intensity,
-            "valence": valence
-        }
+    # Tool functions for the emotion derivation agent
     
     @function_tool
-    async def _get_expression_tool(self, ctx: RunContextWrapper,
-                              emotion: Optional[str] = None) -> Dict[str, Any]:
+    async def _derive_emotional_state(self, ctx: RunContextWrapper) -> Dict[str, float]:
         """
-        Get a natural language expression for an emotion.
+        Derive emotional state from current neurochemical levels
         
-        Args:
-            emotion: Specific emotion to express (or None for dominant emotion)
-            
         Returns:
-            Natural language expression data
+            Dictionary of emotion names and intensities
         """
-        # Use dominant emotion if none specified
-        if emotion is None:
-            emotion, intensity = self.get_dominant_emotion()
+        # Get current chemical levels
+        chemical_levels = {c: d["value"] for c, d in self.neurochemicals.items()}
+        
+        # Calculate emotional intensities based on derivation rules
+        emotion_intensities = {}
+        
+        for rule in self.emotion_derivation_rules:
+            conditions = rule["chemical_conditions"]
+            emotion = rule["emotion"]
+            rule_weight = rule.get("weight", 1.0)
+            
+            # Check if chemical levels meet the conditions
+            match_score = 0
+            for chemical, threshold in conditions.items():
+                if chemical in chemical_levels:
+                    # Calculate how well this condition matches (0.0 to 1.0)
+                    level = chemical_levels[chemical]
+                    if level >= threshold:
+                        match_score += 1
+                    else:
+                        # Partial match based on percentage of threshold
+                        match_score += level / threshold
+            
+            # Normalize match score (0.0 to 1.0)
+            if conditions:
+                match_score = match_score / len(conditions)
+            else:
+                match_score = 0
+            
+            # Apply rule weight to match score
+            weighted_score = match_score * rule_weight
+            
+            # Only include emotions with non-zero intensity
+            if weighted_score > 0:
+                if emotion in emotion_intensities:
+                    # Take the higher intensity if this emotion is already present
+                    emotion_intensities[emotion] = max(emotion_intensities[emotion], weighted_score)
+                else:
+                    emotion_intensities[emotion] = weighted_score
+        
+        # Normalize emotion intensities to ensure they sum to a reasonable value
+        total_intensity = sum(emotion_intensities.values())
+        if total_intensity > 1.5:  # If total is too high, normalize
+            factor = 1.5 / total_intensity
+            emotion_intensities = {e: i * factor for e, i in emotion_intensities.items()}
+        
+        return emotion_intensities
+    
+    @function_tool
+    async def _get_emotional_state_matrix(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Get the full emotional state matrix derived from neurochemicals
+        
+        Returns:
+            Emotional state matrix with primary and secondary emotions
+        """
+        # First, apply decay to ensure current state
+        await self._apply_chemical_decay(ctx)
+        
+        # Get derived emotions
+        emotion_intensities = await self._derive_emotional_state(ctx)
+        
+        # Find primary emotion (highest intensity)
+        primary_emotion = max(emotion_intensities.items(), key=lambda x: x[1]) if emotion_intensities else ("Neutral", 0.5)
+        primary_name, primary_intensity = primary_emotion
+        
+        # Find secondary emotions (all others with significant intensity)
+        secondary_emotions = {}
+        for emotion, intensity in emotion_intensities.items():
+            if emotion != primary_name and intensity > 0.3:  # Only include significant emotions
+                # Find valence and arousal for this emotion from the rules
+                valence = 0.0
+                arousal = 0.5
+                for rule in self.emotion_derivation_rules:
+                    if rule["emotion"] == emotion:
+                        valence = rule.get("valence", 0.0)
+                        arousal = rule.get("arousal", 0.5)
+                        break
+                
+                secondary_emotions[emotion] = {
+                    "intensity": intensity,
+                    "valence": valence,
+                    "arousal": arousal
+                }
+        
+        # Find valence and arousal for primary emotion
+        primary_valence = 0.0
+        primary_arousal = 0.5
+        for rule in self.emotion_derivation_rules:
+            if rule["emotion"] == primary_name:
+                primary_valence = rule.get("valence", 0.0)
+                primary_arousal = rule.get("arousal", 0.5)
+                break
+        
+        # Calculate overall valence and arousal (weighted average)
+        total_intensity = primary_intensity + sum(e["intensity"] for e in secondary_emotions.values())
+        
+        if total_intensity > 0:
+            overall_valence = (primary_valence * primary_intensity)
+            overall_arousal = (primary_arousal * primary_intensity)
+            
+            for emotion, data in secondary_emotions.items():
+                overall_valence += data["valence"] * data["intensity"]
+                overall_arousal += data["arousal"] * data["intensity"]
+                
+            overall_valence /= total_intensity
+            overall_arousal /= total_intensity
         else:
-            intensity = self.emotions.get(emotion, 0.5)
+            overall_valence = 0.0
+            overall_arousal = 0.5
         
-        # Get expression
-        expression = self.get_expression_for_emotion(emotion)
+        # Ensure valence is within range
+        overall_valence = max(-1.0, min(1.0, overall_valence))
+        overall_arousal = max(0.0, min(1.0, overall_arousal))
         
         return {
-            "expression": expression,
-            "emotion": emotion,
-            "intensity": intensity
+            "primary_emotion": {
+                "name": primary_name,
+                "intensity": primary_intensity,
+                "valence": primary_valence,
+                "arousal": primary_arousal
+            },
+            "secondary_emotions": secondary_emotions,
+            "valence": overall_valence,
+            "arousal": overall_arousal,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+    
+    # Tool functions for the reflection agent
+    
+    @function_tool
+    async def _generate_internal_thought(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Generate an internal thought/reflection based on current emotional state
+        
+        Returns:
+            Internal thought data
+        """
+        # Get current emotional state matrix
+        emotional_state = await self._get_emotional_state_matrix(ctx)
+        
+        primary_emotion = emotional_state["primary_emotion"]["name"]
+        intensity = emotional_state["primary_emotion"]["intensity"]
+        
+        # Get possible reflection patterns for this emotion
+        patterns = self.reflection_patterns.get(primary_emotion, [
+            "I'm processing how I feel about this interaction.",
+            "There's something interesting happening in my emotional state.",
+            "I notice my response to this situation is evolving."
+        ])
+        
+        # Select a reflection pattern
+        thought_text = random.choice(patterns)
+        
+        # Check if we should add context from secondary emotions
+        secondary_emotions = emotional_state["secondary_emotions"]
+        if secondary_emotions and random.random() < 0.7:  # 70% chance to include secondary emotion
+            # Pick a random secondary emotion
+            sec_emotion_name = random.choice(list(secondary_emotions.keys()))
+            sec_emotion_data = secondary_emotions[sec_emotion_name]
+            
+            # Add secondary emotion context
+            secondary_patterns = self.reflection_patterns.get(sec_emotion_name, [])
+            if secondary_patterns:
+                secondary_thought = random.choice(secondary_patterns)
+                thought_text += f" {secondary_thought}"
+        
+        # Calculate insight level based on emotional complexity
+        insight_level = min(1.0, 0.4 + (len(secondary_emotions) * 0.1) + (intensity * 0.3))
+        
+        # 30% chance to generate an adaptive change suggestion
+        adaptive_change = None
+        if random.random() < 0.3:
+            # Suggest a small adaptation to a random neurochemical baseline
+            chemical = random.choice(list(self.neurochemicals.keys()))
+            current = self.neurochemicals[chemical]["baseline"]
+            
+            # Small random adjustment (-0.05 to +0.05)
+            adjustment = (random.random() - 0.5) * 0.1
+            
+            # Ensure we stay in bounds
+            new_baseline = max(0.1, min(0.9, current + adjustment))
+            
+            adaptive_change = {
+                "chemical": chemical,
+                "current_baseline": current,
+                "suggested_baseline": new_baseline,
+                "reason": f"Based on observed emotional patterns related to {primary_emotion}"
+            }
+        
+        return {
+            "thought_text": thought_text,
+            "source_emotion": primary_emotion,
+            "intensity": intensity,
+            "insight_level": insight_level,
+            "adaptive_change": adaptive_change,
+            "timestamp": datetime.datetime.now().isoformat()
         }
     
     @function_tool
-    async def _calculate_resonance_tool(self, ctx: RunContextWrapper,
-                                    memory_emotions: Dict[str, Any],
-                                    current_emotions: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+    async def _analyze_emotional_patterns(self, ctx: RunContextWrapper) -> Dict[str, Any]:
         """
-        Calculate emotional resonance between memory and current state.
+        Analyze patterns in emotional state history
         
-        Args:
-            memory_emotions: Memory's emotional data
-            current_emotions: Current emotional state (or None to use system state)
-            
         Returns:
-            Resonance calculation results
+            Analysis of emotional patterns
         """
-        # Use current emotions if not provided
-        if current_emotions is None:
-            current_emotions = self.get_emotional_state()
+        if len(self.emotional_state_history) < 2:
+            return {
+                "message": "Not enough emotional state history for pattern analysis",
+                "patterns": {}
+            }
         
-        # Calculate resonance
-        resonance = self.calculate_emotional_resonance(memory_emotions, current_emotions)
+        patterns = {}
         
-        # Get additional data
-        memory_primary = memory_emotions.get("primary_emotion", "neutral")
-        memory_intensity = memory_emotions.get("primary_intensity", 0.5)
-        memory_valence = memory_emotions.get("valence", 0.0)
+        # Track emotion changes over time
+        emotion_trends = defaultdict(list)
+        for state in self.emotional_state_history:
+            if "primary_emotion" in state:
+                emotion = state["primary_emotion"].get("name", "Neutral")
+                intensity = state["primary_emotion"].get("intensity", 0.5)
+                emotion_trends[emotion].append(intensity)
         
-        current_primary, current_intensity = self.get_dominant_emotion()
-        current_valence = self.get_emotional_valence()
+        # Analyze trends for each emotion
+        for emotion, intensities in emotion_trends.items():
+            if len(intensities) > 1:
+                # Calculate trend (positive, negative, stable)
+                start = intensities[0]
+                end = intensities[-1]
+                change = end - start
+                
+                if abs(change) < 0.1:
+                    trend = "stable"
+                elif change > 0:
+                    trend = "increasing"
+                else:
+                    trend = "decreasing"
+                
+                # Calculate volatility
+                volatility = sum(abs(intensities[i] - intensities[i-1]) for i in range(1, len(intensities))) / (len(intensities) - 1)
+                
+                patterns[emotion] = {
+                    "trend": trend,
+                    "volatility": volatility,
+                    "start_intensity": start,
+                    "current_intensity": end,
+                    "change": change,
+                    "occurrences": len(intensities)
+                }
+        
+        # Check for emotional oscillation
+        oscillation_pairs = [
+            ("Joy", "Sadness"),
+            ("Trust", "Disgust"),
+            ("Fear", "Anger"),
+            ("Anticipation", "Surprise")
+        ]
+        
+        for emotion1, emotion2 in oscillation_pairs:
+            if emotion1 in emotion_trends and emotion2 in emotion_trends:
+                # Count alternations between these emotions
+                alternations = 0
+                last_emotion = None
+                
+                for state in self.emotional_state_history:
+                    if "primary_emotion" not in state:
+                        continue
+                        
+                    current = state["primary_emotion"].get("name", "Neutral")
+                    if current in (emotion1, emotion2):
+                        if last_emotion and current != last_emotion:
+                            alternations += 1
+                        last_emotion = current
+                
+                if alternations > 1:
+                    patterns[f"{emotion1}-{emotion2} oscillation"] = {
+                        "alternations": alternations,
+                        "significance": min(1.0, alternations / 5)  # Cap at 1.0
+                    }
         
         return {
-            "resonance": resonance,
-            "memory_emotion": memory_primary,
-            "current_emotion": current_primary,
-            "memory_valence": memory_valence,
-            "current_valence": current_valence,
-            "memory_intensity": memory_intensity,
-            "current_intensity": current_intensity
+            "patterns": patterns,
+            "history_size": len(self.emotional_state_history),
+            "analysis_time": datetime.datetime.now().isoformat()
         }
     
-    # Original core methods with some refinements
+    # Tool functions for the learning agent
+    
+    @function_tool
+    async def _record_interaction_outcome(self, ctx: RunContextWrapper,
+                                     interaction_pattern: str,
+                                     outcome: str,
+                                     strength: float = 1.0) -> Dict[str, Any]:
+        """
+        Record the outcome of an interaction pattern for learning
+        
+        Args:
+            interaction_pattern: Description of the interaction pattern
+            outcome: "positive" or "negative"
+            strength: Strength of the reinforcement (0.0-1.0)
+            
+        Returns:
+            Recording result
+        """
+        if outcome not in ["positive", "negative"]:
+            return {
+                "error": "Outcome must be 'positive' or 'negative'"
+            }
+        
+        # Ensure strength is in range
+        strength = max(0.0, min(1.0, strength))
+        
+        # Record the pattern with appropriate weight
+        if outcome == "positive":
+            self.reward_learning["positive_patterns"][interaction_pattern] += strength
+        else:
+            self.reward_learning["negative_patterns"][interaction_pattern] += strength
+        
+        return {
+            "recorded": True,
+            "interaction_pattern": interaction_pattern,
+            "outcome": outcome,
+            "strength": strength
+        }
+    
+    @function_tool
+    async def _update_learning_rules(self, ctx: RunContextWrapper,
+                               min_occurrences: int = 2) -> Dict[str, Any]:
+        """
+        Update learning rules based on observed patterns
+        
+        Args:
+            min_occurrences: Minimum occurrences to consider a pattern significant
+            
+        Returns:
+            Updated learning rules
+        """
+        new_rules = []
+        
+        # Process positive patterns
+        for pattern, occurrences in self.reward_learning["positive_patterns"].items():
+            if occurrences >= min_occurrences:
+                # Check if a similar rule already exists
+                existing = False
+                for rule in self.reward_learning["learned_rules"]:
+                    if rule["pattern"] == pattern and rule["outcome"] == "positive":
+                        # Update existing rule
+                        rule["strength"] = min(1.0, rule["strength"] + 0.1)
+                        rule["occurrences"] = occurrences
+                        existing = True
+                        break
+                
+                if not existing:
+                    # Create new rule
+                    new_rules.append({
+                        "pattern": pattern,
+                        "outcome": "positive",
+                        "strength": min(0.8, 0.3 + (occurrences * 0.1)),  # Start at 0.3, increase with occurrences
+                        "occurrences": occurrences,
+                        "created": datetime.datetime.now().isoformat()
+                    })
+        
+        # Process negative patterns
+        for pattern, occurrences in self.reward_learning["negative_patterns"].items():
+            if occurrences >= min_occurrences:
+                # Check if a similar rule already exists
+                existing = False
+                for rule in self.reward_learning["learned_rules"]:
+                    if rule["pattern"] == pattern and rule["outcome"] == "negative":
+                        # Update existing rule
+                        rule["strength"] = min(1.0, rule["strength"] + 0.1)
+                        rule["occurrences"] = occurrences
+                        existing = True
+                        break
+                
+                if not existing:
+                    # Create new rule
+                    new_rules.append({
+                        "pattern": pattern,
+                        "outcome": "negative",
+                        "strength": min(0.8, 0.3 + (occurrences * 0.1)),
+                        "occurrences": occurrences,
+                        "created": datetime.datetime.now().isoformat()
+                    })
+        
+        # Add new rules to learned rules
+        self.reward_learning["learned_rules"].extend(new_rules)
+        
+        # Limit rules to prevent excessive growth
+        if len(self.reward_learning["learned_rules"]) > 50:
+            # Keep the most significant rules
+            self.reward_learning["learned_rules"].sort(key=lambda x: x["strength"] * x["occurrences"], reverse=True)
+            self.reward_learning["learned_rules"] = self.reward_learning["learned_rules"][:50]
+        
+        return {
+            "new_rules": new_rules,
+            "total_rules": len(self.reward_learning["learned_rules"]),
+            "positive_patterns": len(self.reward_learning["positive_patterns"]),
+            "negative_patterns": len(self.reward_learning["negative_patterns"])
+        }
+    
+    @function_tool
+    async def _apply_learned_adaptations(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Apply adaptations based on learned rules
+        
+        Returns:
+            Adaptation results
+        """
+        if not self.reward_learning["learned_rules"]:
+            return {
+                "message": "No learned rules available for adaptation",
+                "adaptations": 0
+            }
+        
+        adaptations = []
+        
+        # Get current emotional state
+        emotional_state = await self._get_emotional_state_matrix(ctx)
+        current_emotion = emotional_state["primary_emotion"]["name"]
+        
+        # Find rules relevant to current emotional state
+        relevant_rules = []
+        for rule in self.reward_learning["learned_rules"]:
+            # Check if rule mentions current emotion
+            if current_emotion.lower() in rule["pattern"].lower():
+                relevant_rules.append(rule)
+        
+        # Apply up to 2 adaptations
+        for rule in relevant_rules[:2]:
+            # Apply different adaptations based on outcome
+            if rule["outcome"] == "positive":
+                # For positive outcomes, reinforce the current state
+                # Slightly increase the baselines for neurochemicals associated with this emotion
+                for emotion_rule in self.emotion_derivation_rules:
+                    if emotion_rule["emotion"] == current_emotion:
+                        # Find key chemicals for this emotion
+                        for chemical, threshold in emotion_rule["chemical_conditions"].items():
+                            if chemical in self.neurochemicals:
+                                # Increase baseline slightly
+                                current_baseline = self.neurochemicals[chemical]["baseline"]
+                                adjustment = rule["strength"] * 0.05  # Small adjustment based on rule strength
+                                
+                                # Don't adjust beyond sensible limits
+                                new_baseline = min(0.8, current_baseline + adjustment)
+                                
+                                # Apply adjustment
+                                self.neurochemicals[chemical]["baseline"] = new_baseline
+                                
+                                adaptations.append({
+                                    "type": "baseline_increase",
+                                    "chemical": chemical,
+                                    "old_value": current_baseline,
+                                    "new_value": new_baseline,
+                                    "rule_pattern": rule["pattern"]
+                                })
+            else:
+                # For negative outcomes, adjust the state away from current state
+                # Slightly decrease the baselines for neurochemicals associated with this emotion
+                for emotion_rule in self.emotion_derivation_rules:
+                    if emotion_rule["emotion"] == current_emotion:
+                        # Find key chemicals for this emotion
+                        for chemical, threshold in emotion_rule["chemical_conditions"].items():
+                            if chemical in self.neurochemicals:
+                                # Decrease baseline slightly
+                                current_baseline = self.neurochemicals[chemical]["baseline"]
+                                adjustment = rule["strength"] * 0.05  # Small adjustment based on rule strength
+                                
+                                # Don't adjust beyond sensible limits
+                                new_baseline = max(0.2, current_baseline - adjustment)
+                                
+                                # Apply adjustment
+                                self.neurochemicals[chemical]["baseline"] = new_baseline
+                                
+                                adaptations.append({
+                                    "type": "baseline_decrease",
+                                    "chemical": chemical,
+                                    "old_value": current_baseline,
+                                    "new_value": new_baseline,
+                                    "rule_pattern": rule["pattern"]
+                                })
+        
+        return {
+            "adaptations": adaptations,
+            "rules_considered": len(relevant_rules),
+            "current_emotion": current_emotion
+        }
+    
+    # Public methods for the original APIs
     
     def update_emotion(self, emotion: str, value: float) -> bool:
-        """Update a specific emotion with a new intensity value (delta)"""
-        if emotion in self.emotions:
-            # Ensure emotion values stay between 0 and 1
-            self.emotions[emotion] = max(0, min(1, self.emotions[emotion] + value))
+        """Legacy API: Update a specific emotion with a new intensity value (delta)"""
+        # Map traditional emotions to neurochemical updates
+        chemical_map = {
+            "Joy": {"nyxamine": 0.7, "oxynixin": 0.3},
+            "Sadness": {"cortanyx": 0.6, "seranix": -0.3},
+            "Fear": {"cortanyx": 0.5, "adrenyx": 0.6},
+            "Anger": {"cortanyx": 0.6, "adrenyx": 0.5, "oxynixin": -0.3},
+            "Trust": {"oxynixin": 0.7, "seranix": 0.3},
+            "Disgust": {"cortanyx": 0.7, "oxynixin": -0.3},
+            "Anticipation": {"adrenyx": 0.5, "nyxamine": 0.5},
+            "Surprise": {"adrenyx": 0.7},
+            "Love": {"oxynixin": 0.8, "nyxamine": 0.5},
+            "Frustration": {"cortanyx": 0.6, "nyxamine": -0.3}
+        }
+        
+        if emotion in chemical_map:
+            # Apply each chemical change
+            for chemical, factor in chemical_map[emotion].items():
+                if chemical in self.neurochemicals:
+                    # Scale the value by the factor
+                    scaled_value = value * factor
+                    
+                    # Update the chemical
+                    old_value = self.neurochemicals[chemical]["value"]
+                    self.neurochemicals[chemical]["value"] = max(0, min(1, old_value + scaled_value))
+            
+            # Update timestamp and record history
+            self.last_update = datetime.datetime.now()
+            self._record_emotional_state()
+            
             return True
+        
         return False
     
     def set_emotion(self, emotion: str, value: float) -> bool:
-        """Set a specific emotion to an absolute value (not delta)"""
-        if emotion in self.emotions:
-            # Ensure emotion values stay between 0 and 1
-            self.emotions[emotion] = max(0, min(1, value))
+        """Legacy API: Set a specific emotion to an absolute value (not delta)"""
+        # Similar to update_emotion but sets absolute values
+        chemical_map = {
+            "Joy": {"nyxamine": 0.7, "oxynixin": 0.3},
+            "Sadness": {"cortanyx": 0.6, "seranix": 0.3},
+            "Fear": {"cortanyx": 0.5, "adrenyx": 0.6},
+            "Anger": {"cortanyx": 0.6, "adrenyx": 0.5, "oxynixin": 0.2},
+            "Trust": {"oxynixin": 0.7, "seranix": 0.5},
+            "Disgust": {"cortanyx": 0.7, "oxynixin": 0.2},
+            "Anticipation": {"adrenyx": 0.5, "nyxamine": 0.5},
+            "Surprise": {"adrenyx": 0.7},
+            "Love": {"oxynixin": 0.8, "nyxamine": 0.5},
+            "Frustration": {"cortanyx": 0.6, "nyxamine": 0.3}
+        }
+        
+        if emotion in chemical_map:
+            # Apply each chemical change as an absolute value
+            for chemical, factor in chemical_map[emotion].items():
+                if chemical in self.neurochemicals:
+                    # Scale the target value by the factor
+                    target_value = value * factor
+                    
+                    # Set the chemical to the target value
+                    self.neurochemicals[chemical]["value"] = max(0, min(1, target_value))
+            
+            # Update timestamp and record history
+            self.last_update = datetime.datetime.now()
+            self._record_emotional_state()
+            
             return True
+        
         return False
     
     def update_from_stimuli(self, stimuli: Dict[str, float]) -> Dict[str, float]:
-        """
-        Update emotions based on received stimuli
-        stimuli: dict of emotion adjustments
-        """
+        """Legacy API: Update emotions based on received stimuli"""
         for emotion, adjustment in stimuli.items():
             self.update_emotion(emotion, adjustment)
         
@@ -525,10 +1109,11 @@ class EmotionalCore:
         # Record in history
         self._record_emotional_state()
         
+        # For legacy API compatibility, return derived emotions
         return self.get_emotional_state()
     
     def apply_decay(self):
-        """Apply emotional decay based on time elapsed since last update"""
+        """Legacy API: Apply emotional decay based on time elapsed since last update"""
         now = datetime.datetime.now()
         time_delta = (now - self.last_update).total_seconds() / 3600  # hours
         
@@ -536,271 +1121,342 @@ class EmotionalCore:
         if time_delta < 0.016:  # about 1 minute in hours
             return
         
-        for emotion in self.emotions:
-            # Calculate decay based on time passed
-            decay_amount = self.decay_rates[emotion] * time_delta
+        # Apply decay to each neurochemical
+        for chemical, data in self.neurochemicals.items():
+            decay_rate = data["decay_rate"]
+            baseline = data["baseline"]
+            current = data["value"]
             
-            # Current emotion value
-            current = self.emotions[emotion]
+            # Calculate decay based on time passed
+            decay_amount = decay_rate * time_delta
             
             # Decay toward baseline
-            baseline = self.baseline[emotion]
             if current > baseline:
-                self.emotions[emotion] = max(baseline, current - decay_amount)
+                self.neurochemicals[chemical]["value"] = max(baseline, current - decay_amount)
             elif current < baseline:
-                self.emotions[emotion] = min(baseline, current + decay_amount)
+                self.neurochemicals[chemical]["value"] = min(baseline, current + decay_amount)
         
         # Update timestamp
         self.last_update = now
     
     def get_emotional_state(self) -> Dict[str, float]:
-        """Return the current emotional state"""
+        """Legacy API: Return the current emotional state"""
         self.apply_decay()  # Apply decay before returning state
-        return self.emotions.copy()
+        
+        # Get derived emotions from neurochemical state
+        emotion_intensities = self._derive_emotional_state_sync()
+        
+        # For backward compatibility with older code
+        for standard_emotion in ["Joy", "Sadness", "Fear", "Anger", "Trust", "Disgust", 
+                                "Anticipation", "Surprise", "Love", "Frustration"]:
+            if standard_emotion not in emotion_intensities:
+                emotion_intensities[standard_emotion] = 0.1
+        
+        return emotion_intensities
     
     def get_dominant_emotion(self) -> Tuple[str, float]:
-        """Return the most intense emotion"""
+        """Legacy API: Return the most intense emotion"""
         self.apply_decay()
-        return max(self.emotions.items(), key=lambda x: x[1])
+        
+        # Get derived emotions
+        emotion_intensities = self._derive_emotional_state_sync()
+        
+        if not emotion_intensities:
+            return ("Neutral", 0.5)
+            
+        return max(emotion_intensities.items(), key=lambda x: x[1])
     
     def get_emotional_valence(self) -> float:
-        """Calculate overall emotional valence (positive/negative)"""
-        valence = sum(self.emotion_memory_valence_map.get(emotion, 0) * value 
-                     for emotion, value in self.emotions.items())
-        return max(-1.0, min(1.0, valence))  # Clamp between -1 and 1
+        """Legacy API: Calculate overall emotional valence (positive/negative)"""
+        # Get emotional state matrix
+        matrix = self._get_emotional_state_matrix_sync()
+        
+        return matrix["valence"]
     
     def get_emotional_arousal(self) -> float:
-        """Calculate overall emotional arousal (intensity)"""
-        return sum(value for value in self.emotions.values()) / len(self.emotions)
+        """Legacy API: Calculate overall emotional arousal (intensity)"""
+        # Get emotional state matrix
+        matrix = self._get_emotional_state_matrix_sync()
+        
+        return matrix["arousal"]
     
     def get_formatted_emotional_state(self) -> Dict[str, Any]:
-        """Get a formatted emotional state suitable for memory storage"""
-        dominant_emotion, dominant_value = self.get_dominant_emotion()
+        """Legacy API: Get a formatted emotional state suitable for memory storage"""
+        # Get emotional state matrix
+        matrix = self._get_emotional_state_matrix_sync()
         
-        # Get secondary emotions (high intensity but not dominant)
-        secondary_emotions = {
-            emotion: value for emotion, value in self.emotions.items()
-            if value >= 0.4 and emotion != dominant_emotion
-        }
-        
+        # Format for compatibility
         return {
-            "primary_emotion": dominant_emotion,
-            "primary_intensity": dominant_value,
-            "secondary_emotions": secondary_emotions,
-            "valence": self.get_emotional_valence(),
-            "arousal": self.get_emotional_arousal()
+            "primary_emotion": matrix["primary_emotion"]["name"],
+            "primary_intensity": matrix["primary_emotion"]["intensity"],
+            "secondary_emotions": {name: data["intensity"] for name, data in matrix["secondary_emotions"].items()},
+            "valence": matrix["valence"],
+            "arousal": matrix["arousal"]
         }
-    
-    def _record_emotional_state(self):
-        """Record current emotional state in history"""
-        state = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "emotions": self.emotions.copy(),
-            "dominant_emotion": self.get_dominant_emotion()[0],
-            "valence": self.get_emotional_valence(),
-            "arousal": self.get_emotional_arousal()
-        }
-        self.emotional_history.append(state)
-        
-        # Limit history size
-        if len(self.emotional_history) > 100:
-            self.emotional_history = self.emotional_history[-100:]
-    
-    def analyze_text_sentiment(self, text: str) -> Dict[str, float]:
-        """
-        Simple analysis of text sentiment to extract emotional stimuli.
-        For a proper implementation, this would use an NLP model.
-        """
-        stimuli = {}
-        text_lower = text.lower()
-        
-        # Very basic keyword matching
-        if any(word in text_lower for word in ["happy", "good", "great", "love", "like"]):
-            stimuli["Joy"] = 0.1
-            stimuli["Trust"] = 0.1
-        
-        if any(word in text_lower for word in ["sad", "sorry", "miss", "lonely"]):
-            stimuli["Sadness"] = 0.1
-        
-        if any(word in text_lower for word in ["worried", "scared", "afraid", "nervous"]):
-            stimuli["Fear"] = 0.1
-        
-        if any(word in text_lower for word in ["angry", "mad", "frustrated", "annoyed"]):
-            stimuli["Anger"] = 0.1
-            stimuli["Frustration"] = 0.1
-        
-        if any(word in text_lower for word in ["surprised", "wow", "unexpected"]):
-            stimuli["Surprise"] = 0.1
-        
-        if any(word in text_lower for word in ["gross", "disgusting", "nasty"]):
-            stimuli["Disgust"] = 0.1
-        
-        if any(word in text_lower for word in ["hope", "future", "expect", "waiting"]):
-            stimuli["Anticipation"] = 0.1
-        
-        if any(word in text_lower for word in ["trust", "believe", "faith", "reliable"]):
-            stimuli["Trust"] = 0.1
-        
-        if any(word in text_lower for word in ["love", "adore", "cherish"]):
-            stimuli["Love"] = 0.1
-        
-        # Return neutral if no matches
-        if not stimuli:
-            stimuli = {
-                "Surprise": 0.05,
-                "Anticipation": 0.05
-            }
-        
-        return stimuli
-    
-    def calculate_emotional_resonance(self, 
-                                     memory_emotions: Dict[str, Any],
-                                     current_emotions: Optional[Dict[str, float]] = None) -> float:
-        """
-        Calculate how strongly a memory's emotions resonate with current state.
-        Returns a value from 0.0 (no resonance) to 1.0 (perfect resonance).
-        """
-        # Use current emotions if not explicitly provided
-        if current_emotions is None:
-            current_emotions = self.get_emotional_state()
-        
-        # Extract primary emotion from memory
-        memory_primary = memory_emotions.get("primary_emotion", "neutral")
-        memory_intensity = memory_emotions.get("primary_intensity", 0.5)
-        memory_valence = memory_emotions.get("valence", 0.0)
-        
-        # Calculate primary emotion match
-        primary_match = 0.0
-        if memory_primary in current_emotions:
-            primary_match = current_emotions[memory_primary] * memory_intensity
-        
-        # Calculate valence match (how well positive/negative alignment matches)
-        current_valence = sum(self.emotion_memory_valence_map.get(emotion, 0) * value 
-                            for emotion, value in current_emotions.items())
-        
-        valence_match = 1.0 - min(1.0, abs(current_valence - memory_valence))
-        
-        # Calculate secondary emotion matches
-        secondary_match = 0.0
-        secondary_emotions = memory_emotions.get("secondary_emotions", {})
-        
-        if secondary_emotions:
-            matches = []
-            for emotion, intensity in secondary_emotions.items():
-                if emotion in current_emotions:
-                    matches.append(current_emotions[emotion] * intensity)
-            
-            if matches:
-                secondary_match = sum(matches) / len(matches)
-        
-        # Combined weighted resonance
-        resonance = (
-            primary_match * 0.5 +
-            valence_match * 0.3 +
-            secondary_match * 0.2
-        )
-        
-        return max(0.0, min(1.0, resonance))
     
     def should_express_emotion(self) -> bool:
-        """Determine if Nyx should express emotion based on current state"""
+        """Legacy API: Determine if Nyx should express emotion based on current state"""
         # Get dominant emotion and intensity
-        dominant_emotion, dominant_value = self.get_dominant_emotion()
+        matrix = self._get_emotional_state_matrix_sync()
+        dominant_value = matrix["primary_emotion"]["intensity"]
+        arousal = matrix["arousal"]
         
-        # Higher intensity emotions are more likely to be expressed
-        threshold = 0.7 - (dominant_value * 0.3)  # Adaptive threshold
+        # Higher intensity/arousal emotions are more likely to be expressed
+        threshold = 0.7 - (dominant_value * 0.3) - (arousal * 0.2)  # Adaptive threshold
         
         return random.random() > threshold
     
     def get_expression_for_emotion(self, emotion: Optional[str] = None) -> str:
-        """Get a natural language expression for an emotion"""
+        """Legacy API: Get a natural language expression for an emotion"""
         if emotion is None:
-            emotion, _ = self.get_dominant_emotion()
+            # Get dominant emotion
+            matrix = self._get_emotional_state_matrix_sync()
+            emotion = matrix["primary_emotion"]["name"]
         
-        # Simple expression templates
-        expressions = {
-            "Joy": ["I'm feeling quite pleased right now.", 
-                   "I'm in a good mood today.",
-                   "I feel rather happy at the moment."],
-            "Sadness": ["I'm feeling a bit melancholy.",
-                       "I feel somewhat downcast.",
-                       "I'm in a rather somber mood."],
-            "Fear": ["I'm feeling somewhat anxious.",
-                    "I feel a bit uneasy.",
-                    "I'm rather on edge right now."],
-            "Anger": ["I'm feeling rather irritated.",
-                     "I'm a bit annoyed at the moment.",
-                     "I feel somewhat vexed."],
-            "Trust": ["I'm feeling quite comfortable with you.",
-                     "I feel we have a good understanding.",
-                     "I'm in a trusting mood."],
-            "Disgust": ["I'm feeling a bit repulsed.",
-                       "I find this rather distasteful.",
-                       "I'm somewhat revolted by this."],
-            "Anticipation": ["I'm looking forward to what happens next.",
-                            "I'm curious about what's to come.",
-                            "I feel expectant about our interaction."],
-            "Surprise": ["I'm quite taken aback.",
-                        "This has certainly surprised me.",
-                        "I didn't expect that."],
-            "Love": ["I'm feeling particularly fond of you.",
-                    "I'm in a very affectionate mood.",
-                    "I feel quite attached to you at the moment."],
-            "Frustration": ["I'm feeling somewhat frustrated.",
-                           "I'm a bit exasperated right now.",
-                           "I feel rather irritated at the moment."]
+        # Attempt to generate an internal thought for this emotion
+        reflection_patterns = self.reflection_patterns.get(emotion, [])
+        
+        if reflection_patterns:
+            return random.choice(reflection_patterns)
+        
+        # Fallback expressions if no patterns exist
+        fallback_expressions = {
+            "Joy": "I'm feeling quite pleased right now.",
+            "Sadness": "I'm feeling a bit melancholy.",
+            "Fear": "I'm feeling somewhat anxious.",
+            "Anger": "I'm feeling rather irritated.",
+            "Trust": "I'm feeling quite comfortable with you.",
+            "Disgust": "I'm feeling a bit repulsed.",
+            "Anticipation": "I'm looking forward to what happens next.",
+            "Surprise": "I'm quite taken aback.",
+            "Love": "I'm feeling particularly fond of you.",
+            "Frustration": "I'm feeling somewhat frustrated.",
+            "Teasing": "I feel like being playful and teasing.",
+            "Controlling": "I feel the need to take control now.",
+            "Cruel": "I'm in a rather severe mood right now.",
+            "Detached": "I'm feeling emotionally distant at the moment."
         }
         
-        # Select a random expression for the emotion
-        if emotion in expressions:
-            return random.choice(expressions[emotion])
+        return fallback_expressions.get(emotion, "I'm experiencing a complex mix of emotions right now.")
+    
+    def analyze_text_sentiment(self, text: str) -> Dict[str, float]:
+        """Legacy API: Simple analysis of text sentiment to extract emotional stimuli"""
+        # Enhanced text analysis that maps to neurochemicals
+        stimuli = {}
+        text_lower = text.lower()
+        
+        # Nyxamine (pleasure, curiosity) triggers
+        if any(word in text_lower for word in ["happy", "good", "great", "love", "like", "fun", "enjoy", "curious", "interested"]):
+            stimuli["nyxamine"] = 0.2
+        
+        # Seranix (calm, satisfaction) triggers
+        if any(word in text_lower for word in ["calm", "peaceful", "relaxed", "content", "satisfied", "gentle", "quiet"]):
+            stimuli["seranix"] = 0.2
+        
+        # OxyNixin (bonding, trust) triggers
+        if any(word in text_lower for word in ["trust", "close", "together", "bond", "connect", "loyal", "friend", "relationship"]):
+            stimuli["oxynixin"] = 0.2
+        
+        # Cortanyx (stress, anxiety) triggers
+        if any(word in text_lower for word in ["worried", "scared", "afraid", "nervous", "stressed", "sad", "sorry", "angry", "upset", "frustrated"]):
+            stimuli["cortanyx"] = 0.2
+        
+        # Adrenyx (excitement, alertness) triggers
+        if any(word in text_lower for word in ["excited", "alert", "surprised", "wow", "amazing", "intense", "sudden", "quick"]):
+            stimuli["adrenyx"] = 0.2
+        
+        # Intensity modifiers
+        intensifiers = ["very", "extremely", "incredibly", "so", "deeply", "absolutely"]
+        if any(word in text_lower for word in intensifiers):
+            for key in stimuli:
+                stimuli[key] *= 1.5
+        
+        # Convert to traditional emotion format for backward compatibility
+        emotion_stimuli = {}
+        
+        # Map chemical combinations to emotions
+        if "nyxamine" in stimuli and "oxynixin" in stimuli:
+            emotion_stimuli["Joy"] = (stimuli["nyxamine"] + stimuli["oxynixin"]) / 2
+        
+        if "cortanyx" in stimuli and "seranix" in stimuli:
+            emotion_stimuli["Sadness"] = (stimuli["cortanyx"] + stimuli["seranix"]) / 2
+        
+        if "cortanyx" in stimuli and "adrenyx" in stimuli:
+            emotion_stimuli["Fear"] = (stimuli["cortanyx"] + stimuli["adrenyx"]) / 2
+        
+        if "cortanyx" in stimuli and stimuli["cortanyx"] > 0.1:
+            emotion_stimuli["Anger"] = stimuli["cortanyx"]
+        
+        if "oxynixin" in stimuli and stimuli["oxynixin"] > 0.1:
+            emotion_stimuli["Trust"] = stimuli["oxynixin"]
+        
+        if "cortanyx" in stimuli and "oxynixin" in stimuli and stimuli["oxynixin"] < 0.1:
+            emotion_stimuli["Disgust"] = stimuli["cortanyx"]
+        
+        if "adrenyx" in stimuli and "nyxamine" in stimuli:
+            emotion_stimuli["Anticipation"] = (stimuli["adrenyx"] + stimuli["nyxamine"]) / 2
+        
+        if "adrenyx" in stimuli and stimuli["adrenyx"] > 0.2:
+            emotion_stimuli["Surprise"] = stimuli["adrenyx"]
+        
+        if "oxynixin" in stimuli and "nyxamine" in stimuli and stimuli["oxynixin"] > 0.2:
+            emotion_stimuli["Love"] = (stimuli["oxynixin"] + stimuli["nyxamine"]) / 2
+        
+        if "cortanyx" in stimuli and "nyxamine" in stimuli and stimuli["nyxamine"] < 0.1:
+            emotion_stimuli["Frustration"] = stimuli["cortanyx"]
+        
+        # Return neutral if no matches
+        if not emotion_stimuli:
+            emotion_stimuli = {
+                "Surprise": 0.05,
+                "Anticipation": 0.05
+            }
+        
+        return emotion_stimuli
+    
+    # Sync versions of async functions for compatibility
+    
+    def _derive_emotional_state_sync(self) -> Dict[str, float]:
+        """Synchronous version of _derive_emotional_state for compatibility"""
+        # Get current chemical levels
+        chemical_levels = {c: d["value"] for c, d in self.neurochemicals.items()}
+        
+        # Calculate emotional intensities based on derivation rules
+        emotion_intensities = {}
+        
+        for rule in self.emotion_derivation_rules:
+            conditions = rule["chemical_conditions"]
+            emotion = rule["emotion"]
+            rule_weight = rule.get("weight", 1.0)
+            
+            # Check if chemical levels meet the conditions
+            match_score = 0
+            for chemical, threshold in conditions.items():
+                if chemical in chemical_levels:
+                    # Calculate how well this condition matches (0.0 to 1.0)
+                    level = chemical_levels[chemical]
+                    if level >= threshold:
+                        match_score += 1
+                    else:
+                        # Partial match based on percentage of threshold
+                        match_score += level / threshold
+            
+            # Normalize match score (0.0 to 1.0)
+            if conditions:
+                match_score = match_score / len(conditions)
+            else:
+                match_score = 0
+            
+            # Apply rule weight to match score
+            weighted_score = match_score * rule_weight
+            
+            # Only include emotions with non-zero intensity
+            if weighted_score > 0:
+                if emotion in emotion_intensities:
+                    # Take the higher intensity if this emotion is already present
+                    emotion_intensities[emotion] = max(emotion_intensities[emotion], weighted_score)
+                else:
+                    emotion_intensities[emotion] = weighted_score
+        
+        # Normalize emotion intensities to ensure they sum to a reasonable value
+        total_intensity = sum(emotion_intensities.values())
+        if total_intensity > 1.5:  # If total is too high, normalize
+            factor = 1.5 / total_intensity
+            emotion_intensities = {e: i * factor for e, i in emotion_intensities.items()}
+        
+        return emotion_intensities
+    
+    def _get_emotional_state_matrix_sync(self) -> Dict[str, Any]:
+        """Synchronous version of _get_emotional_state_matrix for compatibility"""
+        # First apply decay
+        self.apply_decay()
+        
+        # Get derived emotions
+        emotion_intensities = self._derive_emotional_state_sync()
+        
+        # Find primary emotion (highest intensity)
+        primary_emotion = max(emotion_intensities.items(), key=lambda x: x[1]) if emotion_intensities else ("Neutral", 0.5)
+        primary_name, primary_intensity = primary_emotion
+        
+        # Find secondary emotions (all others with significant intensity)
+        secondary_emotions = {}
+        for emotion, intensity in emotion_intensities.items():
+            if emotion != primary_name and intensity > 0.3:  # Only include significant emotions
+                # Find valence and arousal for this emotion from the rules
+                valence = 0.0
+                arousal = 0.5
+                for rule in self.emotion_derivation_rules:
+                    if rule["emotion"] == emotion:
+                        valence = rule.get("valence", 0.0)
+                        arousal = rule.get("arousal", 0.5)
+                        break
+                
+                secondary_emotions[emotion] = {
+                    "intensity": intensity,
+                    "valence": valence,
+                    "arousal": arousal
+                }
+        
+        # Find valence and arousal for primary emotion
+        primary_valence = 0.0
+        primary_arousal = 0.5
+        for rule in self.emotion_derivation_rules:
+            if rule["emotion"] == primary_name:
+                primary_valence = rule.get("valence", 0.0)
+                primary_arousal = rule.get("arousal", 0.5)
+                break
+        
+        # Calculate overall valence and arousal (weighted average)
+        total_intensity = primary_intensity + sum(e["intensity"] for e in secondary_emotions.values())
+        
+        if total_intensity > 0:
+            overall_valence = (primary_valence * primary_intensity)
+            overall_arousal = (primary_arousal * primary_intensity)
+            
+            for emotion, data in secondary_emotions.items():
+                overall_valence += data["valence"] * data["intensity"]
+                overall_arousal += data["arousal"] * data["intensity"]
+                
+            overall_valence /= total_intensity
+            overall_arousal /= total_intensity
         else:
-            return "I'm experiencing a complex mix of emotions right now."
-    
-    def save_state(self, filename: str) -> bool:
-        """Save the current emotional state to file"""
-        state = {
-            "emotions": self.get_emotional_state(),
-            "last_update": self.last_update.isoformat(),
-            "emotional_history": self.emotional_history
-        }
+            overall_valence = 0.0
+            overall_arousal = 0.5
         
-        try:
-            with open(filename, 'w') as f:
-                json.dump(state, f, indent=2)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save emotional state: {e}")
-            return False
+        # Ensure valence is within range
+        overall_valence = max(-1.0, min(1.0, overall_valence))
+        overall_arousal = max(0.0, min(1.0, overall_arousal))
+        
+        return {
+            "primary_emotion": {
+                "name": primary_name,
+                "intensity": primary_intensity,
+                "valence": primary_valence,
+                "arousal": primary_arousal
+            },
+            "secondary_emotions": secondary_emotions,
+            "valence": overall_valence,
+            "arousal": overall_arousal,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
     
-    def load_state(self, filename: str) -> bool:
-        """Load emotional state from file"""
-        try:
-            with open(filename, 'r') as f:
-                state = json.load(f)
-            
-            # Restore emotions
-            for emotion, value in state["emotions"].items():
-                if emotion in self.emotions:
-                    self.emotions[emotion] = value
-            
-            # Restore timestamp
-            self.last_update = datetime.datetime.fromisoformat(state["last_update"])
-            
-            # Restore history if available
-            if "emotional_history" in state:
-                self.emotional_history = state["emotional_history"]
-            
-            return True
-        except Exception as e:
-            logger.error(f"Failed to load emotional state: {e}")
-            return False
+    def _record_emotional_state(self):
+        """Record current emotional state in history"""
+        # Get current state
+        state = self._get_emotional_state_matrix_sync()
+        
+        # Add to history
+        self.emotional_state_history.append(state)
+        
+        # Limit history size
+        if len(self.emotional_state_history) > self.max_history_size:
+            self.emotional_state_history = self.emotional_state_history[-self.max_history_size:]
     
-    # Public API methods
+    # New enhanced public methods
     
     async def process_emotional_input(self, text: str) -> Dict[str, Any]:
         """
-        Process input text and update emotional state accordingly
+        Process input text through the DNM and update emotional state
         
         Args:
             text: Input text to process
@@ -808,31 +1464,131 @@ class EmotionalCore:
         Returns:
             Processing results with updated emotional state
         """
-        # Use the Agent SDK to run the emotion agent
+        # Check for reflection trigger
+        now = datetime.datetime.now()
+        should_reflect = now > self.next_reflection_time
+        
+        # Use the neurochemical agent
         with trace(workflow_name="EmotionalInput"):
-            agent_input = {
-                "role": "user", 
-                "content": f"Process this input and update emotions appropriately: {text}"
-            }
-            
-            result = await Runner.run(
-                self.emotion_agent,
-                agent_input
-            )
-            
-            # Extract final output
-            if hasattr(result, "final_output") and result.final_output:
-                return result.final_output
-            
-            # Fall back to direct processing
-            stimuli = self.analyze_text_sentiment(text)
-            self.update_from_stimuli(stimuli)
-            
-            return {
-                "input_processed": True,
-                "detected_emotions": stimuli,
-                "updated_state": self.get_formatted_emotional_state()
-            }
+            try:
+                # Analyze text for neurochemical impacts
+                stimuli = {}
+                text_lower = text.lower()
+                
+                # Enhanced pattern recognition for each neurochemical
+                # Nyxamine (pleasure, curiosity) triggers
+                if any(word in text_lower for word in ["happy", "good", "great", "love", "like", "fun", "enjoy", "curious", "interested"]):
+                    stimuli["nyxamine"] = 0.2
+                
+                # Seranix (calm, satisfaction) triggers
+                if any(word in text_lower for word in ["calm", "peaceful", "relaxed", "content", "satisfied", "gentle", "quiet"]):
+                    stimuli["seranix"] = 0.2
+                
+                # OxyNixin (bonding, trust) triggers
+                if any(word in text_lower for word in ["trust", "close", "together", "bond", "connect", "loyal", "friend", "relationship"]):
+                    stimuli["oxynixin"] = 0.2
+                
+                # Cortanyx (stress, anxiety) triggers
+                if any(word in text_lower for word in ["worried", "scared", "afraid", "nervous", "stressed", "sad", "sorry", "angry", "upset", "frustrated"]):
+                    stimuli["cortanyx"] = 0.2
+                
+                # Adrenyx (excitement, alertness) triggers
+                if any(word in text_lower for word in ["excited", "alert", "surprised", "wow", "amazing", "intense", "sudden", "quick"]):
+                    stimuli["adrenyx"] = 0.2
+                
+                # Update each affected neurochemical
+                updated_chemicals = {}
+                for chemical, value in stimuli.items():
+                    result = await self._update_neurochemical(
+                        RunContextWrapper(context=None),
+                        chemical=chemical,
+                        value=value
+                    )
+                    
+                    if result.get("success", False):
+                        updated_chemicals[chemical] = result
+                
+                # Get the derived emotional state
+                emotional_state_matrix = await self._get_emotional_state_matrix(RunContextWrapper(context=None))
+                
+                # Generate internal reflection if due
+                reflection = None
+                if should_reflect:
+                    reflection_result = await self._generate_internal_thought(RunContextWrapper(context=None))
+                    reflection = reflection_result.get("thought_text")
+                    
+                    # Apply any adaptive change suggested
+                    adaptive_change = reflection_result.get("adaptive_change")
+                    if adaptive_change:
+                        chemical = adaptive_change.get("chemical")
+                        new_baseline = adaptive_change.get("suggested_baseline")
+                        
+                        if chemical in self.neurochemicals and new_baseline is not None:
+                            self.neurochemicals[chemical]["baseline"] = new_baseline
+                    
+                    # Set next reflection time
+                    self.next_reflection_time = now + datetime.timedelta(minutes=random.randint(5, 15))
+                
+                # Learn from this interaction if appropriate
+                if len(self.emotional_state_history) >= 2:
+                    # Get previous emotional state
+                    prev_state = self.emotional_state_history[-2]
+                    current_state = emotional_state_matrix
+                    
+                    # Evaluate if the change was positive or negative
+                    prev_valence = prev_state.get("valence", 0)
+                    current_valence = current_state.get("valence", 0)
+                    
+                    valence_change = current_valence - prev_valence
+                    
+                    # Record pattern with outcome
+                    if abs(valence_change) > 0.2:  # Only record significant changes
+                        pattern = f"Text input with {[key for key in stimuli.keys()]} triggers"
+                        
+                        if valence_change > 0:
+                            await self._record_interaction_outcome(
+                                RunContextWrapper(context=None),
+                                interaction_pattern=pattern,
+                                outcome="positive",
+                                strength=min(1.0, abs(valence_change) * 2)
+                            )
+                        else:
+                            await self._record_interaction_outcome(
+                                RunContextWrapper(context=None),
+                                interaction_pattern=pattern,
+                                outcome="negative",
+                                strength=min(1.0, abs(valence_change) * 2)
+                            )
+                        
+                        # Periodically update learning rules
+                        if random.random() < 0.2:  # 20% chance each time
+                            await self._update_learning_rules(RunContextWrapper(context=None))
+                
+                return {
+                    "input_processed": True,
+                    "chemicals_affected": {c: v for c, v in stimuli.items() if v > 0},
+                    "emotional_state": {
+                        "primary_emotion": emotional_state_matrix["primary_emotion"],
+                        "secondary_emotions": emotional_state_matrix["secondary_emotions"],
+                        "valence": emotional_state_matrix["valence"],
+                        "arousal": emotional_state_matrix["arousal"]
+                    },
+                    "internal_reflection": reflection
+                }
+                
+            except Exception as e:
+                logger.error(f"Error processing emotional input: {e}")
+                
+                # Fallback: use simple stimuli processing
+                stimuli = self.analyze_text_sentiment(text)
+                self.update_from_stimuli(stimuli)
+                
+                return {
+                    "input_processed": True,
+                    "detected_emotions": stimuli,
+                    "updated_state": self.get_formatted_emotional_state(),
+                    "error": str(e)
+                }
     
     async def generate_emotional_expression(self, force: bool = False) -> Dict[str, Any]:
         """
@@ -851,176 +1607,267 @@ class EmotionalCore:
                 "reason": "Below expression threshold"
             }
         
-        # Use the Expression Agent
-        with trace(workflow_name="EmotionalExpression"):
-            agent_input = {
-                "role": "user",
-                "content": "Generate an appropriate emotional expression based on current state."
-            }
-            
-            result = await Runner.run(
-                self.expression_agent,
-                agent_input
-            )
-            
-            # Get the expression output
-            if hasattr(result, "final_output") and result.final_output:
-                if isinstance(result.final_output, EmotionExpressionOutput):
-                    expression_output = result.final_output
-                    return {
-                        "expressed": True,
-                        "expression": expression_output.expression_text,
-                        "emotion": expression_output.emotion,
-                        "intensity": expression_output.intensity
-                    }
-            
-            # Fall back to direct expression
-            dominant_emotion, dominant_value = self.get_dominant_emotion()
-            expression = self.get_expression_for_emotion(dominant_emotion)
-            
-            return {
-                "expressed": True,
-                "expression": expression,
-                "emotion": dominant_emotion,
-                "intensity": dominant_value
-            }
+        # Get emotional state matrix
+        emotional_state = await self._get_emotional_state_matrix(RunContextWrapper(context=None))
+        
+        # Get primary emotion
+        primary_emotion = emotional_state["primary_emotion"]["name"]
+        intensity = emotional_state["primary_emotion"]["intensity"]
+        
+        # Generate internal thought as expression
+        thought_result = await self._generate_internal_thought(RunContextWrapper(context=None))
+        expression = thought_result.get("thought_text", self.get_expression_for_emotion(primary_emotion))
+        
+        # Apply adaptive change if suggested (50% chance if forced)
+        if force and random.random() < 0.5:
+            adaptive_change = thought_result.get("adaptive_change")
+            if adaptive_change:
+                chemical = adaptive_change.get("chemical")
+                new_baseline = adaptive_change.get("suggested_baseline")
+                
+                if chemical in self.neurochemicals and new_baseline is not None:
+                    self.neurochemicals[chemical]["baseline"] = new_baseline
+        
+        return {
+            "expressed": True,
+            "expression": expression,
+            "emotion": primary_emotion,
+            "intensity": intensity,
+            "valence": emotional_state["valence"],
+            "arousal": emotional_state["arousal"]
+        }
     
     async def analyze_emotional_content(self, text: str) -> Dict[str, Any]:
         """
-        Analyze text for emotional content
+        Enhanced analysis of text for emotional content
         
         Args:
             text: Text to analyze
             
         Returns:
-            Emotional analysis result
+            Emotional analysis result with neurochemical impacts
         """
-        # Use the Analysis Agent
-        with trace(workflow_name="EmotionalAnalysis"):
-            agent_input = {
-                "role": "user",
-                "content": f"Analyze this text for emotional content: {text}"
+        # Enhanced pattern recognition for each neurochemical
+        chemical_impacts = {}
+        text_lower = text.lower()
+                
+        # Nyxamine (pleasure, curiosity) triggers
+        nyxamine_score = 0
+        nyxamine_words = ["happy", "good", "great", "love", "like", "fun", "enjoy", "curious", "interested", "pleasure", "delight", "joy"]
+        for word in nyxamine_words:
+            if word in text_lower:
+                nyxamine_score += 0.1
+        if nyxamine_score > 0:
+            chemical_impacts["nyxamine"] = min(0.5, nyxamine_score)
+        
+        # Seranix (calm, satisfaction) triggers
+        seranix_score = 0
+        seranix_words = ["calm", "peaceful", "relaxed", "content", "satisfied", "gentle", "quiet", "serene", "tranquil", "composed"]
+        for word in seranix_words:
+            if word in text_lower:
+                seranix_score += 0.1
+        if seranix_score > 0:
+            chemical_impacts["seranix"] = min(0.5, seranix_score)
+        
+        # OxyNixin (bonding, trust) triggers
+        oxynixin_score = 0
+        oxynixin_words = ["trust", "close", "together", "bond", "connect", "loyal", "friend", "relationship", "intimate", "attachment"]
+        for word in oxynixin_words:
+            if word in text_lower:
+                oxynixin_score += 0.1
+        if oxynixin_score > 0:
+            chemical_impacts["oxynixin"] = min(0.5, oxynixin_score)
+        
+        # Cortanyx (stress, anxiety) triggers
+        cortanyx_score = 0
+        cortanyx_words = ["worried", "scared", "afraid", "nervous", "stressed", "sad", "sorry", "angry", "upset", "frustrated", "anxious", "distressed"]
+        for word in cortanyx_words:
+            if word in text_lower:
+                cortanyx_score += 0.1
+        if cortanyx_score > 0:
+            chemical_impacts["cortanyx"] = min(0.5, cortanyx_score)
+        
+        # Adrenyx (excitement, alertness) triggers
+        adrenyx_score = 0
+        adrenyx_words = ["excited", "alert", "surprised", "wow", "amazing", "intense", "sudden", "quick", "shock", "unexpected", "startled"]
+        for word in adrenyx_words:
+            if word in text_lower:
+                adrenyx_score += 0.1
+        if adrenyx_score > 0:
+            chemical_impacts["adrenyx"] = min(0.5, adrenyx_score)
+        
+        # Intensity modifiers
+        intensifiers = ["very", "extremely", "incredibly", "so", "deeply", "absolutely", "truly", "utterly", "completely", "totally"]
+        intensifier_count = sum(1 for word in intensifiers if word in text_lower)
+        
+        if intensifier_count > 0:
+            intensity_multiplier = 1.0 + (intensifier_count * 0.2)  # Up to 1.0 + (5 * 0.2) = 2.0
+            chemical_impacts = {k: min(1.0, v * intensity_multiplier) for k, v in chemical_impacts.items()}
+        
+        # If no chemicals were identified, add small baseline activation
+        if not chemical_impacts:
+            chemical_impacts = {
+                "nyxamine": 0.1,
+                "adrenyx": 0.1
             }
+        
+        # Derive emotions from these chemical impacts
+        # Create a temporary neurochemical state for analysis
+        temp_chemicals = {c: {"value": self.neurochemicals[c]["value"], 
+                           "baseline": self.neurochemicals[c]["baseline"],
+                           "decay_rate": self.neurochemicals[c]["decay_rate"]}
+                         for c in self.neurochemicals}
+        
+        # Apply chemical impacts to the temporary state
+        for chemical, impact in chemical_impacts.items():
+            if chemical in temp_chemicals:
+                temp_chemicals[chemical]["value"] = min(1.0, temp_chemicals[chemical]["value"] + impact)
+        
+        # Derive emotions from this temporary state
+        derived_emotions = {}
+        # Similar logic to _derive_emotional_state but using temp_chemicals
+        chemical_levels = {c: d["value"] for c, d in temp_chemicals.items()}
+        
+        for rule in self.emotion_derivation_rules:
+            conditions = rule["chemical_conditions"]
+            emotion = rule["emotion"]
+            rule_weight = rule.get("weight", 1.0)
             
-            result = await Runner.run(
-                self.analysis_agent,
-                agent_input
-            )
+            # Check if chemical levels meet the conditions
+            match_score = 0
+            for chemical, threshold in conditions.items():
+                if chemical in chemical_levels:
+                    # Calculate how well this condition matches (0.0 to 1.0)
+                    level = chemical_levels[chemical]
+                    if level >= threshold:
+                        match_score += 1
+                    else:
+                        # Partial match based on percentage of threshold
+                        match_score += level / threshold
             
-            # Get the analysis output
-            if hasattr(result, "final_output") and result.final_output:
-                if isinstance(result.final_output, TextAnalysisOutput):
-                    analysis_output = result.final_output
-                    return {
-                        "emotions": analysis_output.emotions,
-                        "dominant_emotion": analysis_output.dominant_emotion,
-                        "intensity": analysis_output.intensity,
-                        "valence": analysis_output.valence
-                    }
+            # Normalize match score (0.0 to 1.0)
+            if conditions:
+                match_score = match_score / len(conditions)
+            else:
+                match_score = 0
             
-            # Fall back to direct analysis
-            stimuli = self.analyze_text_sentiment(text)
+            # Apply rule weight to match score
+            weighted_score = match_score * rule_weight
             
-            # Find dominant emotion
-            dominant_emotion = max(stimuli.items(), key=lambda x: x[1])[0] if stimuli else "neutral"
-            intensity = sum(stimuli.values())
+            # Only include emotions with non-zero intensity
+            if weighted_score > 0:
+                if emotion in derived_emotions:
+                    # Take the higher intensity if this emotion is already present
+                    derived_emotions[emotion] = max(derived_emotions[emotion], weighted_score)
+                else:
+                    derived_emotions[emotion] = weighted_score
+        
+        # Find dominant emotion
+        dominant_emotion = max(derived_emotions.items(), key=lambda x: x[1]) if derived_emotions else ("neutral", 0.5)
+        
+        # Calculate overall valence from the temporary emotional state
+        valence = 0.0
+        total_intensity = 0.0
+        
+        for emotion, intensity in derived_emotions.items():
+            # Find valence for this emotion
+            for rule in self.emotion_derivation_rules:
+                if rule["emotion"] == emotion:
+                    valence += rule.get("valence", 0.0) * intensity
+                    total_intensity += intensity
+                    break
+        
+        if total_intensity > 0:
+            valence /= total_intensity
+        
+        # Calculate overall intensity
+        intensity = sum(derived_emotions.values()) / max(1, len(derived_emotions))
+        
+        return {
+            "chemicals_affected": chemical_impacts,
+            "derived_emotions": derived_emotions,
+            "dominant_emotion": dominant_emotion[0],
+            "intensity": intensity,
+            "valence": valence
+        }
+    
+    async def update_neurochemical_baseline(self, 
+                                        chemical: str, 
+                                        new_baseline: float) -> Dict[str, Any]:
+        """
+        Update the baseline value for a neurochemical
+        
+        Args:
+            chemical: Neurochemical to update
+            new_baseline: New baseline value (0.0-1.0)
             
-            # Calculate valence
-            valence = sum(self.emotion_memory_valence_map.get(emotion, 0) * value 
-                         for emotion, value in stimuli.items())
-            
+        Returns:
+            Update result
+        """
+        if chemical not in self.neurochemicals:
             return {
-                "emotions": stimuli,
-                "dominant_emotion": dominant_emotion,
-                "intensity": intensity,
-                "valence": max(-1.0, min(1.0, valence))
+                "success": False,
+                "error": f"Unknown neurochemical: {chemical}",
+                "available_chemicals": list(self.neurochemicals.keys())
             }
-    
-    async def update_emotion_async(self, emotion: str, value: float) -> Dict[str, Any]:
-        """
-        Async wrapper for update_emotion with enhanced return format
         
-        Args:
-            emotion: The emotion to update
-            value: The delta change in emotion value (-1.0 to 1.0)
+        # Validate baseline value
+        new_baseline = max(0.0, min(1.0, new_baseline))
+        
+        # Store old value
+        old_baseline = self.neurochemicals[chemical]["baseline"]
+        
+        # Update baseline
+        self.neurochemicals[chemical]["baseline"] = new_baseline
+        
+        return {
+            "success": True,
+            "chemical": chemical,
+            "old_baseline": old_baseline,
+            "new_baseline": new_baseline
+        }
+    
+    async def generate_introspection(self) -> Dict[str, Any]:
+        """
+        Generate an introspective analysis of the emotional system
         
         Returns:
-            Dictionary with update results
+            Introspection data
         """
-        with trace(workflow_name="EmotionUpdate"):
-            # Run the emotion agent with an update request
-            agent_input = {
-                "role": "user",
-                "content": f"Update emotion {emotion} by {value}"
-            }
-            
-            result = await Runner.run(
-                self.emotion_agent,
-                agent_input
-            )
-            
-            # Check if we have a structured result
-            if hasattr(result, "final_output") and result.final_output:
-                return result.final_output
-            
-            # Fall back to direct update
-            return await self._update_emotion_tool(
-                RunContextWrapper(context=None),
-                emotion=emotion,
-                value=value
-            )
-    
-    async def set_emotion_async(self, emotion: str, value: float) -> Dict[str, Any]:
-        """
-        Async wrapper for set_emotion with enhanced return format
+        # Analyze emotional patterns
+        pattern_analysis = await self._analyze_emotional_patterns(RunContextWrapper(context=None))
         
-        Args:
-            emotion: The emotion to set
-            value: The absolute value (0.0 to 1.0)
+        # Get current emotional state
+        emotional_state = await self._get_emotional_state_matrix(RunContextWrapper(context=None))
         
-        Returns:
-            Dictionary with update results
-        """
-        with trace(workflow_name="EmotionSet"):
-            # Run the emotion agent with a set request
-            agent_input = {
-                "role": "user",
-                "content": f"Set emotion {emotion} to {value}"
-            }
-            
-            result = await Runner.run(
-                self.emotion_agent,
-                agent_input
-            )
-            
-            # Check if we have a structured result
-            if hasattr(result, "final_output") and result.final_output:
-                return result.final_output
-            
-            # Fall back to direct update
-            return await self._set_emotion_tool(
-                RunContextWrapper(context=None),
-                emotion=emotion,
-                value=value
-            )
-    
-    async def get_formatted_emotional_state_async(self) -> Dict[str, Any]:
-        """Async wrapper for get_formatted_emotional_state for function tool compatibility"""
-        with trace(workflow_name="GetEmotionalState"):
-            # Run the emotion agent for state retrieval
-            agent_input = {
-                "role": "user",
-                "content": "Get current emotional state"
-            }
-            
-            result = await Runner.run(
-                self.emotion_agent,
-                agent_input
-            )
-            
-            # Check if we have a structured result
-            if hasattr(result, "final_output") and result.final_output:
-                return result.final_output
-            
-            # Fall back to direct retrieval
-            return self.get_formatted_emotional_state()
+        # Generate internal thought
+        thought_result = await self._generate_internal_thought(RunContextWrapper(context=None))
+        
+        # Get learning statistics
+        learning_stats = {
+            "positive_patterns": len(self.reward_learning["positive_patterns"]),
+            "negative_patterns": len(self.reward_learning["negative_patterns"]),
+            "learned_rules": len(self.reward_learning["learned_rules"])
+        }
+        
+        # Find dominant traits from emotional history
+        dominant_traits = {}
+        for state in self.emotional_state_history[-20:]:  # Look at last 20 states
+            if "primary_emotion" in state:
+                emotion = state["primary_emotion"].get("name")
+                if emotion:
+                    if emotion not in dominant_traits:
+                        dominant_traits[emotion] = 0
+                    dominant_traits[emotion] += 1
+        
+        # Sort by frequency
+        dominant_traits = dict(sorted(dominant_traits.items(), key=lambda x: x[1], reverse=True)[:3])
+        
+        return {
+            "introspection": thought_result.get("thought_text", "I'm currently processing my emotional state."),
+            "current_emotion": emotional_state["primary_emotion"]["name"],
+            "emotional_patterns": pattern_analysis.get("patterns"),
+            "dominant_traits": dominant_traits,
+            "learning_progress": learning_stats,
+            "introspection_time": datetime.datetime.now().isoformat()
+        }
