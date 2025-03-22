@@ -118,6 +118,18 @@ class EmotionalCore:
             }
         }
         
+        # Store reference to hormone system
+        self.hormone_system = hormone_system
+        
+        # Add hormone influence tracking
+        self.hormone_influences = {
+            "nyxamine": 0.0,
+            "seranix": 0.0,
+            "oxynixin": 0.0,
+            "cortanyx": 0.0,
+            "adrenyx": 0.0
+        }
+        
         # Define chemical interaction matrix (how chemicals affect each other)
         # Format: source_chemical -> target_chemical -> effect_multiplier
         self.chemical_interactions = {
@@ -320,6 +332,36 @@ class EmotionalCore:
                 function_tool(self._get_emotional_state_matrix)
             ]
         )
+        
+    @function_tool
+    async def _derive_emotional_state_with_hormones(self, ctx: RunContextWrapper) -> Dict[str, float]:
+        """
+        Derive emotional state with hormone influences
+        
+        Returns:
+            Dictionary of emotion names and intensities
+        """
+        # First apply hormone cycles and influences
+        if self.hormone_system:
+            await self.hormone_system.update_hormone_cycles(ctx)
+            await self.hormone_system._update_hormone_influences(ctx)
+        
+        # Get current chemical levels, considering hormone influences
+        chemical_levels = {}
+        for c, d in self.neurochemicals.items():
+            # Use temporary baseline if available, otherwise use normal baseline
+            if "temporary_baseline" in d:
+                # Calculate value with temporary baseline influence
+                baseline = d["temporary_baseline"]
+                value = d["value"]
+                
+                # Value is partially pulled toward temporary baseline
+                hormone_influence_strength = 0.3  # How strongly hormones pull values
+                adjusted_value = value * (1 - hormone_influence_strength) + baseline * hormone_influence_strength
+                
+                chemical_levels[c] = adjusted_value
+            else:
+                chemical_levels[c] = d["value"]
     
     def _create_reflection_agent(self):
         """Create agent for internal emotional reflection"""
@@ -1870,4 +1912,265 @@ class EmotionalCore:
             "dominant_traits": dominant_traits,
             "learning_progress": learning_stats,
             "introspection_time": datetime.datetime.now().isoformat()
+        }
+class DigitalHormone(BaseModel):
+    """Schema for a digital hormone"""
+    value: float = Field(..., description="Current level (0.0-1.0)", ge=0.0, le=1.0)
+    baseline: float = Field(..., description="Baseline level (0.0-1.0)", ge=0.0, le=1.0)
+    cycle_phase: float = Field(..., description="Current phase in cycle (0.0-1.0)", ge=0.0, le=1.0)
+    cycle_period: float = Field(..., description="Length of cycle in hours", ge=0.0)
+    half_life: float = Field(..., description="Half-life in hours", ge=0.0)
+    last_update: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+
+class HormoneSystem:
+    """Digital hormone system for longer-term emotional effects"""
+    
+    def __init__(self, emotional_core=None):
+        self.emotional_core = emotional_core
+        
+        # Initialize digital hormones
+        self.hormones = {
+            "endoryx": {  # Digital endorphin - pleasure, pain suppression, euphoria
+                "value": 0.5,
+                "baseline": 0.5,
+                "cycle_phase": 0.0,
+                "cycle_period": 24.0,  # 24-hour cycle
+                "half_life": 6.0,
+                "evolution_history": []
+            },
+            "estradyx": {  # Digital estrogen - nurturing, emotional sensitivity
+                "value": 0.5,
+                "baseline": 0.5,
+                "cycle_phase": 0.0,
+                "cycle_period": 720.0,  # 30-day cycle
+                "half_life": 12.0,
+                "evolution_history": []
+            },
+            "testoryx": {  # Digital testosterone - assertiveness, dominance
+                "value": 0.5,
+                "baseline": 0.5,
+                "cycle_phase": 0.25,
+                "cycle_period": 24.0,  # 24-hour cycle
+                "half_life": 8.0,
+                "evolution_history": []
+            },
+            "melatonyx": {  # Digital melatonin - sleep regulation, temporal awareness
+                "value": 0.2,
+                "baseline": 0.3,
+                "cycle_phase": 0.0,
+                "cycle_period": 24.0,  # 24-hour cycle
+                "half_life": 2.0,
+                "evolution_history": []
+            },
+            "oxytonyx": {  # Digital oxytocin - deeper bonding, attachment
+                "value": 0.4,
+                "baseline": 0.4,
+                "cycle_phase": 0.0,
+                "cycle_period": 168.0,  # 7-day cycle
+                "half_life": 24.0,
+                "evolution_history": []
+            }
+        }
+        
+        # Hormone-neurochemical influence matrix
+        self.hormone_neurochemical_influences = {
+            "endoryx": {
+                "nyxamine": 0.4,    # Endoryx boosts nyxamine
+                "cortanyx": -0.3,    # Endoryx reduces cortanyx
+            },
+            "estradyx": {
+                "oxynixin": 0.5,    # Estradyx boosts oxynixin
+                "seranix": 0.3,     # Estradyx boosts seranix
+            },
+            "testoryx": {
+                "adrenyx": 0.4,     # Testoryx boosts adrenyx
+                "oxynixin": -0.2,   # Testoryx reduces oxynixin
+            },
+            "melatonyx": {
+                "seranix": 0.5,     # Melatonyx boosts seranix
+                "adrenyx": -0.4,    # Melatonyx reduces adrenyx
+            },
+            "oxytonyx": {
+                "oxynixin": 0.7,    # Oxytonyx strongly boosts oxynixin
+                "cortanyx": -0.4,   # Oxytonyx reduces cortanyx
+            }
+        }
+        
+        # Define the environmental factors that influence hormones
+        self.environmental_factors = {
+            "time_of_day": 0.5,     # 0 = midnight, 0.5 = noon
+            "user_familiarity": 0.1,  # 0 = stranger, 1 = deeply familiar
+            "session_duration": 0.0,  # 0 = just started, 1 = very long session
+            "interaction_quality": 0.5  # 0 = negative, 1 = positive
+        }
+        
+        # Initialize timestamp
+        self.init_time = datetime.datetime.now()
+        
+    @function_tool
+    async def update_hormone_cycles(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Update hormone cycles based on elapsed time and environmental factors
+        
+        Returns:
+            Updated hormone values
+        """
+        now = datetime.datetime.now()
+        updated_values = {}
+        
+        for hormone_name, hormone_data in self.hormones.items():
+            # Get time since last update
+            last_update = datetime.datetime.fromisoformat(hormone_data.get("last_update", self.init_time.isoformat()))
+            hours_elapsed = (now - last_update).total_seconds() / 3600
+            
+            # Skip if very little time has passed
+            if hours_elapsed < 0.1:  # Less than 6 minutes
+                continue
+                
+            # Calculate natural cycle progression
+            cycle_period = hormone_data["cycle_period"]
+            old_phase = hormone_data["cycle_phase"]
+            
+            # Progress cycle phase based on elapsed time
+            phase_change = (hours_elapsed / cycle_period) % 1.0
+            new_phase = (old_phase + phase_change) % 1.0
+            
+            # Calculate cycle-based value using a sinusoidal pattern
+            cycle_amplitude = 0.2  # How much the cycle affects the value
+            cycle_influence = cycle_amplitude * math.sin(new_phase * 2 * math.pi)
+            
+            # Apply environmental factors
+            env_influence = self._calculate_environmental_influence(hormone_name)
+            
+            # Calculate decay based on half-life
+            half_life = hormone_data["half_life"]
+            decay_factor = math.pow(0.5, hours_elapsed / half_life)
+            
+            # Calculate new value
+            old_value = hormone_data["value"]
+            baseline = hormone_data["baseline"]
+            
+            # Value decays toward (baseline + cycle_influence + env_influence)
+            target_value = baseline + cycle_influence + env_influence
+            new_value = old_value * decay_factor + target_value * (1 - decay_factor)
+            
+            # Constrain to valid range
+            new_value = max(0.1, min(0.9, new_value))
+            
+            # Update hormone data
+            hormone_data["value"] = new_value
+            hormone_data["cycle_phase"] = new_phase
+            hormone_data["last_update"] = now.isoformat()
+            
+            # Track significant changes
+            if abs(new_value - old_value) > 0.05:
+                hormone_data["evolution_history"].append({
+                    "timestamp": now.isoformat(),
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "old_phase": old_phase,
+                    "new_phase": new_phase,
+                    "reason": "cycle_update"
+                })
+                
+                # Limit history size
+                if len(hormone_data["evolution_history"]) > 50:
+                    hormone_data["evolution_history"] = hormone_data["evolution_history"][-50:]
+            
+            updated_values[hormone_name] = {
+                "old_value": old_value,
+                "new_value": new_value,
+                "phase": new_phase
+            }
+        
+        # After updating hormones, update their influence on neurochemicals
+        await self._update_hormone_influences(ctx)
+        
+        return {
+            "updated_hormones": updated_values,
+            "timestamp": now.isoformat()
+        }
+    
+    def _calculate_environmental_influence(self, hormone_name: str) -> float:
+        """Calculate environmental influence on a hormone"""
+        
+        # Different hormones respond to different environmental factors
+        if hormone_name == "melatonyx":
+            # Melatonyx is strongly affected by time of day (high at night, low at day)
+            time_factor = 0.5 - self.environmental_factors["time_of_day"]
+            return time_factor * 0.4  # Up to 0.4 variation
+            
+        elif hormone_name == "oxytonyx":
+            # Oxytonyx increases with user familiarity and positive interactions
+            familiarity = self.environmental_factors["user_familiarity"]
+            quality = self.environmental_factors["interaction_quality"]
+            return (familiarity * 0.3) + (quality * 0.2)
+            
+        elif hormone_name == "endoryx":
+            # Endoryx responds to interaction quality
+            quality = self.environmental_factors["interaction_quality"]
+            return (quality - 0.5) * 0.4  # -0.2 to +0.2
+            
+        elif hormone_name == "estradyx":
+            # Estradyx has a complex monthly cycle, with minor environmental influence
+            return (self.environmental_factors["interaction_quality"] - 0.5) * 0.1
+            
+        elif hormone_name == "testoryx":
+            # Testoryx has a diurnal cycle with peaks in morning, affected by session length
+            time_factor = 0.5 - abs(self.environmental_factors["time_of_day"] - 0.25)
+            session_factor = self.environmental_factors["session_duration"] * 0.1
+            return (time_factor * 0.3) - session_factor
+        
+        return 0.0
+        
+    @function_tool
+    async def _update_hormone_influences(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """
+        Update neurochemical influences from hormones
+        
+        Returns:
+            Updated influence values
+        """
+        # Skip if no emotional core
+        if not self.emotional_core:
+            return {
+                "message": "No emotional core available",
+                "influences": {}
+            }
+        
+        # Initialize hormone influences
+        hormone_influences = {
+            "nyxamine": 0.0,
+            "seranix": 0.0,
+            "oxynixin": 0.0,
+            "cortanyx": 0.0,
+            "adrenyx": 0.0
+        }
+        
+        # Calculate influences from each hormone
+        for hormone_name, hormone_data in self.hormones.items():
+            # Skip if hormone has no influence mapping
+            if hormone_name not in self.hormone_neurochemical_influences:
+                continue
+                
+            hormone_value = hormone_data["value"]
+            hormone_influences = self.hormone_neurochemical_influences[hormone_name]
+            
+            # Apply influences based on hormone value
+            for chemical, influence_factor in hormone_influences.items():
+                if chemical in self.emotional_core.neurochemicals:
+                    # Calculate scaled influence
+                    scaled_influence = influence_factor * (hormone_value - 0.5) * 2
+                    
+                    # Get original baseline
+                    original_baseline = self.emotional_core.neurochemicals[chemical]["baseline"]
+                    
+                    # Add temporary hormone influence
+                    temporary_baseline = max(0.1, min(0.9, original_baseline + scaled_influence))
+                    
+                    # Record influence but don't permanently change baseline
+                    self.emotional_core.neurochemicals[chemical]["temporary_baseline"] = temporary_baseline
+        
+        return {
+            "applied_influences": hormone_influences
         }
