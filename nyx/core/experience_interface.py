@@ -4,15 +4,53 @@ import logging
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union, Set
-import numpy as np
 import random
+from pydantic import BaseModel, Field
+
+# Import OpenAI Agents SDK components
+from agents import (
+    Agent, Runner, GuardrailFunctionOutput, InputGuardrail, OutputGuardrail,
+    function_tool, handoff, trace, RunContextWrapper, FunctionTool
+)
 
 logger = logging.getLogger(__name__)
 
+# Define schema models for structured outputs
+class ExperienceOutput(BaseModel):
+    """Schema for experience retrieval output"""
+    experience_text: str = Field(..., description="The formatted experience text")
+    confidence: float = Field(..., description="Confidence score (0.0-1.0)")
+    source_id: Optional[str] = Field(None, description="Source memory ID")
+    relevance_score: float = Field(..., description="Relevance score (0.0-1.0)")
+    emotional_context: Optional[Dict[str, Any]] = Field(None, description="Emotional context data")
+
+class ReflectionOutput(BaseModel):
+    """Schema for reflection output"""
+    reflection_text: str = Field(..., description="The reflection text")
+    confidence: float = Field(..., description="Confidence score (0.0-1.0)")
+    experience_ids: List[str] = Field(default_factory=list, description="IDs of experiences used")
+    insight_level: float = Field(..., description="Depth of insight (0.0-1.0)")
+
+class NarrativeOutput(BaseModel):
+    """Schema for narrative output"""
+    narrative_text: str = Field(..., description="The narrative text")
+    experiences_included: int = Field(..., description="Number of experiences included")
+    coherence_score: float = Field(..., description="Narrative coherence (0.0-1.0)")
+    chronological: bool = Field(..., description="Whether narrative is chronological")
+
+class ExperienceContextData(BaseModel):
+    """Context data for experience operations"""
+    query: str = Field(..., description="Query or topic")
+    scenario_type: Optional[str] = Field(None, description="Type of scenario")
+    emotional_state: Dict[str, Any] = Field(default_factory=dict, description="Current emotional state")
+    entities: List[str] = Field(default_factory=list, description="Entities involved")
+    user_id: Optional[str] = Field(None, description="User ID")
+    timestamp: Optional[str] = Field(None, description="Operation timestamp")
+
 class ExperienceInterface:
     """
-    Interface for managing, retrieving, and formatting experience-related memories.
-    Provides natural language experience sharing and recall functionality.
+    Agent-based interface for managing, retrieving, and formatting experience-related memories.
+    Provides natural language experience sharing and recall functionality using OpenAI Agents SDK.
     """
     
     def __init__(self, memory_core, emotional_core):
@@ -26,19 +64,15 @@ class ExperienceInterface:
         self.memory_core = memory_core
         self.emotional_core = emotional_core
         
+        # Set up agents
+        self.experience_agent = self._create_experience_agent()
+        self.reflection_agent = self._create_reflection_agent()
+        self.narrative_agent = self._create_narrative_agent()
+        self.recall_agent = self._create_recall_agent()
+        
         # Caching
         self.experience_cache = {}
         self.last_retrieval_time = datetime.now()
-        self.relevance_cache = {}
-        
-        # Confidence mapping 
-        self.confidence_markers = {
-            (0.8, 1.0): "vividly recall",
-            (0.6, 0.8): "clearly remember",
-            (0.4, 0.6): "remember",
-            (0.2, 0.4): "think I recall",
-            (0.0, 0.2): "vaguely remember"
-        }
         
         # Template patterns for experience recall formatting
         self.recall_templates = {
@@ -84,18 +118,124 @@ class ExperienceInterface:
                 "I once dealt with someone who needed strict handling when they {brief_summary}. {reflection}"
             ]
         }
+        
+        # Confidence mapping
+        self.confidence_markers = {
+            (0.8, 1.0): "vividly recall",
+            (0.6, 0.8): "clearly remember",
+            (0.4, 0.6): "remember",
+            (0.2, 0.4): "think I recall",
+            (0.0, 0.2): "vaguely remember"
+        }
+        
+    def _create_experience_agent(self):
+        """Create the main experience agent"""
+        return Agent(
+            name="Experience Agent",
+            instructions="""
+            You are the Experience Agent, responsible for managing and retrieving experiences.
+            Your role is to determine the best way to handle experience-related requests and
+            coordinate with specialized agents when appropriate.
+            """,
+            handoffs=[
+                handoff(self._create_reflection_agent()),
+                handoff(self._create_narrative_agent()),
+                handoff(self._create_recall_agent())
+            ],
+            tools=[
+                function_tool(self._retrieve_experiences),
+                function_tool(self._get_emotional_context),
+                function_tool(self._store_experience)
+            ],
+            input_guardrails=[
+                InputGuardrail(guardrail_function=self._experience_request_guardrail)
+            ]
+        )
     
-    async def retrieve_experiences_enhanced(self, 
-                                         query: str,
-                                         scenario_type: Optional[str] = None,
-                                         limit: int = 3) -> List[Dict[str, Any]]:
+    def _create_reflection_agent(self):
+        """Create the reflection agent for generating reflections from experiences"""
+        return Agent(
+            name="Reflection Agent",
+            handoff_description="Specialist agent for generating reflections from experiences",
+            instructions="""
+            You are the Reflection Agent, specialized in generating insightful reflections
+            based on experiences. Create thoughtful, introspective reflections that show
+            personality and emotional growth.
+            """,
+            tools=[
+                function_tool(self._retrieve_experiences),
+                function_tool(self._get_emotional_context)
+            ],
+            output_type=ReflectionOutput
+        )
+    
+    def _create_narrative_agent(self):
+        """Create the narrative agent for constructing coherent narratives"""
+        return Agent(
+            name="Narrative Agent",
+            handoff_description="Specialist agent for constructing narratives from experiences",
+            instructions="""
+            You are the Narrative Agent, specialized in constructing coherent narratives
+            from multiple experiences. Weave experiences together in a way that creates
+            a compelling and meaningful story.
+            """,
+            tools=[
+                function_tool(self._retrieve_experiences),
+                function_tool(self._get_timeframe_text)
+            ],
+            output_type=NarrativeOutput
+        )
+    
+    def _create_recall_agent(self):
+        """Create the recall agent for conversational experience recall"""
+        return Agent(
+            name="Recall Agent",
+            handoff_description="Specialist agent for conversational recall of experiences",
+            instructions="""
+            You are the Recall Agent, specialized in conversational recall of experiences.
+            Generate natural, engaging, and emotionally appropriate recollections of experiences.
+            """,
+            tools=[
+                function_tool(self._get_emotional_tone),
+                function_tool(self._get_scenario_tone),
+                function_tool(self._get_timeframe_text),
+                function_tool(self._get_confidence_marker)
+            ],
+            output_type=ExperienceOutput
+        )
+    
+    # Guardrail functions
+    
+    async def _experience_request_guardrail(self, ctx, agent, input_data):
+        """Guardrail to validate experience requests"""
+        # Check for minimum context
+        if isinstance(input_data, str) and len(input_data.strip()) < 3:
+            return GuardrailFunctionOutput(
+                output_info={"error": "Request too short"},
+                tripwire_triggered=True
+            )
+        
+        return GuardrailFunctionOutput(
+            output_info={"valid": True},
+            tripwire_triggered=False
+        )
+    
+    # Tool functions
+    
+    @function_tool
+    async def _retrieve_experiences(self, ctx: RunContextWrapper, 
+                                query: str,
+                                scenario_type: Optional[str] = None,
+                                limit: int = 3,
+                                min_relevance: float = 0.6) -> List[Dict[str, Any]]:
         """
-        Enhanced retrieval of experiences based on query and scenario type.
+        Retrieve relevant experiences based on query and scenario type
         
         Args:
             query: Search query
             scenario_type: Optional scenario type to filter by
             limit: Maximum number of experiences to return
+            min_relevance: Minimum relevance score (0.0-1.0)
             
         Returns:
             List of relevant experiences with metadata
@@ -108,33 +248,8 @@ class ExperienceInterface:
             "entities": []
         }
         
-        # Use the core method for retrieval
-        return await self.retrieve_relevant_experiences(
-            current_context=context,
-            limit=limit
-        )
-    
-    async def retrieve_relevant_experiences(self, 
-                                          current_context: Dict[str, Any],
-                                          limit: int = 3,
-                                          min_relevance: float = 0.6) -> List[Dict[str, Any]]:
-        """
-        Retrieve experiences relevant to the current conversation context.
-        
-        Args:
-            current_context: Current conversation context including:
-                - query: Search query or current topic
-                - scenario_type: Type of scenario (e.g., "teasing", "dark")
-                - emotional_state: Current emotional state
-                - entities: Entities involved in current context
-            limit: Maximum number of experiences to return
-            min_relevance: Minimum relevance score (0.0-1.0)
-            
-        Returns:
-            List of relevant experiences with metadata
-        """
         # Check cache for identical request
-        cache_key = f"{current_context.get('query', '')}_{current_context.get('scenario_type', '')}_{limit}_{min_relevance}"
+        cache_key = f"{query}_{scenario_type}_{limit}_{min_relevance}"
         if cache_key in self.experience_cache:
             cache_time, cache_result = self.experience_cache[cache_key]
             # Use cache if less than 5 minutes old
@@ -142,15 +257,12 @@ class ExperienceInterface:
             if cache_age < 300:
                 return cache_result
         
-        # Extract key information from context
-        query = current_context.get("query", "")
-        
         # Get base memories from memory system
         base_memories = await self.memory_core.retrieve_memories(
             query=query,
             memory_types=["observation", "reflection", "episodic", "experience"],
             limit=limit*3,  # Get more to filter later
-            context=current_context
+            context=context
         )
         
         if not base_memories:
@@ -160,19 +272,10 @@ class ExperienceInterface:
         # Score memories for relevance
         scored_memories = []
         for memory in base_memories:
-            # Calculate relevance score
-            relevance_score = await self._calculate_relevance_score(
-                memory, current_context
-            )
-            
-            # Skip low-relevance memories
-            if relevance_score < min_relevance:
-                continue
-            
             # Get emotional context for this memory
             emotional_context = await self._get_memory_emotional_context(memory)
             
-            # Calculate experiential richness (how much detail/emotion it has)
+            # Calculate experiential richness
             experiential_richness = self._calculate_experiential_richness(
                 memory, emotional_context
             )
@@ -180,10 +283,10 @@ class ExperienceInterface:
             # Add to scored memories
             scored_memories.append({
                 "memory": memory,
-                "relevance_score": relevance_score,
+                "relevance_score": memory.get("relevance", 0.5),
                 "emotional_context": emotional_context,
                 "experiential_richness": experiential_richness,
-                "final_score": relevance_score * 0.7 + experiential_richness * 0.3
+                "final_score": memory.get("relevance", 0.5) * 0.7 + experiential_richness * 0.3
             })
         
         # Sort by final score
@@ -192,13 +295,14 @@ class ExperienceInterface:
         # Process top memories into experiences
         experiences = []
         for item in scored_memories[:limit]:
-            experience = await self._convert_memory_to_experience(
-                item["memory"],
-                item["emotional_context"],
-                item["relevance_score"],
-                item["experiential_richness"]
-            )
-            experiences.append(experience)
+            if item["final_score"] >= min_relevance:
+                experience = await self._convert_memory_to_experience(
+                    item["memory"],
+                    item["emotional_context"],
+                    item["relevance_score"],
+                    item["experiential_richness"]
+                )
+                experiences.append(experience)
         
         # Cache the result
         self.experience_cache[cache_key] = (datetime.now(), experiences)
@@ -206,197 +310,21 @@ class ExperienceInterface:
         
         return experiences
     
-    async def generate_conversational_recall(self, 
-                                          experience: Dict[str, Any],
-                                          context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Generate a natural, conversational recall of an experience.
-        
-        Args:
-            experience: The experience to recall
-            context: Current conversation context
-            
-        Returns:
-            Conversational recall with reflection
-        """
-        # Extract experience data
-        content = experience.get("content", experience.get("memory_text", ""))
-        emotional_context = experience.get("emotional_context", {})
-        scenario_type = experience.get("scenario_type", "general")
-        timestamp = experience.get("timestamp", experience.get("metadata", {}).get("timestamp"))
-        
-        # Get timeframe text
-        timeframe = self._get_timeframe_text(timestamp)
-        
-        # Determine tone for recall
-        emotional_tone = self._get_emotional_tone(emotional_context)
-        scenario_tone = self._get_scenario_tone(scenario_type)
-        
-        # Select tone (prioritize scenario tone if available)
-        tone = scenario_tone or emotional_tone
-        
-        # Get templates for this tone
-        templates = self.recall_templates.get(tone, self.recall_templates["standard"])
-        
-        # Select a random template
-        template = random.choice(templates)
-        
-        # Generate simple components for template filling
-        sentences = content.split(".")
-        brief_summary = sentences[0] if sentences else "something happened"
-        if len(brief_summary) > 50:
-            brief_summary = brief_summary[:47] + "..."
-        
-        detail = ""
-        if len(sentences) > 1:
-            detail = sentences[1]
-            if len(detail) > 60:
-                detail = detail[:57] + "..."
-        else:
-            detail = "It was quite memorable."
-        
-        # Generate a reflection based on scenario type and emotion
-        reflection = "I found it quite interesting to observe."
-        
-        # Fill in the template
-        recall_text = template.format(
-            timeframe=timeframe,
-            brief_summary=brief_summary,
-            detail=detail,
-            reflection=reflection
-        )
-        
-        return {
-            "recall_text": recall_text,
-            "confidence": experience.get("relevance_score", 0.5)
-        }
+    @function_tool
+    async def _get_emotional_context(self, ctx: RunContextWrapper) -> Dict[str, Any]:
+        """Get current emotional context"""
+        return self.emotional_core.get_formatted_emotional_state()
     
-    async def handle_experience_sharing_request(self,
-                                             user_query: str,
-                                             context_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    @function_tool
+    async def _store_experience(self, ctx: RunContextWrapper,
+                             memory_text: str,
+                             scenario_type: str = "general",
+                             entities: List[str] = None,
+                             emotional_context: Dict[str, Any] = None,
+                             significance: int = 5,
+                             tags: List[str] = None) -> Dict[str, Any]:
         """
-        Process a user request to share experiences.
-        
-        Args:
-            user_query: User's query text
-            context_data: Additional context data
-            
-        Returns:
-            Experience sharing response
-        """
-        context_data = context_data or {}
-        
-        # Create context for experience retrieval
-        context = {
-            "query": user_query,
-            "scenario_type": context_data.get("scenario_type", ""),
-            "emotional_state": self.emotional_core.get_formatted_emotional_state(),
-            "entities": context_data.get("entities", [])
-        }
-        
-        # Retrieve relevant experiences
-        experiences = await self.retrieve_relevant_experiences(
-            current_context=context,
-            limit=1  # Just get the most relevant experience
-        )
-        
-        if not experiences:
-            return {
-                "has_experience": False,
-                "response_text": None
-            }
-        
-        # Generate conversational recall for the most relevant experience
-        top_experience = experiences[0]
-        recall_result = await self.generate_conversational_recall(
-            experience=top_experience,
-            context=context_data
-        )
-        
-        return {
-            "has_experience": True,
-            "response_text": recall_result["recall_text"],
-            "confidence": recall_result["confidence"],
-            "experience": top_experience
-        }
-    
-    async def generate_personality_reflection(self,
-                                           experiences: List[Dict[str, Any]],
-                                           context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Generate a personality-driven reflection based on experiences.
-        
-        Args:
-            experiences: List of experiences to reflect on
-            context: Current conversation context
-            
-        Returns:
-            Personality-driven reflection
-        """
-        if not experiences:
-            return {
-                "reflection": "I don't have specific experiences to reflect on yet.",
-                "confidence": 0.3
-            }
-        
-        # Extract key information from top experience
-        top_experience = experiences[0]
-        
-        # For more complex reflections with multiple experiences
-        if len(experiences) > 1:
-            reflection = await self._generate_complex_reflection(experiences, context)
-            return reflection
-        
-        # For simpler reflections based on a single experience
-        scenario_type = top_experience.get("scenario_type", "general")
-        emotional_context = top_experience.get("emotional_context", {})
-        
-        # Generate simple reflection
-        reflection = "Reflecting on this experience, I've noticed patterns in how I approach similar situations."
-        
-        # Determine confidence based on relevance and richness
-        relevance = top_experience.get("relevance_score", 0.5)
-        richness = top_experience.get("experiential_richness", 0.5)
-        confidence = 0.5 + (relevance * 0.25) + (richness * 0.25)
-        
-        return {
-            "reflection": reflection,
-            "confidence": confidence,
-            "experience_id": top_experience.get("id"),
-            "scenario_type": scenario_type,
-            "emotional_context": emotional_context
-        }
-    
-    async def construct_narrative(self,
-                               experiences: List[Dict[str, Any]],
-                               topic: str,
-                               chronological: bool = True) -> Dict[str, Any]:
-        """
-        Construct a coherent narrative from multiple experiences.
-        
-        Args:
-            experiences: List of experiences to include in narrative
-            topic: Topic of the narrative
-            chronological: Whether to maintain chronological order
-            
-        Returns:
-            Narrative data
-        """
-        return await self.memory_core.construct_narrative_from_memories(
-            topic=topic,
-            chronological=chronological,
-            limit=len(experiences)
-        )
-        
-    async def store_experience(self,
-                            memory_text: str,
-                            scenario_type: str = "general",
-                            entities: List[str] = None,
-                            emotional_context: Dict[str, Any] = None,
-                            significance: int = 5,
-                            tags: List[str] = None) -> Dict[str, Any]:
-        """
-        Store a new experience in the memory system.
+        Store a new experience in the memory system
         
         Args:
             memory_text: The memory text
@@ -452,132 +380,131 @@ class ExperienceInterface:
             "tags": tags,
             "significance": significance
         }
-        
-    async def _calculate_relevance_score(self, 
-                                      memory: Dict[str, Any], 
-                                      context: Dict[str, Any]) -> float:
+    
+    @function_tool
+    async def _get_emotional_tone(self, ctx: RunContextWrapper, 
+                             emotional_context: Dict[str, Any]) -> str:
         """
-        Calculate how relevant a memory is to the current context.
+        Determine the emotional tone for recall based on emotions
         
         Args:
-            memory: Memory to evaluate
-            context: Current conversation context
+            emotional_context: Emotional context data
             
         Returns:
-            Relevance score (0.0-1.0)
+            Emotional tone string
         """
-        # Check cache for this calculation
-        memory_id = memory.get("id", "")
-        context_hash = hash(str(context))
-        cache_key = f"{memory_id}_{context_hash}"
-        
-        if cache_key in self.relevance_cache:
-            return self.relevance_cache[cache_key]
-        
-        # Extract memory attributes
-        memory_text = memory.get("memory_text", "")
-        memory_tags = memory.get("tags", [])
-        memory_metadata = memory.get("metadata", {})
-        
-        # Initialize score components
-        semantic_score = 0.0
-        tag_score = 0.0
-        temporal_score = 0.0
-        emotional_score = 0.0
-        entity_score = 0.0
-        
-        # Semantic relevance (via embedding similarity)
-        # This would ideally use the embedding similarity from your memory system
-        if "relevance" in memory:
-            semantic_score = memory.get("relevance", 0.0)
-        elif "embedding" in memory and "query_embedding" in context:
-            # Calculate cosine similarity if both embeddings available
-            memory_embedding = np.array(memory["embedding"])
-            query_embedding = np.array(context["query_embedding"])
+        if not emotional_context:
+            return "standard"
             
-            # Cosine similarity
-            dot_product = np.dot(memory_embedding, query_embedding)
-            norm_product = np.linalg.norm(memory_embedding) * np.linalg.norm(query_embedding)
-            semantic_score = dot_product / norm_product if norm_product > 0 else 0.0
-        else:
-            # Fallback: keyword matching
-            query = context.get("query", "").lower()
-            text = memory_text.lower()
+        primary = emotional_context.get("primary_emotion", "neutral")
+        intensity = emotional_context.get("primary_intensity", 0.5)
+        valence = emotional_context.get("valence", 0.0)
+        
+        # High intensity experiences
+        if intensity > 0.8:
+            return "intense"
             
-            # Simple word overlap
-            query_words = set(query.split())
-            text_words = set(text.split())
+        # Positive emotions
+        if valence > 0.3 or primary in ["Joy", "Anticipation", "Trust", "Love"]:
+            return "positive"
             
-            if query_words:
-                matches = query_words.intersection(text_words)
-                semantic_score = len(matches) / len(query_words)
+        # Negative emotions
+        if valence < -0.3 or primary in ["Anger", "Fear", "Disgust", "Sadness", "Frustration"]:
+            return "negative"
+            
+        # Default to standard
+        return "standard"
+    
+    @function_tool
+    async def _get_scenario_tone(self, ctx: RunContextWrapper, 
+                              scenario_type: str) -> str:
+        """
+        Get tone based on scenario type
+        
+        Args:
+            scenario_type: Type of scenario
+            
+        Returns:
+            Scenario tone string
+        """
+        scenario_type = scenario_type.lower()
+        
+        if scenario_type in ["teasing", "indulgent"]:
+            return "teasing"
+        elif scenario_type in ["discipline", "punishment", "training"]:
+            return "disciplinary"
+        elif scenario_type in ["dark", "fear"]:
+            return "intense"
+        
+        # No specific tone for this scenario type
+        return "standard"
+    
+    @function_tool
+    async def _get_timeframe_text(self, ctx: RunContextWrapper, 
+                             timestamp: Optional[str]) -> str:
+        """
+        Get conversational timeframe text from timestamp
+        
+        Args:
+            timestamp: ISO timestamp string
+            
+        Returns:
+            Natural language timeframe text
+        """
+        if not timestamp:
+            return "a while back"
+            
+        try:
+            if isinstance(timestamp, str):
+                memory_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
             else:
-                semantic_score = 0.1  # Minimal score for empty query
-        
-        # Tag matching
-        scenario_type = context.get("scenario_type", "").lower()
-        context_tags = context.get("tags", [])
-        
-        # Count matching tags
-        matching_tags = 0
-        for tag in memory_tags:
-            if tag.lower() in scenario_type or tag in context_tags:
-                matching_tags += 1
-        
-        tag_score = min(1.0, matching_tags / 3) if memory_tags else 0.0
-        
-        # Temporal relevance (newer memories score higher)
-        if "timestamp" in memory:
-            memory_time = datetime.fromisoformat(memory["timestamp"]) if isinstance(memory["timestamp"], str) else memory["timestamp"]
-            age_in_days = (datetime.now() - memory_time).total_seconds() / 86400
-            # Newer memories get higher scores, but not too dominant
-            temporal_score = max(0.0, 1.0 - (age_in_days / 180))  # 6 month scale
-        
-        # Emotional relevance
-        memory_emotions = memory_metadata.get("emotions", {})
-        context_emotions = context.get("emotional_state", {})
-        
-        if memory_emotions and context_emotions:
-            # Compare primary emotions
-            memory_primary = memory_emotions.get("primary", {}).get("name", "neutral")
-            context_primary = context_emotions.get("primary_emotion", "neutral")
-            
-            # Emotion match bonus
-            if memory_primary == context_primary:
-                emotional_score += 0.5
+                memory_time = timestamp
                 
-            # Emotional intensity comparison
-            memory_intensity = memory_emotions.get("primary", {}).get("intensity", 0.5)
-            context_intensity = context_emotions.get("intensity", 0.5)
+            days_ago = (datetime.now() - memory_time).days
             
-            # Similar intensity bonus
-            emotional_score += 0.5 * (1.0 - abs(memory_intensity - context_intensity))
+            if days_ago < 1:
+                return "earlier today"
+            elif days_ago < 2:
+                return "yesterday"
+            elif days_ago < 7:
+                return f"{days_ago} days ago"
+            elif days_ago < 14:
+                return "last week"
+            elif days_ago < 30:
+                return "a couple weeks ago"
+            elif days_ago < 60:
+                return "a month ago"
+            elif days_ago < 365:
+                return f"{days_ago // 30} months ago"
+            else:
+                return "a while back"
+                
+        except Exception as e:
+            logger.error(f"Error processing timestamp: {e}")
+            return "a while back"
+    
+    @function_tool
+    async def _get_confidence_marker(self, ctx: RunContextWrapper, 
+                                relevance: float) -> str:
+        """
+        Get confidence marker text based on relevance score
         
-        # Entity relevance
-        memory_entities = memory_metadata.get("entities", [])
-        context_entities = context.get("entities", [])
-        
-        if memory_entities and context_entities:
-            matching_entities = len(set(memory_entities).intersection(set(context_entities)))
-            entity_score = min(1.0, matching_entities / len(context_entities)) if context_entities else 0.0
-        
-        # Combine scores with weights
-        final_score = (
-            semantic_score * 0.35 +
-            tag_score * 0.20 +
-            temporal_score * 0.10 +
-            emotional_score * 0.20 +
-            entity_score * 0.15
-        )
-        
-        # Cache the result
-        self.relevance_cache[cache_key] = final_score
-        
-        return min(1.0, max(0.0, final_score))
+        Args:
+            relevance: Relevance score (0.0-1.0)
+            
+        Returns:
+            Confidence marker text
+        """
+        for (min_val, max_val), marker in self.confidence_markers.items():
+            if min_val <= relevance < max_val:
+                return marker
+        return "remember"  # Default
+    
+    # Helper functions
     
     async def _get_memory_emotional_context(self, memory: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Get or infer emotional context for a memory.
+        Get or infer emotional context for a memory
         
         Args:
             memory: Memory to analyze
@@ -599,7 +526,6 @@ class ExperienceInterface:
             # Get memory tags for context
             tags = memory.get("tags", [])
             
-            # For best results, analyze the text directly
             # Use emotional_core if available
             if self.emotional_core:
                 try:
@@ -663,8 +589,7 @@ class ExperienceInterface:
                                        memory: Dict[str, Any], 
                                        emotional_context: Dict[str, Any]) -> float:
         """
-        Calculate how rich and detailed the experience is.
-        Higher scores mean the memory has more emotional and sensory detail.
+        Calculate how rich and detailed the experience is
         
         Args:
             memory: Memory to evaluate
@@ -684,8 +609,7 @@ class ExperienceInterface:
         sensory_richness = 0.0
         significance_score = 0.0
         
-        # Text length as a proxy for detail (longer memories might have more detail)
-        # Capped at reasonable limits to avoid overly long memories dominating
+        # Text length as a proxy for detail
         word_count = len(memory_text.split())
         detail_score = min(1.0, word_count / 100)  # Cap at 100 words
         
@@ -726,7 +650,7 @@ class ExperienceInterface:
                                          relevance_score: float,
                                          experiential_richness: float) -> Dict[str, Any]:
         """
-        Convert a raw memory into a rich experience format.
+        Convert a raw memory into a rich experience format
         
         Args:
             memory: The base memory
@@ -775,121 +699,249 @@ class ExperienceInterface:
         
         return experience
     
-    async def _generate_complex_reflection(self,
-                                        experiences: List[Dict[str, Any]],
-                                        context: Dict[str, Any] = None) -> Dict[str, Any]:
+    # Public API methods
+    
+    async def retrieve_experiences_enhanced(self, 
+                                         query: str,
+                                         scenario_type: Optional[str] = None,
+                                         limit: int = 3) -> List[Dict[str, Any]]:
         """
-        Generate a more complex reflection based on multiple experiences.
+        Enhanced retrieval of experiences based on query and scenario type
+        
+        Args:
+            query: Search query
+            scenario_type: Optional scenario type to filter by
+            limit: Maximum number of experiences to return
+            
+        Returns:
+            List of relevant experiences with metadata
+        """
+        # Use the Agent SDK to run the experience agent
+        with trace(workflow_name="ExperienceRetrieval"):
+            context = ExperienceContextData(
+                query=query,
+                scenario_type=scenario_type,
+                emotional_state=self.emotional_core.get_formatted_emotional_state(),
+                entities=[],
+                timestamp=datetime.now().isoformat()
+            )
+            
+            result = await Runner.run(
+                self.experience_agent,
+                f"Retrieve {limit} experiences related to: {query}" + 
+                (f" with scenario type: {scenario_type}" if scenario_type else ""),
+                context=context
+            )
+            
+            # The agent may have reformatted experiences as part of its output
+            if hasattr(result, "experiences") and result.experiences:
+                return result.experiences
+            
+            # Fall back to direct retrieval if agent didn't return experiences
+            return await self._retrieve_experiences(
+                RunContextWrapper(context=context),
+                query=query,
+                scenario_type=scenario_type,
+                limit=limit
+            )
+    
+    async def generate_conversational_recall(self, 
+                                          experience: Dict[str, Any],
+                                          context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Generate a natural, conversational recall of an experience
+        
+        Args:
+            experience: The experience to recall
+            context: Current conversation context
+            
+        Returns:
+            Conversational recall with reflection
+        """
+        # Use the Recall Agent for this task
+        with trace(workflow_name="ConversationalRecall"):
+            context_data = ExperienceContextData(
+                query="recall experience",
+                scenario_type=experience.get("scenario_type", "general"),
+                emotional_state=self.emotional_core.get_formatted_emotional_state(),
+                entities=experience.get("entities", []),
+                timestamp=datetime.now().isoformat()
+            )
+            
+            # Create the agent input
+            agent_input = {
+                "role": "user",
+                "content": f"Generate a conversational recall of this experience: {experience.get('content', '')}",
+                "experience": experience
+            }
+            
+            result = await Runner.run(
+                self.recall_agent,
+                agent_input,
+                context=context_data
+            )
+            
+            # Return the agent's structured output
+            recall_output = result.final_output_as(ExperienceOutput)
+            
+            return {
+                "recall_text": recall_output.experience_text,
+                "confidence": recall_output.confidence,
+                "experience": experience
+            }
+    
+    async def handle_experience_sharing_request(self,
+                                             user_query: str,
+                                             context_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process a user request to share experiences
+        
+        Args:
+            user_query: User's query text
+            context_data: Additional context data
+            
+        Returns:
+            Experience sharing response
+        """
+        context_data = context_data or {}
+        
+        # Use the agent system for handling this request
+        with trace(workflow_name="ExperienceSharing"):
+            # Prepare context
+            context = ExperienceContextData(
+                query=user_query,
+                scenario_type=context_data.get("scenario_type", ""),
+                emotional_state=self.emotional_core.get_formatted_emotional_state(),
+                entities=context_data.get("entities", []),
+                timestamp=datetime.now().isoformat()
+            )
+            
+            # Run the experience agent
+            result = await Runner.run(
+                self.experience_agent,
+                f"Share an experience related to: {user_query}",
+                context=context
+            )
+            
+            # Process the result
+            if hasattr(result, "final_output") and result.final_output:
+                # Check if we have a structured output
+                if isinstance(result.final_output, ExperienceOutput):
+                    return {
+                        "has_experience": True,
+                        "response_text": result.final_output.experience_text,
+                        "confidence": result.final_output.confidence,
+                        "experience": {"id": result.final_output.source_id}
+                    }
+                # Otherwise use the text output
+                else:
+                    return {
+                        "has_experience": True,
+                        "response_text": str(result.final_output),
+                        "confidence": 0.5,  # Default confidence
+                        "experience": None
+                    }
+            
+            # No experiences found
+            return {
+                "has_experience": False,
+                "response_text": None
+            }
+    
+    async def generate_personality_reflection(self,
+                                           experiences: List[Dict[str, Any]],
+                                           context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Generate a personality-driven reflection based on experiences
         
         Args:
             experiences: List of experiences to reflect on
             context: Current conversation context
             
         Returns:
-            Complex reflection
+            Personality-driven reflection
         """
-        # Extract key data from experiences
-        primary_emotions = [exp.get("emotional_context", {}).get("primary_emotion", "neutral") for exp in experiences]
-        scenario_types = [exp.get("scenario_type", "general") for exp in experiences]
+        if not experiences:
+            return {
+                "reflection": "I don't have specific experiences to reflect on yet.",
+                "confidence": 0.3
+            }
         
-        # Determine dominant emotion and scenario type
-        emotion_counts = {}
-        for emotion in primary_emotions:
-            emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
-        dominant_emotion = max(emotion_counts.items(), key=lambda x: x[1])[0] if emotion_counts else "neutral"
-        
-        scenario_counts = {}
-        for scenario in scenario_types:
-            scenario_counts[scenario] = scenario_counts.get(scenario, 0) + 1
-        dominant_scenario = max(scenario_counts.items(), key=lambda x: x[1])[0] if scenario_counts else "general"
-        
-        # Generate a reflection about patterns across experiences
-        reflection_text = "I've noticed an interesting pattern across these experiences that highlights my approach to similar situations."
-        
-        # Calculate confidence based on experience count and relevance
-        relevance_scores = [exp.get("relevance_score", 0.5) for exp in experiences]
-        avg_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.5
-        
-        # More relevant experiences = higher confidence
-        confidence = 0.5 + (avg_relevance * 0.3) + (min(len(experiences), 3) * 0.1 / 3)
-        
-        return {
-            "reflection": reflection_text,
-            "confidence": min(1.0, confidence),
-            "experience_count": len(experiences),
-            "experience_ids": [exp.get("id") for exp in experiences],
-            "dominant_emotion": dominant_emotion,
-            "dominant_scenario": dominant_scenario
-        }
+        # Use the Reflection Agent for this task
+        with trace(workflow_name="PersonalityReflection"):
+            context_data = ExperienceContextData(
+                query="reflect on experiences",
+                scenario_type="",
+                emotional_state=self.emotional_core.get_formatted_emotional_state(),
+                timestamp=datetime.now().isoformat()
+            )
+            
+            # Create input with experiences
+            agent_input = {
+                "role": "user",
+                "content": "Generate a reflection based on these experiences",
+                "experiences": experiences
+            }
+            
+            result = await Runner.run(
+                self.reflection_agent,
+                agent_input,
+                context=context_data
+            )
+            
+            # Get the reflection output
+            reflection_output = result.final_output_as(ReflectionOutput)
+            
+            return {
+                "reflection": reflection_output.reflection_text,
+                "confidence": reflection_output.confidence,
+                "experience_ids": reflection_output.experience_ids,
+                "insight_level": reflection_output.insight_level
+            }
     
-    def _get_timeframe_text(self, timestamp: Optional[str]) -> str:
-        """Get conversational timeframe text from timestamp"""
-        if not timestamp:
-            return "a while back"
-            
-        try:
-            if isinstance(timestamp, str):
-                memory_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-            else:
-                memory_time = timestamp
-                
-            days_ago = (datetime.now() - memory_time).days
-            
-            if days_ago < 1:
-                return "earlier today"
-            elif days_ago < 2:
-                return "yesterday"
-            elif days_ago < 7:
-                return f"{days_ago} days ago"
-            elif days_ago < 14:
-                return "last week"
-            elif days_ago < 30:
-                return "a couple weeks ago"
-            elif days_ago < 60:
-                return "a month ago"
-            elif days_ago < 365:
-                return f"{days_ago // 30} months ago"
-            else:
-                return "a while back"
-                
-        except Exception as e:
-            logger.error(f"Error processing timestamp: {e}")
-            return "a while back"
-    
-    def _get_emotional_tone(self, emotional_context: Dict[str, Any]) -> str:
-        """Determine the emotional tone for recall based on the experience's emotions"""
-        if not emotional_context:
-            return "standard"
-            
-        primary = emotional_context.get("primary_emotion", "neutral")
-        intensity = emotional_context.get("primary_intensity", 0.5)
-        valence = emotional_context.get("valence", 0.0)
+    async def construct_narrative(self,
+                               experiences: List[Dict[str, Any]],
+                               topic: str,
+                               chronological: bool = True) -> Dict[str, Any]:
+        """
+        Construct a coherent narrative from multiple experiences
         
-        # High intensity experiences
-        if intensity > 0.8:
-            return "intense"
+        Args:
+            experiences: List of experiences to include in narrative
+            topic: Topic of the narrative
+            chronological: Whether to maintain chronological order
             
-        # Positive emotions
-        if valence > 0.3 or primary in ["Joy", "Anticipation", "Trust", "Love"]:
-            return "positive"
+        Returns:
+            Narrative data
+        """
+        # Use the Narrative Agent for this task
+        with trace(workflow_name="NarrativeConstruction"):
+            context_data = ExperienceContextData(
+                query=topic,
+                emotional_state=self.emotional_core.get_formatted_emotional_state(),
+                timestamp=datetime.now().isoformat()
+            )
             
-        # Negative emotions
-        if valence < -0.3 or primary in ["Anger", "Fear", "Disgust", "Sadness", "Frustration"]:
-            return "negative"
+            # Create input with experiences and options
+            agent_input = {
+                "role": "user",
+                "content": f"Construct a narrative about {topic} from these experiences",
+                "experiences": experiences,
+                "chronological": chronological
+            }
             
-        # Default to standard
-        return "standard"
-    
-    def _get_scenario_tone(self, scenario_type: str) -> Optional[str]:
-        """Get tone based on scenario type"""
-        scenario_type = scenario_type.lower()
-        
-        if scenario_type in ["teasing", "indulgent"]:
-            return "teasing"
-        elif scenario_type in ["discipline", "punishment", "training"]:
-            return "disciplinary"
-        elif scenario_type in ["dark", "fear"]:
-            return "intense"
-        
-        # No specific tone for this scenario type
-        return None
+            result = await Runner.run(
+                self.narrative_agent,
+                agent_input,
+                context=context_data
+            )
+            
+            # Get the narrative output
+            narrative_output = result.final_output_as(NarrativeOutput)
+            
+            return {
+                "narrative": narrative_output.narrative_text,
+                "confidence": narrative_output.coherence_score,
+                "experience_count": narrative_output.experiences_included,
+                "chronological": narrative_output.chronological
+            }
