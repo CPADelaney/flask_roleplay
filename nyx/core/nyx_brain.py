@@ -22,6 +22,9 @@ from nyx.core.meta_core import MetaCore
 from nyx.core.knowledge_core import KnowledgeCoreAgents
 from nyx.core.memory_orchestrator import MemoryOrchestrator
 from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
+from nyx.core.experience_consolidation import ExperienceConsolidationSystem
+from nyx.core.identity_evolution import IdentityEvolutionSystem
+from nyx.core.cross_user_experience import CrossUserExperienceManager
 
 # Import function tools
 from nyx.api.function_tools import (
@@ -239,7 +242,10 @@ class NyxBrain:
         self.knowledge_core = None
         self.memory_orchestrator = None
         self.reasoning_core = None
-        
+        self.identity_evolution = None
+        self.experience_consolidation = None
+        self.cross_user_manager = None
+            
         # State tracking
         self.initialized = False
         self.last_interaction = datetime.datetime.now()
@@ -285,6 +291,9 @@ class NyxBrain:
         
         # Registry of instance clusters (for cross-conversation access)
         self.instance_registry = {}
+
+        self.cross_user_enabled = True
+        self.cross_user_sharing_threshold = 0.7
     
     @classmethod
     async def get_instance(cls, user_id: int, conversation_id: int) -> 'NyxBrain':
@@ -322,7 +331,7 @@ class NyxBrain:
         
         logger.info(f"Initializing NyxBrain for user {self.user_id}, conversation {self.conversation_id}")
         
-        # Initialize core components
+        # Initialize core components (existing code)
         self.emotional_core = EmotionalCore()
         
         # Initialize memory system
@@ -338,6 +347,21 @@ class NyxBrain:
         
         # Initialize experience interface with memory core and emotional core
         self.experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
+        
+        # Initialize identity evolution system
+        self.identity_evolution = IdentityEvolutionSystem()
+        
+        # Initialize experience consolidation system
+        self.experience_consolidation = ExperienceConsolidationSystem(
+            memory_core=self.memory_core,
+            experience_interface=self.experience_interface
+        )
+        
+        # Initialize cross-user experience manager
+        self.cross_user_manager = CrossUserExperienceManager(
+            memory_core=self.memory_core,
+            experience_interface=self.experience_interface
+        )
         
         # Initialize internal feedback system
         self.internal_feedback = InternalFeedbackSystem()
@@ -360,7 +384,9 @@ class NyxBrain:
             "reasoning": self.reasoning_core,
             "reflection": self.reflection_engine,
             "adaptation": self.dynamic_adaptation,
-            "feedback": self.internal_feedback
+            "feedback": self.internal_feedback,
+            "identity": self.identity_evolution,
+            "experience": self.experience_interface
         })
         
         # Initialize main brain agent
@@ -387,6 +413,9 @@ class NyxBrain:
             - Internal Feedback: Evaluates system performance
             - Meta Core: Handles meta-cognition and self-improvement
             - Knowledge Core: Manages knowledge and reasoning
+            - Identity Evolution: Develops and maintains Nyx's identity
+            - Experience Consolidation: Consolidates similar experiences into higher-level abstractions
+            - Cross-User Experience: Manages sharing experiences across users
             
             Use your tools to process user messages, generate responses, maintain the system,
             and facilitate Nyx's identity evolution through experiences and adaptation.
@@ -399,7 +428,14 @@ class NyxBrain:
                 perform_maintenance,
                 get_identity_state,
                 adapt_experience_sharing,
-                run_experience_consolidation
+                run_experience_consolidation,
+                
+                # Add new function tools
+                function_tool(self.get_identity_profile),
+                function_tool(self.update_identity_from_experience),
+                function_tool(self.generate_identity_reflection),
+                function_tool(self.run_cross_user_experience),
+                function_tool(self.consolidate_experiences)
             ]
         )
     
@@ -496,20 +532,18 @@ class NyxBrain:
                     
                     # Calculate potential identity impact
                     experience = experience_result.get("experience", {})
-                    if experience:
+                    if experience and self.identity_evolution:
                         try:
-                            # Get identity impact
-                            identity_impact = await self._calculate_identity_impact_from_experience(experience)
+                            # Calculate impact on identity
+                            identity_impact = await self.identity_evolution.calculate_experience_impact(experience)
                             
                             # Update identity based on experience
-                            if identity_impact and self.experience_interface:
-                                await self.experience_interface._update_identity_from_experience(
-                                    RunContextWrapper(context=context),
-                                    experience=experience,
-                                    impact=identity_impact
-                                )
+                            await self.identity_evolution.update_identity_from_experience(
+                                experience=experience,
+                                impact=identity_impact
+                            )
                         except Exception as e:
-                            logger.error(f"Error calculating identity impact: {str(e)}")
+                            logger.error(f"Error updating identity from experience: {str(e)}")
             
             # Add memory of this interaction
             memory_text = f"User said: {user_input}"
@@ -586,6 +620,93 @@ class NyxBrain:
             }
             
             return result
+
+    async def get_identity_profile(self) -> Dict[str, Any]:
+        """
+        Get the current identity profile
+        
+        Returns:
+            Current identity profile
+        """
+        if not self.identity_evolution:
+            return {"error": "Identity evolution system not initialized"}
+        
+        return await self.identity_evolution.get_identity_profile()
+
+    async def update_identity_from_experience(self, 
+                                           experience: Dict[str, Any], 
+                                           impact: Optional[Dict[str, Dict[str, float]]] = None) -> Dict[str, Any]:
+        """
+        Update identity based on an experience
+        
+        Args:
+            experience: Experience data
+            impact: Optional impact data (will be calculated if not provided)
+            
+        Returns:
+            Update results
+        """
+        if not self.identity_evolution:
+            return {"error": "Identity evolution system not initialized"}
+        
+        # Calculate impact if not provided
+        if impact is None:
+            impact = await self.identity_evolution.calculate_experience_impact(experience)
+        
+        # Update identity
+        return await self.identity_evolution.update_identity_from_experience(
+            experience=experience,
+            impact=impact
+        )
+    
+    async def generate_identity_reflection(self) -> Dict[str, Any]:
+        """
+        Generate a reflection on current identity state
+        
+        Returns:
+            Identity reflection
+        """
+        if not self.identity_evolution:
+            return {"error": "Identity evolution system not initialized"}
+        
+        return await self.identity_evolution.generate_identity_reflection()
+    
+    async def run_cross_user_experience(self, 
+                                     target_user_id: str, 
+                                     query: str, 
+                                     scenario_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Find and share experiences from other users
+        
+        Args:
+            target_user_id: ID of the target user
+            query: Search query
+            scenario_type: Optional scenario type
+            
+        Returns:
+            Cross-user experience results
+        """
+        if not self.cross_user_manager:
+            return {"error": "Cross-user experience manager not initialized"}
+        
+        return await self.cross_user_manager.find_cross_user_experiences(
+            target_user_id=target_user_id,
+            query=query,
+            scenario_type=scenario_type,
+            source_user_ids=None  # Auto-detect sources
+        )
+    
+    async def consolidate_experiences(self) -> Dict[str, Any]:
+        """
+        Run the experience consolidation process
+        
+        Returns:
+            Consolidation results
+        """
+        if not self.experience_consolidation:
+            return {"error": "Experience consolidation system not initialized"}
+        
+        return await self.experience_consolidation.run_consolidation_cycle()
     
     async def generate_response(self, 
                              user_input: str, 
@@ -841,13 +962,22 @@ class NyxBrain:
                     results["knowledge_maintenance"] = {"error": str(e)}
             
             # Run experience consolidation if available
-            if self.experience_interface:
+            if self.experience_consolidation:
                 try:
-                    consolidation_result = await self.run_experience_consolidation()
+                    consolidation_result = await self.experience_consolidation.run_consolidation_cycle()
                     results["experience_consolidation"] = consolidation_result
                 except Exception as e:
                     logger.error(f"Error in experience consolidation: {str(e)}")
                     results["experience_consolidation"] = {"error": str(e)}
+            
+            # Update cross-user clusters if available
+            if self.cross_user_manager:
+                try:
+                    cluster_result = await self.cross_user_manager.update_user_clusters()
+                    results["user_clustering"] = cluster_result
+                except Exception as e:
+                    logger.error(f"Error updating user clusters: {str(e)}")
+                    results["user_clustering"] = {"error": str(e)}
             
             results["maintenance_time"] = datetime.datetime.now().isoformat()
             return results
@@ -921,7 +1051,54 @@ class NyxBrain:
                 except Exception as e:
                     logger.error(f"Error getting experience stats: {str(e)}")
                     experience_stats = {"error": str(e)}
+
+            # Get identity evolution stats if available
+            identity_stats = {}
+            if self.identity_evolution:
+                try:
+                    identity_state = await self.identity_evolution.get_identity_state()
+                    identity_stats = {
+                        "trait_count": len(identity_state.get("top_traits", {})),
+                        "coherence_score": identity_state.get("coherence_score", 0.0),
+                        "evolution_rate": identity_state.get("evolution_rate", 0.0),
+                        "update_count": identity_state.get("update_count", 0),
+                        "dominant_traits": list(identity_state.get("top_traits", {}).keys())[:3] if "top_traits" in identity_state else []
+                    }
+                except Exception as e:
+                    logger.error(f"Error getting identity stats: {str(e)}")
+                    identity_stats = {"error": str(e)}
             
+            # Get consolidation stats if available
+            consolidation_stats = {}
+            if self.experience_consolidation:
+                try:
+                    consolidation_insights = await self.experience_consolidation.get_consolidation_insights()
+                    consolidation_stats = {
+                        "total_consolidations": consolidation_insights.get("total_consolidations", 0),
+                        "last_consolidation": consolidation_insights.get("last_consolidation", "never"),
+                        "consolidation_types": consolidation_insights.get("consolidation_types", {}),
+                        "ready_for_consolidation": consolidation_insights.get("ready_for_consolidation", False)
+                    }
+                except Exception as e:
+                    logger.error(f"Error getting consolidation stats: {str(e)}")
+                    consolidation_stats = {"error": str(e)}
+            
+            # Get cross-user stats if available
+            cross_user_stats = {}
+            if self.cross_user_manager:
+                try:
+                    sharing_stats = await self.cross_user_manager.get_sharing_statistics(str(self.user_id))
+                    cross_user_stats = {
+                        "total_shares": sharing_stats.get("total_shares", 0),
+                        "shares_sent": sharing_stats.get("user_shares", {}).get(str(self.user_id), {}).get("shared", 0),
+                        "shares_received": sharing_stats.get("user_shares", {}).get(str(self.user_id), {}).get("received", 0),
+                        "most_shared_scenario": sharing_stats.get("most_shared_scenario", "none")
+                    }
+                except Exception as e:
+                    logger.error(f"Error getting cross-user stats: {str(e)}")
+                    cross_user_stats = {"error": str(e)}
+            
+            # Return all stats
             return {
                 "memory_stats": memory_stats,
                 "emotional_state": {
@@ -940,15 +1117,17 @@ class NyxBrain:
                     "emotion_updates": self.performance_metrics["emotion_updates"],
                     "reflections_generated": self.performance_metrics["reflections_generated"],
                     "experiences_shared": self.performance_metrics["experiences_shared"],
-                    "cross_user_experiences_shared": self.performance_metrics["cross_user_experiences_shared"],
+                    "cross_user_experiences_shared": self.performance_metrics.get("cross_user_experiences_shared", 0),
                     "avg_response_time": avg_response_time
                 },
                 "introspection": introspection,
                 "meta_stats": meta_stats,
                 "knowledge_stats": knowledge_stats,
                 "identity_stats": identity_stats,
-                "experience_stats": experience_stats
+                "consolidation_stats": consolidation_stats,
+                "cross_user_stats": cross_user_stats
             }
+                
     
     def _should_share_experience(self, user_input: str, context: Dict[str, Any]) -> bool:
         """Determine if we should share an experience based on input and context"""
