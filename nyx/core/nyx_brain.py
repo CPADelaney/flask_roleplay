@@ -3,6 +3,7 @@
 import logging
 import asyncio
 import json
+import math
 import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union
 
@@ -49,9 +50,11 @@ class ProcessResult(BaseModel):
     memory_count: int = Field(0, description="Number of memories retrieved")
     has_experience: bool = Field(False, description="Whether an experience was found")
     experience_response: Optional[str] = Field(None, description="Experience response if available")
+    cross_user_experience: bool = Field(False, description="Whether experience is from another user")
     memory_id: Optional[str] = Field(None, description="ID of stored memory")
     response_time: float = Field(0.0, description="Processing time in seconds")
     context_change: Optional[Dict[str, Any]] = Field(None, description="Context change detection")
+    identity_impact: Optional[Dict[str, Any]] = Field(None, description="Impact on identity")
 
 class ResponseResult(BaseModel):
     """Result of generating a response"""
@@ -62,6 +65,21 @@ class ResponseResult(BaseModel):
     memories_used: List[str] = Field(default_factory=list, description="IDs of memories used")
     memory_count: int = Field(0, description="Number of memories used")
     evaluation: Optional[Dict[str, Any]] = Field(None, description="Response evaluation if available")
+    experience_sharing_adapted: bool = Field(False, description="Whether experience sharing was adapted")
+
+class AdaptationResult(BaseModel):
+    """Result of adaptation process"""
+    strategy_id: str = Field(..., description="ID of the selected strategy")
+    context_change: Dict[str, Any] = Field(..., description="Context change information")
+    confidence: float = Field(..., description="Confidence in strategy selection")
+    adaptations: Dict[str, Any] = Field(..., description="Applied adaptations")
+
+class IdentityState(BaseModel):
+    """Current state of Nyx's identity"""
+    top_preferences: Dict[str, float] = Field(..., description="Top preferences with scores")
+    top_traits: Dict[str, float] = Field(..., description="Top traits with scores")
+    identity_reflection: str = Field(..., description="Reflection on identity")
+    identity_evolution: Dict[str, Any] = Field(..., description="Identity evolution metrics")
 
 # =============== Brain Function Tools ===============
 
@@ -149,12 +167,61 @@ async def perform_maintenance(ctx) -> Dict[str, Any]:
     result = await brain.run_maintenance()
     return result
 
+@function_tool
+async def get_identity_state(ctx) -> Dict[str, Any]:
+    """
+    Get current state of Nyx's identity
+    
+    Returns:
+        Identity state information
+    """
+    brain = ctx.context
+    
+    # Get identity state
+    result = await brain.get_identity_state()
+    return result
+
+@function_tool
+async def adapt_experience_sharing(ctx, user_id: str, feedback: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Adapt experience sharing based on user feedback
+    
+    Args:
+        user_id: User ID
+        feedback: User feedback data
+    
+    Returns:
+        Adaptation results
+    """
+    brain = ctx.context
+    
+    # Adapt experience sharing
+    result = await brain.adapt_experience_sharing(user_id, feedback)
+    return result
+
+@function_tool
+async def run_experience_consolidation(ctx) -> Dict[str, Any]:
+    """
+    Run experience consolidation process
+    
+    Returns:
+        Consolidation results
+    """
+    brain = ctx.context
+    
+    # Run consolidation
+    result = await brain.run_experience_consolidation()
+    return result
+
 # =============== Main Brain Class ===============
 
 class NyxBrain:
     """
     Central integration point for all Nyx systems.
     Handles cross-component communication and provides a unified API using the OpenAI Agents SDK.
+    
+    Enhanced with improved experience sharing, identity evolution, vector search,
+    cross-user experience sharing, and better adaptation integration.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
@@ -181,6 +248,7 @@ class NyxBrain:
         # Bidirectional influence settings
         self.memory_to_emotion_influence = 0.3  # How much memories influence emotions
         self.emotion_to_memory_influence = 0.4  # How much emotions influence memory retrieval
+        self.experience_to_identity_influence = 0.2  # How much experiences influence identity
         
         # Performance monitoring
         self.performance_metrics = {
@@ -188,17 +256,35 @@ class NyxBrain:
             "emotion_updates": 0,
             "reflections_generated": 0,
             "experiences_shared": 0,
+            "cross_user_experiences_shared": 0,
+            "experience_consolidations": 0,
             "response_times": []
         }
         
         # Caching
         self.context_cache = {}
+        self.identity_cache = {}
+        self.adaptation_cache = {}
+        
+        # Cross-user experience settings
+        self.cross_user_enabled = True
+        self.cross_user_sharing_threshold = 0.7  # Min relevance for cross-user experiences
+        
+        # Identity settings
+        self.identity_reflection_interval = 10  # Interactions between identity reflections
+        
+        # Experience consolidation settings
+        self.consolidation_interval = 24  # Hours between consolidations
+        self.last_consolidation = datetime.datetime.now() - datetime.timedelta(hours=25)  # Start with consolidation due
         
         # Main brain agent - initialized in initialize()
         self.brain_agent = None
         
         # Trace group ID for connecting traces
         self.trace_group_id = f"nyx-brain-{user_id}-{conversation_id}"
+        
+        # Registry of instance clusters (for cross-conversation access)
+        self.instance_registry = {}
     
     @classmethod
     async def get_instance(cls, user_id: int, conversation_id: int) -> 'NyxBrain':
@@ -214,6 +300,18 @@ class NyxBrain:
             instance = cls(user_id, conversation_id)
             await instance.initialize()
             cls._instances[key] = instance
+            
+            # Register in cross-conversation registry by user
+            if not hasattr(cls, '_user_instances'):
+                cls._user_instances = {}
+                
+            if user_id not in cls._user_instances:
+                cls._user_instances[user_id] = []
+                
+            cls._user_instances[user_id].append(instance)
+            
+            # Store reference to registry
+            instance.instance_registry = cls._user_instances
         
         return cls._instances[key]
     
@@ -284,20 +382,24 @@ class NyxBrain:
             - Emotional Core: Manages emotions and emotional expressions
             - Memory Core: Stores and retrieves memories
             - Reflection Engine: Generates reflections and introspective insights
-            - Experience Interface: Shares relevant experiences
+            - Experience Interface: Shares relevant experiences (including cross-user experiences)
             - Dynamic Adaptation: Adapts to changing contexts
             - Internal Feedback: Evaluates system performance
             - Meta Core: Handles meta-cognition and self-improvement
             - Knowledge Core: Manages knowledge and reasoning
             
-            Use your tools to process user messages, generate responses, and maintain the system.
+            Use your tools to process user messages, generate responses, maintain the system,
+            and facilitate Nyx's identity evolution through experiences and adaptation.
             """,
             tools=[
                 process_user_message,
                 generate_agent_response,
                 run_cognitive_cycle,
                 get_brain_stats,
-                perform_maintenance
+                perform_maintenance,
+                get_identity_state,
+                adapt_experience_sharing,
+                run_experience_consolidation
             ]
         )
     
@@ -336,6 +438,10 @@ class NyxBrain:
             # Initialize context
             context = context or {}
             
+            # Add user_id to context if not present
+            if "user_id" not in context:
+                context["user_id"] = str(self.user_id)
+            
             # Process emotional impact of input
             emotional_stimuli = self.emotional_core.analyze_text_sentiment(user_input)
             emotional_state = self.emotional_core.update_from_stimuli(emotional_stimuli)
@@ -366,14 +472,44 @@ class NyxBrain:
             # Check if experience sharing is requested
             should_share_experience = self._should_share_experience(user_input, context)
             experience_result = None
+            identity_impact = None
             
             if should_share_experience:
-                # Retrieve and format experience
+                # Enhanced experience sharing with cross-user support and adaptation
                 experience_result = await self.experience_interface.share_experience_enhanced(
                     query=user_input,
-                    context_data=context
+                    context_data={
+                        "user_id": str(self.user_id),
+                        "emotional_state": emotional_state,
+                        "include_cross_user": self.cross_user_enabled and context.get("include_cross_user", True),
+                        "scenario_type": context.get("scenario_type", ""),
+                        "conversation_id": self.conversation_id
+                    }
                 )
-                self.performance_metrics["experiences_shared"] += 1
+                
+                if experience_result.get("has_experience", False):
+                    self.performance_metrics["experiences_shared"] += 1
+                    
+                    # Track cross-user experiences
+                    if experience_result.get("cross_user", False):
+                        self.performance_metrics["cross_user_experiences_shared"] += 1
+                    
+                    # Calculate potential identity impact
+                    experience = experience_result.get("experience", {})
+                    if experience:
+                        try:
+                            # Get identity impact
+                            identity_impact = await self._calculate_identity_impact_from_experience(experience)
+                            
+                            # Update identity based on experience
+                            if identity_impact and self.experience_interface:
+                                await self.experience_interface._update_identity_from_experience(
+                                    RunContextWrapper(context=context),
+                                    experience=experience,
+                                    impact=identity_impact
+                                )
+                        except Exception as e:
+                            logger.error(f"Error calculating identity impact: {str(e)}")
             
             # Add memory of this interaction
             memory_text = f"User said: {user_input}"
@@ -386,12 +522,14 @@ class NyxBrain:
                 tags=["interaction", "user_input"],
                 metadata={
                     "emotional_context": self.emotional_core.get_formatted_emotional_state(),
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "user_id": str(self.user_id)
                 }
             )
             
-            # Check for context change
+            # Check for context change using dynamic adaptation
             context_change_result = None
+            adaptation_result = None
             if self.dynamic_adaptation:
                 # Prepare context for change detection
                 context_for_adaptation = {
@@ -399,18 +537,38 @@ class NyxBrain:
                     "emotional_state": emotional_state,
                     "memories_retrieved": len(memories),
                     "has_experience": experience_result["has_experience"] if experience_result else False,
-                    "interaction_count": self.interaction_count
+                    "cross_user_experience": experience_result.get("cross_user", False) if experience_result else False,
+                    "interaction_count": self.interaction_count,
+                    "identity_impact": True if identity_impact else False
                 }
                 
-                # Detect context change
-                context_change_result = await self.dynamic_adaptation.detect_context_change(context_for_adaptation)
+                try:
+                    # Detect context change
+                    context_change_result = await self.dynamic_adaptation.detect_context_change(context_for_adaptation)
+                    
+                    # If significant change, run adaptation cycle
+                    if context_change_result.significant_change:
+                        # Measure current performance
+                        current_performance = {
+                            "success_rate": context.get("success_rate", 0.7),
+                            "error_rate": context.get("error_rate", 0.1),
+                            "efficiency": context.get("efficiency", 0.8),
+                            "response_time": start_time.timestamp() - self.last_interaction.timestamp()
+                        }
+                        
+                        # Run adaptation cycle
+                        adaptation_result = await self.dynamic_adaptation.adaptation_cycle(
+                            context_for_adaptation, current_performance
+                        )
+                except Exception as e:
+                    logger.error(f"Error in adaptation: {str(e)}")
             
             # Calculate response time
             end_time = datetime.datetime.now()
             response_time = (end_time - start_time).total_seconds()
             self.performance_metrics["response_times"].append(response_time)
             
-            # Return processing results in a structured format using the ProcessResult model
+            # Return processing results in a structured format
             result = {
                 "user_input": user_input,
                 "emotional_state": emotional_state,
@@ -418,9 +576,12 @@ class NyxBrain:
                 "memory_count": len(memories),
                 "has_experience": experience_result["has_experience"] if experience_result else False,
                 "experience_response": experience_result["response_text"] if experience_result and experience_result["has_experience"] else None,
+                "cross_user_experience": experience_result.get("cross_user", False) if experience_result else False,
                 "memory_id": memory_id,
                 "response_time": response_time,
                 "context_change": context_change_result,
+                "adaptation_result": adaptation_result,
+                "identity_impact": identity_impact,
                 "meta_result": meta_result
             }
             
@@ -443,10 +604,18 @@ class NyxBrain:
             # Process the input first
             processing_result = await self.process_input(user_input, context)
             
+            # Track if experience sharing was adapted
+            experience_sharing_adapted = processing_result.get("context_change") is not None and \
+                                       processing_result.get("adaptation_result") is not None
+            
             # Determine if experience response should be used
             if processing_result["has_experience"]:
                 main_response = processing_result["experience_response"]
                 response_type = "experience"
+                
+                # If it's a cross-user experience, mark it
+                if processing_result.get("cross_user_experience", False):
+                    response_type = "cross_user_experience"
             else:
                 # For reasoning-related queries, use the reasoning agents
                 if self._is_reasoning_query(user_input):
@@ -488,7 +657,9 @@ class NyxBrain:
                 "emotional_state": processing_result["emotional_state"],
                 "emotional_expression": emotional_expression,
                 "memories_used": [m["id"] for m in processing_result["memories"]],
-                "memory_count": processing_result["memory_count"]
+                "memory_count": processing_result["memory_count"],
+                "experience_sharing_adapted": experience_sharing_adapted,
+                "identity_impact": processing_result.get("identity_impact")
             }
             
             # Add memory of this response
@@ -497,11 +668,12 @@ class NyxBrain:
                 memory_type="observation",
                 memory_scope="game",
                 significance=5,
-                tags=["interaction", "nyx_response"],
+                tags=["interaction", "nyx_response", response_type],
                 metadata={
                     "emotional_context": self.emotional_core.get_formatted_emotional_state(),
                     "timestamp": datetime.datetime.now().isoformat(),
-                    "response_type": response_type
+                    "response_type": response_type,
+                    "user_id": str(self.user_id)
                 }
             )
             
@@ -518,6 +690,17 @@ class NyxBrain:
                     response_data["evaluation"] = evaluation
                 except Exception as e:
                     logger.error(f"Error evaluating response: {str(e)}")
+            
+            # Check if it's time for experience consolidation
+            await self._check_and_run_consolidation()
+            
+            # Check if it's time for identity reflection
+            if self.interaction_count % self.identity_reflection_interval == 0:
+                try:
+                    identity_state = await self.get_identity_state()
+                    response_data["identity_reflection"] = identity_state
+                except Exception as e:
+                    logger.error(f"Error generating identity reflection: {str(e)}")
             
             return response_data
     
@@ -543,7 +726,9 @@ class NyxBrain:
                     adaptable_context = {
                         "user_input": user_input,
                         "response": response_data["message"],
+                        "response_type": response_data["response_type"],
                         "interaction_type": context.get("interaction_type", "general") if context else "general",
+                        "user_id": str(self.user_id)
                     }
                     
                     # Detect context change
@@ -559,14 +744,29 @@ class NyxBrain:
                     
                     # Add adaptation data to response
                     response_data["adaptation"] = {
-                        "context_change": change_result,
+                        "context_change": change_result.model_dump() if hasattr(change_result, "model_dump") else change_result,
                         "performance": performance
                     }
                     
                     # If significant change, select strategy
-                    if change_result.significant_change:  # Updated to use the proper attribute
+                    if change_result.significant_change:
                         strategy = await self.dynamic_adaptation.select_strategy(adaptable_context, performance)
-                        response_data["adaptation"]["strategy"] = strategy
+                        response_data["adaptation"]["strategy"] = strategy.model_dump() if hasattr(strategy, "model_dump") else strategy
+                        
+                        # Apply strategy to experience sharing adaptations
+                        if self.experience_interface:
+                            # Get strategy parameters
+                            strategy_params = strategy.selected_strategy.parameters.model_dump() \
+                                if hasattr(strategy.selected_strategy, "parameters") else {}
+                            
+                            # Update experience sharing parameters based on strategy
+                            if "exploration_rate" in strategy_params:
+                                # Higher exploration rate = more cross-user experiences
+                                self.cross_user_enabled = strategy_params["exploration_rate"] > 0.3
+                            
+                            if "risk_tolerance" in strategy_params:
+                                # Higher risk tolerance = lower threshold for cross-user sharing
+                                self.cross_user_sharing_threshold = max(0.5, 1.0 - strategy_params["risk_tolerance"])
                 except Exception as e:
                     logger.error(f"Error in adaptation: {str(e)}")
                     response_data["adaptation"] = {"error": str(e)}
@@ -640,6 +840,15 @@ class NyxBrain:
                     logger.error(f"Error in knowledge maintenance: {str(e)}")
                     results["knowledge_maintenance"] = {"error": str(e)}
             
+            # Run experience consolidation if available
+            if self.experience_interface:
+                try:
+                    consolidation_result = await self.run_experience_consolidation()
+                    results["experience_consolidation"] = consolidation_result
+                except Exception as e:
+                    logger.error(f"Error in experience consolidation: {str(e)}")
+                    results["experience_consolidation"] = {"error": str(e)}
+            
             results["maintenance_time"] = datetime.datetime.now().isoformat()
             return results
     
@@ -683,6 +892,36 @@ class NyxBrain:
                     logger.error(f"Error getting knowledge stats: {str(e)}")
                     knowledge_stats = {"error": str(e)}
             
+            # Get identity state if available
+            identity_stats = {}
+            if self.experience_interface:
+                try:
+                    identity_profile = await self.experience_interface._get_identity_profile(RunContextWrapper(context=None))
+                    identity_stats = {
+                        "preference_count": sum(len(prefs) for prefs in identity_profile["preferences"].values()),
+                        "trait_count": len(identity_profile["traits"]),
+                        "evolution_history_count": len(identity_profile["evolution_history"]),
+                        "dominant_traits": sorted(identity_profile["traits"].items(), key=lambda x: x[1], reverse=True)[:3]
+                    }
+                except Exception as e:
+                    logger.error(f"Error getting identity stats: {str(e)}")
+                    identity_stats = {"error": str(e)}
+            
+            # Get experience interface stats
+            experience_stats = {}
+            if self.experience_interface:
+                try:
+                    vector_search_status = await self.experience_interface.check_vector_search_status()
+                    experience_stats = {
+                        "vector_search_status": vector_search_status,
+                        "experiences_shared": self.performance_metrics["experiences_shared"],
+                        "cross_user_experiences_shared": self.performance_metrics["cross_user_experiences_shared"],
+                        "consolidations_performed": self.performance_metrics["experience_consolidations"]
+                    }
+                except Exception as e:
+                    logger.error(f"Error getting experience stats: {str(e)}")
+                    experience_stats = {"error": str(e)}
+            
             return {
                 "memory_stats": memory_stats,
                 "emotional_state": {
@@ -701,11 +940,14 @@ class NyxBrain:
                     "emotion_updates": self.performance_metrics["emotion_updates"],
                     "reflections_generated": self.performance_metrics["reflections_generated"],
                     "experiences_shared": self.performance_metrics["experiences_shared"],
+                    "cross_user_experiences_shared": self.performance_metrics["cross_user_experiences_shared"],
                     "avg_response_time": avg_response_time
                 },
                 "introspection": introspection,
                 "meta_stats": meta_stats,
-                "knowledge_stats": knowledge_stats
+                "knowledge_stats": knowledge_stats,
+                "identity_stats": identity_stats,
+                "experience_stats": experience_stats
             }
     
     def _should_share_experience(self, user_input: str, context: Dict[str, Any]) -> bool:
@@ -713,7 +955,8 @@ class NyxBrain:
         # Check for explicit experience requests
         explicit_request = any(phrase in user_input.lower() for phrase in 
                              ["remember", "recall", "tell me about", "have you done", 
-                              "previous", "before", "past", "experience", "what happened"])
+                              "previous", "before", "past", "experience", "what happened",
+                              "have you ever", "did you ever", "similar", "others"])
         
         if explicit_request:
             return True
@@ -723,6 +966,25 @@ class NyxBrain:
         
         if is_question and "share_experiences" in context and context["share_experiences"]:
             return True
+        
+        # Check for personal references that might trigger experience sharing
+        personal_references = any(phrase in user_input.lower() for phrase in 
+                               ["your experience", "you like", "you prefer", "you enjoy",
+                                "you think", "you feel", "your opinion", "your view"])
+        
+        if personal_references:
+            return True
+        
+        # Get user preference for experience sharing if available
+        user_id = str(self.user_id)
+        if self.experience_interface and hasattr(self.experience_interface, "user_preference_profiles"):
+            profile = self.experience_interface._get_user_preference_profile(user_id)
+            sharing_preference = profile.get("experience_sharing_preference", 0.5)
+            
+            # Higher preference means more likely to share experiences even without explicit request
+            random_factor = random.random()
+            if random_factor < sharing_preference * 0.5:  # Scale down to make this path less common
+                return True
         
         # Default to not sharing experiences unless explicitly requested
         return False
@@ -779,6 +1041,99 @@ class NyxBrain:
         
         return impact
     
+    async def _calculate_identity_impact_from_experience(self, experience: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+        """
+        Calculate the impact of an experience on identity formation
+        
+        Args:
+            experience: The experience that may impact identity
+            
+        Returns:
+            Impact on identity components
+        """
+        # Extract relevant data
+        scenario_type = experience.get("scenario_type", "general")
+        emotional_context = experience.get("emotional_context", {})
+        significance = experience.get("significance", 5) / 10  # Convert to 0-1 scale
+        
+        # Default empty impact
+        impact = {
+            "preferences": {},
+            "traits": {}
+        }
+        
+        # Impact on scenario preferences based on emotional response
+        if scenario_type:
+            # Get valence from emotional context
+            valence = emotional_context.get("valence", 0)
+            
+            # Impact depends on emotional valence
+            if valence > 0.3:
+                # Positive experience with this scenario type
+                impact["preferences"]["scenario_types"] = {scenario_type: 0.1 * significance}
+            elif valence < -0.3:
+                # Negative experience with this scenario type
+                impact["preferences"]["scenario_types"] = {scenario_type: -0.05 * significance}
+        
+        # Impact on traits based on scenario type
+        trait_impacts = {}
+        
+        # Map scenario types to trait impacts
+        scenario_trait_map = {
+            "teasing": {"playfulness": 0.1, "creativity": 0.05},
+            "discipline": {"strictness": 0.1, "dominance": 0.08},
+            "dark": {"intensity": 0.1, "cruelty": 0.08},
+            "indulgent": {"patience": 0.1, "creativity": 0.08},
+            "psychological": {"creativity": 0.1, "intensity": 0.05},
+            "nurturing": {"patience": 0.1, "strictness": -0.05},
+            "service": {"patience": 0.08, "dominance": 0.05},
+            "worship": {"intensity": 0.05, "dominance": 0.1},
+            "punishment": {"strictness": 0.1, "cruelty": 0.05}
+        }
+        
+        # Apply trait impacts based on scenario type
+        if scenario_type in scenario_trait_map:
+            for trait, base_impact in scenario_trait_map[scenario_type].items():
+                trait_impacts[trait] = base_impact * significance
+        
+        # Apply trait impacts from emotional context
+        primary_emotion = emotional_context.get("primary_emotion", "")
+        primary_intensity = emotional_context.get("primary_intensity", 0.5)
+        
+        # Map emotions to trait impacts
+        emotion_trait_map = {
+            "Joy": {"playfulness": 0.1, "patience": 0.05},
+            "Sadness": {"patience": 0.05, "intensity": -0.05},
+            "Fear": {"intensity": 0.1, "cruelty": 0.05},
+            "Anger": {"intensity": 0.1, "strictness": 0.08},
+            "Trust": {"patience": 0.1, "dominance": 0.05},
+            "Disgust": {"cruelty": 0.1, "strictness": 0.05},
+            "Anticipation": {"creativity": 0.1, "playfulness": 0.05},
+            "Surprise": {"creativity": 0.1, "intensity": 0.05},
+            "Love": {"patience": 0.1, "dominance": 0.05},
+            "Frustration": {"intensity": 0.1, "strictness": 0.08}
+        }
+        
+        # Apply emotion-based trait impacts
+        if primary_emotion in emotion_trait_map:
+            for trait, base_impact in emotion_trait_map[primary_emotion].items():
+                if trait in trait_impacts:
+                    # Average with existing impact
+                    trait_impacts[trait] = (trait_impacts[trait] + (base_impact * primary_intensity)) / 2
+                else:
+                    # New impact
+                    trait_impacts[trait] = base_impact * primary_intensity
+        
+        # Add trait impacts to overall impact
+        if trait_impacts:
+            impact["traits"] = trait_impacts
+        
+        # If no significant impact, return None
+        if not impact["preferences"] and not impact["traits"]:
+            return None
+        
+        return impact
+    
     async def process_user_input_enhanced(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Enhanced processing of user input with comprehensive results.
@@ -828,13 +1183,371 @@ class NyxBrain:
                 "memory_count": result["memory_count"],
                 "has_experience": result["has_experience"],
                 "experience_response": result["experience_response"],
+                "cross_user_experience": result.get("cross_user_experience", False),
                 "memory_id": result["memory_id"],
                 "response_time": result["response_time"],
+                "identity_impact": result.get("identity_impact"),
                 "system_stats": {
                     "memory_stats": system_stats["memory_stats"],
                     "emotional_state": system_stats["emotional_state"],
-                    "performance_metrics": system_stats["performance_metrics"]
+                    "performance_metrics": system_stats["performance_metrics"],
+                    "identity_stats": system_stats.get("identity_stats", {})
                 }
+            }
+    
+    # New methods for enhanced functionality
+    
+    async def get_identity_state(self) -> Dict[str, Any]:
+        """
+        Get the current state of Nyx's identity
+        
+        Returns:
+            Identity state information
+        """
+        if not self.experience_interface:
+            return {
+                "error": "Experience interface not initialized"
+            }
+        
+        # Check cache
+        cache_key = f"identity_{self.interaction_count}"
+        if cache_key in self.identity_cache:
+            return self.identity_cache[cache_key]
+        
+        try:
+            # Get identity profile
+            identity_profile = await self.experience_interface._get_identity_profile(RunContextWrapper(context=None))
+            
+            # Generate identity reflection
+            reflection = await self.experience_interface._generate_identity_reflection(RunContextWrapper(context=None))
+            
+            # Get top preferences
+            top_scenario_prefs = sorted(
+                identity_profile["preferences"]["scenario_types"].items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:3]
+            
+            top_emotional_prefs = sorted(
+                identity_profile["preferences"]["emotional_tones"].items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:3]
+            
+            # Get top traits
+            top_traits = sorted(
+                identity_profile["traits"].items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:3]
+            
+            # Calculate identity evolution metrics
+            evolution_history = identity_profile.get("evolution_history", [])
+            
+            # Calculate recent evolution (last 10 entries)
+            recent_changes = {}
+            
+            for entry in evolution_history[-10:]:
+                updates = entry.get("updates", {})
+                
+                for category, items in updates.items():
+                    for item_key, item_data in items.items():
+                        change = item_data.get("change", 0)
+                        
+                        if abs(change) >= 0.05:  # Threshold for significant change
+                            full_key = f"{category}.{item_key}"
+                            
+                            if full_key not in recent_changes:
+                                recent_changes[full_key] = 0
+                                
+                            recent_changes[full_key] += change
+            
+            # Format the identity state
+            result = {
+                "top_preferences": {
+                    "scenario_types": dict(top_scenario_prefs),
+                    "emotional_tones": dict(top_emotional_prefs)
+                },
+                "top_traits": dict(top_traits),
+                "identity_reflection": reflection,
+                "identity_evolution": {
+                    "total_updates": len(evolution_history),
+                    "recent_significant_changes": {k: round(v, 2) for k, v in sorted(recent_changes.items(), key=lambda x: abs(x[1]), reverse=True)[:5]}
+                }
+            }
+            
+            # Cache the result
+            self.identity_cache[cache_key] = result
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting identity state: {str(e)}")
+            return {
+                "error": str(e)
+            }
+    
+    async def adapt_experience_sharing(self, user_id: str, feedback: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Adapt experience sharing parameters based on user feedback
+        
+        Args:
+            user_id: User ID
+            feedback: Feedback data about experience sharing
+            
+        Returns:
+            Adaptation results
+        """
+        if not self.experience_interface:
+            return {
+                "error": "Experience interface not initialized"
+            }
+        
+        try:
+            # Update user preference profile based on feedback
+            adaptation_result = await self.experience_interface.adapt_experience_sharing_to_user(
+                user_id=user_id,
+                user_feedback=feedback
+            )
+            
+            # Apply changes to brain settings
+            if "profile" in adaptation_result:
+                profile = adaptation_result["profile"]
+                
+                # Update cross-user experience settings
+                sharing_preference = profile.get("experience_sharing_preference", 0.5)
+                
+                # Enable cross-user sharing if preference is high enough
+                self.cross_user_enabled = sharing_preference > 0.4
+                
+                # Adjust threshold based on preference
+                self.cross_user_sharing_threshold = max(0.5, 1.0 - (sharing_preference * 0.5))
+                
+                # Add these updates to the result
+                adaptation_result["system_settings_updated"] = {
+                    "cross_user_enabled": self.cross_user_enabled,
+                    "cross_user_sharing_threshold": self.cross_user_sharing_threshold
+                }
+            
+            return adaptation_result
+            
+        except Exception as e:
+            logger.error(f"Error adapting experience sharing: {str(e)}")
+            return {
+                "error": str(e)
+            }
+    
+    async def run_experience_consolidation(self) -> Dict[str, Any]:
+        """
+        Run the experience consolidation process
+        
+        Returns:
+            Consolidation results
+        """
+        if not self.experience_interface:
+            return {
+                "error": "Experience interface not initialized"
+            }
+        
+        try:
+            # Run consolidation
+            consolidation_result = await self.experience_interface.consolidate_experiences()
+            
+            # Update performance metrics
+            if consolidation_result.get("status") == "completed":
+                self.performance_metrics["experience_consolidations"] += consolidation_result.get("consolidations_created", 0)
+            
+            return consolidation_result
+            
+        except Exception as e:
+            logger.error(f"Error running experience consolidation: {str(e)}")
+            return {
+                "error": str(e)
+            }
+    
+    async def _check_and_run_consolidation(self) -> None:
+        """Check if it's time for consolidation and run if needed"""
+        if not self.experience_interface:
+            return
+        
+        # Check time since last consolidation
+        now = datetime.datetime.now()
+        time_since_last = (now - self.last_consolidation).total_seconds() / 3600  # hours
+        
+        if time_since_last >= self.consolidation_interval:
+            try:
+                # Run consolidation in background
+                asyncio.create_task(self.run_experience_consolidation())
+                
+                # Update last consolidation time
+                self.last_consolidation = now
+            except Exception as e:
+                logger.error(f"Error scheduling consolidation: {str(e)}")
+    
+    async def get_cross_user_experiences(self, 
+                                     query: str, 
+                                     limit: int = 3) -> List[Dict[str, Any]]:
+        """
+        Get relevant experiences from other users/conversations
+        
+        Args:
+            query: Search query
+            limit: Maximum number of experiences to return
+            
+        Returns:
+            List of cross-user experiences
+        """
+        if not self.experience_interface:
+            return []
+        
+        try:
+            # Get cross-user experiences
+            experiences = await self.experience_interface._get_cross_user_experiences(
+                RunContextWrapper(context=None),
+                query=query,
+                user_id=str(self.user_id),
+                limit=limit
+            )
+            
+            return experiences
+            
+        except Exception as e:
+            logger.error(f"Error getting cross-user experiences: {str(e)}")
+            return []
+    
+    async def share_cross_conversation_experience(self, 
+                                              query: str, 
+                                              target_conversation_id: int) -> Dict[str, Any]:
+        """
+        Share an experience from the current conversation with another conversation
+        
+        Args:
+            query: Search query to find relevant experience
+            target_conversation_id: Target conversation ID
+            
+        Returns:
+            Sharing result
+        """
+        if not self.experience_interface:
+            return {
+                "error": "Experience interface not initialized"
+            }
+        
+        try:
+            # Get relevant experiences from this conversation
+            experiences = await self.experience_interface.retrieve_experiences_enhanced(
+                query=query,
+                limit=1,
+                user_id=str(self.user_id),
+                include_cross_user=False  # Only from this user
+            )
+            
+            if not experiences:
+                return {
+                    "shared": False,
+                    "reason": "No relevant experiences found"
+                }
+            
+            # Get the target brain instance
+            target_key = f"brain_{self.user_id}_{target_conversation_id}"
+            
+            if not hasattr(self.__class__, '_instances') or target_key not in self.__class__._instances:
+                return {
+                    "shared": False,
+                    "reason": "Target conversation not found"
+                }
+            
+            target_brain = self.__class__._instances[target_key]
+            
+            # Share the experience with the target conversation
+            experience = experiences[0]
+            
+            # Add to target's experience interface
+            await target_brain.experience_interface._store_experience(
+                RunContextWrapper(context=None),
+                memory_text=experience.get("content", ""),
+                scenario_type=experience.get("scenario_type", "general"),
+                entities=experience.get("entities", []),
+                emotional_context=experience.get("emotional_context", {}),
+                significance=experience.get("significance", 5),
+                tags=experience.get("tags", []),
+                user_id=str(self.user_id)
+            )
+            
+            return {
+                "shared": True,
+                "experience": {
+                    "id": experience.get("id"),
+                    "content": experience.get("content"),
+                    "scenario_type": experience.get("scenario_type"),
+                    "significance": experience.get("significance")
+                },
+                "target_conversation_id": target_conversation_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Error sharing cross-conversation experience: {str(e)}")
+            return {
+                "shared": False,
+                "error": str(e)
+            }
+    
+    def update_adaptation_strategy(self, strategy_id: str) -> Dict[str, Any]:
+        """
+        Manually update the adaptation strategy
+        
+        Args:
+            strategy_id: ID of the strategy to apply
+            
+        Returns:
+            Update result
+        """
+        if not self.dynamic_adaptation:
+            return {
+                "error": "Dynamic adaptation system not initialized"
+            }
+        
+        try:
+            # Update current strategy
+            self.dynamic_adaptation.context.current_strategy_id = strategy_id
+            
+            # Get strategy details
+            strategy_details = self.dynamic_adaptation.context.strategies.get(strategy_id, {})
+            
+            # Apply strategy parameters to experience sharing
+            if "parameters" in strategy_details:
+                params = strategy_details["parameters"]
+                
+                # Update cross-user experience settings based on strategy
+                if "exploration_rate" in params:
+                    # Higher exploration rate = more cross-user experiences
+                    self.cross_user_enabled = params["exploration_rate"] > 0.3
+                
+                if "risk_tolerance" in params:
+                    # Higher risk tolerance = lower threshold for cross-user sharing
+                    self.cross_user_sharing_threshold = max(0.5, 1.0 - params["risk_tolerance"])
+                
+                # Update identity evolution settings
+                if "adaptation_rate" in params:
+                    # Higher adaptation rate = stronger identity evolution
+                    self.experience_to_identity_influence = params["adaptation_rate"]
+            
+            return {
+                "strategy_updated": True,
+                "strategy_id": strategy_id,
+                "strategy_name": strategy_details.get("name", "Unknown"),
+                "applied_settings": {
+                    "cross_user_enabled": self.cross_user_enabled,
+                    "cross_user_sharing_threshold": self.cross_user_sharing_threshold,
+                    "experience_to_identity_influence": self.experience_to_identity_influence
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error updating adaptation strategy: {str(e)}")
+            return {
+                "strategy_updated": False,
+                "error": str(e)
             }
 
 # For backward compatibility in case directly imported
