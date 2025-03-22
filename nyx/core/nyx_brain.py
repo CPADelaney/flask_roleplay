@@ -331,8 +331,11 @@ class NyxBrain:
         
         logger.info(f"Initializing NyxBrain for user {self.user_id}, conversation {self.conversation_id}")
         
-        # Initialize core components (existing code)
-        self.emotional_core = EmotionalCore()
+        # Initialize hormone system first
+        self.hormone_system = HormoneSystem()
+        
+        # Initialize emotional core with hormone system
+        self.emotional_core = EmotionalCore(hormone_system=self.hormone_system)
         
         # Initialize memory system
         self.memory_core = MemoryCore(self.user_id, self.conversation_id)
@@ -348,8 +351,8 @@ class NyxBrain:
         # Initialize experience interface with memory core and emotional core
         self.experience_interface = ExperienceInterface(self.memory_core, self.emotional_core)
         
-        # Initialize identity evolution system
-        self.identity_evolution = IdentityEvolutionSystem()
+        # Initialize identity evolution system with hormone system reference
+        self.identity_evolution = IdentityEvolutionSystem(hormone_system=self.hormone_system)
         
         # Initialize experience consolidation system
         self.experience_consolidation = ExperienceConsolidationSystem(
@@ -386,7 +389,8 @@ class NyxBrain:
             "adaptation": self.dynamic_adaptation,
             "feedback": self.internal_feedback,
             "identity": self.identity_evolution,
-            "experience": self.experience_interface
+            "experience": self.experience_interface,
+            "hormone": self.hormone_system  # Add hormone system reference
         })
         
         # Initialize main brain agent
@@ -438,10 +442,146 @@ class NyxBrain:
                 function_tool(self.consolidate_experiences)
             ]
         )
+
+    # Add this method for hormone-related information as part of system stats
+    async def get_hormone_stats(self) -> Dict[str, Any]:
+        """Get statistics about the hormone system"""
+        if not self.hormone_system:
+            return {
+                "error": "Hormone system not initialized"
+            }
+        
+        # Get current hormone levels
+        hormone_levels = {name: data["value"] for name, data in self.hormone_system.hormones.items()}
+        
+        # Get current cycle phases
+        cycle_phases = {name: data["cycle_phase"] for name, data in self.hormone_system.hormones.items()}
+        
+        # Calculate hormone trends
+        hormone_trends = {}
+        for name, data in self.hormone_system.hormones.items():
+            if data["evolution_history"]:
+                recent_history = data["evolution_history"][-10:]
+                values = [entry.get("new_value", 0) for entry in recent_history]
+                if len(values) > 1:
+                    start = values[0]
+                    end = values[-1]
+                    change = end - start
+                    
+                    if abs(change) < 0.05:
+                        trend = "stable"
+                    elif change > 0:
+                        trend = "increasing"
+                    else:
+                        trend = "decreasing"
+                    
+                    hormone_trends[name] = {
+                        "trend": trend,
+                        "change": change,
+                        "history_points": len(values)
+                    }
+                else:
+                    hormone_trends[name] = {
+                        "trend": "unknown",
+                        "change": 0,
+                        "history_points": len(values)
+                    }
+            else:
+                hormone_trends[name] = {
+                    "trend": "unknown",
+                    "change": 0,
+                    "history_points": 0
+                }
+        
+        # Get environmental factors
+        environmental_factors = self.hormone_system.environmental_factors.copy()
+        
+        # Calculate dominant hormone
+        dominant_hormone = max(hormone_levels.items(), key=lambda x: x[1])
+        
+        return {
+            "hormone_levels": hormone_levels,
+            "cycle_phases": cycle_phases,
+            "hormone_trends": hormone_trends,
+            "environmental_factors": environmental_factors,
+            "dominant_hormone": {
+                "name": dominant_hormone[0],
+                "value": dominant_hormone[1]
+            }
+        }
     
-    async def process_input(self, 
-                          user_input: str, 
-                          context: Dict[str, Any] = None) -> Dict[str, Any]:
+    # Add this method to run_maintenance for hormone maintenance
+    async def run_maintenance(self) -> Dict[str, Any]:
+        """Run maintenance on all subsystems"""
+        if not self.initialized:
+            await self.initialize()
+        
+        with trace(workflow_name="run_maintenance", group_id=self.trace_group_id):
+            results = {}
+            
+            # Run hormone maintenance
+            if self.hormone_system:
+                try:
+                    # Update hormone cycles
+                    hormone_result = await self.hormone_system.update_hormone_cycles(RunContextWrapper(context=None))
+                    results["hormone_maintenance"] = hormone_result
+                    
+                    # Update identity from hormones if identity evolution is available
+                    if self.identity_evolution:
+                        identity_update = await self.identity_evolution.update_identity_from_hormones(RunContextWrapper(context=None))
+                        results["hormone_identity_update"] = identity_update
+                except Exception as e:
+                    logger.error(f"Error in hormone maintenance: {str(e)}")
+                    results["hormone_maintenance"] = {"error": str(e)}
+            
+            # Run memory maintenance
+            try:
+                memory_result = await self.memory_orchestrator.run_maintenance()
+                results["memory_maintenance"] = memory_result
+            except Exception as e:
+                logger.error(f"Error in memory maintenance: {str(e)}")
+                results["memory_maintenance"] = {"error": str(e)}
+            
+            # Run meta core maintenance if available
+            if self.meta_core:
+                try:
+                    meta_result = await self.meta_core.improve_meta_parameters()
+                    results["meta_maintenance"] = meta_result
+                except Exception as e:
+                    logger.error(f"Error in meta maintenance: {str(e)}")
+                    results["meta_maintenance"] = {"error": str(e)}
+            
+            # Run knowledge core maintenance if available
+            if self.knowledge_core:
+                try:
+                    knowledge_result = await self.knowledge_core.run_integration_cycle()
+                    results["knowledge_maintenance"] = knowledge_result
+                except Exception as e:
+                    logger.error(f"Error in knowledge maintenance: {str(e)}")
+                    results["knowledge_maintenance"] = {"error": str(e)}
+            
+            # Run experience consolidation if available
+            if self.experience_consolidation:
+                try:
+                    consolidation_result = await self.experience_consolidation.run_consolidation_cycle()
+                    results["experience_consolidation"] = consolidation_result
+                except Exception as e:
+                    logger.error(f"Error in experience consolidation: {str(e)}")
+                    results["experience_consolidation"] = {"error": str(e)}
+            
+            # Update cross-user clusters if available
+            if self.cross_user_manager:
+                try:
+                    cluster_result = await self.cross_user_manager.update_user_clusters()
+                    results["user_clustering"] = cluster_result
+                except Exception as e:
+                    logger.error(f"Error updating user clusters: {str(e)}")
+                    results["user_clustering"] = {"error": str(e)}
+            
+            results["maintenance_time"] = datetime.datetime.now().isoformat()
+            return results
+    
+    async def process_input(self, user_input: str, context: Dict[str, Any] = None):
         """
         Process user input and update all systems.
         
@@ -457,6 +597,22 @@ class NyxBrain:
         
         with trace(workflow_name="process_input", group_id=self.trace_group_id):
             start_time = datetime.datetime.now()
+            
+            # Update environmental factors for hormone system
+            if self.hormone_system:
+                # Update time of day
+                current_hour = datetime.datetime.now().hour
+                self.hormone_system.environmental_factors["time_of_day"] = (current_hour % 24) / 24.0
+                
+                # Update session duration
+                time_in_session = (datetime.datetime.now() - self.last_interaction).total_seconds() / 3600  # hours
+                self.hormone_system.environmental_factors["session_duration"] = min(1.0, time_in_session / 8.0)  # Cap at 8 hours
+                
+                # Update user familiarity
+                if context and "user_id" in context:
+                    user_id = context["user_id"]
+                    interaction_count = self.interaction_count  # Use as proxy for familiarity
+                    self.hormone_system.environmental_factors["user_familiarity"] = min(1.0, interaction_count / 100)
             
             # Run meta-cognitive cycle if available
             meta_result = {}
@@ -481,6 +637,12 @@ class NyxBrain:
             # Process emotional impact of input
             emotional_stimuli = self.emotional_core.analyze_text_sentiment(user_input)
             emotional_state = self.emotional_core.update_from_stimuli(emotional_stimuli)
+            
+            # Update hormone system interaction quality based on emotional valence
+            if self.hormone_system:
+                valence = self.emotional_core.get_emotional_valence()
+                interaction_quality = (valence + 1.0) / 2.0  # Convert from -1:1 to 0:1 range
+                self.hormone_system.environmental_factors["interaction_quality"] = interaction_quality
             
             # Add emotional state to context for memory retrieval
             context["emotional_state"] = emotional_state
@@ -597,6 +759,15 @@ class NyxBrain:
                 except Exception as e:
                     logger.error(f"Error in adaptation: {str(e)}")
             
+            # Periodically update identity from hormones (weekly)
+            if self.identity_evolution and self.hormone_system:
+                if self.interaction_count % 100 == 0:  # Every 100 interactions
+                    try:
+                        hormone_identity_update = await self.identity_evolution.update_identity_from_hormones(RunContextWrapper(context=None))
+                        logger.info(f"Updated identity from hormones: {hormone_identity_update}")
+                    except Exception as e:
+                        logger.error(f"Error updating identity from hormones: {str(e)}")
+            
             # Calculate response time
             end_time = datetime.datetime.now()
             response_time = (end_time - start_time).total_seconds()
@@ -618,6 +789,12 @@ class NyxBrain:
                 "identity_impact": identity_impact,
                 "meta_result": meta_result
             }
+            
+            # Add hormone information if available
+            if self.hormone_system:
+                # Get hormone levels
+                hormone_levels = {name: data["value"] for name, data in self.hormone_system.hormones.items()}
+                result["hormone_levels"] = hormone_levels
             
             return result
 
@@ -1003,6 +1180,15 @@ class NyxBrain:
                 memory_stats=memory_stats,
                 player_model=None  # Player model would be provided in real implementation
             )
+
+            # Get hormone stats if available
+            hormone_stats = {}
+            if self.hormone_system:
+                try:
+                    hormone_stats = await self.get_hormone_stats()
+                except Exception as e:
+                    logger.error(f"Error getting hormone stats: {str(e)}")
+                    hormone_stats = {"error": str(e)}
             
             # Get meta core stats if available
             meta_stats = {}
@@ -1108,6 +1294,7 @@ class NyxBrain:
                     "valence": self.emotional_core.get_emotional_valence(),
                     "arousal": self.emotional_core.get_emotional_arousal()
                 },
+                "hormone_stats": hormone_stats,  # Add this line
                 "interaction_stats": {
                     "interaction_count": self.interaction_count,
                     "last_interaction": self.last_interaction.isoformat()
