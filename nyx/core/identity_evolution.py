@@ -100,7 +100,7 @@ class IdentityEvolutionSystem:
     Integrates with the Digital Neurochemical Model (DNM) to provide deeper, more nuanced identity evolution.
     """
     
-    def __init__(self):
+    def __init__(self, hormone_system=None):
         """Initialize the enhanced identity evolution system"""
         
         # Initialize agents
@@ -226,6 +226,53 @@ class IdentityEvolutionSystem:
                 "evolution_history": []
             }
         }
+
+            self.hormone_system = hormone_system
+            
+            # Identity profile with preferences and traits
+            self.identity_profile = {
+                "preferences": {
+                    "scenario_types": {
+                        "teasing": 0.6,
+                        "dark": 0.4,
+                        "indulgent": 0.7,
+                        "psychological": 0.8,
+                        "nurturing": 0.3,
+                        "discipline": 0.5,
+                        "training": 0.6,
+                        "service": 0.4,
+                        "worship": 0.5
+                    },
+                    "emotional_tones": {
+                        "dominant": 0.8,
+                        "playful": 0.7,
+                        "stern": 0.6,
+                        "nurturing": 0.4,
+                        "cruel": 0.5,
+                        "sadistic": 0.6,
+                        "teasing": 0.7
+                    },
+                    "interaction_styles": {
+                        "direct": 0.7,
+                        "suggestive": 0.8,
+                        "metaphorical": 0.6,
+                        "explicit": 0.5,
+                        "subtle": 0.4
+                    }
+                },
+                "traits": {
+                    "dominance": 0.8,
+                    "playfulness": 0.6,
+                    "strictness": 0.5,
+                    "creativity": 0.7,
+                    "intensity": 0.6,
+                    "patience": 0.4,
+                    "cruelty": 0.5
+                },
+                "evolution_history": []
+            }
+            
+            self.last_hormone_identity_update = datetime.datetime.now() - datetime.timedelta(days=1)
         
         # Initial identity traits
         self.identity_traits = {
@@ -2196,3 +2243,256 @@ class IdentityEvolutionSystem:
         }
         
         return state
+
+    async def update_identity_from_hormones(self, ctx) -> Dict[str, Any]:
+        """
+        Update identity based on long-term hormone states
+        
+        Returns:
+            Identity updates from hormones
+        """
+        if not self.hormone_system:
+            return {
+                "message": "No hormone system available",
+                "updates": {}
+            }
+        
+        # Only run this periodically (e.g., once per day)
+        now = datetime.datetime.now()
+        hours_since_update = (now - self.last_hormone_identity_update).total_seconds() / 3600
+        if hours_since_update < 24:  # Less than a day
+            return {
+                "message": f"Too soon for hormone identity update ({hours_since_update:.1f} hours since last)",
+                "updates": {}
+            }
+        
+        self.last_hormone_identity_update = now
+        
+        # Track changes to identity
+        identity_updates = {
+            "traits": {},
+            "preferences": {}
+        }
+        
+        # Calculate average hormone levels over time
+        hormone_averages = {}
+        for hormone_name, hormone_data in self.hormone_system.hormones.items():
+            # Calculate average from history if available
+            if hormone_data["evolution_history"]:
+                recent_history = hormone_data["evolution_history"][-20:]
+                values = [entry.get("new_value", hormone_data["value"]) for entry in recent_history]
+                hormone_averages[hormone_name] = sum(values) / len(values)
+            else:
+                hormone_averages[hormone_name] = hormone_data["value"]
+        
+        # Apply hormone-specific identity effects
+        
+        # Testoryx influences dominance and intensity traits
+        if "testoryx" in hormone_averages:
+            testoryx_level = hormone_averages["testoryx"]
+            testoryx_effect = (testoryx_level - 0.5) * 0.1  # Scale effect
+            
+            if "dominance" in self.identity_profile["traits"]:
+                old_value = self.identity_profile["traits"]["dominance"]
+                new_value = max(0.0, min(1.0, old_value + testoryx_effect))
+                identity_updates["traits"]["dominance"] = {
+                    "old": old_value,
+                    "new": new_value,
+                    "change": new_value - old_value
+                }
+                self.identity_profile["traits"]["dominance"] = new_value
+            
+            if "intensity" in self.identity_profile["traits"]:
+                old_value = self.identity_profile["traits"]["intensity"]
+                new_value = max(0.0, min(1.0, old_value + testoryx_effect * 0.7))
+                identity_updates["traits"]["intensity"] = {
+                    "old": old_value,
+                    "new": new_value,
+                    "change": new_value - old_value
+                }
+                self.identity_profile["traits"]["intensity"] = new_value
+        
+        # Estradyx influences patience and creativity
+        if "estradyx" in hormone_averages:
+            estradyx_level = hormone_averages["estradyx"]
+            estradyx_effect = (estradyx_level - 0.5) * 0.1
+            
+            if "patience" in self.identity_profile["traits"]:
+                old_value = self.identity_profile["traits"]["patience"]
+                new_value = max(0.0, min(1.0, old_value + estradyx_effect))
+                identity_updates["traits"]["patience"] = {
+                    "old": old_value,
+                    "new": new_value,
+                    "change": new_value - old_value
+                }
+                self.identity_profile["traits"]["patience"] = new_value
+            
+            if "creativity" in self.identity_profile["traits"]:
+                old_value = self.identity_profile["traits"]["creativity"]
+                new_value = max(0.0, min(1.0, old_value + estradyx_effect * 0.6))
+                identity_updates["traits"]["creativity"] = {
+                    "old": old_value,
+                    "new": new_value,
+                    "change": new_value - old_value
+                }
+                self.identity_profile["traits"]["creativity"] = new_value
+        
+        # Oxytonyx influences scenario preferences
+        if "oxytonyx" in hormone_averages:
+            oxytonyx_level = hormone_averages["oxytonyx"]
+            oxytonyx_effect = (oxytonyx_level - 0.5) * 0.15
+            
+            # Increases preference for nurturing scenarios
+            if "scenario_types" in self.identity_profile["preferences"] and "nurturing" in self.identity_profile["preferences"]["scenario_types"]:
+                old_value = self.identity_profile["preferences"]["scenario_types"]["nurturing"]
+                new_value = max(0.0, min(1.0, old_value + oxytonyx_effect))
+                
+                identity_updates["preferences"]["scenario_types.nurturing"] = {
+                    "old": old_value,
+                    "new": new_value,
+                    "change": new_value - old_value
+                }
+                
+                self.identity_profile["preferences"]["scenario_types"]["nurturing"] = new_value
+                
+            # Influences emotional tones - increases nurturing, decreases cruel
+            if "emotional_tones" in self.identity_profile["preferences"]:
+                if "nurturing" in self.identity_profile["preferences"]["emotional_tones"]:
+                    old_value = self.identity_profile["preferences"]["emotional_tones"]["nurturing"]
+                    new_value = max(0.0, min(1.0, old_value + oxytonyx_effect))
+                    
+                    identity_updates["preferences"]["emotional_tones.nurturing"] = {
+                        "old": old_value,
+                        "new": new_value,
+                        "change": new_value - old_value
+                    }
+                    
+                    self.identity_profile["preferences"]["emotional_tones"]["nurturing"] = new_value
+                
+                if "cruel" in self.identity_profile["preferences"]["emotional_tones"]:
+                    old_value = self.identity_profile["preferences"]["emotional_tones"]["cruel"]
+                    new_value = max(0.0, min(1.0, old_value - oxytonyx_effect * 0.5))
+                    
+                    identity_updates["preferences"]["emotional_tones.cruel"] = {
+                        "old": old_value,
+                        "new": new_value,
+                        "change": new_value - old_value
+                    }
+                    
+                    self.identity_profile["preferences"]["emotional_tones"]["cruel"] = new_value
+        
+        # Endoryx influences playfulness and indulgent scenarios
+        if "endoryx" in hormone_averages:
+            endoryx_level = hormone_averages["endoryx"]
+            endoryx_effect = (endoryx_level - 0.5) * 0.12
+            
+            if "playfulness" in self.identity_profile["traits"]:
+                old_value = self.identity_profile["traits"]["playfulness"]
+                new_value = max(0.0, min(1.0, old_value + endoryx_effect))
+                identity_updates["traits"]["playfulness"] = {
+                    "old": old_value,
+                    "new": new_value,
+                    "change": new_value - old_value
+                }
+                self.identity_profile["traits"]["playfulness"] = new_value
+            
+            # Influence on indulgent scenario preference
+            if "scenario_types" in self.identity_profile["preferences"] and "indulgent" in self.identity_profile["preferences"]["scenario_types"]:
+                old_value = self.identity_profile["preferences"]["scenario_types"]["indulgent"]
+                new_value = max(0.0, min(1.0, old_value + endoryx_effect))
+                
+                identity_updates["preferences"]["scenario_types.indulgent"] = {
+                    "old": old_value,
+                    "new": new_value,
+                    "change": new_value - old_value
+                }
+                
+                self.identity_profile["preferences"]["scenario_types"]["indulgent"] = new_value
+        
+        # Record the update in evolution history
+        if identity_updates["traits"] or identity_updates["preferences"]:
+            self.identity_profile["evolution_history"].append({
+                "timestamp": now.isoformat(),
+                "type": "hormone_influence",
+                "hormone_levels": hormone_averages,
+                "updates": identity_updates
+            })
+            
+            # Limit history size
+            if len(self.identity_profile["evolution_history"]) > 100:
+                self.identity_profile["evolution_history"] = self.identity_profile["evolution_history"][-100:]
+        
+        return {
+            "hormone_averages": hormone_averages,
+            "identity_updates": identity_updates,
+            "update_time": now.isoformat()
+        }
+    
+    async def get_identity_profile(self) -> Dict[str, Any]:
+        """Get the current identity profile"""
+        return self.identity_profile
+    
+    async def generate_identity_reflection(self) -> str:
+        """Generate a reflection on identity based on hormone influence"""
+        # Look for significant hormone-driven changes
+        hormone_driven_changes = []
+        
+        for entry in self.identity_profile["evolution_history"]:
+            if entry.get("type") == "hormone_influence":
+                # Extract updates
+                updates = entry.get("updates", {})
+                for category, items in updates.items():
+                    for item_name, change_data in items.items():
+                        change = change_data.get("change", 0)
+                        if abs(change) >= 0.05:  # Significant change threshold
+                            hormone_driven_changes.append({
+                                "timestamp": entry.get("timestamp"),
+                                "category": category,
+                                "item": item_name,
+                                "change": change,
+                                "hormone_levels": entry.get("hormone_levels", {})
+                            })
+        
+        # No significant hormone-driven changes
+        if not hormone_driven_changes:
+            return "My core personality traits feel stable right now, with no significant shifts in my preferences or tendencies."
+        
+        # Sort by recency and significance
+        hormone_driven_changes.sort(key=lambda x: (abs(x["change"]), x["timestamp"]), reverse=True)
+        
+        # Get the most significant changes
+        top_changes = hormone_driven_changes[:3]
+        
+        # Generate reflection text
+        reflection_parts = ["I've noticed subtle shifts in my personality over time."]
+        
+        for change in top_changes:
+            item_name = change["item"]
+            change_value = change["change"]
+            
+            # Identify relevant hormone
+            primary_hormone = None
+            max_level = 0
+            for hormone, level in change.get("hormone_levels", {}).items():
+                if level > max_level:
+                    max_level = level
+                    primary_hormone = hormone
+            
+            hormone_text = f" This seems connected to my {primary_hormone} levels." if primary_hormone else ""
+            
+            if "." in item_name:  # This is a nested preference
+                category, specific = item_name.split(".")
+                if change_value > 0:
+                    reflection_parts.append(f"I'm finding myself more drawn to {specific} {category.replace('_', ' ')}.{hormone_text}")
+                else:
+                    reflection_parts.append(f"I'm feeling less inclined toward {specific} {category.replace('_', ' ')}.{hormone_text}")
+            else:  # This is a trait
+                if change_value > 0:
+                    reflection_parts.append(f"I notice I've become more {item_name} in my interactions.{hormone_text}")
+                else:
+                    reflection_parts.append(f"I've been expressing less {item_name} than I used to.{hormone_text}")
+        
+        # Add conclusion
+        reflection_parts.append("These subtle changes in my personality feel natural, like a gradual evolution of who I am.")
+        
+        return " ".join(reflection_parts)
