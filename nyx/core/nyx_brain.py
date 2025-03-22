@@ -21,7 +21,6 @@ from nyx.core.meta_core import MetaCore
 from nyx.core.knowledge_core import KnowledgeCoreAgents
 from nyx.core.memory_orchestrator import MemoryOrchestrator
 from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent as reasoning_triage_agent
-from nyx.core.component_influence_matrix import ComponentInfluenceMatrix
 
 # Import function tools
 from nyx.api.function_tools import (
@@ -150,38 +149,6 @@ async def perform_maintenance(ctx) -> Dict[str, Any]:
     result = await brain.run_maintenance()
     return result
 
-@function_tool
-async def get_influence_matrix_report(ctx) -> Dict[str, Any]:
-    """
-    Get a report on the current state of the component influence matrix
-    
-    Returns:
-        Influence matrix report data
-    """
-    brain = ctx.context
-    
-    if brain.influence_matrix:
-        report = brain.influence_matrix.get_influence_report()
-        return report
-    
-    return {"error": "Influence matrix not initialized"}
-
-@function_tool
-async def optimize_influence_matrix(ctx) -> Dict[str, Any]:
-    """
-    Run optimization on the component influence matrix
-    
-    Returns:
-        Optimization results
-    """
-    brain = ctx.context
-    
-    if brain.influence_matrix:
-        result = await brain.optimize_influence_matrix()
-        return result
-    
-    return {"error": "Influence matrix not initialized"}
-
 # =============== Main Brain Class ===============
 
 class NyxBrain:
@@ -206,18 +173,14 @@ class NyxBrain:
         self.memory_orchestrator = None
         self.reasoning_core = None
         
-        # Component influence matrix - initialized in initialize()
-        self.influence_matrix = None
-        
         # State tracking
         self.initialized = False
         self.last_interaction = datetime.datetime.now()
         self.interaction_count = 0
         
-        # Legacy influence parameters - kept for backward compatibility
-        # but actual values will come from influence matrix
-        self.memory_to_emotion_influence = 0.3
-        self.emotion_to_memory_influence = 0.4
+        # Bidirectional influence settings
+        self.memory_to_emotion_influence = 0.3  # How much memories influence emotions
+        self.emotion_to_memory_influence = 0.4  # How much emotions influence memory retrieval
         
         # Performance monitoring
         self.performance_metrics = {
@@ -233,9 +196,6 @@ class NyxBrain:
         
         # Main brain agent - initialized in initialize()
         self.brain_agent = None
-        
-        # Component activity tracking for influence learning
-        self.component_activity = {}
         
         # Trace group ID for connecting traces
         self.trace_group_id = f"nyx-brain-{user_id}-{conversation_id}"
@@ -263,9 +223,6 @@ class NyxBrain:
             return
         
         logger.info(f"Initializing NyxBrain for user {self.user_id}, conversation {self.conversation_id}")
-        
-        # Initialize influence matrix first
-        self.influence_matrix = ComponentInfluenceMatrix()
         
         # Initialize core components
         self.emotional_core = EmotionalCore()
@@ -308,19 +265,6 @@ class NyxBrain:
             "feedback": self.internal_feedback
         })
         
-        # Initialize component activity tracking
-        self.component_activity = {
-            "memory": 0.0,
-            "emotion": 0.0,
-            "reasoning": 0.0,
-            "reflection": 0.0,
-            "adaptation": 0.0,
-            "experience": 0.0,
-            "meta": 0.0,
-            "knowledge": 0.0,
-            "feedback": 0.0
-        }
-        
         # Initialize main brain agent
         self.brain_agent = self._create_brain_agent()
         
@@ -345,7 +289,6 @@ class NyxBrain:
             - Internal Feedback: Evaluates system performance
             - Meta Core: Handles meta-cognition and self-improvement
             - Knowledge Core: Manages knowledge and reasoning
-            - Component Influence Matrix: Manages dynamic interactions between components
             
             Use your tools to process user messages, generate responses, and maintain the system.
             """,
@@ -354,9 +297,7 @@ class NyxBrain:
                 generate_agent_response,
                 run_cognitive_cycle,
                 get_brain_stats,
-                perform_maintenance,
-                get_influence_matrix_report,
-                optimize_influence_matrix
+                perform_maintenance
             ]
         )
     
@@ -379,20 +320,14 @@ class NyxBrain:
         with trace(workflow_name="process_input", group_id=self.trace_group_id):
             start_time = datetime.datetime.now()
             
-            # Reset component activity tracking for this interaction
-            self._reset_component_activity()
-            
             # Run meta-cognitive cycle if available
             meta_result = {}
             if self.meta_core:
                 try:
                     meta_result = await self.meta_core.cognitive_cycle(context or {})
-                    # Track meta core activity
-                    self.component_activity["meta"] = 0.7
                 except Exception as e:
                     logger.error(f"Error in meta-cognitive cycle: {str(e)}")
                     meta_result = {"error": str(e)}
-                    self.component_activity["meta"] = 0.1
             
             # Update interaction tracking
             self.last_interaction = datetime.datetime.now()
@@ -400,33 +335,13 @@ class NyxBrain:
             
             # Initialize context
             context = context or {}
-            # Add user input to context
-            context["user_input"] = user_input
             
             # Process emotional impact of input
             emotional_stimuli = self.emotional_core.analyze_text_sentiment(user_input)
             emotional_state = self.emotional_core.update_from_stimuli(emotional_stimuli)
             
-            # Track emotion core activity
-            emotional_stimuli_magnitude = sum(emotional_stimuli.values())
-            self.component_activity["emotion"] = 0.3 + (0.7 * min(1.0, emotional_stimuli_magnitude))
-            
             # Add emotional state to context for memory retrieval
             context["emotional_state"] = emotional_state
-            
-            # Get dynamic influence weight from emotion to memory
-            emotion_to_memory_influence = 0.4  # Default value
-            if self.influence_matrix:
-                emotion_to_memory_influence = self.influence_matrix.calculate_contextual_influence(
-                    "emotion", "memory", context
-                )
-                
-            # Apply emotion-to-memory influence when retrieving memories
-            # by including emotional state in context with appropriate weight
-            retrieval_context = context.copy()
-            if emotion_to_memory_influence > 0.3:  # Only apply if influence is significant
-                # Enhance emotional context based on influence level
-                retrieval_context["emotional_weight"] = emotion_to_memory_influence
             
             # Retrieve relevant memories using memory orchestrator
             memories = await self.memory_orchestrator.retrieve_memories(
@@ -434,39 +349,22 @@ class NyxBrain:
                 memory_types=context.get("memory_types", ["observation", "reflection", "abstraction", "experience"]), 
                 limit=context.get("memory_limit", 5)
             )
-            
-            # Track memory activity based on retrieval success
-            self.component_activity["memory"] = 0.4 + (0.6 * min(1.0, len(memories) / 10))
             self.performance_metrics["memory_operations"] += 1
-            
-            # Get dynamic influence weight from memory to emotion
-            memory_to_emotion_influence = 0.3  # Default value
-            if self.influence_matrix:
-                memory_to_emotion_influence = self.influence_matrix.calculate_contextual_influence(
-                    "memory", "emotion", context
-                )
             
             # Update emotional state based on retrieved memories
             if memories:
-                memory_emotional_impact = await self._calculate_memory_emotional_impact(memories, context)
-                # Apply memory-to-emotion influence with dynamic weight
+                memory_emotional_impact = await self._calculate_memory_emotional_impact(memories)
+                # Apply memory-to-emotion influence
                 for emotion, value in memory_emotional_impact.items():
-                    self.emotional_core.update_emotion(emotion, value * memory_to_emotion_influence)
+                    self.emotional_core.update_emotion(emotion, value * self.memory_to_emotion_influence)
                 
                 # Get updated emotional state
                 emotional_state = self.emotional_core.get_emotional_state()
             
             self.performance_metrics["emotion_updates"] += 1
             
-            # Determine experience sharing based on dynamic influence
-            experience_to_response_influence = 0.5  # Default value
-            if self.influence_matrix:
-                experience_to_response_influence = self.influence_matrix.calculate_contextual_influence(
-                    "experience", "reasoning", context
-                )
-            
-            # Check if experience sharing is appropriate
-            should_share_experience = self._should_share_experience(user_input, context) or experience_to_response_influence > 0.7
+            # Check if experience sharing is requested
+            should_share_experience = self._should_share_experience(user_input, context)
             experience_result = None
             
             if should_share_experience:
@@ -476,12 +374,6 @@ class NyxBrain:
                     context_data=context
                 )
                 self.performance_metrics["experiences_shared"] += 1
-                
-                # Track experience activity
-                if experience_result and experience_result.get("has_experience", False):
-                    self.component_activity["experience"] = 0.8
-                else:
-                    self.component_activity["experience"] = 0.2
             
             # Add memory of this interaction
             memory_text = f"User said: {user_input}"
@@ -498,13 +390,7 @@ class NyxBrain:
                 }
             )
             
-            # Check for reasoning requirements
-            if self._is_reasoning_query(user_input):
-                self.component_activity["reasoning"] = 0.8
-            else:
-                self.component_activity["reasoning"] = 0.3
-            
-            # Check for context change using dynamic adaptation
+            # Check for context change
             context_change_result = None
             if self.dynamic_adaptation:
                 # Prepare context for change detection
@@ -516,37 +402,13 @@ class NyxBrain:
                     "interaction_count": self.interaction_count
                 }
                 
-                # Get dynamic influence for adaptation
-                adaptation_influence = 0.5  # Default value
-                if self.influence_matrix:
-                    adaptation_influence = self.influence_matrix.calculate_contextual_influence(
-                        "adaptation", "meta", context
-                    )
-                
-                # Only run adaptation if influence is sufficient
-                if adaptation_influence > 0.3:
-                    # Detect context change
-                    context_change_result = await self.dynamic_adaptation.detect_context_change(context_for_adaptation)
-                    
-                    # Track adaptation activity
-                    if context_change_result and getattr(context_change_result, "significant_change", False):
-                        self.component_activity["adaptation"] = 0.9
-                    else:
-                        self.component_activity["adaptation"] = 0.4
+                # Detect context change
+                context_change_result = await self.dynamic_adaptation.detect_context_change(context_for_adaptation)
             
             # Calculate response time
             end_time = datetime.datetime.now()
             response_time = (end_time - start_time).total_seconds()
             self.performance_metrics["response_times"].append(response_time)
-            
-            # Update influence matrix with component activity and estimated outcomes
-            interaction_outcomes = {
-                "success_rate": context.get("success_rate", 0.5),
-                "response_quality": context.get("response_quality", 0.5),
-                "user_satisfaction": context.get("user_satisfaction", 0.5)
-            }
-            
-            await self._update_influence_matrix(self.component_activity, interaction_outcomes)
             
             # Return processing results in a structured format using the ProcessResult model
             result = {
@@ -559,8 +421,7 @@ class NyxBrain:
                 "memory_id": memory_id,
                 "response_time": response_time,
                 "context_change": context_change_result,
-                "meta_result": meta_result,
-                "component_activity": self.component_activity
+                "meta_result": meta_result
             }
             
             return result
@@ -582,33 +443,13 @@ class NyxBrain:
             # Process the input first
             processing_result = await self.process_input(user_input, context)
             
-            # Enhanced context with processing results
-            enhanced_context = context.copy() if context else {}
-            enhanced_context.update({
-                "processing_result": processing_result,
-                "component_activity": self.component_activity
-            })
-            
-            # Determine response strategy using dynamic influence weights
-            experience_influence = 0.5  # Default value
-            reasoning_influence = 0.5  # Default value
-            
-            if self.influence_matrix:
-                experience_influence = self.influence_matrix.calculate_contextual_influence(
-                    "experience", "reasoning", enhanced_context
-                )
-                reasoning_influence = self.influence_matrix.calculate_contextual_influence(
-                    "reasoning", "emotion", enhanced_context
-                )
-            
             # Determine if experience response should be used
-            if processing_result["has_experience"] and experience_influence > 0.4:
+            if processing_result["has_experience"]:
                 main_response = processing_result["experience_response"]
                 response_type = "experience"
-                self.component_activity["experience"] = 0.9
             else:
                 # For reasoning-related queries, use the reasoning agents
-                if self._is_reasoning_query(user_input) and reasoning_influence > 0.3:
+                if self._is_reasoning_query(user_input):
                     try:
                         reasoning_result = await Runner.run(
                             reasoning_triage_agent,
@@ -616,13 +457,11 @@ class NyxBrain:
                         )
                         main_response = reasoning_result.final_output
                         response_type = "reasoning"
-                        self.component_activity["reasoning"] = 0.9
                     except Exception as e:
                         logger.error(f"Error in reasoning response: {str(e)}")
                         # Fallback to standard response
                         main_response = "I understand your question and would like to reason through it with you."
                         response_type = "standard"
-                        self.component_activity["reasoning"] = 0.3
                 else:
                     # No specific experience to share, generate standard response
                     # In a real implementation, this would be more sophisticated
@@ -630,17 +469,7 @@ class NyxBrain:
                     response_type = "standard"
             
             # Determine if emotion should be expressed
-            emotional_expression_influence = 0.5  # Default
-            if self.influence_matrix:
-                emotional_expression_influence = self.influence_matrix.calculate_contextual_influence(
-                    "emotion", "experience", enhanced_context
-                )
-            
-            should_express_emotion = (
-                self.emotional_core.should_express_emotion() or 
-                emotional_expression_influence > 0.7
-            )
-            
+            should_express_emotion = self.emotional_core.should_express_emotion()
             emotional_expression = None
             
             if should_express_emotion:
@@ -648,11 +477,9 @@ class NyxBrain:
                     expression_result = await self.emotional_core.generate_emotional_expression(force=False)
                     if expression_result.get("expressed", False):
                         emotional_expression = expression_result.get("expression", "")
-                        self.component_activity["emotion"] = 0.8
                 except Exception as e:
                     logger.error(f"Error generating emotional expression: {str(e)}")
                     emotional_expression = self.emotional_core.get_expression_for_emotion()
-                    self.component_activity["emotion"] = 0.4
             
             # Package the response
             response_data = {
@@ -661,8 +488,7 @@ class NyxBrain:
                 "emotional_state": processing_result["emotional_state"],
                 "emotional_expression": emotional_expression,
                 "memories_used": [m["id"] for m in processing_result["memories"]],
-                "memory_count": processing_result["memory_count"],
-                "component_activity": self.component_activity
+                "memory_count": processing_result["memory_count"]
             }
             
             # Add memory of this response
@@ -679,15 +505,8 @@ class NyxBrain:
                 }
             )
             
-            # Get feedback influence
-            feedback_influence = 0.5  # Default
-            if self.influence_matrix:
-                feedback_influence = self.influence_matrix.calculate_contextual_influence(
-                    "feedback", "adaptation", enhanced_context
-                )
-            
-            # Evaluate the response if internal feedback system is available and influence is sufficient
-            if self.internal_feedback and feedback_influence > 0.3:
+            # Evaluate the response if internal feedback system is available
+            if self.internal_feedback:
                 try:
                     evaluation = await self.internal_feedback.critic_evaluate(
                         aspect="effectiveness",
@@ -697,21 +516,8 @@ class NyxBrain:
                     
                     # Add evaluation to response data
                     response_data["evaluation"] = evaluation
-                    
-                    # Track feedback activity
-                    self.component_activity["feedback"] = 0.7
                 except Exception as e:
                     logger.error(f"Error evaluating response: {str(e)}")
-                    self.component_activity["feedback"] = 0.2
-            
-            # Update influence matrix again with final component activity
-            interaction_outcomes = {
-                "success_rate": response_data.get("evaluation", {}).get("success_rate", 0.5),
-                "response_quality": response_data.get("evaluation", {}).get("quality_score", 0.5),
-                "user_satisfaction": response_data.get("evaluation", {}).get("user_satisfaction", 0.5)
-            }
-            
-            await self._update_influence_matrix(self.component_activity, interaction_outcomes)
             
             return response_data
     
@@ -730,15 +536,8 @@ class NyxBrain:
             # Generate standard response
             response_data = await self.generate_response(user_input, context)
             
-            # Check if adaptation should be applied based on influence matrix
-            adaptation_threshold = 0.5  # Default
-            if self.influence_matrix:
-                adaptation_threshold = self.influence_matrix.calculate_contextual_influence(
-                    "adaptation", "meta", context or {}
-                )
-            
             # Add adaptive behavior from dynamic adaptation system
-            if self.dynamic_adaptation and adaptation_threshold > 0.4:
+            if self.dynamic_adaptation:
                 try:
                     # Create adaptable context
                     adaptable_context = {
@@ -764,9 +563,6 @@ class NyxBrain:
                         "performance": performance
                     }
                     
-                    # Track adaptation activity
-                    self.component_activity["adaptation"] = 0.8
-                    
                     # If significant change, select strategy
                     if change_result.significant_change:  # Updated to use the proper attribute
                         strategy = await self.dynamic_adaptation.select_strategy(adaptable_context, performance)
@@ -774,17 +570,9 @@ class NyxBrain:
                 except Exception as e:
                     logger.error(f"Error in adaptation: {str(e)}")
                     response_data["adaptation"] = {"error": str(e)}
-                    self.component_activity["adaptation"] = 0.2
-            
-            # Determine if reflection should be included based on influence
-            reflection_threshold = 0.5  # Default
-            if self.influence_matrix:
-                reflection_threshold = self.influence_matrix.calculate_contextual_influence(
-                    "reflection", "meta", context or {}
-                )
             
             # Generate a meta-cognitive reflection if appropriate
-            if (self.interaction_count % 10 == 0 or reflection_threshold > 0.7) and self.reflection_engine:
+            if self.interaction_count % 10 == 0 and self.reflection_engine:
                 try:
                     system_stats = await self.get_system_stats()
                     introspection = await self.reflection_engine.generate_introspection(
@@ -792,19 +580,8 @@ class NyxBrain:
                         player_model=context.get("player_model")
                     )
                     response_data["introspection"] = introspection
-                    
-                    # Track reflection activity
-                    self.component_activity["reflection"] = 0.8
                 except Exception as e:
                     logger.error(f"Error generating introspection: {str(e)}")
-                    self.component_activity["reflection"] = 0.2
-            
-            # Update influence matrix with final activities
-            await self._update_influence_matrix(self.component_activity, {
-                "success_rate": 0.5,  # Default as we don't have real feedback yet
-                "response_quality": 0.5,
-                "user_satisfaction": 0.5
-            })
             
             return response_data
     
@@ -823,37 +600,9 @@ class NyxBrain:
             await self.initialize()
         
         with trace(workflow_name="create_reflection", group_id=self.trace_group_id):
-            # Track reflection activity
-            self.component_activity["reflection"] = 0.9
-            
-            # Get the memory-to-reflection influence
-            memory_to_reflection_influence = 0.5  # Default
-            if self.influence_matrix:
-                memory_to_reflection_influence = self.influence_matrix.get_influence("memory", "reflection")
-            
-            # Enhance retrieval parameters based on influence
-            memory_limit = 5  # Default
-            if memory_to_reflection_influence > 0.7:
-                memory_limit = 8  # Retrieve more memories if influence is high
-            elif memory_to_reflection_influence < 0.3:
-                memory_limit = 3  # Retrieve fewer memories if influence is low
-            
-            # Use orchestrator for reflection creation with dynamic parameters
-            reflection_result = await self.memory_orchestrator.create_reflection(
-                topic=topic,
-                limit=memory_limit
-            )
+            # Use orchestrator for reflection creation
+            reflection_result = await self.memory_orchestrator.create_reflection(topic=topic)
             self.performance_metrics["reflections_generated"] += 1
-            
-            # Track memory activity
-            self.component_activity["memory"] = 0.7
-            
-            # Update influence matrix
-            await self._update_influence_matrix(self.component_activity, {
-                "success_rate": 0.7,  # Reflections typically successful
-                "response_quality": 0.6,
-                "user_satisfaction": 0.6
-            })
             
             return reflection_result
     
@@ -864,15 +613,6 @@ class NyxBrain:
         
         with trace(workflow_name="run_maintenance", group_id=self.trace_group_id):
             results = {}
-            
-            # Optimize influence matrix first
-            if self.influence_matrix:
-                try:
-                    matrix_result = await self.optimize_influence_matrix()
-                    results["influence_matrix_maintenance"] = matrix_result
-                except Exception as e:
-                    logger.error(f"Error in influence matrix maintenance: {str(e)}")
-                    results["influence_matrix_maintenance"] = {"error": str(e)}
             
             # Run memory maintenance
             try:
@@ -943,15 +683,6 @@ class NyxBrain:
                     logger.error(f"Error getting knowledge stats: {str(e)}")
                     knowledge_stats = {"error": str(e)}
             
-            # Get influence matrix stats if available
-            influence_stats = {}
-            if self.influence_matrix:
-                try:
-                    influence_stats = self.influence_matrix.get_influence_report()
-                except Exception as e:
-                    logger.error(f"Error getting influence stats: {str(e)}")
-                    influence_stats = {"error": str(e)}
-            
             return {
                 "memory_stats": memory_stats,
                 "emotional_state": {
@@ -974,20 +705,11 @@ class NyxBrain:
                 },
                 "introspection": introspection,
                 "meta_stats": meta_stats,
-                "knowledge_stats": knowledge_stats,
-                "influence_stats": influence_stats,
-                "component_activity": self.component_activity
+                "knowledge_stats": knowledge_stats
             }
     
     def _should_share_experience(self, user_input: str, context: Dict[str, Any]) -> bool:
         """Determine if we should share an experience based on input and context"""
-        # Get dynamic influence weight for experience sharing
-        experience_share_threshold = 0.5  # Default
-        if self.influence_matrix and context:
-            experience_share_threshold = self.influence_matrix.calculate_contextual_influence(
-                "experience", "memory", context
-            )
-        
         # Check for explicit experience requests
         explicit_request = any(phrase in user_input.lower() for phrase in 
                              ["remember", "recall", "tell me about", "have you done", 
@@ -999,12 +721,7 @@ class NyxBrain:
         # Check if it's a question that could benefit from experience sharing
         is_question = user_input.endswith("?") or user_input.lower().startswith(("what", "how", "when", "where", "why", "who", "can", "could", "do", "did"))
         
-        # Adjust based on dynamic threshold
-        if is_question and experience_share_threshold > 0.6:
-            return True
-        
-        # Use explicit context setting if available
-        if "share_experiences" in context and context["share_experiences"]:
+        if is_question and "share_experiences" in context and context["share_experiences"]:
             return True
         
         # Default to not sharing experiences unless explicitly requested
@@ -1021,31 +738,9 @@ class NyxBrain:
         
         return any(indicator in user_input.lower() for indicator in reasoning_indicators)
     
-    async def _calculate_memory_emotional_impact(self, 
-                                          memories: List[Dict[str, Any]], 
-                                          context: Dict[str, Any]) -> Dict[str, float]:
-        """
-        Calculate emotional impact from relevant memories using dynamic influence weights
-        
-        Args:
-            memories: List of retrieved memories
-            context: Current context
-            
-        Returns:
-            Dictionary of emotion impacts
-        """
+    async def _calculate_memory_emotional_impact(self, memories: List[Dict[str, Any]]) -> Dict[str, float]:
+        """Calculate emotional impact from relevant memories"""
         impact = {}
-        
-        # Get dynamic memory-to-emotion influence
-        memory_emotion_influence = 0.3  # Default
-        if self.influence_matrix:
-            memory_emotion_influence = self.influence_matrix.calculate_contextual_influence(
-                "memory", "emotion", context
-            )
-        
-        # Scale impact factor based on dynamic influence
-        base_impact_scale = 0.1
-        impact_scale = base_impact_scale * (memory_emotion_influence / 0.3)  # Scale based on influence
         
         for memory in memories:
             # Extract emotional context
@@ -1074,8 +769,8 @@ class NyxBrain:
                         # If timestamp can't be parsed, use default
                         pass
                 
-                # Calculate final impact value with dynamic scaling
-                impact_value = primary_intensity * relevance * recency_factor * impact_scale
+                # Calculate final impact value
+                impact_value = primary_intensity * relevance * recency_factor * 0.1
                 
                 # Add to impact dict
                 if primary_emotion not in impact:
@@ -1083,68 +778,6 @@ class NyxBrain:
                 impact[primary_emotion] += impact_value
         
         return impact
-    
-    def _reset_component_activity(self):
-        """Reset component activity tracking for a new interaction"""
-        self.component_activity = {
-            "memory": 0.0,
-            "emotion": 0.0,
-            "reasoning": 0.0,
-            "reflection": 0.0,
-            "adaptation": 0.0,
-            "experience": 0.0,
-            "meta": 0.0,
-            "knowledge": 0.0,
-            "feedback": 0.0
-        }
-    
-    async def _update_influence_matrix(self, 
-                                 component_activity: Dict[str, float], 
-                                 outcomes: Dict[str, float]) -> None:
-        """
-        Update the influence matrix based on component activity and interaction outcomes
-        
-        Args:
-            component_activity: Dictionary of component activity levels
-            outcomes: Dictionary of outcome metrics
-        """
-        if not self.influence_matrix:
-            return
-        
-        # Prepare interaction data
-        interaction_data = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "active_components": component_activity
-        }
-        
-        # Learn from this interaction
-        self.influence_matrix.learn_from_interaction(interaction_data, outcomes)
-    
-    async def optimize_influence_matrix(self) -> Dict[str, Any]:
-        """
-        Optimize the influence matrix based on historical data
-        
-        Returns:
-            Optimization results
-        """
-        if not self.influence_matrix:
-            return {"error": "Influence matrix not initialized"}
-        
-        # Run optimization
-        results = self.influence_matrix.optimize_weights()
-        
-        # Save matrix state if significant changes
-        if results.get("changes", 0) > 3:
-            try:
-                save_path = f"nyx_influence_matrix_{self.user_id}_{self.conversation_id}.json"
-                saved = self.influence_matrix.save_to_file(save_path)
-                results["saved_to_file"] = saved
-                results["save_path"] = save_path
-            except Exception as e:
-                logger.error(f"Error saving influence matrix: {e}")
-                results["save_error"] = str(e)
-        
-        return results
     
     async def process_user_input_enhanced(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -1187,11 +820,6 @@ class NyxBrain:
             # Add additional processing information
             system_stats = await self.get_system_stats()
             
-            # Add influence matrix report
-            influence_report = {}
-            if self.influence_matrix:
-                influence_report = self.influence_matrix.get_influence_report()
-            
             # Return enhanced result
             return {
                 "input": user_input,
@@ -1202,8 +830,6 @@ class NyxBrain:
                 "experience_response": result["experience_response"],
                 "memory_id": result["memory_id"],
                 "response_time": result["response_time"],
-                "component_activity": self.component_activity,
-                "influence_report": influence_report,
                 "system_stats": {
                     "memory_stats": system_stats["memory_stats"],
                     "emotional_state": system_stats["emotional_state"],
