@@ -14,6 +14,7 @@ openai-agents==0.0.4
 asyncpg
 celery
 gunicorn
+eventlet>=0.24.1
 
 # Web framework
 flask==3.0.0
