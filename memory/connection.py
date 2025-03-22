@@ -5,11 +5,14 @@ import logging
 import asyncpg
 from typing import Optional, Dict, Any
 import time
+import os
 
 # Import config
 from config import DB_CONFIG
 
 logger = logging.getLogger("memory_db")
+
+DB_CONFIG = os.getenv("DB_DSN")
 
 class DBConnectionManager:
     """
