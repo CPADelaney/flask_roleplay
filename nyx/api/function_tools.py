@@ -452,3 +452,185 @@ async def evaluate_response(ctx: RunContextWrapper[Any],
     return json.dumps({
         "error": "Internal feedback system not available"
     })
+@function_tool
+async def get_hormone_levels(ctx) -> Dict[str, float]:
+    """
+    Get current digital hormone levels
+    
+    Returns:
+        Dictionary of hormone levels
+    """
+    brain = ctx.context
+    
+    if not brain.hormone_system:
+        return {"error": "Hormone system not initialized"}
+    
+    # Get current hormone levels
+    hormone_levels = {name: data["value"] for name, data in brain.hormone_system.hormones.items()}
+    
+    return hormone_levels
+
+@function_tool
+async def get_hormone_state(ctx) -> Dict[str, Any]:
+    """
+    Get detailed state of the hormone system
+    
+    Returns:
+        Full hormone system state with cycles and environmental factors
+    """
+    brain = ctx.context
+    
+    if not brain.hormone_system:
+        return {"error": "Hormone system not initialized"}
+    
+    # Get hormone levels
+    hormone_levels = {name: data["value"] for name, data in brain.hormone_system.hormones.items()}
+    
+    # Get cycle phases
+    cycle_phases = {name: data["cycle_phase"] for name, data in brain.hormone_system.hormones.items()}
+    
+    # Get environmental factors
+    environmental_factors = brain.hormone_system.environmental_factors.copy()
+    
+    return {
+        "hormone_levels": hormone_levels,
+        "cycle_phases": cycle_phases,
+        "environmental_factors": environmental_factors
+    }
+
+@function_tool
+async def update_hormone_cycles(ctx) -> Dict[str, Any]:
+    """
+    Manually trigger an update of hormone cycles
+    
+    Returns:
+        Updated hormone values
+    """
+    brain = ctx.context
+    
+    if not brain.hormone_system:
+        return {"error": "Hormone system not initialized"}
+    
+    # Update hormone cycles
+    result = await brain.hormone_system.update_hormone_cycles(ctx)
+    
+    return result
+
+@function_tool
+async def set_environmental_factor(ctx, factor_name: str, value: float) -> Dict[str, Any]:
+    """
+    Set an environmental factor for the hormone system
+    
+    Args:
+        factor_name: Name of the factor to update
+        value: New value (0.0-1.0)
+        
+    Returns:
+        Updated environmental factors
+    """
+    brain = ctx.context
+    
+    if not brain.hormone_system:
+        return {"error": "Hormone system not initialized"}
+    
+    # Validate factor name
+    if factor_name not in brain.hormone_system.environmental_factors:
+        return {
+            "error": f"Unknown environmental factor: {factor_name}",
+            "available_factors": list(brain.hormone_system.environmental_factors.keys())
+        }
+    
+    # Validate value
+    if not 0.0 <= value <= 1.0:
+        return {"error": "Value must be between 0.0 and 1.0"}
+    
+    # Set the factor
+    brain.hormone_system.environmental_factors[factor_name] = value
+    
+    return {
+        "updated": True,
+        "factor": factor_name,
+        "value": value,
+        "environmental_factors": brain.hormone_system.environmental_factors
+    }
+
+@function_tool
+async def get_hormone_impact_on_identity(ctx) -> Dict[str, Any]:
+    """
+    Get the impact of hormones on identity
+    
+    Returns:
+        Recent hormone-driven identity changes
+    """
+    brain = ctx.context
+    
+    if not brain.identity_evolution:
+        return {"error": "Identity evolution system not initialized"}
+    
+    # Get evolution history
+    evolution_history = brain.identity_evolution.identity_profile.get("evolution_history", [])
+    
+    # Filter for hormone-driven changes
+    hormone_driven_changes = []
+    
+    for entry in evolution_history:
+        if entry.get("type") == "hormone_influence":
+            hormone_driven_changes.append(entry)
+    
+    # If no hormone-driven changes, return empty result
+    if not hormone_driven_changes:
+        return {
+            "message": "No hormone-driven identity changes found",
+            "changes": []
+        }
+    
+    # Get the most recent changes
+    recent_changes = hormone_driven_changes[-5:]
+    
+    # Format the changes
+    formatted_changes = []
+    
+    for change in recent_changes:
+        updates = change.get("updates", {})
+        hormone_levels = change.get("hormone_levels", {})
+        
+        # Find dominant hormone
+        dominant_hormone = None
+        max_level = 0
+        for hormone, level in hormone_levels.items():
+            if level > max_level:
+                max_level = level
+                dominant_hormone = hormone
+        
+        formatted_changes.append({
+            "timestamp": change.get("timestamp"),
+            "dominant_hormone": dominant_hormone,
+            "hormone_levels": hormone_levels,
+            "trait_updates": updates.get("traits", {}),
+            "preference_updates": updates.get("preferences", {})
+        })
+    
+    return {
+        "hormone_driven_changes": formatted_changes,
+        "total_changes": len(hormone_driven_changes),
+        "recent_changes": len(recent_changes)
+    }
+
+@function_tool
+async def generate_hormone_reflection(ctx) -> str:
+    """
+    Generate a reflection on how hormones are affecting identity
+    
+    Returns:
+        Hormone reflection text
+    """
+    brain = ctx.context
+    
+    if not brain.identity_evolution:
+        return "Identity evolution system not initialized."
+    
+    try:
+        reflection = await brain.identity_evolution.generate_identity_reflection()
+        return reflection
+    except Exception as e:
+        return f"Unable to generate hormone reflection: {str(e)}"
