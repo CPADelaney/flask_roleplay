@@ -6,10 +6,13 @@ import json
 import math
 import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union
+import os
+import math
 
-from agents import Agent, Runner, trace, function_tool, handoff
+from agents import Agent, Runner, trace, function_tool, handoff, RunContextWrapper
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from pydantic import BaseModel, Field
+
 
 # Import core systems
 from nyx.core.emotional_core import EmotionalCore
@@ -25,6 +28,14 @@ from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent a
 from nyx.core.experience_consolidation import ExperienceConsolidationSystem
 from nyx.core.identity_evolution import IdentityEvolutionSystem
 from nyx.core.cross_user_experience import CrossUserExperienceManager
+
+from nyx.streamer.gamer_girl import (
+    AdvancedGameAgentSystem, 
+    GameSessionLearningManager,
+    CommentaryType, 
+    AnswerType
+)
+from nyx.streamer.integration import setup_enhanced_streaming
 
 # Import function tools
 from nyx.api.function_tools import (
@@ -85,6 +96,199 @@ class IdentityState(BaseModel):
     identity_evolution: Dict[str, Any] = Field(..., description="Identity evolution metrics")
 
 # =============== Brain Function Tools ===============
+
+async def initialize_streaming(self, video_source=0, audio_source=None):
+    """
+    Initialize the streaming system with full brain integration
+    
+    Args:
+        video_source: Video capture source (0 for webcam)
+        audio_source: Audio capture source
+        
+    Returns:
+        Streaming core system
+    """
+    # Use the integration setup function
+    self.streaming_core = await setup_enhanced_streaming(self, video_source, audio_source)
+    
+    # Set brain reference in the streaming system
+    self.streaming_core.streaming_system.set_nyx_brain(self)
+    
+    # Initialize learning manager with brain access
+    self.streaming_core.learning_manager = GameSessionLearningManager(self, self.streaming_core)
+    
+    # Register memory functions for streaming
+    self.store_streaming_memory = self.streaming_core.memory_mapper.store_gameplay_memory
+    self.retrieve_streaming_memories = self.streaming_core.memory_mapper.retrieve_relevant_memories
+    self.create_streaming_reflection = self.streaming_core.memory_mapper.create_streaming_reflection
+    
+    # Register streaming control functions
+    self.start_streaming = self.streaming_core.start_streaming
+    self.stop_streaming = self.streaming_core.stop_streaming
+    self.add_streaming_question = self.streaming_core.add_audience_question
+    self.get_streaming_stats = self.streaming_core.get_streaming_stats
+    
+    # Register experience and knowledge functions
+    self.recall_streaming_experience = self.streaming_core.recall_streaming_experience
+    self.get_cross_game_insights = self.streaming_core.get_cross_game_insights
+    
+    # Register learning and analysis functions
+    self.summarize_streaming_learnings = self.streaming_core.learning_manager.generate_learning_summary
+    self.analyze_streaming_session = self.streaming_core.learning_manager.analyze_session_learnings
+    
+    logger.info(f"Streaming system initialized and integrated with brain for user {self.user_id}")
+    
+    return self.streaming_core
+
+async def process_streaming_event(self, event_type: str, event_data: dict, significance: float = 5.0):
+    """
+    Process a significant streaming event through the brain's cognitive systems
+    
+    Args:
+        event_type: Type of event (e.g., "commentary", "question_answer")
+        event_data: Data about the event
+        significance: Importance level (1-10)
+        
+    Returns:
+        Processing results including memory_id and any cognitive processing
+    """
+    results = {}
+    
+    # Get game name from streaming system if available
+    game_name = "Unknown Game"
+    if hasattr(self, "streaming_core") and hasattr(self.streaming_core.streaming_system, "game_state"):
+        game_name = self.streaming_core.streaming_system.game_state.game_name or "Unknown Game"
+    
+    # 1. Store in memory system
+    memory_text = f"While streaming {game_name}, observed {event_type}: {event_data.get('text', str(event_data))}"
+    memory_id = await self.memory_core.add_memory(
+        memory_text=memory_text,
+        memory_type="observation",
+        memory_scope="game",
+        significance=significance,
+        tags=["streaming", event_type, game_name],
+        metadata={
+            "timestamp": datetime.datetime.now().isoformat(),
+            "game_name": game_name,
+            "event_type": event_type,
+            "event_data": event_data,
+            "streaming": True
+        }
+    )
+    results["memory_id"] = memory_id
+    
+    # 2. Impact emotional state if available
+    if hasattr(self, "emotional_core") and self.emotional_core:
+        # Analyze emotional impact
+        if event_type == "commentary":
+            # Commentary might reflect emotional state
+            self.emotional_core.update_emotion("Joy", 0.1)
+        elif event_type == "question_answer":
+            # Answering questions might increase engagement
+            self.emotional_core.update_emotion("Interest", 0.1)
+        elif event_type == "significant_moment":
+            # Game moments might have stronger impact
+            intensity = event_data.get("significance", 5.0) / 10.0
+            if "combat" in str(event_data).lower():
+                self.emotional_core.update_emotion("Excitement", intensity)
+            elif "story" in str(event_data).lower():
+                self.emotional_core.update_emotion("Interest", intensity)
+        
+        # Get updated emotional state
+        results["emotional_state"] = self.emotional_core.get_emotional_state()
+    
+    # 3. Process through reasoning system if significant enough
+    if significance >= 7.0 and hasattr(self, "reasoning_core"):
+        try:
+            reasoning_result = await self.reasoning_core.analyze_event(
+                event_data=event_data,
+                context={"domain": "gaming", "event_type": event_type}
+            )
+            results["reasoning"] = reasoning_result
+        except Exception as e:
+            logger.error(f"Error in reasoning about streaming event: {e}")
+    
+    # 4. Process through identity system if available
+    if hasattr(self, "identity_evolution") and event_type in ["question_answer", "commentary"]:
+        try:
+            # Streaming affects identity over time
+            if event_type == "commentary":
+                # Commentary style affects identity
+                style = event_data.get("focus", "")
+                if style == "strategy":
+                    await self.identity_evolution.update_trait("analytical", 0.05)
+                elif style == "lore":
+                    await self.identity_evolution.update_trait("curious", 0.05)
+            
+            results["identity_updated"] = True
+        except Exception as e:
+            logger.error(f"Error updating identity from streaming event: {e}")
+    
+    return results
+
+async def integrate_streaming_knowledge(self, game_name: str):
+    """
+    Integrate knowledge from streaming into long-term knowledge systems
+    
+    Args:
+        game_name: Name of the game to integrate knowledge for
+        
+    Returns:
+        Integration results
+    """
+    results = {}
+    
+    # 1. Create reflection on streaming experience
+    if self.streaming_core and self.streaming_core.memory_mapper:
+        reflection = await self.streaming_core.memory_mapper.create_streaming_reflection(
+            game_name=game_name,
+            aspect="knowledge_integration",
+            context="knowledge integration"
+        )
+        results["reflection"] = reflection
+    
+    # 2. Store cross-game insights as knowledge
+    if self.streaming_core and hasattr(self.streaming_core, "cross_game_knowledge"):
+        insights = self.streaming_core.cross_game_knowledge.get_applicable_insights(
+            target_game=game_name,
+            min_relevance=0.7
+        )
+        
+        if insights and hasattr(self, "knowledge_core"):
+            try:
+                for insight in insights:
+                    await self.knowledge_core.add_knowledge_item(
+                        domain="gaming",
+                        content=insight["insight"],
+                        source=f"Cross-game insight: {insight['source_game']} → {insight['target_game']}",
+                        confidence=insight["relevance"]
+                    )
+                
+                results["insights_added"] = len(insights)
+            except Exception as e:
+                logger.error(f"Error storing cross-game insights: {e}")
+    
+    # 3. Consolidate experiences if available
+    if hasattr(self, "experience_consolidation"):
+        try:
+            query = f"streaming {game_name}"
+            experiences = await self.memory_core.retrieve_memories(
+                query=query,
+                memory_types=["experience"],
+                limit=10
+            )
+            
+            if len(experiences) >= 3:
+                consolidation = await self.experience_consolidation.consolidate_experiences(
+                    experiences=experiences,
+                    topic=f"Streaming {game_name}",
+                    min_count=3
+                )
+                results["consolidation"] = consolidation
+        except Exception as e:
+            logger.error(f"Error consolidating streaming experiences: {e}")
+    
+    return results
 
 @function_tool
 async def process_user_message(ctx, user_input: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -292,8 +496,92 @@ class NyxBrain:
         # Registry of instance clusters (for cross-conversation access)
         self.instance_registry = {}
 
+        # Initialize streaming system if needed
+        if os.environ.get("ENABLE_STREAMING", "false").lower() == "true":
+            await self.initialize_streaming()
+    
+        self.initialized = True
+        logger.info(f"NyxBrain initialized for user {self.user_id}, conversation {self.conversation_id}")    
+
         self.cross_user_enabled = True
         self.cross_user_sharing_threshold = 0.7
+
+    async def run_streaming_session(self, game_name=None, session_options=None):
+        """
+        Run a complete streaming session with full cognitive integration
+        
+        Args:
+            game_name: Optional game name to focus on
+            session_options: Options for the streaming session
+            
+        Returns:
+            Session results
+        """
+        # Initialize streaming if not already initialized
+        if not hasattr(self, "streaming_core"):
+            await self.initialize_streaming()
+        
+        # Start the streaming session
+        start_result = await self.start_streaming()
+        
+        # Track session state
+        session_active = start_result["status"] == "streaming_started"
+        session_start_time = datetime.datetime.now()
+        
+        try:
+            # Run periodic tasks while streaming
+            while session_active:
+                # Run meta-cognitive cycle
+                if hasattr(self, "meta_core"):
+                    await self.meta_core.cognitive_cycle({"streaming": True})
+                
+                # Update hormone system
+                if hasattr(self, "hormone_system"):
+                    await self.hormone_system.update_hormone_cycles(RunContextWrapper(context=None))
+                
+                # Create periodic reflection
+                if self.streaming_core and self.streaming_core.memory_mapper:
+                    if datetime.datetime.now() - session_start_time > datetime.timedelta(minutes=10):
+                        # Create reflection after 10 minutes
+                        current_game = self.streaming_core.streaming_system.game_state.game_name or game_name or "Unknown Game"
+                        await self.streaming_core.memory_mapper.create_streaming_reflection(
+                            game_name=current_game,
+                            aspect="session_progress",
+                            context="mid-session"
+                        )
+                
+                # Check if session is still active
+                stats = await self.get_streaming_stats()
+                session_active = stats.get("is_streaming", False)
+                
+                # Wait before next check
+                await asyncio.sleep(60)  # Check every minute
+        
+        except Exception as e:
+            logger.error(f"Error during streaming session: {e}")
+        
+        finally:
+            # Stop streaming if still active
+            if session_active:
+                stop_result = await self.stop_streaming()
+            else:
+                stats = await self.get_streaming_stats()
+                stop_result = {"status": "already_stopped", "stats": stats}
+            
+            # Run knowledge integration
+            current_game = self.streaming_core.streaming_system.game_state.game_name or game_name or "Unknown Game"
+            integration_result = await self.integrate_streaming_knowledge(current_game)
+            
+            # Generate session summary
+            if self.streaming_core and hasattr(self.streaming_core, "learning_manager"):
+                summary = await self.streaming_core.learning_manager.generate_learning_summary()
+                stop_result["learning_summary"] = summary
+            
+            return {
+                "session_duration": (datetime.datetime.now() - session_start_time).total_seconds(),
+                "stop_result": stop_result,
+                "knowledge_integration": integration_result
+            }
     
     @classmethod
     async def get_instance(cls, user_id: int, conversation_id: int) -> 'NyxBrain':
