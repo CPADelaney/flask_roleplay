@@ -1314,3 +1314,178 @@ async def integrate_with_nyx_brain(nyx_brain: NyxBrain, video_source=0, audio_so
     logger.info(f"Streaming capabilities integrated with Nyx brain for user {nyx_brain.user_id}")
     
     return streaming_core
+
+# Add to nyx/streamer/integration.py
+class CrossGameKnowledgeIntegration:
+    """Deep integration between streaming and cross-game knowledge systems"""
+    
+    @staticmethod
+    async def integrate(brain, streaming_core):
+        """
+        Integrate cross-game knowledge with streaming capabilities
+        
+        Args:
+            brain: NyxBrain instance
+            streaming_core: StreamingCore instance
+            
+        Returns:
+            Integration status
+        """
+        from nyx.streamer.cross_game_knowledge import EnhancedCrossGameKnowledgeSystem
+        
+        # Create cross-game knowledge system if not exists
+        if not hasattr(streaming_core, "cross_game_knowledge"):
+            streaming_core.cross_game_knowledge = EnhancedCrossGameKnowledgeSystem()
+            
+            # Initialize with some data
+            streaming_core.cross_game_knowledge.seed_initial_knowledge()
+        
+        # Add real-time cross-game insight generation during gameplay
+        original_process = streaming_core.streaming_system._process_game_frame
+        
+        async def knowledge_enhanced_frame():
+            # Run original processing
+            await original_process()
+            
+            # Generate cross-game insights periodically
+            game_state = streaming_core.streaming_system.game_state
+            if game_state.game_id and game_state.frame_count % 300 == 0:  # Every ~10 seconds at 30fps
+                # Get current game info
+                game_name = game_state.game_name
+                current_context = ""
+                
+                if game_state.current_location:
+                    current_context += f"in {game_state.current_location.get('name', '')}"
+                if game_state.detected_action:
+                    current_context += f" while {game_state.detected_action.get('name', '')}"
+                
+                # Get insights from cross-game knowledge
+                insights = streaming_core.cross_game_knowledge.get_applicable_insights(
+                    target_game=game_name,
+                    context=current_context
+                )
+                
+                # Process relevant insights
+                if insights:
+                    for insight in insights[:1]:  # Use top insight
+                        # Add to game state for commentary
+                        game_state.add_event(
+                            "cross_game_insight", 
+                            {
+                                "source_game": insight.get("source_game_name", insight.get("source_game", "")),
+                                "target_game": game_name,
+                                "mechanic": insight.get("mechanic_name", insight.get("mechanic", "")),
+                                "content": insight.get("content", insight.get("insight", "")),
+                                "relevance": insight.get("relevance", 0.7)
+                            }
+                        )
+                        
+                        # Store in memory system if available
+                        if hasattr(streaming_core, "memory_mapper"):
+                            await streaming_core.memory_mapper.store_gameplay_memory(
+                                game_name=game_name,
+                                event_type="cross_game_insight",
+                                event_data={
+                                    "source_game": insight.get("source_game_name", insight.get("source_game", "")),
+                                    "content": insight.get("content", insight.get("insight", "")),
+                                    "relevance": insight.get("relevance", 0.7)
+                                },
+                                significance=7.0
+                            )
+                        
+                        # Add to brain's experiences if available
+                        if hasattr(brain, "experience_interface"):
+                            try:
+                                await brain.experience_interface.store_experience(
+                                    text=f"While streaming {game_name}, I made a connection to {insight.get('source_game_name', insight.get('source_game', ''))}: {insight.get('content', insight.get('insight', ''))}",
+                                    scenario_type="analysis",
+                                    entities=[game_name, insight.get("source_game_name", insight.get("source_game", ""))],
+                                    significance=7.0,
+                                    tags=["streaming", "cross_game_insight", game_name],
+                                    user_id=str(brain.user_id)
+                                )
+                            except Exception as e:
+                                logger.error(f"Error storing cross-game insight in experience system: {e}")
+        
+        # Replace frame processing method
+        streaming_core.streaming_system._process_game_frame = knowledge_enhanced_frame
+        
+        # Add methods to streaming core
+        streaming_core.get_cross_game_insights = streaming_core.cross_game_knowledge.get_applicable_insights
+        streaming_core.generate_game_insight = streaming_core.cross_game_knowledge.generate_insight
+        streaming_core.discover_game_patterns = streaming_core.cross_game_knowledge.discover_patterns
+        
+        # Add periodic knowledge consolidation
+        async def run_knowledge_consolidation():
+            result = await streaming_core.cross_game_knowledge.consolidate_knowledge()
+            
+            # Store consolidation as reflection if memory system available
+            if hasattr(streaming_core, "memory_mapper"):
+                combined_games = ", ".join(streaming_core.streaming_system.game_state.session_stats.get("games_played", []))
+                if combined_games:
+                    await streaming_core.memory_mapper.create_streaming_reflection(
+                        game_name=combined_games,
+                        aspect="cross_game_knowledge",
+                        context="consolidation"
+                    )
+            
+            return result
+        
+        streaming_core.run_knowledge_consolidation = run_knowledge_consolidation
+        
+        return {
+            "status": "integrated",
+            "components": {
+                "cross_game_knowledge": True,
+                "real_time_insights": True,
+                "knowledge_consolidation": True
+            }
+        }
+
+# Enhance setup_enhanced_streaming to include the new integration
+async def setup_enhanced_streaming(brain: NyxBrain, 
+                                video_source=0, 
+                                audio_source=None) -> StreamingCore:
+    """
+    Set up deeply integrated streaming system utilizing all of Nyx's cognitive systems
+    
+    Args:
+        brain: NyxBrain instance
+        video_source: Video source
+        audio_source: Audio source
+        
+    Returns:
+        Fully integrated StreamingCore
+    """
+    # 1. First create the base streaming core
+    streaming_core = await integrate_with_nyx_brain(brain, video_source, audio_source)
+    
+    # 2. Add hormone system integration
+    await StreamingHormoneIntegration.integrate(brain, streaming_core)
+    
+    # 3. Add reflection engine integration
+    await StreamingIntegration.integrate(brain, streaming_core)
+    
+    # 4. Add cross-game knowledge integration - NEW!
+    await CrossGameKnowledgeIntegration.integrate(brain, streaming_core)
+    
+    # 5. Enhance with reasoning system integration
+    streaming_core = await enhance_with_reasoning(brain, streaming_core)
+    
+    # 6. Enhance with experience system integration
+    streaming_core = await enhance_with_experience(brain, streaming_core)
+    
+    # 7. Connect to meta-cognitive system for ongoing integration
+    streaming_core = await connect_to_metacognition(brain, streaming_core)
+    
+    # 8. Set up bi-directional identity influence
+    streaming_core = await setup_identity_integration(brain, streaming_core)
+    
+    # 9. Enable periodic cross-system tasks
+    task = asyncio.create_task(_run_enhanced_periodic_tasks(brain, streaming_core))
+    streaming_core._integrated_task = task
+    
+    # 10. Register functions in the brain
+    _register_brain_functions(brain, streaming_core)
+    
+    return streaming_core
