@@ -470,6 +470,8 @@ async def setup_identity_integration(brain: NyxBrain, streaming_core: StreamingC
     
     return streaming_core
 
+
+
 async def _run_enhanced_periodic_tasks(brain: NyxBrain, streaming_core: StreamingCore):
     """Run periodic tasks for enhanced integration"""
     try:
@@ -550,6 +552,32 @@ async def _run_enhanced_periodic_tasks(brain: NyxBrain, streaming_core: Streamin
             await asyncio.sleep(600)
     except asyncio.CancelledError:
         logger.info("Enhanced periodic tasks cancelled")
+    except Exception as e:
+        logger.error(f"Error in enhanced periodic tasks: {e}")
+
+async def _run_enhanced_periodic_tasks(brain, streaming_core):
+    """Run comprehensive integration tasks across all systems"""
+    try:
+        while True:
+            # Only run if streaming is active
+            if streaming_core.is_streaming():
+                # 1. Run reflection (already implemented)
+                # 2. Update identity from streaming (already implemented)
+                
+                # 3. Process significant experiences through experience system
+                if hasattr(brain, "experience_interface"):
+                    await process_experiences_with_experience_system(brain, streaming_core)
+                
+                # 4. Run meta-cognitive cycle with streaming context
+                if hasattr(brain, "meta_core"):
+                    await run_metacognitive_cycle_for_streaming(brain, streaming_core)
+                
+                # 5. Use reasoning system to analyze patterns
+                if hasattr(brain, "reasoning_core"):
+                    await analyze_streaming_patterns(brain, streaming_core)
+            
+            # Wait before next cycle
+            await asyncio.sleep(300)  # 5 minutes
     except Exception as e:
         logger.error(f"Error in enhanced periodic tasks: {e}")
 
