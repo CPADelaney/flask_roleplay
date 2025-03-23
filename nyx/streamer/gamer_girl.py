@@ -2286,3 +2286,46 @@ class AdvancedGameAgentSystem:
         except Exception as e:
             logger.error(f"Error answering question: {e}")
             # In a real system, this might be logged but not shown to the audience
+# Add to nyx/streamer/gamer_girl.py
+
+@function_tool
+async def get_learning_summary(ctx: RunContextWrapper[GameState]) -> str:
+    """
+    Get a summary of what has been learned during the streaming session
+    
+    Returns:
+        Summary of session learnings
+    """
+    game_state = ctx.context
+    
+    # Check if there's a learning manager available
+    if not hasattr(ctx, "learning_manager"):
+        return "Learning analysis system not available."
+    
+    learning_manager = ctx.learning_manager
+    
+    # Get session data
+    session_data = {
+        "game_name": game_state.game_name,
+        "recent_events": list(game_state.recent_events),
+        "dialog_history": game_state.dialog_history,
+        "answered_questions": list(game_state.answered_questions),
+        "transferred_insights": game_state.transferred_insights
+    }
+    
+    # Generate learning summary
+    try:
+        summary_result = await learning_manager.generate_learning_summary()
+        
+        if summary_result.get("has_learnings", False):
+            return summary_result["summary"]
+        else:
+            return "No significant learnings have been identified in this streaming session yet."
+    except Exception as e:
+        return f"Error generating learning summary: {e}"
+
+# Add to the enhanced_commentary_agent tools
+enhanced_commentary_agent.tools.append(get_learning_summary)
+
+# Add to the enhanced_question_agent tools
+enhanced_question_agent.tools.append(get_learning_summary)
