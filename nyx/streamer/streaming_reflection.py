@@ -1120,33 +1120,25 @@ class StreamingReflectionEngine:
         }
 
 # Helper class for integrating with NyxBrain
+# Update the single StreamingIntegration class definition to include the enhanced reflection functionality
+
 class StreamingIntegration:
     """Helper for integrating streaming capabilities with Nyx"""
     
     @staticmethod
-    async def integrate(brain: NyxBrain, video_source=0, audio_source=None) -> Dict[str, Any]:
+    async def integrate(brain: NyxBrain, streaming_core: StreamingCore) -> Dict[str, Any]:
         """
         Integrate streaming capabilities with Nyx brain
         
         Args:
             brain: NyxBrain instance
-            video_source: Video capture source
-            audio_source: Audio capture source
+            streaming_core: StreamingCore instance
             
         Returns:
             Integration status
         """
-        from nyx.streamer.nyx_streaming_core import integrate_with_nyx_brain
-        
-        # Create streaming core
-        streaming_core = await integrate_with_nyx_brain(
-            nyx_brain=brain,
-            video_source=video_source,
-            audio_source=audio_source
-        )
-        
-        # Create reflection engine
-        reflection_engine = StreamingReflectionEngine(
+        # Create enhanced reflection engine
+        reflection_engine = EnhancedStreamingReflectionEngine(
             brain=brain,
             streaming_core=streaming_core
         )
@@ -1157,14 +1149,20 @@ class StreamingIntegration:
         # Add reflection to the brain
         brain.streaming_reflection = reflection_engine
         
+        # Add enhanced reflection methods to streaming_core
+        streaming_core.generate_deep_reflection = reflection_engine.generate_deep_reflection
+        streaming_core.generate_comparative_reflection = reflection_engine.generate_comparative_reflection
+        streaming_core.enhanced_consolidate_experiences = reflection_engine.enhanced_consolidate_streaming_experiences
+        
         return {
             "status": "integrated",
             "components": {
                 "streaming_core": True,
-                "reflection_engine": True,
+                "enhanced_reflection_engine": True,
                 "memory_mapper": True
             }
         }
+        
 class EnhancedStreamingReflectionEngine(StreamingReflectionEngine):
     """
     Enhanced reflection engine for streaming experiences with deeper
@@ -1614,45 +1612,3 @@ class EnhancedStreamingReflectionEngine(StreamingReflectionEngine):
             }
         
         return basic_result
-
-# Update StreamingIntegration to use the enhanced reflection engine
-class StreamingIntegration:
-    """Helper for integrating streaming capabilities with Nyx"""
-    
-    @staticmethod
-    async def integrate(brain: NyxBrain, streaming_core: StreamingCore) -> Dict[str, Any]:
-        """
-        Integrate streaming capabilities with Nyx brain
-        
-        Args:
-            brain: NyxBrain instance
-            streaming_core: StreamingCore instance
-            
-        Returns:
-            Integration status
-        """
-        # Create enhanced reflection engine - UPDATED!
-        reflection_engine = EnhancedStreamingReflectionEngine(
-            brain=brain,
-            streaming_core=streaming_core
-        )
-        
-        # Make reflection engine available
-        streaming_core.reflection_engine = reflection_engine
-        
-        # Add reflection to the brain
-        brain.streaming_reflection = reflection_engine
-        
-        # Add enhanced reflection methods to streaming_core
-        streaming_core.generate_deep_reflection = reflection_engine.generate_deep_reflection
-        streaming_core.generate_comparative_reflection = reflection_engine.generate_comparative_reflection
-        streaming_core.enhanced_consolidate_experiences = reflection_engine.enhanced_consolidate_streaming_experiences
-        
-        return {
-            "status": "integrated",
-            "components": {
-                "streaming_core": True,
-                "enhanced_reflection_engine": True,  # Updated!
-                "memory_mapper": True
-            }
-        }
