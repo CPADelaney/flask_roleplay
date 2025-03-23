@@ -35,6 +35,13 @@ from nyx.streamer.gamer_girl import (
     CommentaryType, 
     AnswerType
 )
+
+from nyx.api.thinking_tools import (
+    should_use_extended_thinking,
+    think_before_responding,
+    generate_reasoned_response
+)
+
 from nyx.streamer.integration import setup_enhanced_streaming
 
 # Import function tools
@@ -470,6 +477,18 @@ class NyxBrain:
             "experience_consolidations": 0,
             "response_times": []
         }
+
+        self.thinking_config = {
+            "thinking_enabled": True,  # Master switch for thinking capability
+            "last_thinking_interaction": 0,  # Track when we last used thinking
+            "thinking_stats": {
+                "total_thinking_used": 0,
+                "basic_thinking_used": 0,
+                "moderate_thinking_used": 0,
+                "deep_thinking_used": 0,
+                "thinking_time_avg": 0.0
+            }
+        }
         
         # Caching
         self.context_cache = {}
@@ -506,6 +525,105 @@ class NyxBrain:
         self.cross_user_enabled = True
         self.cross_user_sharing_threshold = 0.7
 
+    async def process_user_input_with_thinking(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Process user input with optional thinking phase"""
+        if not self.initialized:
+            await self.initialize()
+        
+        with trace(workflow_name="process_input_with_thinking", group_id=self.trace_group_id):
+            start_time = datetime.datetime.now()
+            
+            # Initialize context if needed
+            if context is None:
+                context = {}
+            
+            # Check if thinking should be used
+            thinking_decision = {"should_think": False}
+            if self.thinking_config["thinking_enabled"]:
+                # Determine if this query needs thinking
+                thinking_decision = await should_use_extended_thinking(
+                    RunContextWrapper(context=self),
+                    user_input, 
+                    context
+                )
+            
+            # Perform thinking if needed
+            if thinking_decision.get("should_think", False):
+                thinking_level = thinking_decision.get("thinking_level", 1)
+                thinking_result = await think_before_responding(
+                    RunContextWrapper(context=self),
+                    user_input,
+                    thinking_level,
+                    context
+                )
+                
+                # Update thinking stats
+                self.thinking_config["last_thinking_interaction"] = self.interaction_count
+                self.thinking_config["thinking_stats"]["total_thinking_used"] += 1
+                
+                if thinking_level == 1:
+                    self.thinking_config["thinking_stats"]["basic_thinking_used"] += 1
+                elif thinking_level == 2:
+                    self.thinking_config["thinking_stats"]["moderate_thinking_used"] += 1
+                else:  # thinking_level == 3
+                    self.thinking_config["thinking_stats"]["deep_thinking_used"] += 1
+                
+                # Add thinking result to context
+                context["thinking_result"] = thinking_result
+                context["thinking_applied"] = True
+            else:
+                # No thinking needed
+                context["thinking_applied"] = False
+            
+            # Process the input (with or without thinking)
+            result = await self.process_input(user_input, context)
+            
+            # Add thinking information to result if applicable
+            if context.get("thinking_applied", False):
+                result["thinking_applied"] = True
+                result["thinking_level"] = context["thinking_result"].get("thinking_level", 1)
+                result["thinking_steps"] = context["thinking_result"].get("thinking_steps", [])
+                
+                # Track thinking time
+                thinking_time = (datetime.datetime.now() - start_time).total_seconds()
+                
+                # Update average thinking time
+                current_avg = self.thinking_config["thinking_stats"]["thinking_time_avg"]
+                total_thinking = self.thinking_config["thinking_stats"]["total_thinking_used"]
+                
+                if total_thinking > 1:  # Not the first time
+                    self.thinking_config["thinking_stats"]["thinking_time_avg"] = (
+                        (current_avg * (total_thinking - 1) + thinking_time) / total_thinking
+                    )
+                else:  # First time using thinking
+                    self.thinking_config["thinking_stats"]["thinking_time_avg"] = thinking_time
+            else:
+                result["thinking_applied"] = False
+            
+            return result
+    
+    async def generate_response_with_thinking(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Generate a response with thinking when appropriate"""
+        with trace(workflow_name="generate_response_with_thinking", group_id=self.trace_group_id):
+            # Process the input first, which handles thinking decision
+            processing_result = await self.process_user_input_with_thinking(user_input, context)
+            
+            # If thinking was applied, generate reasoned response
+            if processing_result.get("thinking_applied", False) and "thinking_result" in (context or {}):
+                thinking_result = context["thinking_result"]
+                
+                # Generate reasoned response
+                response = await generate_reasoned_response(
+                    RunContextWrapper(context=self),
+                    user_input,
+                    thinking_result,
+                    context
+                )
+            else:
+                # Use standard response generation
+                response = await self.generate_response(user_input, context)
+            
+            return response    
     async def run_streaming_session(self, game_name=None, session_options=None):
         """
         Run a complete streaming session with full cognitive integration
@@ -1788,66 +1906,40 @@ class NyxBrain:
         
         return impact
     
-    async def process_user_input_enhanced(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Enhanced processing of user input with comprehensive results.
+async def process_user_input_enhanced(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Enhanced processing of user input with comprehensive results."""
+    with trace(workflow_name="process_user_input_enhanced", group_id=self.trace_group_id):
+        # Initialize context
+        if context is None:
+            context = {}
+            
+        # Process through the brain with thinking capability
+        result = await self.process_user_input_with_thinking(user_input, context)
         
-        Args:
-            user_input: User's input text
-            context: Additional context information
-            
-        Returns:
-            Comprehensive processing results
-        """
-        with trace(workflow_name="process_user_input_enhanced", group_id=self.trace_group_id):
-            # Process through the brain agent
-            if self.brain_agent:
-                try:
-                    agent_input = {
-                        "role": "user",
-                        "content": f"Process this user input: {user_input}"
-                    }
-                    
-                    if context:
-                        agent_input["context"] = context
-                    
-                    result = await Runner.run(
-                        self.brain_agent,
-                        agent_input,
-                        context=self
-                    )
-                    
-                    # If agent successfully processed, return the result
-                    if hasattr(result, "final_output") and result.final_output:
-                        return result.final_output
-                except Exception as e:
-                    logger.error(f"Error in brain agent processing: {str(e)}")
-            
-            # If agent failed or isn't available, use direct processing
-            result = await self.process_input(user_input, context)
-            
-            # Add additional processing information
-            system_stats = await self.get_system_stats()
-            
-            # Return enhanced result
-            return {
-                "input": user_input,
-                "emotional_state": result["emotional_state"],
-                "memories": result["memories"],
-                "memory_count": result["memory_count"],
-                "has_experience": result["has_experience"],
-                "experience_response": result["experience_response"],
-                "cross_user_experience": result.get("cross_user_experience", False),
-                "memory_id": result["memory_id"],
-                "response_time": result["response_time"],
-                "identity_impact": result.get("identity_impact"),
-                "system_stats": {
-                    "memory_stats": system_stats["memory_stats"],
-                    "emotional_state": system_stats["emotional_state"],
-                    "performance_metrics": system_stats["performance_metrics"],
-                    "identity_stats": system_stats.get("identity_stats", {})
-                }
+        # Add additional processing information
+        system_stats = await self.get_system_stats()
+        
+        # Return enhanced result
+        return {
+            "input": user_input,
+            "emotional_state": result["emotional_state"],
+            "memories": result["memories"],
+            "memory_count": result["memory_count"],
+            "has_experience": result["has_experience"],
+            "experience_response": result["experience_response"],
+            "cross_user_experience": result.get("cross_user_experience", False),
+            "memory_id": result["memory_id"],
+            "response_time": result["response_time"],
+            "thinking_applied": result.get("thinking_applied", False),
+            "thinking_level": result.get("thinking_level") if result.get("thinking_applied", False) else None,
+            "identity_impact": result.get("identity_impact"),
+            "system_stats": {
+                "memory_stats": system_stats["memory_stats"],
+                "emotional_state": system_stats["emotional_state"],
+                "performance_metrics": system_stats["performance_metrics"],
+                "identity_stats": system_stats.get("identity_stats", {})
             }
+        }
     
     # New methods for enhanced functionality
     
