@@ -600,3 +600,204 @@ async def _run_enhanced_periodic_tasks(brain: NyxBrain, streaming_core: Streamin
         logger.info("Enhanced periodic tasks cancelled")
     except Exception as e:
         logger.error(f"Error in enhanced periodic tasks: {e}")
+async def setup_enhanced_streaming_v2(brain: NyxBrain, 
+                                    video_source=0, 
+                                    audio_source=None) -> StreamingCore:
+    """
+    Set up deeply integrated streaming system with all enhancements
+    
+    Args:
+        brain: NyxBrain instance
+        video_source: Video source
+        audio_source: Audio source
+        
+    Returns:
+        Fully integrated StreamingCore
+    """
+    # 1. Create the optimized streaming core
+    streaming_core = await integrate_with_nyx_brain(brain, video_source, audio_source)
+    
+    # 2. Add hormone system integration
+    await StreamingHormoneIntegration.integrate(brain, streaming_core)
+    
+    # 3. Add enhanced reflection engine integration
+    await StreamingIntegration.integrate(brain, streaming_core)
+    
+    # 4. Add cross-game knowledge integration
+    await CrossGameKnowledgeIntegration.integrate(brain, streaming_core)
+    
+    # 5. Enhance with reasoning system integration
+    streaming_core = await enhance_with_reasoning(brain, streaming_core)
+    
+    # 6. Enhance with experience system integration
+    streaming_core = await enhance_with_experience(brain, streaming_core)
+    
+    # 7. Connect to meta-cognitive system for ongoing integration
+    streaming_core = await connect_to_metacognition(brain, streaming_core)
+    
+    # 8. Set up bi-directional identity influence
+    streaming_core = await setup_identity_integration(brain, streaming_core)
+    
+    # 9. Enable periodic cross-system tasks
+    task = asyncio.create_task(_run_enhanced_periodic_tasks(brain, streaming_core))
+    streaming_core._integrated_task = task
+    
+    # 10. Register enhanced functions in the brain
+    _register_enhanced_brain_functions(brain, streaming_core)
+    
+    logger.info("Enhanced streaming system v2 fully initialized with all improvements")
+    
+    return streaming_core
+
+def _register_enhanced_brain_functions(brain: NyxBrain, streaming_core: StreamingCore) -> None:
+    """
+    Register all enhanced streaming functions in the brain
+    
+    Args:
+        brain: NyxBrain instance
+        streaming_core: StreamingCore instance
+    """
+    # Basic streaming functions
+    brain.stream = streaming_core.start_streaming
+    brain.stop_stream = streaming_core.stop_streaming
+    brain.add_stream_question = streaming_core.add_audience_question
+    brain.get_stream_stats = streaming_core.get_streaming_stats
+    
+    # Optimized processing
+    brain.process_frame_optimized = streaming_core.process_frame_optimized
+    brain.get_performance_metrics = streaming_core.get_performance_metrics
+    
+    # Enhanced memory and experience
+    brain.retrieve_streaming_experience = streaming_core.recall_streaming_experience
+    brain.create_streaming_memory = streaming_core.memory_mapper.store_gameplay_memory
+    brain.create_streaming_reflection = streaming_core.memory_mapper.create_streaming_reflection
+    
+    # Enhanced reflection
+    brain.generate_deep_reflection = streaming_core.generate_deep_reflection
+    brain.generate_comparative_reflection = streaming_core.generate_comparative_reflection
+    brain.consolidate_streaming_experiences = streaming_core.enhanced_consolidate_experiences
+    
+    # Cross-game knowledge
+    brain.get_cross_game_insights = streaming_core.get_cross_game_insights
+    brain.generate_game_insight = streaming_core.generate_game_insight
+    brain.discover_game_patterns = streaming_core.discover_game_patterns
+    brain.run_knowledge_consolidation = streaming_core.run_knowledge_consolidation
+    
+    # Hormone system
+    brain.update_hormone_from_streaming_event = streaming_core.update_hormone_from_event
+    brain.get_streaming_hormone_state = streaming_core.get_hormone_state
+    
+    # Reasoning
+    if hasattr(streaming_core, "reason_about_streaming_event"):
+        brain.reason_about_streaming_event = streaming_core.reason_about_streaming_event
+    
+    # Audience stats
+    if hasattr(streaming_core.streaming_system, "enhanced_audience"):
+        brain.get_audience_stats = streaming_core.streaming_system.enhanced_audience.get_audience_stats
+        brain.get_popular_topics = streaming_core.streaming_system.enhanced_audience.get_popular_topics
+        brain.get_user_personalization = streaming_core.streaming_system.enhanced_audience.get_user_personalization
+
+# Add this function to the end of _run_enhanced_periodic_tasks
+async def _run_enhanced_periodic_tasks_v2(brain: NyxBrain, streaming_core: StreamingCore):
+    """Run all enhanced periodic tasks"""
+    try:
+        while True:
+            # Only run tasks if streaming is active
+            if streaming_core.session_start_time is not None:
+                logger.info("Running enhanced periodic streaming tasks")
+                
+                # 1. Run streaming reflection
+                if hasattr(streaming_core, "reflection_engine"):
+                    reflection_result = await streaming_core.reflection_engine.run_periodic_reflection()
+                    if reflection_result:
+                        logger.info(f"Periodic streaming reflection created")
+                
+                # 2. Run deep reflection periodically (every hour)
+                if (hasattr(streaming_core, "reflection_engine") and 
+                    isinstance(streaming_core.reflection_engine, EnhancedStreamingReflectionEngine)):
+                    # Check if time for deep reflection
+                    now = datetime.now()
+                    time_since_deep = now - streaming_core.reflection_engine.last_deep_reflection_time
+                    if time_since_deep >= streaming_core.reflection_engine.deep_reflection_interval:
+                        # Force deep reflection
+                        deep_result = await streaming_core.reflection_engine.run_periodic_reflection(force=True)
+                        if deep_result and "deep_reflection" in deep_result:
+                            logger.info("Deep streaming reflection created")
+                
+                # 3. Consolidate streaming experiences
+                if (hasattr(streaming_core, "reflection_engine") and 
+                    hasattr(streaming_core.reflection_engine, "enhanced_consolidate_streaming_experiences")):
+                    consolidation = await streaming_core.reflection_engine.enhanced_consolidate_streaming_experiences()
+                    if consolidation.get("status") == "success":
+                        logger.info(f"Consolidated streaming experiences: {consolidation.get('abstractions_created', 0)} abstractions")
+                
+                # 4. Run meta-cognitive cycle
+                if hasattr(streaming_core, "run_metacognitive_cycle"):
+                    meta_result = await streaming_core.run_metacognitive_cycle(
+                        streaming_core.streaming_system.game_state
+                    )
+                    logger.info("Ran meta-cognitive cycle for streaming")
+                
+                # 5. Consolidate cross-game knowledge
+                if hasattr(streaming_core, "run_knowledge_consolidation"):
+                    knowledge_result = await streaming_core.run_knowledge_consolidation()
+                    logger.info(f"Consolidated cross-game knowledge")
+                
+                # 6. Sync hormone system with Nyx's emotional core
+                if hasattr(streaming_core, "hormone_system") and hasattr(streaming_core.hormone_system, "sync_with_brain_hormone_system"):
+                    hormone_result = streaming_core.hormone_system.sync_with_brain_hormone_system()
+                    logger.info(f"Synced streaming hormone system with brain")
+                
+                # 7. Apply reasoning to recent significant events
+                if hasattr(streaming_core, "reason_about_game_event"):
+                    game_state = streaming_core.streaming_system.game_state
+                    recent_events = game_state.recent_events
+                    
+                    significant_events = [
+                        event for event in recent_events
+                        if event.get("data", {}).get("significance", 0) >= 7.0 and
+                        not event.get("data", {}).get("reasoning_applied", False)
+                    ]
+                    
+                    if significant_events:
+                        # Process one significant event
+                        event = significant_events[0]
+                        await streaming_core.reason_about_game_event(
+                            game_name=game_state.game_name or "Unknown Game",
+                            event_type=event["type"],
+                            event_data=event["data"]
+                        )
+                        
+                        # Mark as processed
+                        event["data"]["reasoning_applied"] = True
+                        logger.info(f"Applied reasoning to significant event")
+                
+                # 8. Update identity from streaming experience periodically
+                if hasattr(streaming_core, "update_identity_from_streaming"):
+                    game_state = streaming_core.streaming_system.game_state
+                    game_name = game_state.game_name or "Unknown Game"
+                    
+                    # Update identity with current session data
+                    streaming_data = {
+                        "commentary_count": game_state.session_stats.get("commentary_count", 0),
+                        "questions_answered": game_state.session_stats.get("questions_answered", 0),
+                        "commentary_style": "analytical",  # Would be determined dynamically
+                        "session_duration": (datetime.now() - streaming_core.session_start_time).total_seconds() 
+                                           if streaming_core.session_start_time else 0,
+                        "game_genre": game_state.game_genre
+                    }
+                    
+                    identity_result = await streaming_core.update_identity_from_streaming(
+                        game_name=game_name,
+                        streaming_data=streaming_data
+                    )
+                    
+                    if identity_result.get("updated", False):
+                        logger.info("Updated identity based on streaming")
+            
+            # Run every 10 minutes
+            await asyncio.sleep(600)
+    except asyncio.CancelledError:
+        logger.info("Enhanced periodic tasks cancelled")
+    except Exception as e:
+        logger.error(f"Error in enhanced periodic tasks: {e}")
