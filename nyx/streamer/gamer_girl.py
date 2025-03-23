@@ -1893,3 +1893,396 @@ class AdvancedGameAgentSystem:
                     "confidence": confidence,
                     "speaker": speaker
                 })
+# Add to nyx/streamer/gamer_girl.py
+class EnhancedAudienceInteraction:
+    """
+    Enhanced audience interaction system with improved question answering,
+    personalization, and audience analytics.
+    """
+    
+    def __init__(self, game_state: GameState):
+        """Initialize with reference to game state"""
+        self.game_state = game_state
+        self.audience_memory = {}  # username -> interactions
+        self.question_history = {}  # username -> questions
+        self.topic_interests = {}  # topic -> interest score
+        self.active_users = deque(maxlen=100)  # Recently active users
+        self.sentiment_tracker = {}  # username -> sentiment history
+        self.question_prioritization = True  # Enable question prioritization
+        self.personalization = True  # Enable personalization
+        
+        # Interaction stats
+        self.stats = {
+            "total_questions": 0,
+            "answered_questions": 0,
+            "total_users": 0,
+            "returning_users": 0,
+            "avg_response_time": 0,
+            "response_times": deque(maxlen=50)
+        }
+    
+    def add_user_question(self, user_id: str, username: str, question: str) -> Dict[str, Any]:
+        """
+        Add a question from a user with enhanced tracking
+        
+        Args:
+            user_id: User ID
+            username: Username
+            question: Question text
+            
+        Returns:
+            Question data with priority and position
+        """
+        # Track in active users
+        self.active_users.append(username)
+        
+        # Update total stats
+        self.stats["total_questions"] += 1
+        
+        # Check if new user
+        if username not in self.audience_memory:
+            self.audience_memory[username] = {
+                "first_seen": time.time(),
+                "interaction_count": 0,
+                "questions": [],
+                "topics_asked": Counter(),
+                "sentiment": 0,
+                "user_id": user_id
+            }
+            self.stats["total_users"] += 1
+        else:
+            self.stats["returning_users"] += 1
+        
+        # Update user data
+        self.audience_memory[username]["interaction_count"] += 1
+        self.audience_memory[username]["last_interaction"] = time.time()
+        
+        # Analyze question for topics
+        topics = self._extract_topics(question)
+        for topic in topics:
+            self.audience_memory[username]["topics_asked"][topic] += 1
+            
+            # Update global topic interests
+            if topic not in self.topic_interests:
+                self.topic_interests[topic] = 0
+            self.topic_interests[topic] += 1
+        
+        # Calculate priority
+        priority = self._calculate_question_priority(username, question, topics)
+        
+        # Create question data
+        question_data = {
+            "user_id": user_id,
+            "username": username,
+            "question": question,
+            "topics": topics,
+            "timestamp": time.time(),
+            "priority": priority,
+            "personalize": self.personalization
+        }
+        
+        # Add to user's question history
+        if username not in self.question_history:
+            self.question_history[username] = []
+        
+        self.question_history[username].append(question_data)
+        self.audience_memory[username]["questions"].append(question)
+        
+        # Add to game state queue
+        self.game_state.add_question(user_id, username, question)
+        
+        return question_data
+    
+    def record_question_answered(self, question_data: Dict[str, Any], answer: str) -> Dict[str, Any]:
+        """
+        Record that a question was answered
+        
+        Args:
+            question_data: Question data
+            answer: Answer text
+            
+        Returns:
+            Updated stats
+        """
+        # Calculate response time
+        if "timestamp" in question_data:
+            response_time = time.time() - question_data["timestamp"]
+            self.stats["response_times"].append(response_time)
+            self.stats["avg_response_time"] = sum(self.stats["response_times"]) / len(self.stats["response_times"])
+        
+        # Update stats
+        self.stats["answered_questions"] += 1
+        
+        # Store the answer
+        username = question_data.get("username")
+        if username in self.audience_memory:
+            if "answers_received" not in self.audience_memory[username]:
+                self.audience_memory[username]["answers_received"] = []
+            
+            self.audience_memory[username]["answers_received"].append({
+                "question": question_data.get("question", ""),
+                "answer": answer,
+                "timestamp": time.time()
+            })
+        
+        return {
+            "stats": self.stats,
+            "username": username,
+            "user_data": self.audience_memory.get(username)
+        }
+    
+    def get_user_personalization(self, username: str) -> Dict[str, Any]:
+        """
+        Get personalization data for a user
+        
+        Args:
+            username: Username
+            
+        Returns:
+            Personalization data
+        """
+        if not self.personalization or username not in self.audience_memory:
+            return {}
+        
+        user_data = self.audience_memory[username]
+        
+        # Calculate top interests
+        top_topics = user_data["topics_asked"].most_common(3)
+        
+        # Calculate interaction frequency
+        interaction_count = user_data["interaction_count"]
+        first_seen = user_data.get("first_seen", time.time())
+        interaction_period = (time.time() - first_seen) / 86400  # days
+        frequency = interaction_count / max(1, interaction_period)
+        
+        # Determine user type
+        user_type = "new"
+        if interaction_count >= 10:
+            user_type = "regular"
+        elif interaction_count >= 3:
+            user_type = "returning"
+        
+        return {
+            "username": username,
+            "interaction_count": interaction_count,
+            "top_interests": top_topics,
+            "frequency": frequency,
+            "user_type": user_type,
+            "questions_asked": len(user_data.get("questions", [])),
+            "answers_received": len(user_data.get("answers_received", []))
+        }
+    
+    def _extract_topics(self, question: str) -> List[str]:
+        """
+        Extract topics from a question
+        
+        Args:
+            question: Question text
+            
+        Returns:
+            List of topics
+        """
+        # Simple keyword-based topic extraction
+        topics = []
+        
+        # Game mechanics
+        if any(word in question.lower() for word in ["mechanics", "controls", "gameplay", "play", "system"]):
+            topics.append("game_mechanics")
+        
+        # Story/plot
+        if any(word in question.lower() for word in ["story", "plot", "character", "narrative", "lore"]):
+            topics.append("story")
+        
+        # Strategy/tips
+        if any(word in question.lower() for word in ["strategy", "tips", "how to", "best way", "help"]):
+            topics.append("strategy")
+        
+        # Technical
+        if any(word in question.lower() for word in ["graphics", "performance", "technical", "lag", "bug"]):
+            topics.append("technical")
+        
+        # Comparisons
+        if any(word in question.lower() for word in ["compare", "better", "different", "like", "similar"]):
+            topics.append("comparisons")
+        
+        # If no specific topics found, use "general"
+        if not topics:
+            topics.append("general")
+        
+        return topics
+    
+    def _calculate_question_priority(self, username: str, question: str, topics: List[str]) -> float:
+        """
+        Calculate question priority
+        
+        Args:
+            username: Username
+            question: Question text
+            topics: Question topics
+            
+        Returns:
+            Priority score (0-1)
+        """
+        if not self.question_prioritization:
+            return 0.5  # Default priority
+        
+        base_priority = 0.5
+        priority_modifiers = []
+        
+        # User engagement factor
+        if username in self.audience_memory:
+            user_data = self.audience_memory[username]
+            
+            # Reward regulars slightly
+            if user_data["interaction_count"] > 5:
+                priority_modifiers.append(0.1)
+            
+            # But also prioritize first-time askers
+            if user_data["interaction_count"] == 1:
+                priority_modifiers.append(0.2)
+            
+            # Check waiting time
+            if len(user_data["questions"]) > len(user_data.get("answers_received", [])):
+                # User has unanswered questions
+                priority_modifiers.append(0.15)
+        
+        # Topic relevance factor
+        current_game = self.game_state.game_name
+        current_action = self.game_state.detected_action.get("name") if self.game_state.detected_action else None
+        
+        # Check if question is relevant to current game/action
+        if current_game and current_game.lower() in question.lower():
+            priority_modifiers.append(0.2)
+        
+        if current_action and current_action.lower() in question.lower():
+            priority_modifiers.append(0.25)
+        
+        # Topics currently being shown
+        relevant_topics = []
+        if "game_mechanics" in topics and current_action:
+            relevant_topics.append("game_mechanics")
+        
+        if "story" in topics and any(event["type"] == "character_dialog" for event in self.game_state.recent_events):
+            relevant_topics.append("story")
+        
+        if relevant_topics:
+            priority_modifiers.append(0.2)
+        
+        # Calculate final priority
+        final_priority = base_priority + sum(priority_modifiers)
+        
+        # Clamp to valid range
+        return max(0.0, min(1.0, final_priority))
+    
+    def get_popular_topics(self, limit: int = 5) -> List[Tuple[str, int]]:
+        """
+        Get most popular topics among audience
+        
+        Args:
+            limit: Maximum number of topics to return
+            
+        Returns:
+            List of (topic, count) tuples
+        """
+        # Get topics sorted by popularity
+        sorted_topics = sorted(self.topic_interests.items(), key=lambda x: x[1], reverse=True)
+        
+        return sorted_topics[:limit]
+    
+    def get_audience_stats(self) -> Dict[str, Any]:
+        """
+        Get comprehensive audience statistics
+        
+        Returns:
+            Audience statistics
+        """
+        # Calculate active users
+        active_count = len(set(self.active_users))
+        
+        # Calculate returning users
+        returning_users = sum(1 for user, data in self.audience_memory.items() 
+                             if data["interaction_count"] > 1)
+        
+        # Calculate metrics
+        engagement_rate = self.stats["answered_questions"] / max(1, self.stats["total_questions"])
+        avg_questions_per_user = self.stats["total_questions"] / max(1, self.stats["total_users"])
+        
+        # Get top topics
+        top_topics = self.get_popular_topics(5)
+        
+        return {
+            "total_users": self.stats["total_users"],
+            "active_users": active_count,
+            "returning_users": returning_users,
+            "total_questions": self.stats["total_questions"],
+            "answered_questions": self.stats["answered_questions"],
+            "engagement_rate": engagement_rate,
+            "avg_questions_per_user": avg_questions_per_user,
+            "avg_response_time": self.stats["avg_response_time"],
+            "top_topics": top_topics
+        }
+
+# Enhance AdvancedGameAgentSystem
+class AdvancedGameAgentSystem:
+    # ... (existing code)
+    
+    def __init__(self, video_source=0, audio_source=None):
+        # ... (existing initialization)
+        
+        # Add enhanced audience interaction
+        self.enhanced_audience = EnhancedAudienceInteraction(self.game_state)
+        
+        # ... (rest of existing code)
+    
+    def add_audience_question(self, user_id: str, username: str, question: str):
+        """Add a question from the audience with enhanced tracking"""
+        # Use enhanced audience system
+        question_data = self.enhanced_audience.add_user_question(user_id, username, question)
+        
+        # Original functionality still happens via game_state
+        return question_data
+    
+    async def _answer_question(self, extended_context):
+        """Answer the next audience question using multi-modal analysis and cross-game insights"""
+        # Get the next question from the queue
+        question_data = self.game_state.get_next_question()
+        if not question_data:
+            logger.info("No questions to answer")
+            return
+        
+        logger.info(f"Answering question from {question_data['username']}")
+        question = question_data['question']
+        
+        try:
+            # Get personalization data if available
+            personalization = {}
+            if hasattr(self, "enhanced_audience"):
+                personalization = self.enhanced_audience.get_user_personalization(question_data['username'])
+                
+                # Add personalization to context
+                if personalization and hasattr(extended_context, "context"):
+                    extended_context.context.user_personalization = personalization
+            
+            with trace("GameStream", workflow_name="advanced_question_answering"):
+                # Run the enhanced question agent
+                result = await Runner.run(
+                    enhanced_question_agent, 
+                    question, 
+                    context=self.game_state
+                )
+                answer = result.final_output
+            
+            # Store the answered question in the game state
+            self.game_state.add_answered_question(question_data, answer.answer)
+            
+            # Record the answer in audience system
+            if hasattr(self, "enhanced_audience"):
+                self.enhanced_audience.record_question_answered(question_data, answer.answer)
+            
+            # In a real system, this would be sent to the streaming output
+            print(f"\n[Q&A] {question_data['username']} asked: {question}")
+            print(f"[ANSWER (using {', '.join(answer.used_sources)})] {answer.answer}\n")
+            
+        except Exception as e:
+            logger.error(f"Error answering question: {e}")
+            # In a real system, this might be logged but not shown to the audience
