@@ -708,6 +708,43 @@ class StreamingHormoneSystem:
             add_emotion("Alertness", (adrenyx - 0.3) * 1.5)
         
         return secondary_emotions
+
+    def _sync_hormone_levels(self) -> Dict[str, Any]:
+        """
+        Synchronize with Nyx's brain hormone system
+        
+        Returns:
+            Synchronization results
+        """
+        if not hasattr(self.brain, "hormone_system") or not self.brain.hormone_system:
+            return {
+                "synced": False,
+                "reason": "Brain hormone system not available"
+            }
+        
+        # Get brain hormone levels
+        brain_hormones = {}
+        synced_hormones = {}
+        
+        for hormone_name in self.streaming_hormone_state.keys():
+            brain_level = self.brain.hormone_system.get_hormone_level(hormone_name)
+            
+            if brain_level is not None:
+                brain_hormones[hormone_name] = brain_level
+                
+                # Calculate weighted average (favor streaming state more for game-specific reactions)
+                weighted_level = (self.streaming_hormone_state[hormone_name] * 0.7) + (brain_level * 0.3)
+                
+                # Update streaming state
+                self.streaming_hormone_state[hormone_name] = weighted_level
+                synced_hormones[hormone_name] = weighted_level
+        
+        return {
+            "synced": True,
+            "brain_levels": brain_hormones,
+            "streaming_levels": self.streaming_hormone_state,
+            "synced_hormones": synced_hormones
+        }
     
     def sync_with_brain_hormone_system(self) -> Dict[str, Any]:
         """
