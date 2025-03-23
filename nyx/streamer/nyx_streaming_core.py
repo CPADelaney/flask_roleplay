@@ -1259,7 +1259,7 @@ for tool in enhanced_tools:
 # Main integration function
 async def integrate_with_nyx_brain(nyx_brain: NyxBrain, video_source=0, audio_source=None) -> StreamingCore:
     """
-    Integrate streaming capabilities with Nyx brain
+    Integrate streaming capabilities with Nyx brain using optimized streaming core
     
     Args:
         nyx_brain: Instance of NyxBrain
@@ -1269,8 +1269,8 @@ async def integrate_with_nyx_brain(nyx_brain: NyxBrain, video_source=0, audio_so
     Returns:
         StreamingCore instance
     """
-    # Create streaming core with brain reference
-    streaming_core = StreamingCore(
+    # Create optimized streaming core with brain reference
+    streaming_core = OptimizedStreamingCore(
         brain=nyx_brain, 
         video_source=video_source, 
         audio_source=audio_source
@@ -1310,6 +1310,9 @@ async def integrate_with_nyx_brain(nyx_brain: NyxBrain, video_source=0, audio_so
     # Register reasoning if available
     if hasattr(streaming_core, "reason_about_streaming_event"):
         nyx_brain.reason_about_streaming_event = streaming_core.reason_about_streaming_event
+
+    nyx_brain.process_frame_optimized = streaming_core.process_frame_optimized
+    nyx_brain.get_performance_metrics = streaming_core.get_performance_metrics
     
     logger.info(f"Streaming capabilities integrated with Nyx brain for user {nyx_brain.user_id}")
     
@@ -1489,3 +1492,297 @@ async def setup_enhanced_streaming(brain: NyxBrain,
     _register_brain_functions(brain, streaming_core)
     
     return streaming_core
+class OptimizedStreamingCore(StreamingCore):
+    """
+    Performance-optimized streaming core with better asynchronous processing
+    and resource management for real-time performance.
+    """
+    
+    def __init__(self, brain: NyxBrain, video_source=0, audio_source=None):
+        """Initialize the optimized streaming core"""
+        super().__init__(brain, video_source, audio_source)
+        
+        # Processing optimizations
+        self.frame_buffer = deque(maxlen=5)  # Buffer recent frames
+        self.parallel_processing = True  # Enable parallel processing
+        self.skip_frames = 2  # Process every nth frame for heavy operations
+        self.priority_queue = asyncio.PriorityQueue()  # Queue for prioritized tasks
+        self.processing_tasks = set()  # Track active tasks
+        self.resource_monitor = ResourceMonitor()  # Monitor system resources
+        
+        # Performance metrics
+        self.processing_times = {
+            "visual": deque(maxlen=50),
+            "audio": deque(maxlen=50),
+            "speech": deque(maxlen=50),
+            "memory": deque(maxlen=50),
+            "commentary": deque(maxlen=50),
+            "total": deque(maxlen=50)
+        }
+        
+        logger.info("Initialized OptimizedStreamingCore with performance enhancements")
+    
+    async def process_frame_optimized(self):
+        """
+        Process a frame with optimized resource usage
+        
+        Returns:
+            Processing results
+        """
+        if not self.streaming_system or not self.streaming_system.game_state:
+            return {"status": "not_initialized"}
+        
+        # Get current frame
+        frame = self.streaming_system.game_state.current_frame
+        frame_count = self.streaming_system.game_state.frame_count
+        
+        if frame is None:
+            return {"status": "no_frame_available"}
+        
+        # Store in buffer
+        self.frame_buffer.append(frame)
+        
+        # Skip frames for heavy processing based on current load
+        resource_usage = self.resource_monitor.get_usage()
+        high_load = resource_usage.get("cpu", 0) > 70 or resource_usage.get("memory", 0) > 70
+        
+        # Adjust skip rate based on resource usage
+        skip_rate = self.skip_frames * 2 if high_load else self.skip_frames
+        
+        # Check if this frame should be processed
+        if frame_count % skip_rate != 0:
+            return {"status": "frame_skipped", "reason": "resource_management"}
+        
+        start_time = time.time()
+        tasks = []
+        results = {}
+        
+        try:
+            # Create context
+            extended_context = RunContextWrapper(context=self.streaming_system.game_state)
+            
+            if hasattr(self.streaming_system, "audio_processor"):
+                extended_context.audio_processor = self.streaming_system.audio_processor
+            
+            if hasattr(self.streaming_system, "speech_recognition"):
+                extended_context.speech_recognition = self.streaming_system.speech_recognition
+            
+            if hasattr(self, "cross_game_knowledge"):
+                extended_context.cross_game_knowledge = self.cross_game_knowledge
+            
+            # Process in parallel with prioritization
+            if self.parallel_processing:
+                # Always identify game first if needed
+                if not self.streaming_system.game_state.game_id:
+                    game_start = time.time()
+                    game_result = await identify_game(extended_context)
+                    self.processing_times["visual"].append(time.time() - game_start)
+                    results["game_identification"] = game_result
+                
+                # Create prioritized tasks
+                priority_tasks = [
+                    (1, analyze_current_frame(extended_context)),  # High priority
+                    (3, analyze_speech(extended_context)),          # Medium priority
+                    (5, get_player_location(extended_context))      # Lower priority
+                ]
+                
+                # Process every task by priority
+                for priority, coro in sorted(priority_tasks, key=lambda x: x[0]):
+                    try:
+                        # Use asyncio.shield to prevent cancellation
+                        task_start = time.time()
+                        result = await asyncio.shield(coro)
+                        task_time = time.time() - task_start
+                        
+                        # Store timing
+                        if priority == 1:
+                            self.processing_times["visual"].append(task_time)
+                        elif priority == 3:
+                            self.processing_times["speech"].append(task_time)
+                        
+                        # Store result
+                        results[f"task_{priority}"] = result
+                    except Exception as e:
+                        logger.error(f"Error in task with priority {priority}: {e}")
+            else:
+                # Sequential processing for resource-constrained systems
+                visual_start = time.time()
+                results["visual"] = await analyze_current_frame(extended_context)
+                self.processing_times["visual"].append(time.time() - visual_start)
+                
+                speech_start = time.time()
+                results["speech"] = await analyze_speech(extended_context)
+                self.processing_times["speech"].append(time.time() - speech_start)
+            
+            # Always process memory asynchronously
+            if frame_count % (skip_rate * 2) == 0:
+                memory_start = time.time()
+                # Create a lightweight task for memory operations
+                asyncio.create_task(self._process_memory_async(extended_context))
+                self.processing_times["memory"].append(time.time() - memory_start)
+            
+            # Check if it's time for commentary
+            if self._should_generate_commentary():
+                commentary_start = time.time()
+                # Process commentary in a separate task to not block the main loop
+                task = asyncio.create_task(self._generate_commentary_async(extended_context))
+                self.processing_tasks.add(task)
+                task.add_done_callback(self.processing_tasks.remove)
+                self.processing_times["commentary"].append(time.time() - commentary_start)
+        
+        except Exception as e:
+            logger.error(f"Error in optimized frame processing: {e}")
+            results["error"] = str(e)
+        
+        finally:
+            # Calculate total processing time
+            total_time = time.time() - start_time
+            self.processing_times["total"].append(total_time)
+            
+            results["processing_time"] = total_time
+            results["frame_count"] = frame_count
+            
+            return results
+    
+    async def _process_memory_async(self, context):
+        """Process memory operations asynchronously"""
+        try:
+            # Retrieve relevant memories
+            game_name = context.context.game_name
+            if not game_name:
+                return
+            
+            current_context = ""
+            if context.context.current_location:
+                current_context += f"in {context.context.current_location.get('name', '')}"
+            if context.context.detected_action:
+                current_context += f" while {context.context.detected_action.get('name', '')}"
+            
+            # Use memory mapper
+            await self.memory_mapper.retrieve_relevant_memories(
+                game_name=game_name,
+                context=current_context,
+                limit=3
+            )
+        except Exception as e:
+            logger.error(f"Error in async memory processing: {e}")
+    
+    async def _generate_commentary_async(self, context):
+        """Generate commentary asynchronously"""
+        try:
+            # Determine priority source based on recent events
+            priority_source = self._determine_priority_source(context.context)
+            
+            # Generate commentary
+            await self.streaming_system._generate_commentary(context, priority_source)
+        except Exception as e:
+            logger.error(f"Error in async commentary generation: {e}")
+    
+    def _should_generate_commentary(self):
+        """Determine if it's time to generate commentary"""
+        if not hasattr(self, "last_commentary_time"):
+            self.last_commentary_time = 0
+        
+        current_time = time.time()
+        time_since_last = current_time - self.last_commentary_time
+        
+        # Adjust commentary frequency based on system load
+        resource_usage = self.resource_monitor.get_usage()
+        high_load = resource_usage.get("cpu", 0) > 70
+        
+        base_cooldown = self.streaming_system.commentary_cooldown if hasattr(self.streaming_system, "commentary_cooldown") else 5.0
+        adjusted_cooldown = base_cooldown * 1.5 if high_load else base_cooldown
+        
+        return time_since_last >= adjusted_cooldown
+    
+    def _determine_priority_source(self, game_state):
+        """Determine the priority source for commentary"""
+        # Check recent events
+        if hasattr(game_state, "recent_events") and game_state.recent_events:
+            for event in reversed(game_state.recent_events):
+                if event["type"] == "character_dialog":
+                    return "speech"
+                elif event["type"] == "gameplay_event" and event["data"].get("significance", 0) >= 7.0:
+                    return "visual"
+                elif event["type"] == "cross_game_insight":
+                    return "cross_game"
+        
+        # Default to visual
+        return "visual"
+    
+    def get_performance_metrics(self):
+        """Get detailed performance metrics"""
+        metrics = {
+            "average_times": {
+                "visual": sum(self.processing_times["visual"]) / max(len(self.processing_times["visual"]), 1),
+                "speech": sum(self.processing_times["speech"]) / max(len(self.processing_times["speech"]), 1),
+                "memory": sum(self.processing_times["memory"]) / max(len(self.processing_times["memory"]), 1),
+                "commentary": sum(self.processing_times["commentary"]) / max(len(self.processing_times["commentary"]), 1),
+                "total": sum(self.processing_times["total"]) / max(len(self.processing_times["total"]), 1)
+            },
+            "resource_usage": self.resource_monitor.get_usage(),
+            "frame_buffer_size": len(self.frame_buffer),
+            "active_tasks": len(self.processing_tasks),
+            "fps": 1.0 / max(sum(self.processing_times["total"]) / max(len(self.processing_times["total"]), 1), 0.001)
+        }
+        
+        # Add base stats
+        base_stats = super().get_streaming_stats()
+        metrics.update(base_stats)
+        
+        return metrics
+
+class ResourceMonitor:
+    """Monitor system resources for adaptive processing"""
+    
+    def __init__(self):
+        """Initialize the resource monitor"""
+        self.last_check_time = 0
+        self.cached_usage = {
+            "cpu": 0,
+            "memory": 0,
+            "gpu": 0
+        }
+        self.cache_duration = 5  # seconds
+    
+    def get_usage(self):
+        """Get current resource usage"""
+        current_time = time.time()
+        
+        # Use cached values if recent
+        if current_time - self.last_check_time < self.cache_duration:
+            return self.cached_usage
+        
+        try:
+            # CPU usage
+            import psutil
+            cpu_usage = psutil.cpu_percent(interval=0.1)
+            
+            # Memory usage
+            memory_info = psutil.virtual_memory()
+            memory_usage = memory_info.percent
+            
+            # GPU usage (if available)
+            gpu_usage = 0
+            try:
+                import GPUtil
+                gpus = GPUtil.getGPUs()
+                if gpus:
+                    gpu_usage = gpus[0].load * 100
+            except:
+                pass
+            
+            # Update cache
+            self.cached_usage = {
+                "cpu": cpu_usage,
+                "memory": memory_usage,
+                "gpu": gpu_usage
+            }
+            
+            self.last_check_time = current_time
+            
+        except Exception as e:
+            logger.error(f"Error getting resource usage: {e}")
+        
+        return self.cached_usage
+
