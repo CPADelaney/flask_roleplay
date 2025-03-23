@@ -45,6 +45,151 @@ logger = logging.getLogger("game_agents")
 if "OPENAI_API_KEY" not in os.environ:
     raise EnvironmentError("OPENAI_API_KEY environment variable must be set")
 
+class EnhancedMultiModalIntegrator:
+    """
+    Enhanced integration between visual, audio, and speech modalities
+    for more comprehensive game understanding and commentary.
+    """
+    
+    def __init__(self, game_state: GameState):
+        """Initialize with reference to game state"""
+        self.game_state = game_state
+        self.last_visual_update = 0
+        self.last_audio_update = 0
+        self.last_speech_update = 0
+        self.combined_events = []
+        self.audio_buffer = []
+        self.speech_buffer = []
+        self.visual_buffer = []
+        
+    async def process_frame(self, frame: np.ndarray, audio_data: np.ndarray = None):
+        """Process a new frame with multi-modal integration"""
+        current_time = time.time()
+        
+        # Add to visual buffer
+        if frame is not None:
+            self.visual_buffer.append((frame, current_time))
+            # Keep buffer limited
+            while len(self.visual_buffer) > 5:
+                self.visual_buffer.pop(0)
+        
+        # Add to audio buffer
+        if audio_data is not None:
+            self.audio_buffer.append((audio_data, current_time))
+            # Keep buffer limited
+            while len(self.audio_buffer) > 10:
+                self.audio_buffer.pop(0)
+                
+        # Look for multi-modal events
+        events = await self._detect_combined_events()
+        
+        # Add significant events to game state
+        for event in events:
+            self.game_state.add_event(event["type"], event["data"])
+            
+        return events
+    
+    async def add_speech_event(self, speech_data: Dict[str, Any]):
+        """Add a detected speech event"""
+        current_time = time.time()
+        self.speech_buffer.append((speech_data, current_time))
+        
+        # Keep buffer limited
+        while len(self.speech_buffer) > 5:
+            self.speech_buffer.pop(0)
+            
+        self.last_speech_update = current_time
+    
+    async def _detect_combined_events(self) -> List[Dict[str, Any]]:
+        """Detect events by combining visual, audio, and speech cues"""
+        events = []
+        
+        # Look for dialog events (speech + character on screen)
+        if self.speech_buffer and self.visual_buffer:
+            latest_speech, speech_time = self.speech_buffer[-1]
+            latest_frame, frame_time = self.visual_buffer[-1]
+            
+            # If speech and frame are close in time
+            if abs(speech_time - frame_time) < 2.0:
+                # Check if character detection matches speaker
+                if self.game_state.detected_objects:
+                    for obj in self.game_state.detected_objects:
+                        if obj.get("class") == "character" and latest_speech.get("speaker") == obj.get("name"):
+                            # Found character speaking!
+                            events.append({
+                                "type": "character_dialog",
+                                "data": {
+                                    "character": obj.get("name"),
+                                    "text": latest_speech.get("text"),
+                                    "position": obj.get("bbox"),
+                                    "confidence": latest_speech.get("confidence", 0.8),
+                                    "significance": 8.0
+                                }
+                            })
+        
+        # Look for gameplay events (visual change + sound effect)
+        if len(self.visual_buffer) >= 2 and len(self.audio_buffer) >= 1:
+            # Basic change detection between frames
+            if len(self.visual_buffer) >= 2:
+                prev_frame, prev_time = self.visual_buffer[-2]
+                curr_frame, curr_time = self.visual_buffer[-1]
+                
+                # Simple frame difference to detect visual changes
+                if isinstance(prev_frame, np.ndarray) and isinstance(curr_frame, np.ndarray):
+                    try:
+                        # Convert to grayscale for simpler comparison
+                        prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+                        curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
+                        
+                        # Calculate difference
+                        diff = cv2.absdiff(prev_gray, curr_gray)
+                        _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+                        change_percent = np.count_nonzero(thresh) / thresh.size
+                        
+                        # If significant visual change detected
+                        if change_percent > 0.2:
+                            # Check for accompanying audio
+                            for audio_data, audio_time in self.audio_buffer:
+                                # If audio is close in time to the visual change
+                                if abs(audio_time - curr_time) < 0.5:
+                                    # Calculate audio energy as a basic indicator
+                                    audio_energy = np.mean(np.abs(audio_data))
+                                    
+                                    if audio_energy > 0.1:  # Significant audio
+                                        events.append({
+                                            "type": "gameplay_event",
+                                            "data": {
+                                                "visual_change": change_percent,
+                                                "audio_energy": float(audio_energy),
+                                                "location": self.game_state.current_location.get("name") if self.game_state.current_location else "unknown",
+                                                "timestamp": curr_time,
+                                                "significance": min(9.0, 5.0 + (change_percent * 10) + (audio_energy * 10))
+                                            }
+                                        })
+                                        break
+                    except Exception as e:
+                        print(f"Error in frame comparison: {e}")
+        
+        # Look for quest-related events (UI change + dialog)
+        if self.speech_buffer and self.game_state.player_status:
+            latest_speech = self.speech_buffer[-1][0]
+            
+            # Check for quest-related keywords in speech
+            quest_keywords = ["quest", "mission", "objective", "task", "goal"]
+            if any(keyword in latest_speech.get("text", "").lower() for keyword in quest_keywords):
+                events.append({
+                    "type": "quest_update",
+                    "data": {
+                        "text": latest_speech.get("text"),
+                        "speaker": latest_speech.get("speaker"),
+                        "current_objectives": self.game_state.player_status.get("objectives", []),
+                        "significance": 7.5
+                    }
+                })
+        
+        return events
+
+
 ###########################################
 # Context and State Management
 ###########################################
@@ -1393,6 +1538,8 @@ class AdvancedGameAgentSystem:
             processing_fps=30
         )
         
+        self.multi_modal_integrator = EnhancedMultiModalIntegrator(self.game_state)
+        
         # Set up flags
         self.running = False
         self.processing_frame = False
@@ -1649,3 +1796,100 @@ class AdvancedGameAgentSystem:
             "transferred_insights": len(self.game_state.transferred_insights)
         }
 
+    async def _process_game_frame(self):
+        """Process a game frame with advanced multi-modal agent analysis"""
+        if self.processing_frame:
+            return  # Skip if already processing
+        
+        self.processing_frame = True
+        start_time = time.time()
+        
+        try:
+            # Create context for tools with access to all systems
+            extended_context = RunContextWrapper(context=self.game_state)
+            extended_context.audio_processor = self.audio_processor
+            extended_context.speech_recognition = self.speech_recognition
+            extended_context.cross_game_knowledge = self.cross_game_knowledge
+            extended_context.web_search_tool = self.web_search_tool
+            
+            # Process all modalities
+            await self._process_modalities(extended_context)
+            
+            # Integrate multi-modal processing - NEW!
+            combined_events = await self.multi_modal_integrator.process_frame(
+                self.game_state.current_frame,
+                self.game_state.current_audio
+            )
+            
+            # Process any detected multi-modal events
+            for event in combined_events:
+                if event["data"].get("significance", 0) >= 7.0:
+                    # This is a significant event, prioritize for commentary
+                    self.game_state.add_event("significant_moment", event["data"])
+            
+            # Check if it's time for commentary or to answer a question
+            current_time = time.time()
+            time_since_last = current_time - self.last_commentary_time
+            
+            if time_since_last >= self.commentary_cooldown:
+                # Use triage agent to decide what to do
+                with trace("GameStream", workflow_name="advanced_triage_decision"):
+                    # Pass extended context to the triage agent
+                    triage_result = await Runner.run(
+                        enhanced_triage_agent, 
+                        "Decide what to do next based on multi-modal analysis and cross-game insights.", 
+                        context=self.game_state
+                    )
+                    decision = triage_result.final_output
+                
+                if decision.choice == "commentary":
+                    await self._generate_commentary(extended_context, decision.priority_source)
+                elif decision.choice == "answer_question" and self.game_state.pending_questions:
+                    await self._answer_question(extended_context)
+                # Skip otherwise
+                
+                self.last_commentary_time = current_time
+        
+        except Exception as e:
+            logger.error(f"Error processing frame: {e}")
+        
+        finally:
+            processing_time = time.time() - start_time
+            self.agent_times.append(processing_time)
+            self.processing_frame = False
+            
+    async def _process_modalities(self, extended_context):
+        """Process all modalities in parallel"""
+        # Only identify game if not already identified
+        if not self.game_state.game_id:
+            await identify_game(extended_context)
+            
+            # If game identified, find similar games
+            if self.game_state.game_id:
+                await find_similar_games(extended_context)
+        
+        # Always update multi-modal data if game is identified
+        if self.game_state.game_id:
+            # Process in parallel
+            tasks = [
+                analyze_current_frame(extended_context),
+                analyze_speech(extended_context),
+                get_player_location(extended_context),
+                detect_current_action(extended_context)
+            ]
+            results = await asyncio.gather(*tasks)
+            
+            # Process speech results for multi-modal integration
+            speech_result = results[1]
+            if "Transcribed speech" in speech_result:
+                # Extract the transcribed text
+                text = speech_result.split('"')[1] if '"' in speech_result else ""
+                confidence = float(speech_result.split("Confidence: ")[1].split(")")[0]) if "Confidence: " in speech_result else 0.8
+                speaker = speech_result.split("from ")[1].split(":")[0] if "from " in speech_result else None
+                
+                # Add to multi-modal integrator
+                await self.multi_modal_integrator.add_speech_event({
+                    "text": text,
+                    "confidence": confidence,
+                    "speaker": speaker
+                })
