@@ -754,7 +754,8 @@ def _register_enhanced_brain_functions(brain: NyxBrain, streaming_core: Streamin
         brain.get_popular_topics = streaming_core.streaming_system.enhanced_audience.get_popular_topics
         brain.get_user_personalization = streaming_core.streaming_system.enhanced_audience.get_user_personalization
 
-# Add this function to the end of _run_enhanced_periodic_tasks
+# Update the _run_enhanced_periodic_tasks_v2 function in integration.py
+
 async def _run_enhanced_periodic_tasks_v2(brain: NyxBrain, streaming_core: StreamingCore):
     """Run all enhanced periodic tasks"""
     try:
@@ -788,24 +789,44 @@ async def _run_enhanced_periodic_tasks_v2(brain: NyxBrain, streaming_core: Strea
                     if consolidation.get("status") == "success":
                         logger.info(f"Consolidated streaming experiences: {consolidation.get('abstractions_created', 0)} abstractions")
                 
-                # 4. Run meta-cognitive cycle
+                # 4. Run periodic learning analysis - NEW!
+                if hasattr(streaming_core, "learning_manager"):
+                    try:
+                        # Get current session data
+                        session_data = {
+                            "game_name": streaming_core.streaming_system.game_state.game_name,
+                            "recent_events": list(streaming_core.streaming_system.game_state.recent_events),
+                            "dialog_history": streaming_core.streaming_system.game_state.dialog_history,
+                            "answered_questions": list(streaming_core.streaming_system.game_state.answered_questions),
+                            "transferred_insights": streaming_core.streaming_system.game_state.transferred_insights,
+                            "duration": (datetime.now() - streaming_core.session_start_time).total_seconds()
+                        }
+                        
+                        # Run analysis 
+                        analysis_result = await streaming_core.learning_manager.analyze_session_learnings(session_data)
+                        if analysis_result and "summary" in analysis_result:
+                            logger.info(f"Periodic learning analysis created")
+                    except Exception as e:
+                        logger.error(f"Error in learning analysis: {e}")
+                
+                # 5. Run meta-cognitive cycle
                 if hasattr(streaming_core, "run_metacognitive_cycle"):
                     meta_result = await streaming_core.run_metacognitive_cycle(
                         streaming_core.streaming_system.game_state
                     )
                     logger.info("Ran meta-cognitive cycle for streaming")
                 
-                # 5. Consolidate cross-game knowledge
+                # 6. Consolidate cross-game knowledge
                 if hasattr(streaming_core, "run_knowledge_consolidation"):
                     knowledge_result = await streaming_core.run_knowledge_consolidation()
                     logger.info(f"Consolidated cross-game knowledge")
                 
-                # 6. Sync hormone system with Nyx's emotional core
+                # 7. Sync hormone system with Nyx's emotional core
                 if hasattr(streaming_core, "hormone_system") and hasattr(streaming_core.hormone_system, "sync_with_brain_hormone_system"):
                     hormone_result = streaming_core.hormone_system.sync_with_brain_hormone_system()
                     logger.info(f"Synced streaming hormone system with brain")
                 
-                # 7. Apply reasoning to recent significant events
+                # 8. Apply reasoning to recent significant events
                 if hasattr(streaming_core, "reason_about_game_event"):
                     game_state = streaming_core.streaming_system.game_state
                     recent_events = game_state.recent_events
@@ -829,7 +850,7 @@ async def _run_enhanced_periodic_tasks_v2(brain: NyxBrain, streaming_core: Strea
                         event["data"]["reasoning_applied"] = True
                         logger.info(f"Applied reasoning to significant event")
                 
-                # 8. Update identity from streaming experience periodically
+                # 9. Update identity from streaming experience periodically
                 if hasattr(streaming_core, "update_identity_from_streaming"):
                     game_state = streaming_core.streaming_system.game_state
                     game_name = game_state.game_name or "Unknown Game"
@@ -858,7 +879,6 @@ async def _run_enhanced_periodic_tasks_v2(brain: NyxBrain, streaming_core: Strea
         logger.info("Enhanced periodic tasks cancelled")
     except Exception as e:
         logger.error(f"Error in enhanced periodic tasks: {e}")
-# This will be added to nyx/streamer/integration.py
 
 class LearningAnalysisOutput(BaseModel):
     """Output from learning analysis"""
