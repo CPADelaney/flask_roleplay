@@ -1,4 +1,4 @@
-# /nyx/streamer/gamer_girl.py
+# nyx/streamer/gamer_girl.py
 
 import os
 import asyncio
@@ -30,13 +30,6 @@ from agents import (
 # For speech recognition
 import whisper
 
-# Import game vision module components
-from enhanced_game_vision import (
-    GameKnowledgeBase, EnhancedGameRecognitionSystem,
-    EnhancedSpatialMemory, SceneGraphAnalyzer,
-    GameActionRecognition, RealTimeGameProcessor
-)
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("game_agents")
@@ -45,13 +38,650 @@ logger = logging.getLogger("game_agents")
 if "OPENAI_API_KEY" not in os.environ:
     raise EnvironmentError("OPENAI_API_KEY environment variable must be set")
 
+###########################################
+# Game Audio Processor
+###########################################
+
+class GameAudioProcessor:
+    """System for processing game audio and detecting sound events"""
+    
+    def __init__(self, sample_rate=16000):
+        """Initialize audio processor with sample rate"""
+        self.sample_rate = sample_rate
+        self.audio_buffer = deque(maxlen=int(sample_rate * 5))  # 5 seconds buffer
+        self.is_capturing = False
+        self.detected_sounds = []
+        self.audio_features = {}
+        
+    def start_capture(self, device=None):
+        """Start audio capture from the specified device"""
+        self.is_capturing = True
+        logger.info(f"Started audio capture with sample rate {self.sample_rate}Hz")
+        # In a real implementation, this would initialize audio device capture
+    
+    def stop_capture(self):
+        """Stop audio capture"""
+        self.is_capturing = False
+        logger.info("Stopped audio capture")
+    
+    def process_audio_block(self, audio_data=None):
+        """
+        Process a block of audio data
+        
+        Args:
+            audio_data: Optional audio data to process (if None, uses buffer)
+        
+        Returns:
+            Dictionary of audio analysis results
+        """
+        # In a real implementation, this would analyze audio features
+        # and detect sound events
+        
+        if audio_data is None:
+            # Use synthetic data for testing
+            audio_data = np.random.randn(1600)  # 0.1s of audio at 16kHz
+        
+        # Add to buffer
+        for sample in audio_data:
+            self.audio_buffer.append(sample)
+        
+        # Extract basic audio features
+        self.audio_features = {
+            "rms_energy": np.sqrt(np.mean(np.square(audio_data))),
+            "zero_crossing_rate": np.sum(np.abs(np.diff(np.signbit(audio_data)))) / len(audio_data),
+            "timestamp": time.time()
+        }
+        
+        # Return analysis
+        return self.audio_features
+    
+    def get_audio_features(self):
+        """Get the latest audio features"""
+        return self.audio_features
+    
+    def get_detected_sounds(self):
+        """Get recently detected sounds"""
+        return self.detected_sounds
+
+###########################################
+# Enhanced Game Vision Module
+###########################################
+
+class GameKnowledgeBase:
+    """Knowledge base for game recognition and understanding"""
+    
+    def __init__(self):
+        """Initialize game knowledge base"""
+        self.games = {}
+        self.objects = {}
+        self.actions = {}
+        self.locations = {}
+    
+    def load_game_data(self, game_id):
+        """Load data for a specific game"""
+        # In a real implementation, this would load game-specific data
+        logger.info(f"Loaded game data for {game_id}")
+        return True
+
+class EnhancedGameRecognitionSystem:
+    """System for recognizing games from visual input"""
+    
+    def __init__(self, knowledge_base=None):
+        """
+        Initialize game recognition system
+        
+        Args:
+            knowledge_base: Optional GameKnowledgeBase instance
+        """
+        self.knowledge_base = knowledge_base or GameKnowledgeBase()
+        self.recognized_games = {}
+    
+    async def identify_game(self, frame):
+        """
+        Identify the game being played from a video frame
+        
+        Args:
+            frame: Video frame as numpy array
+            
+        Returns:
+            Dictionary with game identification information
+        """
+        # In a real implementation, this would use computer vision to identify games
+        # For demonstration, return a placeholder result
+        return {
+            "game_id": "game123",
+            "game_name": "Example Game",
+            "confidence": 0.85,
+            "genre": ["Action", "RPG"],
+            "timestamp": time.time()
+        }
+    
+    async def detect_objects(self, frame):
+        """
+        Detect game objects in a video frame
+        
+        Args:
+            frame: Video frame as numpy array
+            
+        Returns:
+            List of detected objects with bounding boxes
+        """
+        # In a real implementation, this would use object detection
+        # For demonstration, return placeholder results
+        return [
+            {
+                "class": "character",
+                "name": "Player Character",
+                "bbox": [100, 100, 200, 300],
+                "confidence": 0.92
+            },
+            {
+                "class": "item",
+                "name": "Weapon",
+                "bbox": [300, 250, 350, 300],
+                "confidence": 0.85
+            }
+        ]
+
+class EnhancedSpatialMemory:
+    """Spatial memory system for game environments"""
+    
+    def __init__(self):
+        """Initialize spatial memory system"""
+        self.locations = {}
+        self.current_location = None
+        self.location_history = deque(maxlen=10)
+    
+    async def identify_location(self, frame, game_id=None):
+        """
+        Identify the current location in the game
+        
+        Args:
+            frame: Video frame as numpy array
+            game_id: Optional game ID for context
+            
+        Returns:
+            Dictionary with location information
+        """
+        # In a real implementation, this would identify game locations
+        # For demonstration, return a placeholder result
+        location = {
+            "id": "loc123",
+            "name": "Forest Path",
+            "zone": "Eastern Woods",
+            "confidence": 0.78,
+            "timestamp": time.time()
+        }
+        
+        # Update tracking
+        self.current_location = location
+        self.location_history.append(location)
+        
+        return location
+
+class SceneGraphAnalyzer:
+    """Analyzes scene graphs for game understanding"""
+    
+    def __init__(self):
+        """Initialize scene graph analyzer"""
+        self.relationships = {}
+    
+    async def analyze_scene(self, objects, location):
+        """
+        Analyze relationships between objects in the scene
+        
+        Args:
+            objects: List of detected objects
+            location: Current location information
+            
+        Returns:
+            Scene graph with object relationships
+        """
+        # In a real implementation, this would analyze object relationships
+        # For demonstration, return a placeholder result
+        return {
+            "central_object": objects[0] if objects else None,
+            "relationships": [
+                {"subject": "Player Character", "relation": "holding", "object": "Weapon"}
+            ],
+            "scene_context": f"Player in {location.get('name', 'unknown location')}",
+            "timestamp": time.time()
+        }
+
+class GameActionRecognition:
+    """Recognizes player and NPC actions in games"""
+    
+    def __init__(self):
+        """Initialize action recognition system"""
+        self.recent_actions = deque(maxlen=5)
+    
+    async def detect_action(self, frames, audio_data=None):
+        """
+        Detect actions happening in a sequence of frames
+        
+        Args:
+            frames: List of recent video frames
+            audio_data: Optional audio data for multimodal detection
+            
+        Returns:
+            Dictionary with action information
+        """
+        # In a real implementation, this would analyze actions using computer vision
+        # For demonstration, return a placeholder result
+        action = {
+            "name": "Combat",
+            "confidence": 0.82,
+            "duration": 2.5,
+            "involves_player": True,
+            "timestamp": time.time()
+        }
+        
+        # Update tracking
+        self.recent_actions.append(action)
+        
+        return action
+
+class RealTimeGameProcessor:
+    """Real-time processor for game video streams"""
+    
+    def __init__(self, game_system=None, input_source=0, processing_fps=30):
+        """
+        Initialize real-time game processor
+        
+        Args:
+            game_system: Game analysis system
+            input_source: Video input source
+            processing_fps: Target processing frame rate
+        """
+        self.game_system = game_system
+        self.input_source = input_source
+        self.processing_fps = processing_fps
+        self.is_processing = False
+        self.frame_count = 0
+    
+    def start_processing(self):
+        """Start real-time processing"""
+        self.is_processing = True
+        logger.info(f"Started real-time game processing at {self.processing_fps} FPS")
+    
+    def stop_processing(self):
+        """Stop real-time processing"""
+        self.is_processing = False
+        logger.info("Stopped real-time game processing")
+
+###########################################
+# Hormone System
+###########################################
+
+class HormoneSystem:
+    """System for simulating hormonal influences on emotions and behavior"""
+    
+    def __init__(self):
+        """Initialize hormone system with default values"""
+        # Initialize base hormones
+        self.hormones = {
+            "dopamine": {
+                "value": 0.5,  # 0.0-1.0 scale
+                "decay_rate": 0.05,
+                "description": "Reward and pleasure hormone",
+                "cycle_phase": "normal",
+                "evolution_history": []
+            },
+            "serotonin": {
+                "value": 0.5,
+                "decay_rate": 0.03,
+                "description": "Mood stabilizer and wellbeing hormone",
+                "cycle_phase": "normal",
+                "evolution_history": []
+            },
+            "cortisol": {
+                "value": 0.3,
+                "decay_rate": 0.08,
+                "description": "Stress hormone",
+                "cycle_phase": "normal",
+                "evolution_history": []
+            },
+            "oxytocin": {
+                "value": 0.4,
+                "decay_rate": 0.04,
+                "description": "Social bonding and trust hormone",
+                "cycle_phase": "normal",
+                "evolution_history": []
+            },
+            "adrenaline": {
+                "value": 0.2,
+                "decay_rate": 0.1,
+                "description": "Fight-or-flight response hormone",
+                "cycle_phase": "normal",
+                "evolution_history": []
+            }
+        }
+        
+        # Environmental factors that influence hormones
+        self.environmental_factors = {
+            "time_of_day": 0.5,  # 0.0-1.0 representing 24 hour cycle
+            "interaction_quality": 0.5,  # Quality of recent interactions
+            "user_familiarity": 0.0,  # Familiarity with current user
+            "session_duration": 0.0  # Length of current session
+        }
+        
+        # Last update timestamp
+        self.last_update = time.time()
+        
+        logger.info("Hormone system initialized with default values")
+    
+    async def update_hormone_cycles(self, ctx):
+        """
+        Update hormone levels based on natural cycles and environmental factors
+        
+        Args:
+            ctx: Execution context
+            
+        Returns:
+            Dictionary of updated hormone values
+        """
+        current_time = time.time()
+        time_delta = current_time - self.last_update
+        self.last_update = current_time
+        
+        # Update hormone values based on natural decay and environmental factors
+        updates = {}
+        
+        for name, data in self.hormones.items():
+            old_value = data["value"]
+            
+            # Natural decay toward baseline (0.5)
+            baseline_pull = (0.5 - old_value) * data["decay_rate"] * time_delta
+            
+            # Environmental influences
+            env_influence = self._calculate_environmental_influence(name)
+            
+            # Combined effect
+            new_value = old_value + baseline_pull + env_influence
+            new_value = max(0.0, min(1.0, new_value))  # Clamp to 0.0-1.0
+            
+            # Update hormone value
+            self.hormones[name]["value"] = new_value
+            
+            # Record change
+            if abs(new_value - old_value) > 0.01:  # Only record significant changes
+                self.hormones[name]["evolution_history"].append({
+                    "timestamp": current_time,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "change_reason": "cycle_update"
+                })
+            
+            # Determine hormone phase
+            if new_value > 0.7:
+                self.hormones[name]["cycle_phase"] = "elevated"
+            elif new_value < 0.3:
+                self.hormones[name]["cycle_phase"] = "depleted"
+            else:
+                self.hormones[name]["cycle_phase"] = "normal"
+            
+            updates[name] = {
+                "old_value": old_value,
+                "new_value": new_value,
+                "cycle_phase": self.hormones[name]["cycle_phase"]
+            }
+        
+        return {
+            "updated": True,
+            "hormone_updates": updates,
+            "environmental_factors": self.environmental_factors
+        }
+    
+    def _calculate_environmental_influence(self, hormone_name):
+        """
+        Calculate environmental factor influence on a specific hormone
+        
+        Args:
+            hormone_name: Name of the hormone
+            
+        Returns:
+            Environmental influence value
+        """
+        influence = 0.0
+        
+        # Different hormones are influenced by different factors
+        if hormone_name == "dopamine":
+            # Dopamine influenced by interaction quality and time of day
+            influence += self.environmental_factors["interaction_quality"] * 0.02
+            
+            # Higher in morning, lower at night
+            time_influence = math.sin(self.environmental_factors["time_of_day"] * 2 * math.pi) * 0.01
+            influence += time_influence
+            
+        elif hormone_name == "serotonin":
+            # Serotonin influenced by time of day and familiarity
+            # Higher during daylight hours
+            time_influence = math.sin(self.environmental_factors["time_of_day"] * 2 * math.pi) * 0.015
+            influence += time_influence
+            
+            # Higher with familiar users
+            influence += self.environmental_factors["user_familiarity"] * 0.01
+            
+        elif hormone_name == "cortisol":
+            # Cortisol influenced by session duration and time of day
+            # Higher in morning, lower at night
+            time_influence = math.cos(self.environmental_factors["time_of_day"] * 2 * math.pi) * 0.02
+            influence += time_influence
+            
+            # Increases with very long sessions
+            if self.environmental_factors["session_duration"] > 0.7:
+                influence += (self.environmental_factors["session_duration"] - 0.7) * 0.05
+            
+        elif hormone_name == "oxytocin":
+            # Oxytocin influenced by user familiarity and interaction quality
+            influence += self.environmental_factors["user_familiarity"] * 0.02
+            
+            if self.environmental_factors["interaction_quality"] > 0.6:
+                influence += (self.environmental_factors["interaction_quality"] - 0.6) * 0.04
+            
+        elif hormone_name == "adrenaline":
+            # Adrenaline influenced by interaction quality (negatively)
+            if self.environmental_factors["interaction_quality"] < 0.4:
+                influence += (0.4 - self.environmental_factors["interaction_quality"]) * 0.05
+            
+            # Less adrenaline with familiar users
+            influence -= self.environmental_factors["user_familiarity"] * 0.01
+        
+        return influence
+    
+    def update_hormone(self, hormone_name, value_change, reason="manual_update"):
+        """
+        Update a specific hormone level
+        
+        Args:
+            hormone_name: Name of the hormone to update
+            value_change: Amount to change the hormone value
+            reason: Reason for the change
+            
+        Returns:
+            Dictionary with update information
+        """
+        if hormone_name not in self.hormones:
+            return {
+                "updated": False,
+                "error": f"Hormone {hormone_name} not found"
+            }
+        
+        old_value = self.hormones[hormone_name]["value"]
+        new_value = max(0.0, min(1.0, old_value + value_change))  # Clamp to 0.0-1.0
+        
+        # Update hormone value
+        self.hormones[hormone_name]["value"] = new_value
+        
+        # Record change
+        self.hormones[hormone_name]["evolution_history"].append({
+            "timestamp": time.time(),
+            "old_value": old_value,
+            "new_value": new_value,
+            "change_reason": reason
+        })
+        
+        # Determine hormone phase
+        if new_value > 0.7:
+            self.hormones[hormone_name]["cycle_phase"] = "elevated"
+        elif new_value < 0.3:
+            self.hormones[hormone_name]["cycle_phase"] = "depleted"
+        else:
+            self.hormones[hormone_name]["cycle_phase"] = "normal"
+        
+        return {
+            "updated": True,
+            "hormone": hormone_name,
+            "old_value": old_value,
+            "new_value": new_value,
+            "cycle_phase": self.hormones[hormone_name]["cycle_phase"]
+        }
+    
+    def get_hormone_levels(self):
+        """
+        Get current hormone levels
+        
+        Returns:
+            Dictionary of current hormone levels
+        """
+        return {name: data["value"] for name, data in self.hormones.items()}
+    
+    def get_emotional_state(self):
+        """
+        Get current emotional state based on hormone levels
+        
+        Returns:
+            Dictionary with emotional state information
+        """
+        # Calculate emotional state based on hormone levels
+        dopamine = self.hormones["dopamine"]["value"]
+        serotonin = self.hormones["serotonin"]["value"]
+        cortisol = self.hormones["cortisol"]["value"]
+        oxytocin = self.hormones["oxytocin"]["value"]
+        adrenaline = self.hormones["adrenaline"]["value"]
+        
+        # Calculate core emotional dimensions
+        valence = (dopamine * 0.3 + serotonin * 0.3 + oxytocin * 0.2) - (cortisol * 0.1 + adrenaline * 0.1)
+        valence = max(-1.0, min(1.0, valence * 2 - 0.5))  # Rescale to -1.0 to 1.0
+        
+        arousal = adrenaline * 0.4 + cortisol * 0.3 + dopamine * 0.2 - serotonin * 0.1
+        arousal = max(-1.0, min(1.0, arousal * 2 - 0.5))  # Rescale to -1.0 to 1.0
+        
+        dominance = (dopamine * 0.3 + oxytocin * 0.2) - (cortisol * 0.3 + adrenaline * 0.2)
+        dominance = max(-1.0, min(1.0, dominance * 2))  # Rescale to -1.0 to 1.0
+        
+        # Map to primary and secondary emotions
+        primary_emotion, primary_intensity = self._map_to_primary_emotion(valence, arousal, dominance)
+        secondary_emotion, secondary_intensity = self._map_to_secondary_emotion(
+            valence, arousal, dominance, primary_emotion
+        )
+        
+        return {
+            "valence": valence,
+            "arousal": arousal,
+            "dominance": dominance,
+            "primary_emotion": primary_emotion,
+            "primary_intensity": primary_intensity,
+            "secondary_emotion": secondary_emotion,
+            "secondary_intensity": secondary_intensity,
+            "hormone_levels": self.get_hormone_levels()
+        }
+    
+    def _map_to_primary_emotion(self, valence, arousal, dominance):
+        """
+        Map VAD dimensions to primary emotion
+        
+        Args:
+            valence: Pleasure-displeasure dimension (-1.0 to 1.0)
+            arousal: Activation-deactivation dimension (-1.0 to 1.0)
+            dominance: Dominance-submissiveness dimension (-1.0 to 1.0)
+            
+        Returns:
+            Tuple of (emotion_name, intensity)
+        """
+        # Simplified mapping of VAD space to emotions
+        if valence > 0.3:
+            if arousal > 0.3:
+                if dominance > 0.3:
+                    return "Joy", min(1.0, (valence + arousal + dominance) / 2)
+                else:
+                    return "Trust", min(1.0, (valence + arousal) / 1.5)
+            else:
+                if dominance > 0.3:
+                    return "Anticipation", min(1.0, (valence + dominance) / 1.5)
+                else:
+                    return "Serenity", min(1.0, valence / 0.7)
+        else:
+            if arousal > 0.3:
+                if dominance > 0.3:
+                    return "Anger", min(1.0, (arousal + dominance - valence) / 2)
+                else:
+                    return "Fear", min(1.0, (arousal - valence - dominance) / 1.5)
+            else:
+                if dominance > 0.3:
+                    return "Disgust", min(1.0, (dominance - valence) / 1.5)
+                else:
+                    return "Sadness", min(1.0, (-valence) / 0.7)
+        
+        # Default
+        return "Neutral", 0.5
+    
+    def _map_to_secondary_emotion(self, valence, arousal, dominance, primary_emotion):
+        """
+        Map VAD dimensions to secondary emotion (different from primary)
+        
+        Args:
+            valence: Pleasure-displeasure dimension (-1.0 to 1.0)
+            arousal: Activation-deactivation dimension (-1.0 to 1.0)
+            dominance: Dominance-submissiveness dimension (-1.0 to 1.0)
+            primary_emotion: Name of the primary emotion (to avoid duplication)
+            
+        Returns:
+            Tuple of (emotion_name, intensity)
+        """
+        # Simplified secondary emotion mapping
+        potential_emotions = []
+        
+        # Check for positive valence emotions
+        if valence > 0:
+            if primary_emotion != "Joy":
+                potential_emotions.append(("Joy", valence * 0.7))
+            if primary_emotion != "Trust":
+                potential_emotions.append(("Trust", valence * 0.6))
+            if primary_emotion != "Anticipation" and arousal > 0:
+                potential_emotions.append(("Anticipation", valence * arousal * 0.8))
+        
+        # Check for negative valence emotions
+        if valence < 0:
+            if primary_emotion != "Sadness":
+                potential_emotions.append(("Sadness", -valence * 0.7))
+            if primary_emotion != "Fear" and arousal > 0:
+                potential_emotions.append(("Fear", -valence * arousal * 0.8))
+            if primary_emotion != "Disgust" and dominance > 0:
+                potential_emotions.append(("Disgust", -valence * dominance * 0.7))
+        
+        # Add arousal-driven emotions
+        if arousal > 0.3 and primary_emotion != "Surprise":
+            potential_emotions.append(("Surprise", arousal * 0.6))
+        
+        if not potential_emotions:
+            return "Neutral", 0.3
+        
+        # Sort by intensity and take the strongest
+        potential_emotions.sort(key=lambda x: x[1], reverse=True)
+        return potential_emotions[0]
+
+###########################################
+# Enhanced Multi-Modal Integration
+###########################################
+
 class EnhancedMultiModalIntegrator:
     """
     Enhanced integration between visual, audio, and speech modalities
     for more comprehensive game understanding and commentary.
     """
     
-    def __init__(self, game_state: GameState):
+    def __init__(self, game_state):
         """Initialize with reference to game state"""
         self.game_state = game_state
         self.last_visual_update = 0
@@ -168,7 +798,7 @@ class EnhancedMultiModalIntegrator:
                                         })
                                         break
                     except Exception as e:
-                        print(f"Error in frame comparison: {e}")
+                        logger.error(f"Error in frame comparison: {e}")
         
         # Look for quest-related events (UI change + dialog)
         if self.speech_buffer and self.game_state.player_status:
@@ -188,7 +818,6 @@ class EnhancedMultiModalIntegrator:
                 })
         
         return events
-
 
 ###########################################
 # Context and State Management
@@ -238,6 +867,13 @@ class GameState:
     # Audience questions
     pending_questions: deque = field(default_factory=lambda: deque(maxlen=10))
     answered_questions: deque = field(default_factory=lambda: deque(maxlen=50))
+    
+    # Session data
+    session_start_time: Optional[datetime] = None
+    session_stats: Dict[str, Any] = field(default_factory=dict)
+    
+    # Memory integration
+    retrieved_memories: List[Dict[str, Any]] = field(default_factory=list)
     
     # System state
     last_commentary_time: float = 0
@@ -324,6 +960,11 @@ class GameState:
             "feedback": feedback or {},
             "answered_at": time.time()
         })
+        
+        # Update session stats
+        if "questions_answered" not in self.session_stats:
+            self.session_stats["questions_answered"] = 0
+        self.session_stats["questions_answered"] += 1
 
 ###########################################
 # Speech Recognition System
@@ -1148,7 +1789,583 @@ class CrossGameKnowledgeSystem:
             )
         
         logger.info("Seeded cross-game knowledge base with initial data")
+    
+    def discover_patterns(self, games: List[str]) -> Dict[str, Any]:
+        """
+        Discover patterns and relationships across a set of games
+        
+        Args:
+            games: List of game names to analyze
+            
+        Returns:
+            Dictionary of discovered patterns and relationships
+        """
+        # Get all games data
+        games_data = {}
+        for game in games:
+            if game in self.games_db:
+                games_data[game] = self.games_db[game]
+        
+        if not games_data:
+            return {"error": "No valid games found in knowledge base"}
+        
+        # Find common mechanics
+        all_mechanics = {}
+        for game, data in games_data.items():
+            for mechanic in data.get("mechanics", []):
+                if mechanic not in all_mechanics:
+                    all_mechanics[mechanic] = []
+                all_mechanics[mechanic].append(game)
+        
+        common_mechanics = {
+            mechanic: game_list
+            for mechanic, game_list in all_mechanics.items()
+            if len(game_list) > 1
+        }
+        
+        # Find common genres
+        all_genres = {}
+        for game, data in games_data.items():
+            for genre in data.get("genre", []):
+                if genre not in all_genres:
+                    all_genres[genre] = []
+                all_genres[genre].append(game)
+        
+        common_genres = {
+            genre: game_list
+            for genre, game_list in all_genres.items()
+            if len(game_list) > 1
+        }
+        
+        # Find innovative mechanics (only in one game)
+        innovative_mechanics = {
+            mechanic: game_list
+            for mechanic, game_list in all_mechanics.items()
+            if len(game_list) == 1
+        }
+        
+        return {
+            "common_mechanics": common_mechanics,
+            "common_genres": common_genres,
+            "innovative_mechanics": innovative_mechanics,
+            "games_analyzed": len(games_data)
+        }
+    
+    def generate_insight(self, 
+                       source_game: str, 
+                       target_game: str,
+                       mechanic: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Generate a new insight between two games
+        
+        Args:
+            source_game: Source game for the insight
+            target_game: Target game for the insight
+            mechanic: Optional specific mechanic to focus on
+            
+        Returns:
+            Generated insight
+        """
+        # Check if games exist
+        if source_game not in self.games_db or target_game not in self.games_db:
+            return {"error": "One or both games not found in knowledge base"}
+        
+        source_data = self.games_db[source_game]
+        target_data = self.games_db[target_game]
+        
+        # Find common mechanics if not specified
+        if not mechanic:
+            source_mechanics = set(source_data.get("mechanics", []))
+            target_mechanics = set(target_data.get("mechanics", []))
+            common_mechanics = source_mechanics.intersection(target_mechanics)
+            
+            if not common_mechanics:
+                return {"error": "No common mechanics found between games"}
+            
+            # Pick the first common mechanic
+            mechanic = list(common_mechanics)[0]
+        elif mechanic not in source_data.get("mechanics", []) or mechanic not in target_data.get("mechanics", []):
+            return {"error": f"Mechanic {mechanic} not found in both games"}
+        
+        # Get mechanic details
+        mechanic_data = self.mechanics_db.get(mechanic, None)
+        if not mechanic_data:
+            return {"error": f"Mechanic {mechanic} not found in knowledge base"}
+        
+        # Generate a basic insight
+        # In a real system, this would use NLP to generate better insights
+        insight = f"Both {source_game} and {target_game} use {mechanic}, but they implement it differently based on their game design philosophies."
+        
+        # Add to insights database
+        insight_obj = self.add_insight(
+            source_game=source_game,
+            target_game=target_game,
+            mechanic=mechanic,
+            insight=insight,
+            relevance=0.7
+        )
+        
+        return {
+            "source_game": source_game,
+            "target_game": target_game,
+            "mechanic": mechanic,
+            "insight": insight,
+            "relevance": 0.7,
+            "id": str(time.time())
+        }
+    
+    def consolidate_knowledge(self) -> Dict[str, Any]:
+        """
+        Consolidate knowledge to identify patterns and create new insights
+        
+        Returns:
+            Results of the consolidation process
+        """
+        # In a real system, this would run advanced analytics
+        # For demonstration, we'll create some simple insights
+        
+        # 1. Find most similar games
+        all_similarities = []
+        for game, similarities in self.game_similarity_matrix.items():
+            for other_game, score in similarities.items():
+                if score > 0.7:  # High similarity threshold
+                    all_similarities.append((game, other_game, score))
+        
+        # Sort by similarity score
+        all_similarities.sort(key=lambda x: x[2], reverse=True)
+        
+        # 2. Generate insights for top similar pairs
+        new_insights = []
+        for game1, game2, score in all_similarities[:5]:
+            # Get common mechanics
+            mechanics1 = set(self.games_db.get(game1, {}).get("mechanics", []))
+            mechanics2 = set(self.games_db.get(game2, {}).get("mechanics", []))
+            common = mechanics1.intersection(mechanics2)
+            
+            if common:
+                mechanic = list(common)[0]
+                result = self.generate_insight(game1, game2, mechanic)
+                if "error" not in result:
+                    new_insights.append(result)
+        
+        # 3. Identify emerging patterns
+        # Get all mechanics that appear in at least 3 games
+        popular_mechanics = []
+        for mechanic, data in self.mechanics_db.items():
+            if len(data.games) >= 3:
+                popular_mechanics.append((mechanic, len(data.games)))
+        
+        popular_mechanics.sort(key=lambda x: x[1], reverse=True)
+        
+        return {
+            "new_insights": new_insights,
+            "popular_mechanics": popular_mechanics[:5],
+            "top_similar_games": [(g1, g2, round(score, 2)) for g1, g2, score in all_similarities[:5]]
+        }
 
+###########################################
+# Game Analysis Functions
+###########################################
+
+async def identify_game(ctx: RunContextWrapper[GameState]) -> str:
+    """
+    Identify the game being played from the current frame
+    
+    Returns:
+        Information about the identified game
+    """
+    game_state = ctx.context
+    
+    # Check if we already identified the game
+    if game_state.game_id:
+        return f"Game already identified as {game_state.game_name} (ID: {game_state.game_id})"
+    
+    # Check if we have a frame to analyze
+    if game_state.current_frame is None:
+        return "No frame available for game identification"
+    
+    # Create game recognition system if not available in context
+    recognition_system = None
+    if hasattr(ctx, "game_recognition"):
+        recognition_system = ctx.game_recognition
+    else:
+        recognition_system = EnhancedGameRecognitionSystem()
+    
+    # Identify the game
+    result = await recognition_system.identify_game(game_state.current_frame)
+    
+    if result and result.get("confidence", 0) > 0.7:
+        # Update game state
+        game_state.game_id = result.get("game_id")
+        game_state.game_name = result.get("game_name")
+        game_state.game_genre = result.get("genre", [])
+        
+        return f"Identified game as {game_state.game_name} (ID: {game_state.game_id}) with {result.get('confidence', 0):.2f} confidence"
+    
+    return "Could not identify game with sufficient confidence"
+
+async def analyze_current_frame(ctx: RunContextWrapper[GameState]) -> str:
+    """
+    Analyze the current frame to extract objects, characters, and UI elements
+    
+    Returns:
+        Analysis of the current frame
+    """
+    game_state = ctx.context
+    
+    # Check if we have a frame to analyze
+    if game_state.current_frame is None:
+        return "No frame available for analysis"
+    
+    # Create recognition system if not available in context
+    recognition_system = None
+    if hasattr(ctx, "game_recognition"):
+        recognition_system = ctx.game_recognition
+    else:
+        recognition_system = EnhancedGameRecognitionSystem()
+    
+    # Detect objects
+    objects = await recognition_system.detect_objects(game_state.current_frame)
+    
+    # Update game state
+    game_state.detected_objects = objects
+    
+    # Format results
+    if not objects:
+        return "No notable objects detected in the current frame"
+    
+    object_descriptions = []
+    for obj in objects:
+        obj_class = obj.get("class", "object")
+        obj_name = obj.get("name", "unknown")
+        confidence = obj.get("confidence", 0)
+        
+        object_descriptions.append(f"{obj_name} ({obj_class}, {confidence:.2f} confidence)")
+    
+    return "Detected in current frame: " + ", ".join(object_descriptions)
+
+async def get_player_location(ctx: RunContextWrapper[GameState]) -> str:
+    """
+    Determine the player's current location in the game
+    
+    Returns:
+        Current location information
+    """
+    game_state = ctx.context
+    
+    # Check if we have a frame to analyze
+    if game_state.current_frame is None:
+        return "No frame available for location analysis"
+    
+    # Create spatial memory if not available in context
+    spatial_memory = None
+    if hasattr(ctx, "spatial_memory"):
+        spatial_memory = ctx.spatial_memory
+    else:
+        spatial_memory = EnhancedSpatialMemory()
+    
+    # Identify location
+    location = await spatial_memory.identify_location(
+        game_state.current_frame,
+        game_state.game_id
+    )
+    
+    # Update game state
+    game_state.current_location = location
+    
+    # Format results
+    if not location:
+        return "Could not identify current location"
+    
+    location_name = location.get("name", "unknown area")
+    zone = location.get("zone", "unknown zone")
+    confidence = location.get("confidence", 0)
+    
+    return f"Current location: {location_name} in {zone} ({confidence:.2f} confidence)"
+
+async def detect_current_action(ctx: RunContextWrapper[GameState]) -> str:
+    """
+    Detect what action is currently happening in the game
+    
+    Returns:
+        Current action information
+    """
+    game_state = ctx.context
+    
+    # Check if we have recent frames to analyze
+    if game_state.current_frame is None:
+        return "No frames available for action detection"
+    
+    # Get recent frames from buffer if available
+    frames = [game_state.current_frame]  # Use at least the current frame
+    
+    # Create action recognition if not available in context
+    action_recognition = None
+    if hasattr(ctx, "action_recognition"):
+        action_recognition = ctx.action_recognition
+    else:
+        action_recognition = GameActionRecognition()
+    
+    # Detect action
+    action = await action_recognition.detect_action(
+        frames,
+        game_state.current_audio
+    )
+    
+    # Update game state
+    game_state.detected_action = action
+    
+    # Format results
+    if not action:
+        return "Could not detect current action"
+    
+    action_name = action.get("name", "unknown action")
+    confidence = action.get("confidence", 0)
+    player_involved = "involving the player" if action.get("involves_player", False) else "not involving the player"
+    
+    return f"Current action: {action_name} ({confidence:.2f} confidence, {player_involved})"
+
+###########################################
+# Learning Analysis System
+###########################################
+
+class GameSessionLearningManager:
+    """
+    System for analyzing and summarizing learnings from streaming sessions
+    """
+    
+    def __init__(self, brain, streaming_core):
+        """
+        Initialize learning manager with references to brain and streaming system
+        
+        Args:
+            brain: NyxBrain instance
+            streaming_core: StreamingCore instance
+        """
+        self.brain = brain
+        self.streaming_core = streaming_core
+        self.learnings = []
+        self.last_analysis_time = time.time()
+        self.analysis_interval = 600  # 10 minutes
+        self.learning_categories = {
+            "game_mechanics": [],
+            "storytelling": [],
+            "audience_engagement": [],
+            "cross_game_insights": [],
+            "technical": []
+        }
+    
+    async def analyze_session_learnings(self, session_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze what has been learned during a streaming session
+        
+        Args:
+            session_data: Data from the current streaming session
+            
+        Returns:
+            Learning analysis results
+        """
+        # Extract relevant data
+        game_name = session_data.get("game_name", "Unknown Game")
+        recent_events = session_data.get("recent_events", [])
+        dialog_history = session_data.get("dialog_history", [])
+        answered_questions = session_data.get("answered_questions", [])
+        transferred_insights = session_data.get("transferred_insights", [])
+        
+        # Extract potential learnings from different sources
+        new_learnings = []
+        
+        # From audience questions and answers
+        for qa in answered_questions[-10:]:  # Focus on most recent
+            question = qa.get("question", "")
+            answer = qa.get("answer", "")
+            
+            # Look for knowledge-rich answers
+            if len(answer) > 100 and any(kw in question.lower() for kw in ["how", "why", "what", "explain"]):
+                # This Q&A might contain learning
+                category = self._categorize_learning(question, answer)
+                
+                # Create learning item
+                learning = {
+                    "text": f"Learned about {category} while explaining: {question[:50]}...",
+                    "detail": answer,
+                    "category": category,
+                    "source": "audience_question",
+                    "timestamp": qa.get("timestamp", time.time())
+                }
+                
+                new_learnings.append(learning)
+                self.learning_categories[category].append(learning)
+        
+        # From cross-game insights
+        for insight in transferred_insights:
+            # Create learning item from insight
+            category = "cross_game_insights"
+            
+            learning = {
+                "text": f"Gained insight comparing {game_name} to {insight.get('source_game', 'another game')}",
+                "detail": insight.get("content", ""),
+                "category": category,
+                "source": "cross_game",
+                "timestamp": insight.get("added_at", time.time())
+            }
+            
+            new_learnings.append(learning)
+            self.learning_categories[category].append(learning)
+        
+        # From dialog (lore and story learnings)
+        story_content = []
+        for dialog in dialog_history[-15:]:  # Focus on recent dialog
+            if "speaker" in dialog and dialog.get("speaker") != "Unknown":
+                # Named character dialog might contain lore
+                story_content.append(dialog.get("text", ""))
+        
+        if story_content:
+            # Combine related dialog into single learning
+            story_text = " ".join(story_content[:5])  # Limit length
+            
+            learning = {
+                "text": f"Learned story information in {game_name}",
+                "detail": story_text,
+                "category": "storytelling",
+                "source": "dialog",
+                "timestamp": time.time()
+            }
+            
+            new_learnings.append(learning)
+            self.learning_categories["storytelling"].append(learning)
+        
+        # Combine with existing learnings
+        self.learnings.extend(new_learnings)
+        
+        # Return analysis results
+        return {
+            "new_learnings": len(new_learnings),
+            "total_learnings": len(self.learnings),
+            "categories": {k: len(v) for k, v in self.learning_categories.items()},
+            "latest_learning": new_learnings[0]["text"] if new_learnings else None
+        }
+    
+    def _categorize_learning(self, question: str, answer: str) -> str:
+        """
+        Categorize a learning based on question and answer content
+        
+        Args:
+            question: Question text
+            answer: Answer text
+            
+        Returns:
+            Learning category
+        """
+        # Simple keyword-based categorization
+        text = (question + " " + answer).lower()
+        
+        # Game mechanics 
+        if any(kw in text for kw in ["mechanics", "controls", "gameplay", "system", "how to", "abilities"]):
+            return "game_mechanics"
+        
+        # Storytelling
+        if any(kw in text for kw in ["story", "character", "plot", "lore", "world", "setting"]):
+            return "storytelling"
+        
+        # Technical
+        if any(kw in text for kw in ["engine", "graphics", "performance", "development", "technical"]):
+            return "technical"
+        
+        # Audience engagement
+        if any(kw in text for kw in ["audience", "stream", "viewer", "chat", "community"]):
+            return "audience_engagement"
+        
+        # Default to game mechanics
+        return "game_mechanics"
+    
+    async def generate_learning_summary(self) -> Dict[str, Any]:
+        """
+        Generate a summary of what has been learned during the session
+        
+        Returns:
+            Summary of learnings
+        """
+        # Check if we have enough learnings
+        if len(self.learnings) < 2:
+            return {
+                "has_learnings": False,
+                "summary": "Not enough learnings have been recorded yet to generate a summary."
+            }
+        
+        # Get top categories
+        category_counts = {k: len(v) for k, v in self.learning_categories.items()}
+        top_categories = sorted(category_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        # Generate summary text
+        summary_lines = [
+            f"During this streaming session, I've learned {len(self.learnings)} things:"
+        ]
+        
+        # Add top 3 categories
+        for category, count in top_categories[:3]:
+            if count > 0:
+                # Get most recent learning from this category
+                recent = self.learning_categories[category][-1]
+                
+                # Format category name for display
+                display_category = category.replace("_", " ").title()
+                
+                summary_lines.append(f"• {display_category} ({count}): {recent['text']}")
+        
+        # Add note about cross-game insights if available
+        if category_counts.get("cross_game_insights", 0) > 0:
+            insights = self.learning_categories["cross_game_insights"]
+            summary_lines.append(f"• Made {len(insights)} connections to other games")
+        
+        # Combine into final summary
+        summary = "\n".join(summary_lines)
+        
+        return {
+            "has_learnings": True,
+            "summary": summary,
+            "total_learnings": len(self.learnings),
+            "categories": category_counts,
+            "top_category": top_categories[0][0] if top_categories else None
+        }
+    
+    async def assess_functionality_needs(self, summary_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Assess what functionality might be needed based on learning patterns
+        
+        Args:
+            summary_data: Summary data of learnings
+            
+        Returns:
+            Assessment of functionality needs
+        """
+        functionality_needs = []
+        explanation = []
+        
+        # Get category data
+        categories = summary_data.get("categories", {})
+        total_learnings = summary_data.get("total_learnings", 0)
+        
+        # Check for potential needs
+        if total_learnings > 20:  # Significant learning activity
+            if categories.get("cross_game_insights", 0) > 5:
+                functionality_needs.append("cross_game_knowledge_expansion")
+                explanation.append("High cross-game learning suggests expanding the cross-game knowledge system")
+                
+            if categories.get("storytelling", 0) > categories.get("game_mechanics", 0):
+                functionality_needs.append("narrative_analysis")
+                explanation.append("Focus on story suggests adding narrative analysis capabilities")
+                
+            if categories.get("audience_engagement", 0) > 5:
+                functionality_needs.append("audience_interaction_enhancement")
+                explanation.append("High audience engagement suggests enhancing interaction capabilities")
+        
+        return {
+            "functionality_needs": functionality_needs,
+            "explanation": explanation,
+            "learning_volume": "high" if total_learnings > 20 else "medium" if total_learnings > 10 else "low"
+        }
+        
 ###########################################
 # Enhanced Agent Tools
 ###########################################
@@ -1327,9 +2544,6 @@ async def search_game_information(ctx: RunContextWrapper[GameState], search_quer
     Returns:
         Search results about the game.
     """
-    # This function would typically use a web search tool from the Agents SDK
-    # For this implementation, we're using a placeholder
-    
     # Check if we have a current game
     game_state = ctx.context
     
@@ -1347,553 +2561,46 @@ async def search_game_information(ctx: RunContextWrapper[GameState], search_quer
     else:
         return f"Web search tool not available. Query was: '{search_term}'"
 
-###########################################
-# Enhanced Commentary Agent
-###########################################
-
-class CommentaryType(BaseModel):
-    commentary: str = Field(..., description="The gameplay commentary to share with viewers")
-    focus: Literal["gameplay", "strategy", "lore", "mechanics", "dialog", "cross_game"] = Field(
-        ..., description="What aspect of the game the commentary focuses on"
-    )
-    source: Literal["visual", "audio", "speech", "cross_game"] = Field(
-        ..., description="The primary source of information for this commentary"
-    )
-
-enhanced_commentary_agent = Agent(
-    name="Enhanced Gameplay Commentator",
-    instructions="""
-    You are an expert gameplay commentator who provides insightful, entertaining commentary 
-    about the game being played. Your commentary should be engaging and relevant to what's 
-    happening in the game right now, drawing on both visual and audio information.
-    
-    Important guidelines:
-    - Keep commentary concise and to the point (1-2 sentences)
-    - Sound natural and conversational, like a Twitch streamer
-    - Vary between different types of focus (gameplay, strategy, lore, mechanics, dialog, cross-game)
-    - Consider multiple input sources:
-      - Visual elements (objects, locations, actions)
-      - Audio cues (sound effects, music)
-      - Speech and dialog (character conversations)
-      - Cross-game knowledge (insights from similar games)
-    - Pay special attention to dialog and storytelling moments
-    - Compare mechanics and features to similar games when relevant
-    - Don't be repetitive - vary your commentary style
-    - Express excitement when interesting events happen
-    - Use appropriate gaming terminology
-    - Apply learning tips provided by the system to improve your commentary
-    
-    Remember: You're watching this in real-time with the audience, so make it engaging!
-    """,
-    output_type=CommentaryType,
-    tools=[
-        analyze_current_frame,
-        analyze_speech,
-        get_recent_dialog,
-        find_similar_games,
-        get_cross_game_insights,
-        search_game_information
-    ],
-    model_settings=ModelSettings(
-        temperature=0.7  # More creative commentary
-    )
-)
-
-###########################################
-# Enhanced Question Answering Agent
-###########################################
-
-class AnswerType(BaseModel):
-    answer: str = Field(..., description="The answer to the audience question")
-    relevance: int = Field(
-        ..., 
-        description="How relevant this question is to the current gameplay (1-10 scale)",
-        ge=1, 
-        le=10
-    )
-    used_sources: List[Literal["visual", "audio", "speech", "cross_game", "web_search"]] = Field(
-        ..., description="The sources of information used to answer this question"
-    )
-
-enhanced_question_agent = Agent(
-    name="Enhanced Question Answerer",
-    instructions="""
-    You answer questions from the audience about the game being played. Your answers should be:
-    
-    - Concise and focused on the question asked
-    - Informative, drawing on multiple sources of information:
-      - Visual elements in the game
-      - Audio and speech content
-      - Knowledge of similar games
-      - Web search results when needed
-    - Enhanced with appropriate comparisons to similar games
-    - Friendly and conversational in tone
-    - Improved based on learning tips from past feedback
-    
-    For each question, also rate how relevant it is to what's currently happening in the game
-    on a scale of 1-10 (with 10 being extremely relevant). This helps the system decide when
-    to show your answer.
-    
-    Some questions may be off-topic or inappropriate. For these, provide a brief, polite response
-    indicating you're focusing on game-related questions.
-    """,
-    output_type=AnswerType,
-    tools=[
-        analyze_current_frame,
-        analyze_speech,
-        get_recent_dialog,
-        find_similar_games,
-        get_cross_game_insights,
-        search_game_information
-    ],
-    model_settings=ModelSettings(
-        temperature=0.4  # More factual answers
-    )
-)
-
-###########################################
-# Enhanced Triage Agent for Orchestration
-###########################################
-
-class TriageDecision(BaseModel):
-    choice: Literal["commentary", "answer_question", "skip"] = Field(
-        ..., 
-        description="Which action to take: provide commentary, answer a question, or skip this frame"
-    )
-    reasoning: str = Field(..., description="Reasoning behind the decision")
-    priority_source: Optional[Literal["visual", "audio", "speech", "cross_game"]] = Field(
-        None, description="The primary source that should be prioritized in the response"
-    )
-
-enhanced_triage_agent = Agent(
-    name="Enhanced Triage Agent",
-    instructions="""
-    You are an orchestration agent that decides whether to provide commentary or answer 
-    audience questions based on the current game state. You should:
-    
-    - Prioritize commentary when significant game events occur:
-      - Important visual changes
-      - Notable audio events (music changes, significant sound effects)
-      - Character dialog or story moments
-      - Cross-game insights that apply to the current situation
-    - Answer questions when they are relevant to current gameplay or have been waiting too long
-    - Avoid overwhelming the viewer with too much text at once
-    - Ensure there's a good balance between different types of commentary
-    - Indicate which source of information (visual, audio, speech, cross-game) should be prioritized
-    - Prioritize higher-relevance questions over lower-relevance ones
-    
-    Your job is to create a balanced viewing experience that mixes insightful commentary
-    with timely answers to audience questions, while taking advantage of all information sources.
-    """,
-    output_type=TriageDecision,
-    handoffs=[
-        handoff(enhanced_commentary_agent, tool_name_override="provide_commentary"),
-        handoff(enhanced_question_agent, tool_name_override="answer_question")
-    ],
-    model_settings=ModelSettings(
-        temperature=0.2  # More consistent decision making
-    )
-)
-
-###########################################
-# Advanced Game Agent System
-###########################################
-
-class AdvancedGameAgentSystem:
+@function_tool
+async def get_learning_summary(ctx: RunContextWrapper[GameState]) -> str:
     """
-    Advanced system that integrates multi-modal game analysis with
-    speech recognition and cross-game knowledge for enhanced streaming experience.
+    Get a summary of what has been learned during the streaming session
+    
+    Returns:
+        Summary of session learnings
     """
+    game_state = ctx.context
     
-    def __init__(self, video_source=0, audio_source=None):
-        """Initialize the system with video and audio sources"""
-        self.video_source = video_source
-        self.audio_source = audio_source
-        self.game_state = GameState()
-        self.last_commentary_time = time.time()
-        self.commentary_cooldown = 5.0  # seconds between commentaries
-        
-        # Initialize knowledge base
-        self.knowledge_base = GameKnowledgeBase()
-        
-        # Initialize audio processor
-        self.audio_processor = GameAudioProcessor()
-        
-        # Initialize speech recognition
-        self.speech_recognition = SpeechRecognitionSystem()
-        
-        # Initialize cross-game knowledge
-        self.cross_game_knowledge = CrossGameKnowledgeSystem()
-        
-        # Seed initial cross-game knowledge
-        self.cross_game_knowledge.seed_initial_knowledge()
-        
-        # Initialize web search tool
-        self.web_search_tool = WebSearchTool()
-        
-        # Set up game processor
-        self.game_processor = RealTimeGameProcessor(
-            game_system=None,  # We handle processing ourselves
-            input_source=video_source,
-            processing_fps=30
-        )
-        
-        self.multi_modal_integrator = EnhancedMultiModalIntegrator(self.game_state)
-        
-        # Set up flags
-        self.running = False
-        self.processing_frame = False
-        
-        # Track processing metrics
-        self.frame_times = deque(maxlen=100)
-        self.agent_times = deque(maxlen=20)
-        
-        logger.info("AdvancedGameAgentSystem initialized")
+    # Check if there's a learning manager available
+    if not hasattr(ctx, "learning_manager"):
+        return "Learning analysis system not available."
     
-    async def start(self):
-        """Start the system"""
-        logger.info("Starting AdvancedGameAgentSystem")
-        self.running = True
-        
-        # Start audio capture
-        self.audio_processor.start_capture(self.audio_source)
-        
-        # Start speech recognition
-        self.speech_recognition.start_capture(self.audio_source)
-        
-        # Start video processing
-        await self._process_video_stream()
+    learning_manager = ctx.learning_manager
     
-    async def stop(self):
-        """Stop the system"""
-        logger.info("Stopping AdvancedGameAgentSystem")
-        self.running = False
-        
-        # Stop audio capture
-        self.audio_processor.stop_capture()
-        
-        # Stop speech recognition
-        self.speech_recognition.stop_capture()
-        
-        # Stop video processing
-        if self.game_processor:
-            self.game_processor.stop_processing()
-        
-        # Save cross-game knowledge
-        self.cross_game_knowledge.save_knowledge()
+    # Get session data
+    session_data = {
+        "game_name": game_state.game_name,
+        "recent_events": list(game_state.recent_events),
+        "dialog_history": game_state.dialog_history,
+        "answered_questions": list(game_state.answered_questions),
+        "transferred_insights": game_state.transferred_insights
+    }
     
-    async def _process_video_stream(self):
-        """Process the video stream in real-time"""
-        # Open video capture
-        cap = cv2.VideoCapture(self.video_source)
+    # Generate learning summary
+    try:
+        summary_result = await learning_manager.generate_learning_summary()
         
-        if not cap.isOpened():
-            logger.error(f"Failed to open video source: {self.video_source}")
-            return
-        
-        logger.info(f"Successfully opened video source: {self.video_source}")
-        
-        try:
-            while self.running:
-                start_time = time.time()
-                
-                # Capture frame
-                ret, frame = cap.read()
-                if not ret:
-                    logger.warning("Failed to capture frame")
-                    await asyncio.sleep(0.1)
-                    continue
-                
-                # Generate some synthetic audio for testing
-                # In a real implementation, this would come from the game audio
-                audio_data = np.random.randn(1600)  # 0.1s of audio at 16kHz
-                
-                # Update game state
-                self.game_state.current_frame = frame
-                self.game_state.current_audio = audio_data
-                self.game_state.frame_timestamp = time.time()
-                self.game_state.frame_count += 1
-                
-                # Process audio
-                self.audio_processor.process_audio_block()
-                
-                # Add audio to speech recognition
-                self.speech_recognition.add_audio_data(audio_data)
-                
-                # Only process certain frames to avoid overwhelming the system
-                if self.game_state.frame_count % 30 == 0:  # Process every 30th frame
-                    await self._process_game_frame()
-                
-                # Record frame processing time
-                frame_time = time.time() - start_time
-                self.frame_times.append(frame_time)
-                
-                # Sleep to maintain target FPS
-                sleep_time = max(0, 1/30 - frame_time)
-                await asyncio.sleep(sleep_time)
-                
-        finally:
-            cap.release()
-            logger.info("Video capture released")
-    
-    async def _process_game_frame(self):
-        """Process a game frame with advanced multi-modal agent analysis"""
-        if self.processing_frame:
-            return  # Skip if already processing
-        
-        self.processing_frame = True
-        start_time = time.time()
-        
-        try:
-            # Create context for tools with access to all systems
-            extended_context = RunContextWrapper(context=self.game_state)
-            extended_context.audio_processor = self.audio_processor
-            extended_context.speech_recognition = self.speech_recognition
-            extended_context.cross_game_knowledge = self.cross_game_knowledge
-            extended_context.web_search_tool = self.web_search_tool
-            
-            # Only identify game if not already identified
-            if not self.game_state.game_id:
-                logger.info("Identifying game...")
-                await identify_game(extended_context)
-                
-                # If game identified, find similar games
-                if self.game_state.game_id:
-                    await find_similar_games(extended_context)
-            
-            # Always update multi-modal data
-            if self.game_state.game_id:
-                logger.info("Analyzing frame, audio, and speech...")
-                
-                # Process in parallel
-                tasks = [
-                    analyze_current_frame(extended_context),
-                    analyze_speech(extended_context),
-                    get_player_location(extended_context),
-                    detect_current_action(extended_context)
-                ]
-                await asyncio.gather(*tasks)
-            
-            # Check if it's time for commentary or to answer a question
-            current_time = time.time()
-            time_since_last = current_time - self.last_commentary_time
-            
-            if time_since_last >= self.commentary_cooldown:
-                # Use triage agent to decide what to do
-                logger.info("Running triage agent...")
-                with trace("GameStream", workflow_name="advanced_triage_decision"):
-                    # Pass extended context to the triage agent
-                    triage_result = await Runner.run(
-                        enhanced_triage_agent, 
-                        "Decide what to do next based on multi-modal analysis and cross-game insights.", 
-                        context=self.game_state
-                    )
-                    decision = triage_result.final_output_as(TriageDecision)
-                
-                logger.info(f"Triage decision: {decision.choice} (Priority source: {decision.priority_source or 'none'})")
-                
-                if decision.choice == "commentary":
-                    await self._generate_commentary(extended_context, decision.priority_source)
-                elif decision.choice == "answer_question" and self.game_state.pending_questions:
-                    await self._answer_question(extended_context)
-                # Skip otherwise
-                
-                self.last_commentary_time = current_time
-        
-        except Exception as e:
-            logger.error(f"Error processing frame: {e}")
-        
-        finally:
-            processing_time = time.time() - start_time
-            self.agent_times.append(processing_time)
-            self.processing_frame = False
-            logger.info(f"Frame processed in {processing_time:.3f}s")
-    
-    async def _generate_commentary(self, extended_context, priority_source=None):
-        """Generate commentary based on multi-modal analysis and cross-game insights"""
-        logger.info(f"Generating commentary with priority source: {priority_source or 'none'}")
-        
-        # Prepare instruction based on priority source
-        if priority_source == "visual":
-            instruction = "Provide commentary focusing on the visual elements in the current frame."
-        elif priority_source == "audio":
-            instruction = "Provide commentary focusing on the audio cues and sound effects."
-        elif priority_source == "speech":
-            instruction = "Provide commentary focusing on the character dialog and speech."
-        elif priority_source == "cross_game":
-            instruction = "Provide commentary comparing this game to similar games."
+        if summary_result.get("has_learnings", False):
+            return summary_result["summary"]
         else:
-            instruction = "Provide commentary on the current gameplay using all available information."
-        
-        with trace("GameStream", workflow_name="advanced_commentary"):
-            # Run the commentary agent with the extended context
-            result = await Runner.run(
-                enhanced_commentary_agent, 
-                instruction, 
-                context=self.game_state
-            )
-            commentary = result.final_output_as(CommentaryType)
-        
-        logger.info(f"Commentary generated: {commentary.commentary} (Focus: {commentary.focus}, Source: {commentary.source})")
-        # In a real system, this would be sent to the streaming output
-        print(f"\n[COMMENTARY ({commentary.focus.upper()}, {commentary.source.upper()})] {commentary.commentary}\n")
-    
-    async def _answer_question(self, extended_context):
-        """Answer the next audience question using multi-modal analysis and cross-game insights"""
-        # Get the next question from the queue
-        question_data = self.game_state.get_next_question()
-        if not question_data:
-            logger.info("No questions to answer")
-            return
-        
-        logger.info(f"Answering question from {question_data['username']}")
-        question = question_data['question']
-        
-        try:
-            with trace("GameStream", workflow_name="advanced_question_answering"):
-                result = await Runner.run(
-                    enhanced_question_agent, 
-                    question, 
-                    context=self.game_state
-                )
-                answer = result.final_output_as(AnswerType)
-            
-            logger.info(f"Question answered (relevance: {answer.relevance}/10, sources: {answer.used_sources})")
-            
-            # Store the answered question in the game state
-            self.game_state.add_answered_question(question_data, answer.answer)
-            
-            # In a real system, this would be sent to the streaming output
-            print(f"\n[Q&A] {question_data['username']} asked: {question}")
-            print(f"[ANSWER (using {', '.join(answer.used_sources)})] {answer.answer}\n")
-            
-        except Exception as e:
-            logger.error(f"Error answering question: {e}")
-            # In a real system, this might be logged but not shown to the audience
-    
-    def add_audience_question(self, user_id: str, username: str, question: str):
-        """Add a question from the audience"""
-        logger.info(f"Question received from {username}: {question}")
-        self.game_state.add_question(user_id, username, question)
-    
-    def get_cross_game_insights(self, target_game: str, context: Optional[str] = None):
-        """Get insights from other games for the specified game"""
-        return self.cross_game_knowledge.get_applicable_insights(target_game, context)
-    
-    def get_performance_metrics(self):
-        """Get system performance metrics"""
-        avg_frame_time = sum(self.frame_times) / max(len(self.frame_times), 1)
-        avg_agent_time = sum(self.agent_times) / max(len(self.agent_times), 1)
-        
-        return {
-            "fps": 1.0 / max(avg_frame_time, 0.001),
-            "avg_frame_processing_time": avg_frame_time,
-            "avg_agent_processing_time": avg_agent_time,
-            "frame_count": self.game_state.frame_count,
-            "pending_questions": len(self.game_state.pending_questions),
-            "speech_transcriptions": len(self.game_state.dialog_history),
-            "similar_games": len(self.game_state.similar_games),
-            "transferred_insights": len(self.game_state.transferred_insights)
-        }
+            return "No significant learnings have been identified in this streaming session yet."
+    except Exception as e:
+        return f"Error generating learning summary: {e}"
 
-    async def _process_game_frame(self):
-        """Process a game frame with advanced multi-modal agent analysis"""
-        if self.processing_frame:
-            return  # Skip if already processing
-        
-        self.processing_frame = True
-        start_time = time.time()
-        
-        try:
-            # Create context for tools with access to all systems
-            extended_context = RunContextWrapper(context=self.game_state)
-            extended_context.audio_processor = self.audio_processor
-            extended_context.speech_recognition = self.speech_recognition
-            extended_context.cross_game_knowledge = self.cross_game_knowledge
-            extended_context.web_search_tool = self.web_search_tool
-            
-            # Process all modalities
-            await self._process_modalities(extended_context)
-            
-            # Integrate multi-modal processing - NEW!
-            combined_events = await self.multi_modal_integrator.process_frame(
-                self.game_state.current_frame,
-                self.game_state.current_audio
-            )
-            
-            # Process any detected multi-modal events
-            for event in combined_events:
-                if event["data"].get("significance", 0) >= 7.0:
-                    # This is a significant event, prioritize for commentary
-                    self.game_state.add_event("significant_moment", event["data"])
-            
-            # Check if it's time for commentary or to answer a question
-            current_time = time.time()
-            time_since_last = current_time - self.last_commentary_time
-            
-            if time_since_last >= self.commentary_cooldown:
-                # Use triage agent to decide what to do
-                with trace("GameStream", workflow_name="advanced_triage_decision"):
-                    # Pass extended context to the triage agent
-                    triage_result = await Runner.run(
-                        enhanced_triage_agent, 
-                        "Decide what to do next based on multi-modal analysis and cross-game insights.", 
-                        context=self.game_state
-                    )
-                    decision = triage_result.final_output
-                
-                if decision.choice == "commentary":
-                    await self._generate_commentary(extended_context, decision.priority_source)
-                elif decision.choice == "answer_question" and self.game_state.pending_questions:
-                    await self._answer_question(extended_context)
-                # Skip otherwise
-                
-                self.last_commentary_time = current_time
-        
-        except Exception as e:
-            logger.error(f"Error processing frame: {e}")
-        
-        finally:
-            processing_time = time.time() - start_time
-            self.agent_times.append(processing_time)
-            self.processing_frame = False
-            
-    async def _process_modalities(self, extended_context):
-        """Process all modalities in parallel"""
-        # Only identify game if not already identified
-        if not self.game_state.game_id:
-            await identify_game(extended_context)
-            
-            # If game identified, find similar games
-            if self.game_state.game_id:
-                await find_similar_games(extended_context)
-        
-        # Always update multi-modal data if game is identified
-        if self.game_state.game_id:
-            # Process in parallel
-            tasks = [
-                analyze_current_frame(extended_context),
-                analyze_speech(extended_context),
-                get_player_location(extended_context),
-                detect_current_action(extended_context)
-            ]
-            results = await asyncio.gather(*tasks)
-            
-            # Process speech results for multi-modal integration
-            speech_result = results[1]
-            if "Transcribed speech" in speech_result:
-                # Extract the transcribed text
-                text = speech_result.split('"')[1] if '"' in speech_result else ""
-                confidence = float(speech_result.split("Confidence: ")[1].split(")")[0]) if "Confidence: " in speech_result else 0.8
-                speaker = speech_result.split("from ")[1].split(":")[0] if "from " in speech_result else None
-                
-                # Add to multi-modal integrator
-                await self.multi_modal_integrator.add_speech_event({
-                    "text": text,
-                    "confidence": confidence,
-                    "speaker": speaker
-                })
-# Add to nyx/streamer/gamer_girl.py
+###########################################
+# Enhanced Audience Interaction
+###########################################
+
 class EnhancedAudienceInteraction:
     """
     Enhanced audience interaction system with improved question answering,
@@ -1958,374 +2665,4 @@ class EnhancedAudienceInteraction:
         self.audience_memory[username]["last_interaction"] = time.time()
         
         # Analyze question for topics
-        topics = self._extract_topics(question)
-        for topic in topics:
-            self.audience_memory[username]["topics_asked"][topic] += 1
-            
-            # Update global topic interests
-            if topic not in self.topic_interests:
-                self.topic_interests[topic] = 0
-            self.topic_interests[topic] += 1
-        
-        # Calculate priority
-        priority = self._calculate_question_priority(username, question, topics)
-        
-        # Create question data
-        question_data = {
-            "user_id": user_id,
-            "username": username,
-            "question": question,
-            "topics": topics,
-            "timestamp": time.time(),
-            "priority": priority,
-            "personalize": self.personalization
-        }
-        
-        # Add to user's question history
-        if username not in self.question_history:
-            self.question_history[username] = []
-        
-        self.question_history[username].append(question_data)
-        self.audience_memory[username]["questions"].append(question)
-        
-        # Add to game state queue
-        self.game_state.add_question(user_id, username, question)
-        
-        return question_data
-    
-    def record_question_answered(self, question_data: Dict[str, Any], answer: str) -> Dict[str, Any]:
-        """
-        Record that a question was answered
-        
-        Args:
-            question_data: Question data
-            answer: Answer text
-            
-        Returns:
-            Updated stats
-        """
-        # Calculate response time
-        if "timestamp" in question_data:
-            response_time = time.time() - question_data["timestamp"]
-            self.stats["response_times"].append(response_time)
-            self.stats["avg_response_time"] = sum(self.stats["response_times"]) / len(self.stats["response_times"])
-        
-        # Update stats
-        self.stats["answered_questions"] += 1
-        
-        # Store the answer
-        username = question_data.get("username")
-        if username in self.audience_memory:
-            if "answers_received" not in self.audience_memory[username]:
-                self.audience_memory[username]["answers_received"] = []
-            
-            self.audience_memory[username]["answers_received"].append({
-                "question": question_data.get("question", ""),
-                "answer": answer,
-                "timestamp": time.time()
-            })
-        
-        return {
-            "stats": self.stats,
-            "username": username,
-            "user_data": self.audience_memory.get(username)
-        }
-    
-    def get_user_personalization(self, username: str) -> Dict[str, Any]:
-        """
-        Get personalization data for a user
-        
-        Args:
-            username: Username
-            
-        Returns:
-            Personalization data
-        """
-        if not self.personalization or username not in self.audience_memory:
-            return {}
-        
-        user_data = self.audience_memory[username]
-        
-        # Calculate top interests
-        top_topics = user_data["topics_asked"].most_common(3)
-        
-        # Calculate interaction frequency
-        interaction_count = user_data["interaction_count"]
-        first_seen = user_data.get("first_seen", time.time())
-        interaction_period = (time.time() - first_seen) / 86400  # days
-        frequency = interaction_count / max(1, interaction_period)
-        
-        # Determine user type
-        user_type = "new"
-        if interaction_count >= 10:
-            user_type = "regular"
-        elif interaction_count >= 3:
-            user_type = "returning"
-        
-        return {
-            "username": username,
-            "interaction_count": interaction_count,
-            "top_interests": top_topics,
-            "frequency": frequency,
-            "user_type": user_type,
-            "questions_asked": len(user_data.get("questions", [])),
-            "answers_received": len(user_data.get("answers_received", []))
-        }
-    
-    def _extract_topics(self, question: str) -> List[str]:
-        """
-        Extract topics from a question
-        
-        Args:
-            question: Question text
-            
-        Returns:
-            List of topics
-        """
-        # Simple keyword-based topic extraction
-        topics = []
-        
-        # Game mechanics
-        if any(word in question.lower() for word in ["mechanics", "controls", "gameplay", "play", "system"]):
-            topics.append("game_mechanics")
-        
-        # Story/plot
-        if any(word in question.lower() for word in ["story", "plot", "character", "narrative", "lore"]):
-            topics.append("story")
-        
-        # Strategy/tips
-        if any(word in question.lower() for word in ["strategy", "tips", "how to", "best way", "help"]):
-            topics.append("strategy")
-        
-        # Technical
-        if any(word in question.lower() for word in ["graphics", "performance", "technical", "lag", "bug"]):
-            topics.append("technical")
-        
-        # Comparisons
-        if any(word in question.lower() for word in ["compare", "better", "different", "like", "similar"]):
-            topics.append("comparisons")
-        
-        # If no specific topics found, use "general"
-        if not topics:
-            topics.append("general")
-        
-        return topics
-    
-    def _calculate_question_priority(self, username: str, question: str, topics: List[str]) -> float:
-        """
-        Calculate question priority
-        
-        Args:
-            username: Username
-            question: Question text
-            topics: Question topics
-            
-        Returns:
-            Priority score (0-1)
-        """
-        if not self.question_prioritization:
-            return 0.5  # Default priority
-        
-        base_priority = 0.5
-        priority_modifiers = []
-        
-        # User engagement factor
-        if username in self.audience_memory:
-            user_data = self.audience_memory[username]
-            
-            # Reward regulars slightly
-            if user_data["interaction_count"] > 5:
-                priority_modifiers.append(0.1)
-            
-            # But also prioritize first-time askers
-            if user_data["interaction_count"] == 1:
-                priority_modifiers.append(0.2)
-            
-            # Check waiting time
-            if len(user_data["questions"]) > len(user_data.get("answers_received", [])):
-                # User has unanswered questions
-                priority_modifiers.append(0.15)
-        
-        # Topic relevance factor
-        current_game = self.game_state.game_name
-        current_action = self.game_state.detected_action.get("name") if self.game_state.detected_action else None
-        
-        # Check if question is relevant to current game/action
-        if current_game and current_game.lower() in question.lower():
-            priority_modifiers.append(0.2)
-        
-        if current_action and current_action.lower() in question.lower():
-            priority_modifiers.append(0.25)
-        
-        # Topics currently being shown
-        relevant_topics = []
-        if "game_mechanics" in topics and current_action:
-            relevant_topics.append("game_mechanics")
-        
-        if "story" in topics and any(event["type"] == "character_dialog" for event in self.game_state.recent_events):
-            relevant_topics.append("story")
-        
-        if relevant_topics:
-            priority_modifiers.append(0.2)
-        
-        # Calculate final priority
-        final_priority = base_priority + sum(priority_modifiers)
-        
-        # Clamp to valid range
-        return max(0.0, min(1.0, final_priority))
-    
-    def get_popular_topics(self, limit: int = 5) -> List[Tuple[str, int]]:
-        """
-        Get most popular topics among audience
-        
-        Args:
-            limit: Maximum number of topics to return
-            
-        Returns:
-            List of (topic, count) tuples
-        """
-        # Get topics sorted by popularity
-        sorted_topics = sorted(self.topic_interests.items(), key=lambda x: x[1], reverse=True)
-        
-        return sorted_topics[:limit]
-    
-    def get_audience_stats(self) -> Dict[str, Any]:
-        """
-        Get comprehensive audience statistics
-        
-        Returns:
-            Audience statistics
-        """
-        # Calculate active users
-        active_count = len(set(self.active_users))
-        
-        # Calculate returning users
-        returning_users = sum(1 for user, data in self.audience_memory.items() 
-                             if data["interaction_count"] > 1)
-        
-        # Calculate metrics
-        engagement_rate = self.stats["answered_questions"] / max(1, self.stats["total_questions"])
-        avg_questions_per_user = self.stats["total_questions"] / max(1, self.stats["total_users"])
-        
-        # Get top topics
-        top_topics = self.get_popular_topics(5)
-        
-        return {
-            "total_users": self.stats["total_users"],
-            "active_users": active_count,
-            "returning_users": returning_users,
-            "total_questions": self.stats["total_questions"],
-            "answered_questions": self.stats["answered_questions"],
-            "engagement_rate": engagement_rate,
-            "avg_questions_per_user": avg_questions_per_user,
-            "avg_response_time": self.stats["avg_response_time"],
-            "top_topics": top_topics
-        }
-
-# Enhance AdvancedGameAgentSystem
-class AdvancedGameAgentSystem:
-    # ... (existing code)
-    
-    def __init__(self, video_source=0, audio_source=None):
-        # ... (existing initialization)
-        
-        # Add enhanced audience interaction
-        self.enhanced_audience = EnhancedAudienceInteraction(self.game_state)
-        
-        # ... (rest of existing code)
-    
-    def add_audience_question(self, user_id: str, username: str, question: str):
-        """Add a question from the audience with enhanced tracking"""
-        # Use enhanced audience system
-        question_data = self.enhanced_audience.add_user_question(user_id, username, question)
-        
-        # Original functionality still happens via game_state
-        return question_data
-    
-    async def _answer_question(self, extended_context):
-        """Answer the next audience question using multi-modal analysis and cross-game insights"""
-        # Get the next question from the queue
-        question_data = self.game_state.get_next_question()
-        if not question_data:
-            logger.info("No questions to answer")
-            return
-        
-        logger.info(f"Answering question from {question_data['username']}")
-        question = question_data['question']
-        
-        try:
-            # Get personalization data if available
-            personalization = {}
-            if hasattr(self, "enhanced_audience"):
-                personalization = self.enhanced_audience.get_user_personalization(question_data['username'])
-                
-                # Add personalization to context
-                if personalization and hasattr(extended_context, "context"):
-                    extended_context.context.user_personalization = personalization
-            
-            with trace("GameStream", workflow_name="advanced_question_answering"):
-                # Run the enhanced question agent
-                result = await Runner.run(
-                    enhanced_question_agent, 
-                    question, 
-                    context=self.game_state
-                )
-                answer = result.final_output
-            
-            # Store the answered question in the game state
-            self.game_state.add_answered_question(question_data, answer.answer)
-            
-            # Record the answer in audience system
-            if hasattr(self, "enhanced_audience"):
-                self.enhanced_audience.record_question_answered(question_data, answer.answer)
-            
-            # In a real system, this would be sent to the streaming output
-            print(f"\n[Q&A] {question_data['username']} asked: {question}")
-            print(f"[ANSWER (using {', '.join(answer.used_sources)})] {answer.answer}\n")
-            
-        except Exception as e:
-            logger.error(f"Error answering question: {e}")
-            # In a real system, this might be logged but not shown to the audience
-# Add to nyx/streamer/gamer_girl.py
-
-@function_tool
-async def get_learning_summary(ctx: RunContextWrapper[GameState]) -> str:
-    """
-    Get a summary of what has been learned during the streaming session
-    
-    Returns:
-        Summary of session learnings
-    """
-    game_state = ctx.context
-    
-    # Check if there's a learning manager available
-    if not hasattr(ctx, "learning_manager"):
-        return "Learning analysis system not available."
-    
-    learning_manager = ctx.learning_manager
-    
-    # Get session data
-    session_data = {
-        "game_name": game_state.game_name,
-        "recent_events": list(game_state.recent_events),
-        "dialog_history": game_state.dialog_history,
-        "answered_questions": list(game_state.answered_questions),
-        "transferred_insights": game_state.transferred_insights
-    }
-    
-    # Generate learning summary
-    try:
-        summary_result = await learning_manager.generate_learning_summary()
-        
-        if summary_result.get("has_learnings", False):
-            return summary_result["summary"]
-        else:
-            return "No significant learnings have been identified in this streaming session yet."
-    except Exception as e:
-        return f"Error generating learning summary: {e}"
-
-# Add to the enhanced_commentary_agent tools
-enhanced_commentary_agent.tools.append(get_learning_summary)
-
-# Add to the enhanced_question_agent tools
-enhanced_question_agent.tools.append(get_learning_summary)
+        topics = self._extract
