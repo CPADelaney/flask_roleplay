@@ -1165,3 +1165,494 @@ class StreamingIntegration:
                 "memory_mapper": True
             }
         }
+class EnhancedStreamingReflectionEngine(StreamingReflectionEngine):
+    """
+    Enhanced reflection engine for streaming experiences with deeper
+    memory integration and better experience consolidation.
+    """
+    
+    def __init__(self, brain: NyxBrain, streaming_core: StreamingCore):
+        """Initialize the enhanced reflection engine"""
+        super().__init__(brain, streaming_core)
+        
+        # Enhanced settings
+        self.deep_reflection_interval = timedelta(minutes=30)  # Generate deeper reflections more frequently
+        self.consolidation_threshold = 3  # Minimum similar experiences to consolidate
+        self.last_deep_reflection_time = datetime.now()
+        self.experience_clusters = {}  # Tracks clusters of similar experiences
+        
+    async def generate_deep_reflection(self, game_name: str, aspect: str) -> Dict[str, Any]:
+        """
+        Generate a deeper, more insightful reflection on streaming experiences
+        
+        Args:
+            game_name: Name of the game being streamed
+            aspect: Aspect to reflect on (gameplay, audience, commentary)
+            
+        Returns:
+            Deep reflection results
+        """
+        # Get relevant memories for reflection
+        memories = await self.brain.memory_core.retrieve_memories(
+            query=f"streaming {game_name} {aspect}",
+            memory_types=["observation", "experience", "reflection"],
+            limit=10,
+            min_significance=4
+        )
+        
+        if not memories or len(memories) < 3:
+            return {
+                "reflection": f"Not enough memories about {game_name} {aspect} for a deep reflection.",
+                "confidence": 0.3
+            }
+        
+        # Use Nyx's meta-core if available for deeper analysis
+        if hasattr(self.brain, "meta_core") and self.brain.meta_core:
+            try:
+                meta_reflection = await self.brain.meta_core.generate_reflection(
+                    context={
+                        "domain": "streaming",
+                        "game_name": game_name,
+                        "aspect": aspect,
+                        "memories": memories
+                    }
+                )
+                
+                # Store as a higher-significance reflection
+                reflection_id = await self.brain.memory_core.add_memory(
+                    memory_text=meta_reflection,
+                    memory_type="reflection",
+                    memory_scope="game",
+                    significance=8.0,
+                    tags=["streaming", "deep_reflection", game_name, aspect],
+                    metadata={
+                        "timestamp": datetime.now().isoformat(),
+                        "game_name": game_name,
+                        "aspect": aspect,
+                        "memory_count": len(memories),
+                        "streaming": True
+                    }
+                )
+                
+                return {
+                    "reflection": meta_reflection,
+                    "memory_id": reflection_id,
+                    "confidence": 0.9,
+                    "memory_count": len(memories)
+                }
+            except Exception as e:
+                logger.error(f"Error generating meta-core reflection: {e}")
+        
+        # Fall back to reflection engine
+        return await super()._create_streaming_reflection(game_name, aspect, "deep reflection")
+    
+    async def generate_comparative_reflection(self, game_names: List[str]) -> Dict[str, Any]:
+        """
+        Generate a reflection comparing experiences across multiple games
+        
+        Args:
+            game_names: List of games to compare
+            
+        Returns:
+            Comparative reflection
+        """
+        if not game_names or len(game_names) < 2:
+            return {
+                "reflection": "Need at least two games to generate a comparative reflection.",
+                "confidence": 0.1
+            }
+        
+        # Get memories for each game
+        all_memories = []
+        for game_name in game_names:
+            memories = await self.brain.memory_core.retrieve_memories(
+                query=f"streaming {game_name}",
+                memory_types=["experience"],
+                limit=5,
+                min_significance=5
+            )
+            all_memories.extend(memories)
+        
+        if len(all_memories) < 3:
+            return {
+                "reflection": f"Not enough significant memories about {', '.join(game_names)} for comparison.",
+                "confidence": 0.3
+            }
+        
+        # Use cross-game patterns to inform reflection
+        patterns = await self._identify_cross_game_patterns(game_names)
+        
+        # Format reflection with pattern insights
+        if patterns:
+            pattern_insights = "\n".join([p.get("pattern", "") for p in patterns[:3]])
+            reflection_text = f"Comparing my streaming experiences across {', '.join(game_names)}, I've noticed: {pattern_insights}"
+        else:
+            reflection_text = f"Comparing my streaming experiences across {', '.join(game_names)}, I notice they each have unique qualities but share common elements in how I approach commentary."
+        
+        # Store the comparative reflection
+        reflection_id = await self.brain.memory_core.add_memory(
+            memory_text=reflection_text,
+            memory_type="reflection",
+            memory_scope="game",
+            significance=7.5,
+            tags=["streaming", "comparative_reflection"] + game_names,
+            metadata={
+                "timestamp": datetime.now().isoformat(),
+                "game_names": game_names,
+                "patterns": patterns,
+                "streaming": True
+            }
+        )
+        
+        return {
+            "reflection": reflection_text,
+            "patterns": patterns,
+            "memory_id": reflection_id,
+            "confidence": 0.8 if patterns else 0.6
+        }
+    
+    async def enhanced_consolidate_streaming_experiences(self) -> Dict[str, Any]:
+        """
+        Enhanced consolidation of streaming experiences with improved clustering
+        
+        Returns:
+            Enhanced consolidation results
+        """
+        # Get all streaming experiences
+        experiences = await self.brain.memory_core.retrieve_memories(
+            query="streaming",
+            memory_types=["experience"],
+            limit=30,
+            min_significance=4
+        )
+        
+        if not experiences or len(experiences) < 5:
+            return {
+                "status": "not_enough_experiences",
+                "count": len(experiences)
+            }
+        
+        # Cluster experiences by embedding similarity and semantic content
+        clusters = await self._enhanced_clustering(experiences)
+        
+        # Store clusters for future reference
+        self.experience_clusters = clusters
+        
+        # Process each cluster for consolidation
+        abstractions = []
+        
+        for cluster_id, cluster_data in clusters.items():
+            if len(cluster_data["experiences"]) >= self.consolidation_threshold:
+                # Determine cluster theme
+                theme = cluster_data["theme"]
+                
+                # Create abstraction
+                abstraction = await self._create_streaming_abstraction(
+                    experiences=cluster_data["experiences"],
+                    abstraction_type=theme
+                )
+                
+                abstractions.append(abstraction)
+        
+        # Connect abstractions to create higher-order insights
+        if len(abstractions) >= 2:
+            meta_abstraction = await self._create_meta_abstraction(abstractions)
+            abstractions.append(meta_abstraction)
+        
+        return {
+            "status": "success",
+            "experiences_processed": len(experiences),
+            "clusters_identified": len(clusters),
+            "abstractions_created": len(abstractions),
+            "abstractions": abstractions
+        }
+    
+    async def _enhanced_clustering(self, experiences: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """
+        Enhanced clustering algorithm using embeddings and semantic content
+        
+        Args:
+            experiences: List of experiences to cluster
+            
+        Returns:
+            Dictionary of clusters
+        """
+        # Extract embeddings if available
+        embeddings = {}
+        for exp in experiences:
+            if "embedding" in exp:
+                embeddings[exp["id"]] = exp["embedding"]
+        
+        # If embeddings are available for most experiences, use them
+        if len(embeddings) >= len(experiences) * 0.7:
+            # Use embedding-based clustering
+            clusters = self._cluster_by_embeddings(experiences, embeddings)
+        else:
+            # Fall back to text similarity and tag-based clustering
+            clusters = self._cluster_by_content(experiences)
+        
+        # Determine theme for each cluster
+        for cluster_id, cluster_data in clusters.items():
+            # Extract common tags
+            all_tags = []
+            for exp in cluster_data["experiences"]:
+                all_tags.extend(exp.get("tags", []))
+            
+            # Remove common streaming tags
+            filtered_tags = [tag for tag in all_tags if tag not in ["streaming", "experience"]]
+            
+            # Count occurrences
+            tag_counts = {}
+            for tag in filtered_tags:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            
+            # Find most common tags
+            if tag_counts:
+                common_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+                theme = " and ".join([tag for tag, _ in common_tags])
+            else:
+                theme = "general streaming"
+            
+            cluster_data["theme"] = theme
+        
+        return clusters
+    
+    def _cluster_by_embeddings(self, experiences: List[Dict[str, Any]], embeddings: Dict[str, List[float]]) -> Dict[str, Dict[str, Any]]:
+        """
+        Cluster experiences using embedding similarity
+        
+        Args:
+            experiences: List of experiences
+            embeddings: Dictionary of experience ID to embedding
+            
+        Returns:
+            Dictionary of clusters
+        """
+        threshold = 0.75  # Similarity threshold
+        clusters = {}
+        assigned = set()
+        cluster_id = 0
+        
+        for i, exp in enumerate(experiences):
+            if exp["id"] in assigned or exp["id"] not in embeddings:
+                continue
+            
+            # Create new cluster
+            cluster_id += 1
+            cluster_key = f"cluster_{cluster_id}"
+            clusters[cluster_key] = {
+                "experiences": [exp],
+                "center": embeddings[exp["id"]]
+            }
+            assigned.add(exp["id"])
+            
+            # Find similar experiences
+            for j, other_exp in enumerate(experiences):
+                if i == j or other_exp["id"] in assigned or other_exp["id"] not in embeddings:
+                    continue
+                
+                # Calculate similarity
+                similarity = self._calculate_cosine_similarity(
+                    embeddings[exp["id"]],
+                    embeddings[other_exp["id"]]
+                )
+                
+                if similarity >= threshold:
+                    clusters[cluster_key]["experiences"].append(other_exp)
+                    assigned.add(other_exp["id"])
+        
+        # Create a cluster for unassigned experiences
+        unassigned = [exp for exp in experiences if exp["id"] not in assigned]
+        if unassigned:
+            clusters["misc"] = {
+                "experiences": unassigned,
+                "center": None
+            }
+        
+        return clusters
+    
+    def _cluster_by_content(self, experiences: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """
+        Cluster experiences by content and tags
+        
+        Args:
+            experiences: List of experiences
+            
+        Returns:
+            Dictionary of clusters
+        """
+        # Group by tags
+        tag_groups = {}
+        
+        for exp in experiences:
+            # Use game name as primary grouping
+            game_tags = [tag for tag in exp.get("tags", []) if tag not in ["streaming", "experience"]]
+            
+            if game_tags:
+                key_tag = game_tags[0]
+                
+                if key_tag not in tag_groups:
+                    tag_groups[key_tag] = []
+                
+                tag_groups[key_tag].append(exp)
+        
+        # Convert tag groups to clusters
+        clusters = {}
+        
+        for i, (tag, group) in enumerate(tag_groups.items()):
+            clusters[f"cluster_{i+1}"] = {
+                "experiences": group,
+                "center": None
+            }
+        
+        # Handle experiences without meaningful tags
+        untagged = [exp for exp in experiences if not [tag for tag in exp.get("tags", []) if tag not in ["streaming", "experience"]]]
+        
+        if untagged:
+            clusters["untagged"] = {
+                "experiences": untagged,
+                "center": None
+            }
+        
+        return clusters
+    
+    async def _create_meta_abstraction(self, abstractions: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Create a higher-order abstraction from multiple abstraction
+        
+        Args:
+            abstractions: List of abstractions
+            
+        Returns:
+            Meta-abstraction
+        """
+        # Extract abstraction texts
+        abstraction_texts = [a.get("abstraction", "") for a in abstractions]
+        combined_text = " ".join(abstraction_texts)
+        
+        # Create a meta-abstraction about streaming style/identity
+        meta_text = f"Across my streaming experiences, I've developed patterns in how I approach games, interact with audiences, and provide commentary. These patterns reveal aspects of my identity as a streamer."
+        
+        # Store as abstraction
+        if hasattr(self.brain, "memory_core"):
+            memory_id = await self.brain.memory_core.add_memory(
+                memory_text=meta_text,
+                memory_type="abstraction",
+                memory_scope="game",
+                significance=8.5,
+                tags=["streaming", "meta_abstraction", "identity"],
+                metadata={
+                    "timestamp": datetime.now().isoformat(),
+                    "source_abstractions": [a.get("memory_id") for a in abstractions if "memory_id" in a],
+                    "streaming": True
+                }
+            )
+            
+            return {
+                "abstraction": meta_text,
+                "type": "meta_abstraction",
+                "memory_id": memory_id,
+                "confidence": 0.8,
+                "source_count": len(abstractions)
+            }
+        
+        return {
+            "abstraction": meta_text,
+            "type": "meta_abstraction",
+            "confidence": 0.7,
+            "source_count": len(abstractions)
+        }
+    
+    async def run_periodic_reflection(self, force: bool = False) -> Optional[Dict[str, Any]]:
+        """Enhanced periodic reflection with deep reflection capability"""
+        # Run standard periodic reflection
+        basic_result = await super().run_periodic_reflection(force)
+        
+        # Check if it's time for deep reflection
+        now = datetime.now()
+        time_since_deep = now - self.last_deep_reflection_time
+        
+        if force or time_since_deep >= self.deep_reflection_interval:
+            # Get streaming stats
+            streaming_stats = await self.streaming_core.get_streaming_stats()
+            
+            # Only reflect if we have some streaming activity
+            if streaming_stats.get("commentary_count", 0) == 0:
+                return basic_result
+            
+            # Get game names
+            game_names = streaming_stats.get("games_played", [])
+            
+            if not game_names:
+                return basic_result
+            
+            # Generate deep reflection for primary game
+            primary_game = game_names[0]
+            deep_reflection = await self.generate_deep_reflection(
+                game_name=primary_game,
+                aspect="overall experience"
+            )
+            
+            # If multiple games, generate comparative reflection
+            comparative_reflection = None
+            if len(game_names) >= 2:
+                comparative_reflection = await self.generate_comparative_reflection(game_names)
+            
+            # Run enhanced consolidation
+            consolidation = await self.enhanced_consolidate_streaming_experiences()
+            
+            # Update deep reflection time
+            self.last_deep_reflection_time = now
+            
+            # Combine results
+            return {
+                "basic_result": basic_result,
+                "deep_reflection": deep_reflection,
+                "comparative_reflection": comparative_reflection,
+                "enhanced_consolidation": consolidation,
+                "timestamp": now.isoformat()
+            }
+        
+        return basic_result
+
+# Update StreamingIntegration to use the enhanced reflection engine
+class StreamingIntegration:
+    """Helper for integrating streaming capabilities with Nyx"""
+    
+    @staticmethod
+    async def integrate(brain: NyxBrain, streaming_core: StreamingCore) -> Dict[str, Any]:
+        """
+        Integrate streaming capabilities with Nyx brain
+        
+        Args:
+            brain: NyxBrain instance
+            streaming_core: StreamingCore instance
+            
+        Returns:
+            Integration status
+        """
+        # Create enhanced reflection engine - UPDATED!
+        reflection_engine = EnhancedStreamingReflectionEngine(
+            brain=brain,
+            streaming_core=streaming_core
+        )
+        
+        # Make reflection engine available
+        streaming_core.reflection_engine = reflection_engine
+        
+        # Add reflection to the brain
+        brain.streaming_reflection = reflection_engine
+        
+        # Add enhanced reflection methods to streaming_core
+        streaming_core.generate_deep_reflection = reflection_engine.generate_deep_reflection
+        streaming_core.generate_comparative_reflection = reflection_engine.generate_comparative_reflection
+        streaming_core.enhanced_consolidate_experiences = reflection_engine.enhanced_consolidate_streaming_experiences
+        
+        return {
+            "status": "integrated",
+            "components": {
+                "streaming_core": True,
+                "enhanced_reflection_engine": True,  # Updated!
+                "memory_mapper": True
+            }
+        }
