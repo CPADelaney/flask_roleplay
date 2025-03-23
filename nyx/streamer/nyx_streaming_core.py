@@ -78,7 +78,7 @@ class StreamingMemoryMapper:
         elif event_type == "cross_game_insight":
             memory_text = f"While streaming {game_name}, I made a connection to {event_data.get('source_game', '')}: {event_data.get('content', '')}"
         else:
-            memory_text = f"While streaming {game_name}: {json.dumps(event_data)}"
+            memory_text = f"While streaming {game_name}: {event_data.get('description', json.dumps(event_data))}"
         
         # Prepare tags
         tags = ["streaming", game_name, event_type]
@@ -260,9 +260,31 @@ class StreamingMemoryMapper:
             }
         
         # Create reflection through memory core
-        reflection_result = await self.memory_core.create_reflection_from_memories(topic=f"Streaming {game_name}: {aspect}")
+        if hasattr(self.memory_core, "create_reflection_from_memories"):
+            reflection_result = await self.memory_core.create_reflection_from_memories(
+                topic=f"Streaming {game_name}: {aspect}", 
+                memories=memories
+            )
+            return reflection_result
         
-        return reflection_result
+        # Fallback if create_reflection_from_memories is not available
+        try:
+            # Use retrieve_reflection if available
+            reflection_result = await self.memory_core.retrieve_reflection(
+                topic=f"Streaming {game_name}: {aspect}",
+                context={
+                    "game_name": game_name,
+                    "aspect": aspect,
+                    "context": context
+                }
+            )
+            return reflection_result
+        except Exception as e:
+            # Basic fallback
+            return {
+                "reflection": f"Reflecting on {game_name} {aspect}: Based on my memories, I've enjoyed streaming this game and learned from the experience.",
+                "confidence": 0.4
+            }
 
 class StreamingCore:
     """
@@ -432,191 +454,6 @@ class StreamingCore:
         self.streaming_system.retrieve_game_experiences = self.memory_mapper.retrieve_game_experiences
         self.streaming_system.create_streaming_reflection = self.memory_mapper.create_streaming_reflection
         self.streaming_system.nyx_brain = self.brain
-
-        # Add this method to StreamingMemoryMapper in nyx_streaming_core.py
-        
-        async def store_gameplay_experience(self, 
-                                          game_name: str,
-                                          moment_data: Dict[str, Any],
-                                          emotional_context: Dict[str, Any] = None) -> Dict[str, Any]:
-            """
-            Store a significant gaming moment as an experience in Nyx's experience system
-            
-            Args:
-                game_name: Name of the game
-                moment_data: Data about the gaming moment
-                emotional_context: Optional emotional context
-                
-            Returns:
-                Experience storage results
-            """
-            # Create experience memory
-            memory_text = f"While streaming {game_name}, I experienced: {moment_data.get('description', '')}"
-            
-            # Prepare metadata
-            metadata = {
-                "timestamp": datetime.now().isoformat(),
-                "game_name": game_name,
-                "moment_data": moment_data,
-                "streaming": True,
-                "scenario_type": "gaming"
-            }
-            
-            # Add emotional context if provided
-            if emotional_context:
-                metadata["emotional_context"] = emotional_context
-            
-            # Prepare tags
-            tags = ["streaming", "experience", game_name]
-            if "tags" in moment_data:
-                tags.extend(moment_data["tags"])
-            
-            # Store in memory system
-            memory_id = await self.memory_core.add_memory(
-                memory_text=memory_text,
-                memory_type="experience",
-                memory_scope="game",
-                significance=8.0,  # Higher significance for experiences
-                tags=tags,
-                metadata=metadata
-            )
-            
-            # If experience interface exists, also store there
-            if hasattr(self.brain, "experience_interface") and self.brain.experience_interface:
-                try:
-                    exp_result = await self.brain.experience_interface._store_experience(
-                        RunContextWrapper(context=None),
-                        memory_text=memory_text,
-                        scenario_type="gaming",
-                        entities=[game_name],
-                        emotional_context=emotional_context or {},
-                        significance=8.0,
-                        tags=tags,
-                        user_id=str(self.brain.user_id)
-                    )
-                    
-                    if exp_result and "id" in exp_result:
-                        return {
-                            "memory_id": memory_id,
-                            "experience_id": exp_result["id"],
-                            "stored": True
-                        }
-                except Exception as e:
-                    logger.error(f"Error storing in experience interface: {e}")
-            
-            return {
-                "memory_id": memory_id,
-                "stored": True
-            }
-
-        async def update_identity_from_streaming(self, 
-                                               game_name: str,
-                                               streaming_data: Dict[str, Any]) -> Dict[str, Any]:
-            """
-            Update Nyx's identity based on streaming experiences
-            
-            Args:
-                game_name: Name of the game
-                streaming_data: Data about the streaming session
-                
-            Returns:
-                Identity update results
-            """
-            if not hasattr(self.brain, "identity_evolution") or not self.brain.identity_evolution:
-                return {"status": "identity_evolution_unavailable"}
-            
-            # Extract gameplay preferences from streaming data
-            preferences = {}
-            traits = {}
-            
-            # Extract commentary preferences
-            if "commentary_count" in streaming_data:
-                preferences["activity_types"] = {
-                    "streaming": 0.2  # Increase preference for streaming
-                }
-            
-            # Extract game genre preferences if available
-            if "game_genre" in streaming_data and streaming_data["game_genre"]:
-                preferences["genre_preferences"] = {
-                    streaming_data["game_genre"]: 0.1  # Slight increase for this genre
-                }
-            
-            # Extract trait impacts
-            if "performance_metrics" in streaming_data:
-                metrics = streaming_data["performance_metrics"]
-                
-                # High commentary count suggests verbal expressiveness
-                if metrics.get("commentary_count", 0) > 20:
-                    traits["expressiveness"] = 0.1
-                
-                # Many questions answered suggests helpfulness
-                if metrics.get("questions_answered", 0) > 10:
-                    traits["helpfulness"] = 0.1
-                    
-                # Many experiences shared suggests openness
-                if metrics.get("experiences_shared", 0) > 5:
-                    traits["openness"] = 0.1
-            
-            # Create identity impact
-            impact = {
-                "preferences": preferences,
-                "traits": traits
-            }
-            
-            # Apply impact
-            if traits or preferences:
-                try:
-                    result = await self.brain.identity_evolution.update_identity_from_experience(
-                        experience={
-                            "scenario_type": "gaming",
-                            "game_name": game_name,
-                            "streaming": True
-                        },
-                        impact=impact
-                    )
-                    
-                    return {
-                        "identity_updated": True,
-                        "traits_updated": list(traits.keys()),
-                        "preferences_updated": list(preferences.keys())
-                    }
-                except Exception as e:
-                    logger.error(f"Error updating identity: {e}")
-                    return {"error": str(e)}
-            
-            return {"identity_updated": False, "reason": "no_significant_impact"}
-        
-        # Enhance this method in StreamingCore to utilize all systems
-        async def process_significant_moment(self, game_name, event_type, event_data, significance=7.0):
-            results = {}
-            
-            # 1. Store in memory (already implemented)
-            memory_id = await self.memory_mapper.store_gameplay_memory(
-                game_name, event_type, event_data, significance)
-            results["memory_id"] = memory_id
-            
-            # 2. For significant events, store in experience system
-            if significance >= 7.0 and hasattr(self.brain, "experience_interface"):
-                experience_result = await self.brain.experience_interface.store_experience(
-                    text=f"While streaming {game_name}, I experienced: {event_data.get('description', '')}",
-                    scenario_type="gaming",
-                    significance=significance,
-                    tags=["streaming", game_name, event_type])
-                results["experience_id"] = experience_result.get("id")
-            
-            # 3. For very significant events, use reasoning system
-            if significance >= 8.0 and hasattr(self.brain, "reasoning_core"):
-                reasoning_result = await self.brain.reasoning_core.analyze_event(
-                    event_data, {"context": "streaming", "game_name": game_name})
-                results["reasoning_result"] = reasoning_result
-                
-            # 4. For extremely significant events, update identity
-            if significance >= 9.0 and hasattr(self.brain, "identity_evolution"):
-                identity_result = await self.brain.identity_evolution.update_identity_from_experience(
-                    {"type": "streaming", "game_name": game_name, "event_data": event_data})
-                results["identity_updated"] = True
-            
-            return results
     
     def _create_streaming_orchestrator(self) -> Agent:
         """Create agent that orchestrates streaming with Nyx's systems"""
@@ -961,6 +798,296 @@ class StreamingCore:
             stats["current_duration"] = (datetime.now() - self.session_start_time).total_seconds()
         
         return stats
+    
+    async def process_significant_moment(self, 
+                                      game_name: str,
+                                      event_type: str, 
+                                      event_data: Dict[str, Any],
+                                      significance: float = 7.0) -> Dict[str, Any]:
+        """
+        Process a significant gaming moment and store it in memory
+        
+        Args:
+            game_name: Name of the game
+            event_type: Type of gameplay event
+            event_data: Data about the event
+            significance: Importance of the moment (1-10)
+            
+        Returns:
+            Processing results
+        """
+        results = {}
+        
+        # 1. Store in memory
+        memory_id = await self.memory_mapper.store_gameplay_memory(
+            game_name=game_name, 
+            event_type=event_type, 
+            event_data=event_data, 
+            significance=significance
+        )
+        
+        results["memory_id"] = memory_id
+        
+        # 2. For significant events, store as experience
+        if significance >= 7.0 and hasattr(self.brain, "experience_interface"):
+            # Format description
+            description = event_data.get("description", "")
+            if not description and "text" in event_data:
+                description = event_data["text"]
+                
+            experience_text = f"While streaming {game_name}, I experienced: {description}"
+            
+            # Get emotional context if available
+            emotional_context = {}
+            if hasattr(self, "hormone_system"):
+                emotional_context = self.hormone_system.get_emotional_state()
+                
+            # Store in experience system
+            try:
+                experience_result = await self.brain.experience_interface.store_experience(
+                    text=experience_text,
+                    scenario_type="gaming",
+                    entities=[game_name],
+                    emotional_context=emotional_context,
+                    significance=significance,
+                    tags=["streaming", game_name, event_type],
+                    user_id=str(self.brain.user_id)
+                )
+                
+                results["experience_id"] = experience_result.get("id")
+                results["experience_stored"] = True
+            except Exception as e:
+                logger.error(f"Error storing in experience interface: {e}")
+        
+        # 3. For very significant events, use reasoning system
+        if significance >= 8.0 and hasattr(self.brain, "reasoning_core"):
+            try:
+                reasoning_result = await self.brain.reasoning_core.analyze_event(
+                    event_data=event_data, 
+                    context={
+                        "context": "streaming", 
+                        "game_name": game_name
+                    }
+                )
+                
+                results["reasoning_result"] = reasoning_result
+                results["reasoning_applied"] = True
+            except Exception as e:
+                logger.error(f"Error applying reasoning: {e}")
+        
+        # Update memory stats
+        self.session_stats["memories_created"] += 1
+        if results.get("experience_stored", False):
+            self.session_stats["experiences_stored"] += 1
+        
+        return results
+    
+    async def recall_streaming_experience(self, 
+                                       query: str, 
+                                       game_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Recall streaming experience using both memory and experience systems
+        
+        Args:
+            query: Search query
+            game_name: Optional specific game to search for
+            
+        Returns:
+            Recalled experiences
+        """
+        # Format full query
+        full_query = f"streaming {query}"
+        if game_name:
+            full_query = f"streaming {game_name} {query}"
+        
+        # Try experience system first if available
+        if hasattr(self.brain, "experience_interface"):
+            try:
+                experience_result = await self.brain.experience_interface.recall_experience(
+                    query=full_query,
+                    scenario_type="gaming",
+                    confidence_threshold=0.6
+                )
+                
+                if experience_result and experience_result.get("has_experience", False):
+                    return {
+                        "text": experience_result.get("text", ""),
+                        "confidence": experience_result.get("confidence", 0.0),
+                        "source": "experience_interface",
+                        "has_experience": True
+                    }
+            except Exception as e:
+                logger.error(f"Error recalling from experience interface: {e}")
+        
+        # Fall back to memory system
+        try:
+            memories = await self.brain.memory_core.retrieve_memories(
+                query=full_query,
+                memory_types=["experience", "observation"],
+                limit=3,
+                min_significance=5.0
+            )
+            
+            if memories:
+                return {
+                    "memories": memories,
+                    "text": memories[0]["memory_text"],
+                    "confidence": memories[0].get("relevance", 0.7),
+                    "source": "memory_core",
+                    "has_experience": True
+                }
+        except Exception as e:
+            logger.error(f"Error retrieving memories: {e}")
+        
+        return {
+            "text": "",
+            "confidence": 0.0,
+            "has_experience": False
+        }
+    
+    async def update_identity_from_streaming(self, 
+                                          game_name: str,
+                                          streaming_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update identity based on streaming experiences
+        
+        Args:
+            game_name: Name of the game
+            streaming_data: Data about streaming
+            
+        Returns:
+            Identity update results
+        """
+        if not hasattr(self.brain, "identity_evolution"):
+            return {
+                "updated": False,
+                "reason": "identity_evolution_unavailable"
+            }
+        
+        # Extract identity impacts
+        preferences = {}
+        traits = {}
+        
+        # Game preferences
+        if "game_genre" in streaming_data and streaming_data["game_genre"]:
+            genre = streaming_data["game_genre"]
+            preferences["genre_preferences"] = {
+                genre: 0.1  # Small increase in preference for this genre
+            }
+        
+        # Streaming activity preference
+        if "session_duration" in streaming_data and streaming_data["session_duration"] > 1800:  # 30+ minutes
+            preferences["activity_preferences"] = {
+                "streaming": 0.1  # Small increase in streaming preference
+            }
+        
+        # Commentary style traits
+        if "commentary_style" in streaming_data:
+            style = streaming_data["commentary_style"]
+            if style == "analytical":
+                traits["analytical"] = 0.1
+            elif style == "humorous":
+                traits["humorous"] = 0.1
+            elif style == "educational":
+                traits["informative"] = 0.1
+        
+        # Impact based on audience interaction
+        if streaming_data.get("questions_answered", 0) > 5:
+            traits["helpful"] = 0.1
+        
+        # Create impact
+        impact = {
+            "preferences": preferences,
+            "traits": traits
+        }
+        
+        # Only update if we have meaningful impacts
+        if preferences or traits:
+            try:
+                result = await self.brain.identity_evolution.update_identity_from_experience(
+                    experience={
+                        "type": "streaming",
+                        "game_name": game_name,
+                        "streaming_data": streaming_data
+                    },
+                    impact=impact
+                )
+                
+                return {
+                    "updated": True,
+                    "preferences_updated": list(preferences.keys()),
+                    "traits_updated": list(traits.keys())
+                }
+            except Exception as e:
+                logger.error(f"Error updating identity: {e}")
+                return {"error": str(e)}
+        
+        return {"updated": False, "reason": "no_significant_impact"}
+    
+    async def reason_about_streaming_event(self, 
+                                        event_data: Dict[str, Any], 
+                                        context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Apply reasoning to streaming events
+        
+        Args:
+            event_data: Data about the event
+            context: Additional context
+            
+        Returns:
+            Reasoning results
+        """
+        if not hasattr(self.brain, "reasoning_core"):
+            return {
+                "reasoned": False,
+                "reason": "reasoning_core_unavailable"
+            }
+        
+        try:
+            result = await self.brain.reasoning_core.analyze_event(
+                event_data=event_data,
+                context=context
+            )
+            
+            # Store reasoning as memory if significant
+            if result and result.get("significance", 0) >= 6.0:
+                game_name = context.get("game_name", "Unknown Game")
+                event_type = context.get("event_type", "event")
+                
+                memory_text = f"While streaming {game_name}, I reasoned about {event_type}: {result.get('conclusion', '')}"
+                
+                memory_id = await self.brain.memory_core.add_memory(
+                    memory_text=memory_text,
+                    memory_type="reflection",
+                    memory_scope="game",
+                    significance=result.get("significance", 6.0),
+                    tags=["streaming", "reasoning", game_name, event_type],
+                    metadata={
+                        "timestamp": datetime.now().isoformat(),
+                        "game_name": game_name,
+                        "event_type": event_type,
+                        "reasoning_process": result,
+                        "streaming": True
+                    }
+                )
+                
+                result["memory_id"] = memory_id
+            
+            return {
+                "reasoned": True,
+                "result": result
+            }
+            
+        except Exception as e:
+            logger.error(f"Error applying reasoning to streaming event: {e}")
+            return {
+                "reasoned": False,
+                "error": str(e)
+            }
+
+    def is_streaming(self) -> bool:
+        """Check if a streaming session is active"""
+        return self.session_start_time is not None
 
 # Enhanced function tools for streaming integration
 
@@ -1117,7 +1244,7 @@ async def share_streaming_experience(ctx: RunContextWrapper,
     
     return f"Experience sharing unavailable for {game_name}."
 
-# Update the enhanced commentary agent to include new tools
+# Add these tools to the existing agents
 enhanced_tools = [
     retrieve_streaming_memories,
     create_streaming_reflection,
@@ -1128,46 +1255,6 @@ enhanced_tools = [
 for tool in enhanced_tools:
     enhanced_commentary_agent.tools.append(tool)
     enhanced_question_agent.tools.append(tool)
-
-# Add these methods to StreamingCore
-
-async def recall_streaming_experience(self, query, game_name=None):
-    """Recall streaming experience using both memory and experience systems"""
-    # Try experience system first if available
-    if hasattr(self.brain, "experience_interface"):
-        experiences = await self.brain.experience_interface.recall_experience(
-            query=f"streaming {game_name or ''} {query}",
-            scenario_type="gaming")
-        if experiences:
-            return experiences
-            
-    # Fall back to memory system
-    memories = await self.brain.memory_core.retrieve_memories(
-        query=f"streaming {game_name or ''} {query}",
-        memory_types=["experience", "observation"])
-    return memories
-
-async def reason_about_streaming_event(self, event_data, context):
-    """Apply reasoning to streaming events"""
-    if hasattr(self.brain, "reasoning_core"):
-        return await self.brain.reasoning_core.analyze_event(
-            event_data, context)
-    return None
-
-async def update_identity_from_streaming(self, streaming_data):
-    """Update identity based on streaming experiences"""
-    if hasattr(self.brain, "identity_evolution"):
-        # Extract potential identity impacts
-        impacts = {
-            "traits": {},
-            "preferences": {}
-        }
-        
-        # Add appropriate impacts based on streaming data
-        # ...
-        
-        return await self.brain.identity_evolution.update_identity(impacts, "streaming")
-    return None
 
 # Main integration function
 async def integrate_with_nyx_brain(nyx_brain: NyxBrain, video_source=0, audio_source=None) -> StreamingCore:
@@ -1207,6 +1294,22 @@ async def integrate_with_nyx_brain(nyx_brain: NyxBrain, video_source=0, audio_so
     
     if not hasattr(nyx_brain, "get_stream_stats"):
         nyx_brain.get_stream_stats = streaming_core.get_streaming_stats
+    
+    # Register experience access
+    if not hasattr(nyx_brain, "retrieve_streaming_experience"):
+        nyx_brain.retrieve_streaming_experience = streaming_core.recall_streaming_experience
+    
+    # Register memory creation
+    if not hasattr(nyx_brain, "create_streaming_memory"):
+        nyx_brain.create_streaming_memory = streaming_core.memory_mapper.store_gameplay_memory
+    
+    # Register reflection creation
+    if not hasattr(nyx_brain, "create_streaming_reflection"):
+        nyx_brain.create_streaming_reflection = streaming_core.memory_mapper.create_streaming_reflection
+    
+    # Register reasoning if available
+    if hasattr(streaming_core, "reason_about_streaming_event"):
+        nyx_brain.reason_about_streaming_event = streaming_core.reason_about_streaming_event
     
     logger.info(f"Streaming capabilities integrated with Nyx brain for user {nyx_brain.user_id}")
     
