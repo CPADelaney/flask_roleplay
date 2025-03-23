@@ -1643,6 +1643,106 @@ class OptimizedStreamingCore(StreamingCore):
             results["frame_count"] = frame_count
             
             return results
+
+    def summarize_session_learnings(self) -> Dict[str, Any]:
+        """
+        Summarize what was learned during the streaming session
+        
+        Returns:
+            Learning summary
+        """
+        if not hasattr(self, "learning_manager"):
+            return {
+                "status": "learning_manager_unavailable",
+                "summary": "Learning analysis system not available."
+            }
+        
+        # Get session data
+        session_data = {
+            "game_name": self.streaming_system.game_state.game_name,
+            "recent_events": list(self.streaming_system.game_state.recent_events),
+            "dialog_history": self.streaming_system.game_state.dialog_history,
+            "answered_questions": list(self.streaming_system.game_state.answered_questions),
+            "transferred_insights": self.streaming_system.game_state.transferred_insights,
+            "duration": (datetime.now() - self.session_start_time).total_seconds() if self.session_start_time else 0
+        }
+        
+        # Analyze session learnings
+        analysis_result = await self.learning_manager.analyze_session_learnings(session_data)
+        
+        # Generate final learning summary
+        summary_result = await self.learning_manager.generate_learning_summary()
+        
+        # Add functionality needs assessment
+        needs_assessment = await self.learning_manager.assess_functionality_needs(
+            {"category_counts": summary_result.get("categories", {}), "total_learnings": summary_result.get("total_learnings", 0)}
+        )
+        summary_result["functionality_needs"] = needs_assessment
+        
+        return summary_result
+    
+    async def stop_streaming(self) -> Dict[str, Any]:
+        """
+        Stop the streaming session
+        
+        Returns:
+            Session statistics
+        """
+        if self.session_start_time is None:
+            return {"status": "not_streaming"}
+        
+        # Generate learning summary
+        learning_summary = None
+        if hasattr(self, "learning_manager"):
+            try:
+                learning_summary = await self.summarize_session_learnings()
+            except Exception as e:
+                logger.error(f"Error generating learning summary: {e}")
+        
+        # Stop streaming system
+        await self.streaming_system.stop()
+        
+        # Calculate session duration
+        end_time = datetime.now()
+        duration_seconds = (end_time - self.session_start_time).total_seconds()
+        
+        # Update session stats
+        self.session_stats["duration"] = duration_seconds
+        self.session_stats["start_time"] = self.session_start_time.isoformat()
+        self.session_stats["end_time"] = end_time.isoformat()
+        
+        # Store streaming end event
+        await self.memory_mapper.store_gameplay_memory(
+            game_name="Streaming Session",
+            event_type="session_end",
+            event_data={
+                "start_time": self.session_start_time.isoformat(),
+                "end_time": end_time.isoformat(),
+                "duration": duration_seconds,
+                "stats": self.session_stats,
+                "learning_summary": learning_summary
+            },
+            significance=6.0
+        )
+        
+        # Create session reflection
+        games_played = ", ".join(self.session_stats["games_played"]) if self.session_stats["games_played"] else "games"
+        reflection = await self.memory_mapper.create_streaming_reflection(
+            game_name=games_played,
+            aspect="session",
+            context=f"session lasting {int(duration_seconds / 60)} minutes"
+        )
+        
+        self.session_stats["final_reflection"] = reflection.get("reflection") if reflection else None
+        
+        # Reset session start time
+        self.session_start_time = None
+        
+        return {
+            "status": "streaming_stopped",
+            "stats": self.session_stats,
+            "learning_summary": learning_summary
+        }
     
     async def _process_memory_async(self, context):
         """Process memory operations asynchronously"""
@@ -1788,101 +1888,3 @@ class ResourceMonitor:
 
 # Add to nyx/streamer/nyx_streaming_core.py
 
-async def summarize_session_learnings(self) -> Dict[str, Any]:
-    """
-    Summarize what was learned during the streaming session
-    
-    Returns:
-        Learning summary
-    """
-    if not hasattr(self, "learning_manager"):
-        return {
-            "status": "learning_manager_unavailable",
-            "summary": "Learning analysis system not available."
-        }
-    
-    # Get session data
-    session_data = {
-        "game_name": self.streaming_system.game_state.game_name,
-        "recent_events": list(self.streaming_system.game_state.recent_events),
-        "dialog_history": self.streaming_system.game_state.dialog_history,
-        "answered_questions": list(self.streaming_system.game_state.answered_questions),
-        "transferred_insights": self.streaming_system.game_state.transferred_insights,
-        "duration": (datetime.now() - self.session_start_time).total_seconds() if self.session_start_time else 0
-    }
-    
-    # Analyze session learnings
-    analysis_result = await self.learning_manager.analyze_session_learnings(session_data)
-    
-    # Generate final learning summary
-    summary_result = await self.learning_manager.generate_learning_summary()
-    
-    # Add functionality needs assessment
-    needs_assessment = await self.learning_manager.assess_functionality_needs()
-    summary_result["functionality_needs"] = needs_assessment
-    
-    return summary_result
-
-# Also modify stop_streaming method to include learning summary
-async def stop_streaming(self) -> Dict[str, Any]:
-    """
-    Stop the streaming session
-    
-    Returns:
-        Session statistics
-    """
-    if self.session_start_time is None:
-        return {"status": "not_streaming"}
-    
-    # Generate learning summary
-    learning_summary = None
-    if hasattr(self, "learning_manager"):
-        try:
-            learning_summary = await self.summarize_session_learnings()
-        except Exception as e:
-            logger.error(f"Error generating learning summary: {e}")
-    
-    # Stop streaming system
-    await self.streaming_system.stop()
-    
-    # Calculate session duration
-    end_time = datetime.now()
-    duration_seconds = (end_time - self.session_start_time).total_seconds()
-    
-    # Update session stats
-    self.session_stats["duration"] = duration_seconds
-    self.session_stats["start_time"] = self.session_start_time.isoformat()
-    self.session_stats["end_time"] = end_time.isoformat()
-    
-    # Store streaming end event
-    await self.memory_mapper.store_gameplay_memory(
-        game_name="Streaming Session",
-        event_type="session_end",
-        event_data={
-            "start_time": self.session_start_time.isoformat(),
-            "end_time": end_time.isoformat(),
-            "duration": duration_seconds,
-            "stats": self.session_stats,
-            "learning_summary": learning_summary
-        },
-        significance=6.0
-    )
-    
-    # Create session reflection
-    games_played = ", ".join(self.session_stats["games_played"]) if self.session_stats["games_played"] else "games"
-    reflection = await self.memory_mapper.create_streaming_reflection(
-        game_name=games_played,
-        aspect="session",
-        context=f"session lasting {int(duration_seconds / 60)} minutes"
-    )
-    
-    self.session_stats["final_reflection"] = reflection.get("reflection") if reflection else None
-    
-    # Reset session start time
-    self.session_start_time = None
-    
-    return {
-        "status": "streaming_stopped",
-        "stats": self.session_stats,
-        "learning_summary": learning_summary
-    }
