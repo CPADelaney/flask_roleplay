@@ -711,61 +711,52 @@ class StreamingHormoneSystem:
     
     def sync_with_brain_hormone_system(self) -> Dict[str, Any]:
         """
-        Synchronize with Nyx's brain hormone system
+        Synchronize with Nyx's brain hormone system with deeper integration
         
         Returns:
             Synchronization results
         """
-        if not hasattr(self.brain, "hormone_system") or not self.brain.hormone_system:
+        if not hasattr(self.brain, "emotional_core") or not self.brain.emotional_core:
             return {
                 "synced": False,
-                "reason": "Brain hormone system not available"
+                "reason": "Emotional core not available"
             }
-        
-        # Get brain hormone levels
-        brain_hormones = {}
-        for hormone in self.streaming_hormone_state.keys():
-            brain_level = self.brain.hormone_system.get_hormone_level(hormone)
-            if brain_level is not None:
-                brain_hormones[hormone] = brain_level
-        
-        if not brain_hormones:
-            return {
-                "synced": False,
-                "reason": "No hormone levels retrieved from brain"
-            }
-        
-        # Calculate differences
-        differences = {}
-        significant_differences = False
-        
-        for hormone, stream_level in self.streaming_hormone_state.items():
-            if hormone in brain_hormones:
-                brain_level = brain_hormones[hormone]
-                diff = brain_level - stream_level
-                
-                if abs(diff) >= 0.2:  # Only consider significant differences
-                    differences[hormone] = diff
-                    significant_differences = True
-        
-        # If significant differences found, partially sync
-        if significant_differences:
-            sync_factor = 0.3  # How much to sync (0.0-1.0)
             
-            for hormone, diff in differences.items():
-                # Apply partial sync
-                self.streaming_hormone_state[hormone] += diff * sync_factor
-                
-                # Clamp to valid range
-                self.streaming_hormone_state[hormone] = max(0.0, min(1.0, self.streaming_hormone_state[hormone]))
+        # First sync hormones
+        hormone_sync = self._sync_hormone_levels()
+        
+        # Then update emotional state based on hormones
+        emotion_updates = {}
+        
+        # Map primary hormones to emotions
+        hormone_emotion_mapping = {
+            "nyxamine": ["Joy", "Anticipation"],
+            "seranix": ["Contentment", "Trust"],
+            "oxynixin": ["Love", "Trust"],
+            "cortanyx": ["Fear", "Anger", "Sadness"],
+            "adrenyx": ["Surprise", "Anticipation"]
+        }
+        
+        # Find dominant hormone
+        dominant_hormone = max(self.streaming_hormone_state.items(), key=lambda x: x[1])
+        
+        # Update emotions based on dominant hormone
+        if dominant_hormone[1] >= 0.7:  # Only if significantly elevated
+            hormone_name = dominant_hormone[0]
+            if hormone_name in hormone_emotion_mapping:
+                for emotion in hormone_emotion_mapping[hormone_name]:
+                    # Calculate intensity based on hormone level
+                    intensity = (dominant_hormone[1] - 0.5) * 0.5  # Scale to reasonable emotion update
+                    
+                    # Update emotion in emotional core
+                    self.brain.emotional_core.update_emotion(emotion, intensity)
+                    emotion_updates[emotion] = intensity
         
         return {
-            "synced": significant_differences,
-            "differences": differences,
-            "sync_factor": 0.3 if significant_differences else 0.0,
+            "hormone_sync": hormone_sync,
+            "emotion_updates": emotion_updates,
             "current_state": self.streaming_hormone_state.copy()
         }
-    
     def reset_to_baseline(self) -> Dict[str, Any]:
         """
         Reset hormone levels to baseline values
