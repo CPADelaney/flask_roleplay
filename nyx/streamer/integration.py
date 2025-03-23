@@ -600,6 +600,8 @@ async def _run_enhanced_periodic_tasks(brain: NyxBrain, streaming_core: Streamin
         logger.info("Enhanced periodic tasks cancelled")
     except Exception as e:
         logger.error(f"Error in enhanced periodic tasks: {e}")
+# Add to nyx/streamer/integration.py - in the setup_enhanced_streaming_v2 function
+
 async def setup_enhanced_streaming_v2(brain: NyxBrain, 
                                     video_source=0, 
                                     audio_source=None) -> StreamingCore:
@@ -638,16 +640,71 @@ async def setup_enhanced_streaming_v2(brain: NyxBrain,
     # 8. Set up bi-directional identity influence
     streaming_core = await setup_identity_integration(brain, streaming_core)
     
-    # 9. Enable periodic cross-system tasks
-    task = asyncio.create_task(_run_enhanced_periodic_tasks(brain, streaming_core))
+    # 9. Add learning analysis and summary functionality - NEW!
+    streaming_core.learning_manager = GameSessionLearningManager(brain, streaming_core)
+    
+    # 10. Enable periodic cross-system tasks
+    task = asyncio.create_task(_run_enhanced_periodic_tasks_v2(brain, streaming_core))
     streaming_core._integrated_task = task
     
-    # 10. Register enhanced functions in the brain
+    # 11. Register enhanced functions in the brain
     _register_enhanced_brain_functions(brain, streaming_core)
     
     logger.info("Enhanced streaming system v2 fully initialized with all improvements")
     
     return streaming_core
+
+# Update the _register_enhanced_brain_functions function to include learning summary functionality
+def _register_enhanced_brain_functions(brain: NyxBrain, streaming_core: StreamingCore) -> None:
+    """
+    Register all enhanced streaming functions in the brain
+    
+    Args:
+        brain: NyxBrain instance
+        streaming_core: StreamingCore instance
+    """
+    # Basic streaming functions
+    brain.stream = streaming_core.start_streaming
+    brain.stop_stream = streaming_core.stop_streaming
+    brain.add_stream_question = streaming_core.add_audience_question
+    brain.get_stream_stats = streaming_core.get_streaming_stats
+    
+    # Optimized processing
+    brain.process_frame_optimized = streaming_core.process_frame_optimized
+    brain.get_performance_metrics = streaming_core.get_performance_metrics
+    
+    # Enhanced memory and experience
+    brain.retrieve_streaming_experience = streaming_core.recall_streaming_experience
+    brain.create_streaming_memory = streaming_core.memory_mapper.store_gameplay_memory
+    brain.create_streaming_reflection = streaming_core.memory_mapper.create_streaming_reflection
+    
+    # Enhanced reflection
+    brain.generate_deep_reflection = streaming_core.generate_deep_reflection
+    brain.generate_comparative_reflection = streaming_core.generate_comparative_reflection
+    brain.consolidate_streaming_experiences = streaming_core.enhanced_consolidate_experiences
+    
+    # Cross-game knowledge
+    brain.get_cross_game_insights = streaming_core.get_cross_game_insights
+    brain.generate_game_insight = streaming_core.generate_game_insight
+    brain.discover_game_patterns = streaming_core.discover_game_patterns
+    brain.run_knowledge_consolidation = streaming_core.run_knowledge_consolidation
+    
+    # Learning analysis - NEW!
+    brain.summarize_session_learnings = streaming_core.summarize_session_learnings
+    
+    # Hormone system
+    brain.update_hormone_from_streaming_event = streaming_core.update_hormone_from_event
+    brain.get_streaming_hormone_state = streaming_core.get_hormone_state
+    
+    # Reasoning
+    if hasattr(streaming_core, "reason_about_streaming_event"):
+        brain.reason_about_streaming_event = streaming_core.reason_about_streaming_event
+    
+    # Audience stats
+    if hasattr(streaming_core.streaming_system, "enhanced_audience"):
+        brain.get_audience_stats = streaming_core.streaming_system.enhanced_audience.get_audience_stats
+        brain.get_popular_topics = streaming_core.streaming_system.enhanced_audience.get_popular_topics
+        brain.get_user_personalization = streaming_core.streaming_system.enhanced_audience.get_user_personalization
 
 def _register_enhanced_brain_functions(brain: NyxBrain, streaming_core: StreamingCore) -> None:
     """
