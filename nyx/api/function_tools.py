@@ -7,6 +7,28 @@ from agents import function_tool, RunContextWrapper
 
 logger = logging.getLogger(__name__)
 
+@function_tool
+async def configure_thinking(ctx: RunContextWrapper[Any],
+                          enabled: bool = True) -> Dict[str, Any]:
+    """
+    Configure the thinking capability settings
+    
+    Args:
+        enabled: Whether thinking is enabled at all
+    
+    Returns:
+        Updated configuration
+    """
+    brain = ctx.context
+    
+    # Update thinking configuration
+    brain.thinking_config["thinking_enabled"] = enabled
+    
+    return {
+        "thinking_enabled": brain.thinking_config["thinking_enabled"],
+        "updated_at": datetime.datetime.now().isoformat()
+    }
+
 # --- Memory Functions ---
 
 @function_tool
