@@ -1,4 +1,4 @@
-# enhanced_game_vision.py
+# nyx/streamer/enhanced_game_vision.py
 
 import logging
 import time
