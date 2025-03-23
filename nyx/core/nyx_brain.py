@@ -826,11 +826,13 @@ class NyxBrain:
             - Identity Evolution: Develops and maintains Nyx's identity
             - Experience Consolidation: Consolidates similar experiences into higher-level abstractions
             - Cross-User Experience: Manages sharing experiences across users
+            - Thinking Capability: Enables deliberate reasoning before responding when appropriate
             
             Use your tools to process user messages, generate responses, maintain the system,
             and facilitate Nyx's identity evolution through experiences and adaptation.
             """,
             tools=[
+                # Existing tools...
                 process_user_message,
                 generate_agent_response,
                 run_cognitive_cycle,
@@ -840,12 +842,10 @@ class NyxBrain:
                 adapt_experience_sharing,
                 run_experience_consolidation,
                 
-                # Add new function tools
-                function_tool(self.get_identity_profile),
-                function_tool(self.update_identity_from_experience),
-                function_tool(self.generate_identity_reflection),
-                function_tool(self.run_cross_user_experience),
-                function_tool(self.consolidate_experiences)
+                # Add new thinking tools
+                function_tool(self.process_user_input_with_thinking),
+                function_tool(self.generate_response_with_thinking),
+                configure_thinking
             ]
         )
 
