@@ -180,6 +180,16 @@ class EmotionalCore:
             {"chemical_conditions": {"cortanyx": 0.6, "adrenyx": 0.6, "nyxamine": 0.5}, "emotion": "Cruel", "valence": -0.3, "arousal": 0.7, "weight": 0.8},
             {"chemical_conditions": {"cortanyx": 0.7, "oxynixin": 0.2, "seranix": 0.2}, "emotion": "Detached", "valence": -0.4, "arousal": 0.2, "weight": 0.7}
         ]
+
+        self.emotion_derivation_rules.extend([
+            # Time-influenced emotions
+            {"chemical_conditions": {"seranix": 0.7, "cortanyx": 0.3}, 
+             "emotion": "Contemplation", "valence": 0.2, "arousal": 0.3, "weight": 0.8},
+            {"chemical_conditions": {"seranix": 0.6, "nyxamine": 0.3}, 
+             "emotion": "Reflection", "valence": 0.4, "arousal": 0.3, "weight": 0.8},
+            {"chemical_conditions": {"seranix": 0.7, "cortanyx": 0.4, "nyxamine": 0.3}, 
+             "emotion": "Perspective", "valence": 0.3, "arousal": 0.2, "weight": 0.9},
+        ])
         
         # History of emotional states for learning and reflection
         self.emotional_state_history = []
@@ -332,6 +342,28 @@ class EmotionalCore:
                 function_tool(self._get_emotional_state_matrix)
             ]
         )
+
+    def process_temporal_effects(self, time_effects: List[Dict[str, Any]]):
+        """Process emotional effects from temporal perception"""
+        for effect in time_effects:
+            # Extract effect details
+            emotion = effect.get("emotion", "")
+            intensity = effect.get("intensity", 0.0)
+            valence_shift = effect.get("valence_shift", 0.0)
+            arousal_shift = effect.get("arousal_shift", 0.0)
+            
+            # Apply emotion update
+            if emotion and intensity > 0:
+                self.update_emotion(emotion, intensity * 0.5)
+            
+            # Apply valence and arousal shifts to overall emotional state
+            if self.neurochemicals.get("seranix") and valence_shift:
+                # Seranix affects emotional stability/valence
+                self.update_neurochemical("seranix", valence_shift * 0.3)
+                
+            if self.neurochemicals.get("adrenyx") and arousal_shift:
+                # Adrenyx affects arousal/activation
+                self.update_neurochemical("adrenyx", arousal_shift * 0.3)
         
     @function_tool
     async def _derive_emotional_state_with_hormones(self, ctx: RunContextWrapper) -> Dict[str, float]:
@@ -867,6 +899,15 @@ class EmotionalCore:
             "analysis_time": datetime.datetime.now().isoformat()
         }
     
+    def apply_temporal_hormone_effects(self, hormone_effects: Dict[str, float]):
+        """Apply hormone effects from temporal perception"""
+        if not self.hormone_system:
+            return
+            
+        for hormone, change in hormone_effects.items():
+            if hasattr(self.hormone_system, "update_hormone"):
+                self.hormone_system.update_hormone(hormone, change, "time_perception")
+    
     # Tool functions for the learning agent
     
     @function_tool
@@ -1260,6 +1301,19 @@ class EmotionalCore:
         
         if reflection_patterns:
             return random.choice(reflection_patterns)
+
+        # Add temporal variations if context provided
+        if temporal_context and "time_category" in temporal_context:
+            time_category = temporal_context["time_category"]
+            
+            # Add time-specific variations to expressions
+            if time_category in ["long", "very_long"] and emotion == "Joy":
+                return "After some time apart, I find myself particularly pleased to reconnect."
+            elif time_category in ["long", "very_long"] and emotion in ["Sadness", "Melancholy"]:
+                return "The passage of time has left me in a somewhat pensive state."
+            elif time_category in ["medium", "medium_long"] and emotion == "Anticipation":
+                return "I've been experiencing a growing sense of anticipation during our conversation."
+            
         
         # Fallback expressions if no patterns exist
         fallback_expressions = {
