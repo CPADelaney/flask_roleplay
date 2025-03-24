@@ -191,27 +191,6 @@ class CausalModel(BaseModel):
     error_history: List[Dict[str, Any]] = Field(default_factory=list)
     max_history: int = 50
 
-class TemporalNode(BaseModel):
-    """Node in a temporal procedure graph"""
-    id: str
-    action: Dict[str, Any]
-    temporal_constraints: List[Dict[str, Any]] = Field(default_factory=list)
-    duration: Optional[Tuple[float, float]] = None  # (min, max) duration
-    next_nodes: List[str] = Field(default_factory=list)
-    prev_nodes: List[str] = Field(default_factory=list)
-
-class TemporalProcedureGraph(BaseModel):
-    """Graph representation of a temporal procedure"""
-    id: str
-    name: str
-    nodes: Dict[str, TemporalNode] = Field(default_factory=dict)
-    edges: List[Tuple[str, str, Dict[str, Any]]] = Field(default_factory=list)
-    start_nodes: List[str] = Field(default_factory=list)
-    end_nodes: List[str] = Field(default_factory=list)
-    domain: str
-    created_at: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
-    last_updated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
-
 class ProcedureGraph(BaseModel):
     """Graph representation of a procedure for flexible execution"""
     nodes: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
