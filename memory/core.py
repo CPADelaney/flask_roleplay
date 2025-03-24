@@ -30,7 +30,7 @@ logger = logging.getLogger("memory_system")
 from .telemetry import MemoryTelemetry
 
 # Database configuration
-from config import DB_CONFIG, EMBEDDING_CONFIG
+from .config import DB_CONFIG, EMBEDDING_CONFIG
 
 EMBEDDING_DIMENSION = 1536  # OpenAI Ada-002 dimensionality
 EMBEDDING_MODEL = EMBEDDING_CONFIG.get("model", "text-embedding-ada-002")
