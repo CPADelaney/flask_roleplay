@@ -2467,3 +2467,2146 @@ async def demonstrate_cross_game_transfer():
     
     # Now refine by adding a missing step
     print
+
+# nyx/core/procedural_memory_agent.py
+
+import asyncio
+import datetime
+import logging
+import random
+import uuid
+from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Set
+from collections import Counter
+from pydantic import BaseModel, Field
+
+# OpenAI Agents SDK imports
+from agents import Agent, Runner, trace, function_tool, handoff
+from agents.exceptions import ModelBehaviorError, UserError
+
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# ENHANCED MODELS FOR CONTEXT AWARENESS AND GENERALIZATION
+# ============================================================================
+
+class ActionTemplate(BaseModel):
+    """Generic template for an action that can be mapped across domains"""
+    action_type: str  # e.g., "select", "activate", "navigate", "perform"
+    intent: str  # Higher-level purpose, e.g., "acquisition", "traversal"
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    domain_mappings: Dict[str, Dict[str, Any]] = Field(default_factory=dict)  # domain -> specific implementations
+
+class ChunkTemplate(BaseModel):
+    """Generalizable template for a procedural chunk"""
+    id: str
+    name: str
+    description: str
+    actions: List[ActionTemplate] = Field(default_factory=list)
+    domains: List[str] = Field(default_factory=list)  # Domains where this chunk has been applied
+    success_rate: Dict[str, float] = Field(default_factory=dict)  # domain -> success rate
+    execution_count: Dict[str, int] = Field(default_factory=dict)  # domain -> count
+    context_indicators: Dict[str, List[str]] = Field(default_factory=dict)  # domain -> [context keys]
+    prerequisite_states: Dict[str, Dict[str, Any]] = Field(default_factory=dict)  # domain -> {state requirements}
+    created_at: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    last_updated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+
+class ContextPattern(BaseModel):
+    """Pattern for recognizing a specific context"""
+    id: str
+    name: str
+    domain: str
+    indicators: Dict[str, Any] = Field(default_factory=dict)  # Key state variables and their values/ranges
+    temporal_pattern: List[Dict[str, Any]] = Field(default_factory=list)  # Sequence of recent actions/states
+    confidence_threshold: float = 0.7
+    last_matched: Optional[str] = None
+    match_count: int = 0
+
+class ChunkPrediction(BaseModel):
+    """Prediction for which chunk should be executed next"""
+    chunk_id: str
+    confidence: float
+    context_match_score: float
+    reasoning: List[str] = Field(default_factory=list)
+    alternative_chunks: List[Dict[str, float]] = Field(default_factory=list)
+
+class ControlMapping(BaseModel):
+    """Mapping between control schemes across different domains"""
+    source_domain: str
+    target_domain: str
+    action_type: str
+    source_control: str
+    target_control: str
+    confidence: float = 1.0
+    last_validated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    validation_count: int = 0
+
+class ProcedureTransferRecord(BaseModel):
+    """Record of a procedure transfer between domains"""
+    source_procedure_id: str
+    source_domain: str
+    target_procedure_id: str 
+    target_domain: str
+    transfer_date: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    adaptation_steps: List[Dict[str, Any]] = Field(default_factory=list)
+    success_level: float = 0.0  # 0-1 rating of transfer success
+    practice_needed: int = 0  # How many practice iterations needed post-transfer
+
+class Procedure(BaseModel):
+    """A procedure to be executed"""
+    id: str
+    name: str
+    description: str
+    domain: str
+    steps: List[Dict[str, Any]] = Field(default_factory=list)
+    execution_count: int = 0
+    successful_executions: int = 0
+    average_execution_time: float = 0.0
+    proficiency: float = 0.0
+    chunked_steps: Dict[str, List[str]] = Field(default_factory=dict)
+    is_chunked: bool = False
+    created_at: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    last_updated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    
+class StepResult(BaseModel):
+    """Result from executing a step"""
+    success: bool
+    error: Optional[str] = None
+    data: Dict[str, Any] = Field(default_factory=dict)
+    execution_time: float = 0.0
+
+class ProcedureStats(BaseModel):
+    """Statistics about a procedure"""
+    procedure_name: str
+    procedure_id: str
+    proficiency: float
+    level: str
+    execution_count: int
+    success_rate: float
+    average_execution_time: float
+    is_chunked: bool
+    chunks_count: int
+    steps_count: int
+    domain: str
+
+class TransferStats(BaseModel):
+    """Statistics about procedure transfers"""
+    total_transfers: int = 0
+    successful_transfers: int = 0
+    avg_success_level: float = 0.0
+    avg_practice_needed: int = 0
+    chunks_by_domain: Dict[str, int] = Field(default_factory=dict)
+    recent_transfers: List[Dict[str, Any]] = Field(default_factory=list)
+    templates_count: int = 0
+    actions_count: int = 0
+
+# ============================================================================
+# CHUNK LIBRARY FOR CROSS-DOMAIN GENERALIZATION
+# ============================================================================
+
+class ProceduralChunkLibrary:
+    """Library of generalizable procedural chunks that can transfer across domains"""
+    
+    def __init__(self):
+        self.chunk_templates = {}  # template_id -> ChunkTemplate
+        self.action_templates = {}  # action_type -> ActionTemplate
+        self.domain_chunks = {}  # domain -> [chunk_ids]
+        self.control_mappings = []  # List of ControlMapping objects
+        self.transfer_records = []  # List of ProcedureTransferRecord objects
+        self.similarity_threshold = 0.7  # Minimum similarity for chunk matching
+        
+    def add_chunk_template(self, template: ChunkTemplate) -> str:
+        """Add a chunk template to the library"""
+        self.chunk_templates[template.id] = template
+        
+        # Update domain index
+        for domain in template.domains:
+            if domain not in self.domain_chunks:
+                self.domain_chunks[domain] = []
+            self.domain_chunks[domain].append(template.id)
+        
+        return template.id
+    
+    def add_action_template(self, template: ActionTemplate) -> str:
+        """Add an action template to the library"""
+        self.action_templates[template.action_type] = template
+        return template.action_type
+    
+    def add_control_mapping(self, mapping: ControlMapping) -> None:
+        """Add a control mapping between domains"""
+        self.control_mappings.append(mapping)
+    
+    def record_transfer(self, record: ProcedureTransferRecord) -> None:
+        """Record a procedure transfer between domains"""
+        self.transfer_records.append(record)
+    
+    def find_matching_chunks(self, 
+                           steps: List[Dict[str, Any]], 
+                           source_domain: str,
+                           target_domain: str) -> List[Dict[str, Any]]:
+        """
+        Find library chunks that match a sequence of steps
+        
+        Args:
+            steps: List of step definitions from source procedure
+            source_domain: Domain of the source procedure
+            target_domain: Domain where we want to apply the chunk
+            
+        Returns:
+            List of matching chunks with similarity scores
+        """
+        matches = []
+        
+        # Convert steps to action templates
+        action_sequences = self._extract_action_sequence(steps, source_domain)
+        
+        # Skip if we couldn't extract actions
+        if not action_sequences:
+            return []
+        
+        # Find templates that match this action sequence
+        for template_id, template in self.chunk_templates.items():
+            # Skip if template doesn't support source domain
+            if source_domain not in template.domains:
+                continue
+                
+            # Calculate similarity between template and action sequence
+            similarity = self._calculate_sequence_similarity(template.actions, action_sequences)
+            
+            if similarity >= self.similarity_threshold:
+                # Check if template has been applied to target domain
+                target_applicability = 0.5  # Default medium applicability
+                
+                if target_domain in template.domains:
+                    # Template already used in target domain
+                    target_applicability = 0.9
+                    
+                    # Adjust based on success rate if available
+                    if target_domain in template.success_rate:
+                        target_applicability *= template.success_rate[target_domain]
+                
+                matches.append({
+                    "template_id": template_id,
+                    "template_name": template.name,
+                    "similarity": similarity,
+                    "target_applicability": target_applicability,
+                    "overall_score": similarity * 0.6 + target_applicability * 0.4,
+                    "action_count": len(template.actions)
+                })
+        
+        # Sort by overall score
+        matches.sort(key=lambda x: x["overall_score"], reverse=True)
+        
+        return matches
+    
+    def create_chunk_template_from_steps(self,
+                                      chunk_id: str,
+                                      name: str,
+                                      steps: List[Dict[str, Any]],
+                                      domain: str,
+                                      success_rate: float = 0.9) -> Optional[ChunkTemplate]:
+        """
+        Create a generalizable chunk template from procedure steps
+        
+        Args:
+            chunk_id: ID for the new chunk template
+            name: Name for the template
+            steps: Original procedure steps to generalize
+            domain: Domain of the procedure
+            success_rate: Initial success rate for this domain
+            
+        Returns:
+            New chunk template or None if generalization failed
+        """
+        # Extract action templates
+        action_sequence = self._extract_action_sequence(steps, domain)
+        
+        if not action_sequence:
+            return None
+        
+        # Create template
+        template = ChunkTemplate(
+            id=chunk_id,
+            name=name,
+            description=f"Generalized chunk template for {name}",
+            actions=action_sequence,
+            domains=[domain],
+            success_rate={domain: success_rate},
+            execution_count={domain: 1}
+        )
+        
+        # Add to library
+        self.add_chunk_template(template)
+        
+        return template
+    
+    def map_chunk_to_new_domain(self, 
+                              template_id: str, 
+                              target_domain: str) -> List[Dict[str, Any]]:
+        """
+        Map a chunk template to a new domain
+        
+        Args:
+            template_id: ID of the chunk template
+            target_domain: Domain to map to
+            
+        Returns:
+            List of mapped steps for the new domain
+        """
+        if template_id not in self.chunk_templates:
+            return []
+        
+        template = self.chunk_templates[template_id]
+        
+        # Skip if already mapped to this domain
+        if target_domain in template.domains:
+            # Just return the existing mapping
+            return self._generate_domain_steps(template, target_domain)
+        
+        # We need to create a new mapping
+        mapped_steps = []
+        
+        # For each action in the template
+        for i, action in enumerate(template.actions):
+            # Check if we have a domain mapping
+            if target_domain in action.domain_mappings:
+                # Use existing mapping
+                mapped_action = action.domain_mappings[target_domain]
+            else:
+                # Create new mapping
+                mapped_action = self._map_action_to_domain(action, target_domain)
+                
+                if mapped_action:
+                    # Save mapping for future use
+                    action.domain_mappings[target_domain] = mapped_action
+            
+            if not mapped_action:
+                # Couldn't map this action
+                continue
+                
+            # Create step from mapped action
+            step = {
+                "id": f"step_{i+1}",
+                "description": mapped_action.get("description", f"Step {i+1}"),
+                "function": mapped_action.get("function"),
+                "parameters": mapped_action.get("parameters", {})
+            }
+            
+            mapped_steps.append(step)
+        
+        # Update template
+        if mapped_steps:
+            template.domains.append(target_domain)
+            template.success_rate[target_domain] = 0.5  # Initial estimate
+            template.execution_count[target_domain] = 0
+            template.last_updated = datetime.datetime.now().isoformat()
+        
+        return mapped_steps
+    
+    def update_template_success(self, 
+                              template_id: str, 
+                              domain: str, 
+                              success: bool) -> None:
+        """Update success rate for a template in a specific domain"""
+        if template_id not in self.chunk_templates:
+            return
+            
+        template = self.chunk_templates[template_id]
+        
+        # Update execution count
+        if domain not in template.execution_count:
+            template.execution_count[domain] = 0
+        template.execution_count[domain] += 1
+        
+        # Update success rate
+        if domain not in template.success_rate:
+            template.success_rate[domain] = 0.5  # Default
+            
+        # Use exponential moving average
+        current_rate = template.success_rate[domain]
+        success_value = 1.0 if success else 0.0
+        
+        # More weight to recent results but don't change too drastically
+        template.success_rate[domain] = current_rate * 0.8 + success_value * 0.2
+        
+        # Update timestamp
+        template.last_updated = datetime.datetime.now().isoformat()
+    
+    def get_control_mapping(self, 
+                          source_domain: str, 
+                          target_domain: str, 
+                          action_type: str) -> Optional[ControlMapping]:
+        """Get control mapping between domains for a specific action"""
+        for mapping in self.control_mappings:
+            if (mapping.source_domain == source_domain and
+                mapping.target_domain == target_domain and
+                mapping.action_type == action_type):
+                return mapping
+        
+        return None
+    
+    def _extract_action_sequence(self, 
+                               steps: List[Dict[str, Any]], 
+                               domain: str) -> List[ActionTemplate]:
+        """
+        Extract generalized action sequence from procedure steps
+        
+        Args:
+            steps: Procedure steps
+            domain: Domain of the procedure
+            
+        Returns:
+            List of action templates
+        """
+        action_sequence = []
+        
+        for i, step in enumerate(steps):
+            # Skip if no function
+            if "function" not in step:
+                continue
+            
+            # Determine action type and intent
+            action_type, intent = self._infer_action_type(step, domain)
+            
+            if not action_type:
+                continue
+                
+            # Check if we already have a template for this action type
+            if action_type in self.action_templates:
+                # Use existing template
+                template = self.action_templates[action_type]
+                
+                # Add domain-specific mapping if not present
+                if domain not in template.domain_mappings:
+                    template.domain_mappings[domain] = {
+                        "function": step.get("function"),
+                        "parameters": step.get("parameters", {}),
+                        "description": step.get("description", f"Step {i+1}")
+                    }
+            else:
+                # Create new template
+                template = ActionTemplate(
+                    action_type=action_type,
+                    intent=intent,
+                    parameters={},  # Generic parameters
+                    domain_mappings={
+                        domain: {
+                            "function": step.get("function"),
+                            "parameters": step.get("parameters", {}),
+                            "description": step.get("description", f"Step {i+1}")
+                        }
+                    }
+                )
+                
+                # Add to library
+                self.add_action_template(template)
+            
+            # Add to sequence
+            action_sequence.append(template)
+        
+        return action_sequence
+    
+    def _infer_action_type(self, step: Dict[str, Any], domain: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Infer the general action type and intent from a step
+        
+        Args:
+            step: Procedure step
+            domain: Domain of the procedure
+            
+        Returns:
+            Tuple of (action_type, intent)
+        """
+        function = step.get("function", "")
+        parameters = step.get("parameters", {})
+        description = step.get("description", "").lower()
+        
+        # Try to infer from function name and description
+        if isinstance(function, str):
+            function_lower = function.lower()
+            
+            # Locomotion actions
+            if any(word in function_lower or word in description for word in 
+                ["move", "walk", "run", "navigate", "approach", "go"]):
+                return "locomotion", "navigation"
+                
+            # Interaction actions
+            if any(word in function_lower or word in description for word in 
+                ["press", "click", "push", "interact", "use", "activate"]):
+                return "interaction", "manipulation"
+                
+            # Target/select actions
+            if any(word in function_lower or word in description for word in 
+                ["select", "choose", "target", "aim", "focus"]):
+                return "selection", "targeting"
+                
+            # Acquisition actions
+            if any(word in function_lower or word in description for word in 
+                ["get", "pick", "grab", "take", "collect", "acquire"]):
+                return "acquisition", "collection"
+                
+            # Communication actions
+            if any(word in function_lower or word in description for word in 
+                ["speak", "say", "ask", "tell", "communicate"]):
+                return "communication", "information_exchange"
+                
+            # Cognitive actions
+            if any(word in function_lower or word in description for word in 
+                ["think", "decide", "analyze", "evaluate", "assess"]):
+                return "cognition", "decision_making"
+                
+            # Creation actions
+            if any(word in function_lower or word in description for word in 
+                ["make", "build", "create", "construct", "compose"]):
+                return "creation", "production"
+        
+        # Default fallback - use a generic action type based on domain
+        domain_action_types = {
+            "cooking": "preparation",
+            "driving": "operation",
+            "gaming": "gameplay",
+            "writing": "composition",
+            "music": "performance",
+            "programming": "coding",
+            "sports": "movement"
+        }
+        
+        return domain_action_types.get(domain, "generic_action"), "task_progress"
+    
+    def _calculate_sequence_similarity(self, 
+                                     template_actions: List[ActionTemplate], 
+                                     candidate_actions: List[ActionTemplate]) -> float:
+        """
+        Calculate similarity between two action sequences
+        
+        Args:
+            template_actions: Actions from template
+            candidate_actions: Actions extracted from steps
+            
+        Returns:
+            Similarity score (0.0-1.0)
+        """
+        # Handle empty sequences
+        if not template_actions or not candidate_actions:
+            return 0.0
+            
+        # Dynamic programming approach for sequence alignment
+        m = len(template_actions)
+        n = len(candidate_actions)
+        
+        # Create DP table
+        dp = [[0 for _ in range(n+1)] for _ in range(m+1)]
+        
+        # Fill DP table
+        for i in range(1, m+1):
+            for j in range(1, n+1):
+                # Calculate similarity between actions
+                action_similarity = self._calculate_action_similarity(
+                    template_actions[i-1], 
+                    candidate_actions[j-1]
+                )
+                
+                if action_similarity > 0.7:  # High similarity threshold
+                    # These actions match, extend the sequence
+                    dp[i][j] = dp[i-1][j-1] + 1
+                else:
+                    # Take max of skipping either action
+                    dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+        
+        # Length of longest common subsequence
+        lcs = dp[m][n]
+        
+        # Calculate similarity based on sequence coverage
+        similarity = (2 * lcs) / (m + n)  # Harmonic mean of coverage in both sequences
+        
+        return similarity
+    
+    def _calculate_action_similarity(self, action1: ActionTemplate, action2: ActionTemplate) -> float:
+        """
+        Calculate similarity between two actions
+        
+        Args:
+            action1: First action
+            action2: Second action
+            
+        Returns:
+            Similarity score (0.0-1.0)
+        """
+        # Exact match on action type
+        if action1.action_type == action2.action_type:
+            return 1.0
+            
+        # Match on intent
+        if action1.intent == action2.intent:
+            return 0.8
+            
+        # Otherwise low similarity
+        return 0.2
+    
+    def _map_action_to_domain(self, 
+                            action: ActionTemplate, 
+                            target_domain: str) -> Optional[Dict[str, Any]]:
+        """
+        Map an action to a specific domain
+        
+        Args:
+            action: Action template to map
+            target_domain: Target domain
+            
+        Returns:
+            Mapped action parameters or None if mapping failed
+        """
+        # Check if we have existing mappings for other domains
+        source_domains = [d for d in action.domain_mappings.keys()]
+        
+        if not source_domains:
+            return None
+            
+        # Try to find control mappings for this action type
+        for source_domain in source_domains:
+            mapping = self.get_control_mapping(
+                source_domain=source_domain,
+                target_domain=target_domain,
+                action_type=action.action_type
+            )
+            
+            if mapping:
+                # We found a mapping
+                source_implementation = action.domain_mappings[source_domain]
+                
+                # Apply mapping to create target implementation
+                target_impl = source_implementation.copy()
+                
+                # Update any mapped controls
+                if "parameters" in target_impl:
+                    params = target_impl["parameters"]
+                    
+                    for param_key, param_value in params.items():
+                        # Check if this parameter is a control that needs mapping
+                        if param_key in ["control", "button", "input_method"]:
+                            if param_value == mapping.source_control:
+                                params[param_key] = mapping.target_control
+                
+                return target_impl
+        
+        # No mapping found, use best guess
+        best_source = source_domains[0]  # Just use first domain as best guess
+        best_impl = action.domain_mappings[best_source].copy()
+        
+        # Mark as best guess
+        if "parameters" not in best_impl:
+            best_impl["parameters"] = {}
+        best_impl["parameters"]["best_guess_mapping"] = True
+        
+        return best_impl
+    
+    def _generate_domain_steps(self, template: ChunkTemplate, domain: str) -> List[Dict[str, Any]]:
+        """Generate concrete steps for a domain from a template"""
+        steps = []
+        
+        # Create steps from actions
+        for i, action in enumerate(template.actions):
+            if domain in action.domain_mappings:
+                impl = action.domain_mappings[domain]
+                
+                step = {
+                    "id": f"step_{i+1}",
+                    "description": impl.get("description", f"Step {i+1}"),
+                    "function": impl.get("function"),
+                    "parameters": impl.get("parameters", {})
+                }
+                
+                steps.append(step)
+        
+        return steps
+
+# ============================================================================
+# FUNCTION TOOLS FOR PROCEDURAL MEMORY
+# ============================================================================
+
+@function_tool
+async def add_procedure(
+    ctx,
+    name: str, 
+    steps: List[Dict[str, Any]], 
+    description: str = None,
+    domain: str = "general"
+) -> Dict[str, Any]:
+    """
+    Add a new procedure to the procedural memory system.
+    
+    Args:
+        name: Name of the procedure
+        steps: List of step definitions with function, description and parameters
+        description: Optional description of what the procedure accomplishes
+        domain: Domain/context where this procedure applies
+        
+    Returns:
+        Information about the created procedure
+    """
+    manager = ctx.context
+    
+    # Generate a unique ID for the procedure
+    procedure_id = f"proc_{int(datetime.datetime.now().timestamp())}_{random.randint(1000, 9999)}"
+    
+    # Create procedure object
+    procedure = Procedure(
+        id=procedure_id,
+        name=name,
+        description=description or f"Procedure for {name}",
+        domain=domain,
+        steps=steps,
+        created_at=datetime.datetime.now().isoformat(),
+        last_updated=datetime.datetime.now().isoformat()
+    )
+    
+    # Register function names if needed
+    for step in steps:
+        function_name = step.get("function")
+        if function_name and callable(function_name):
+            # It's a callable, register it by name
+            func_name = function_name.__name__
+            manager.register_function(func_name, function_name)
+            step["function"] = func_name
+    
+    # Store the procedure
+    manager.procedures[name] = procedure
+    
+    # Create a trace for analytics
+    with trace(workflow_name="add_procedure"):
+        logger.info(f"Added new procedure '{name}' with {len(steps)} steps in {domain} domain")
+    
+    return {
+        "procedure_id": procedure_id,
+        "name": name,
+        "domain": domain,
+        "steps_count": len(steps)
+    }
+
+@function_tool
+async def execute_procedure(
+    ctx,
+    name: str,
+    context: Dict[str, Any] = None,
+    force_conscious: bool = False
+) -> Dict[str, Any]:
+    """
+    Execute a procedure by name
+    
+    Args:
+        name: Name of the procedure to execute
+        context: Context data for execution
+        force_conscious: Force deliberate execution even if proficient
+        
+    Returns:
+        Execution results including success and execution time
+    """
+    manager = ctx.context
+    
+    if name not in manager.procedures:
+        return {"error": f"Procedure '{name}' not found"}
+    
+    procedure = manager.procedures[name]
+    
+    # Create execution trace
+    with trace(workflow_name="execute_procedure"):
+        # Add domain to context
+        context = context or {}
+        context["domain"] = procedure.domain
+        
+        # Determine execution mode
+        automatic = procedure.proficiency > 0.8 and not force_conscious
+        
+        # Execute the procedure
+        start_time = datetime.datetime.now()
+        try:
+            result = await manager.execute_procedure_steps(procedure, context, not automatic)
+        except Exception as e:
+            logger.error(f"Error executing procedure {name}: {str(e)}")
+            return {
+                "error": str(e),
+                "success": False,
+                "execution_time": (datetime.datetime.now() - start_time).total_seconds()
+            }
+        
+        execution_time = (datetime.datetime.now() - start_time).total_seconds()
+        
+        # Update procedure statistics
+        manager.update_procedure_stats(procedure, execution_time, result["success"])
+        
+        # Update result with procedure details
+        result["procedure_name"] = name
+        result["procedure_id"] = procedure.id
+        result["domain"] = procedure.domain
+        result["execution_time"] = execution_time
+        result["automatic"] = automatic
+        
+    return result
+
+@function_tool
+async def transfer_procedure(
+    ctx,
+    source_name: str,
+    target_name: str,
+    target_domain: str
+) -> Dict[str, Any]:
+    """
+    Transfer a procedure from one domain to another
+    
+    Args:
+        source_name: Name of the source procedure
+        target_name: Name for the new procedure
+        target_domain: Domain for the new procedure
+        
+    Returns:
+        Transfer results with adapted procedure details
+    """
+    manager = ctx.context
+    
+    if source_name not in manager.procedures:
+        return {"error": f"Source procedure '{source_name}' not found"}
+    
+    source = manager.procedures[source_name]
+    
+    # Create a trace for the transfer operation
+    with trace(workflow_name="transfer_procedure"):
+        # Use the chunk library to map steps to the new domain
+        mapped_steps = []
+        
+        for step in source.steps:
+            # Try to map step to new domain
+            mapped_step = manager.map_step_to_domain(
+                step=step,
+                source_domain=source.domain,
+                target_domain=target_domain
+            )
+            
+            if mapped_step:
+                mapped_steps.append(mapped_step)
+        
+        if not mapped_steps:
+            return {
+                "success": False,
+                "error": "Could not map any steps to the target domain"
+            }
+        
+        # Create new procedure
+        new_procedure = await add_procedure(
+            ctx,
+            name=target_name,
+            steps=mapped_steps,
+            description=f"Transferred from {source_name} ({source.domain} to {target_domain})",
+            domain=target_domain
+        )
+        
+        # Record transfer
+        transfer_record = ProcedureTransferRecord(
+            source_procedure_id=source.id,
+            source_domain=source.domain,
+            target_procedure_id=new_procedure["procedure_id"],
+            target_domain=target_domain,
+            transfer_date=datetime.datetime.now().isoformat(),
+            success_level=0.8,  # Initial estimate
+            practice_needed=5  # Initial estimate
+        )
+        
+        manager.chunk_library.record_transfer(transfer_record)
+        
+        # Update transfer stats
+        manager.transfer_stats["total_transfers"] += 1
+        manager.transfer_stats["successful_transfers"] += 1
+    
+    return {
+        "success": True,
+        "source_name": source_name,
+        "target_name": target_name,
+        "source_domain": source.domain,
+        "target_domain": target_domain,
+        "steps_count": len(mapped_steps),
+        "procedure_id": new_procedure["procedure_id"]
+    }
+
+@function_tool
+async def get_procedure_proficiency(ctx, name: str) -> ProcedureStats:
+    """
+    Get the current proficiency level for a procedure
+    
+    Args:
+        name: Name of the procedure
+        
+    Returns:
+        Proficiency information including level and execution statistics
+    """
+    manager = ctx.context
+    
+    if name not in manager.procedures:
+        raise UserError(f"Procedure '{name}' not found")
+    
+    procedure = manager.procedures[name]
+    
+    # Determine proficiency level
+    proficiency_level = "novice"
+    if procedure.proficiency >= 0.95:
+        proficiency_level = "automatic"
+    elif procedure.proficiency >= 0.8:
+        proficiency_level = "expert"
+    elif procedure.proficiency >= 0.5:
+        proficiency_level = "competent"
+    
+    # Calculate success rate
+    success_rate = procedure.successful_executions / max(1, procedure.execution_count)
+    
+    return ProcedureStats(
+        procedure_name=name,
+        procedure_id=procedure.id,
+        proficiency=procedure.proficiency,
+        level=proficiency_level,
+        execution_count=procedure.execution_count,
+        success_rate=success_rate,
+        average_execution_time=procedure.average_execution_time,
+        is_chunked=procedure.is_chunked,
+        chunks_count=len(procedure.chunked_steps) if procedure.is_chunked else 0,
+        steps_count=len(procedure.steps),
+        domain=procedure.domain
+    )
+
+@function_tool
+async def list_procedures(ctx, domain: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    List all procedures, optionally filtered by domain
+    
+    Args:
+        domain: Optional domain to filter by
+        
+    Returns:
+        List of procedure summaries
+    """
+    manager = ctx.context
+    
+    procedure_list = []
+    
+    for name, procedure in manager.procedures.items():
+        # Filter by domain if specified
+        if domain and procedure.domain != domain:
+            continue
+            
+        # Get proficiency level
+        proficiency_level = "novice"
+        if procedure.proficiency >= 0.95:
+            proficiency_level = "automatic"
+        elif procedure.proficiency >= 0.8:
+            proficiency_level = "expert"
+        elif procedure.proficiency >= 0.5:
+            proficiency_level = "competent"
+            
+        # Create summary
+        procedure_list.append({
+            "name": name,
+            "id": procedure.id,
+            "description": procedure.description,
+            "domain": procedure.domain,
+            "proficiency": procedure.proficiency,
+            "proficiency_level": proficiency_level,
+            "steps_count": len(procedure.steps),
+            "execution_count": procedure.execution_count,
+            "is_chunked": procedure.is_chunked,
+            "created_at": procedure.created_at,
+            "last_updated": procedure.last_updated
+        })
+        
+    # Sort by domain and then name
+    procedure_list.sort(key=lambda x: (x["domain"], x["name"]))
+    
+    return procedure_list
+
+@function_tool
+async def get_transfer_statistics(ctx) -> TransferStats:
+    """
+    Get statistics about procedure transfers
+    
+    Returns:
+        Transfer statistics including success rates and domain coverage
+    """
+    manager = ctx.context
+    
+    # Get chunks by domain
+    chunks_by_domain = {}
+    for domain, chunk_ids in manager.chunk_library.domain_chunks.items():
+        chunks_by_domain[domain] = len(chunk_ids)
+    
+    # Get recent transfers
+    recent_transfers = []
+    for record in manager.chunk_library.transfer_records[-5:]:
+        recent_transfers.append({
+            "source_domain": record.source_domain,
+            "target_domain": record.target_domain,
+            "transfer_date": record.transfer_date,
+            "success_level": record.success_level
+        })
+    
+    return TransferStats(
+        total_transfers=manager.transfer_stats["total_transfers"],
+        successful_transfers=manager.transfer_stats["successful_transfers"],
+        avg_success_level=manager.transfer_stats.get("avg_success_level", 0.0),
+        avg_practice_needed=manager.transfer_stats.get("avg_practice_needed", 0),
+        chunks_by_domain=chunks_by_domain,
+        recent_transfers=recent_transfers,
+        templates_count=len(manager.chunk_library.chunk_templates),
+        actions_count=len(manager.chunk_library.action_templates)
+    )
+
+@function_tool
+async def identify_chunking_opportunities(ctx, procedure_name: str) -> Dict[str, Any]:
+    """
+    Identify opportunities to chunk steps in a procedure
+    
+    Args:
+        procedure_name: Name of the procedure to analyze
+        
+    Returns:
+        Potential chunks that could be formed
+    """
+    manager = ctx.context
+    
+    if procedure_name not in manager.procedures:
+        raise UserError(f"Procedure '{procedure_name}' not found")
+    
+    procedure = manager.procedures[procedure_name]
+    
+    # Need at least 3 steps and some executions to consider chunking
+    if len(procedure.steps) < 3 or procedure.execution_count < 5:
+        return {
+            "can_chunk": False,
+            "reason": f"Need at least 3 steps and 5 executions (has {len(procedure.steps)} steps and {procedure.execution_count} executions)"
+        }
+    
+    # Find sequences of steps that could be chunked
+    chunks = []
+    current_chunk = []
+    
+    for i in range(len(procedure.steps) - 1):
+        # Start a new potential chunk
+        if not current_chunk:
+            current_chunk = [procedure.steps[i]["id"]]
+        
+        # Check if next step is consistently executed after this one
+        co_occurrence = manager.calculate_step_co_occurrence(
+            procedure,
+            procedure.steps[i]["id"], 
+            procedure.steps[i+1]["id"]
+        )
+        
+        if co_occurrence > 0.8:  # High co-occurrence threshold
+            # Add to current chunk
+            current_chunk.append(procedure.steps[i+1]["id"])
+        else:
+            # End current chunk if it has multiple steps
+            if len(current_chunk) > 1:
+                chunks.append(current_chunk)
+            current_chunk = []
+    
+    # Add the last chunk if it exists
+    if len(current_chunk) > 1:
+        chunks.append(current_chunk)
+    
+    return {
+        "can_chunk": len(chunks) > 0,
+        "potential_chunks": chunks,
+        "chunk_count": len(chunks),
+        "procedure_name": procedure_name
+    }
+
+@function_tool
+async def apply_chunking(ctx, procedure_name: str) -> Dict[str, Any]:
+    """
+    Apply chunking to a procedure based on execution patterns
+    
+    Args:
+        procedure_name: Name of the procedure to chunk
+        
+    Returns:
+        Results of the chunking process
+    """
+    manager = ctx.context
+    
+    if procedure_name not in manager.procedures:
+        raise UserError(f"Procedure '{procedure_name}' not found")
+    
+    procedure = manager.procedures[procedure_name]
+    
+    # Find chunking opportunities
+    chunking_result = await identify_chunking_opportunities(ctx, procedure_name)
+    
+    if not chunking_result["can_chunk"]:
+        return chunking_result
+    
+    # Apply chunks
+    chunks = chunking_result["potential_chunks"]
+    
+    for i, chunk in enumerate(chunks):
+        chunk_id = f"chunk_{i+1}"
+        procedure.chunked_steps[chunk_id] = chunk
+    
+    # Mark as chunked
+    procedure.is_chunked = True
+    procedure.last_updated = datetime.datetime.now().isoformat()
+    
+    return {
+        "success": True,
+        "chunks_applied": len(chunks),
+        "chunk_ids": list(procedure.chunked_steps.keys()),
+        "procedure_name": procedure_name
+    }
+
+@function_tool
+async def generalize_chunk_from_steps(
+    ctx,
+    chunk_name: str,
+    procedure_name: str,
+    step_ids: List[str],
+    domain: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Create a generalizable chunk template from specific procedure steps
+    
+    Args:
+        chunk_name: Name for the new chunk template
+        procedure_name: Name of the procedure containing the steps
+        step_ids: IDs of the steps to include in the chunk
+        domain: Optional domain override (defaults to procedure's domain)
+        
+    Returns:
+        Information about the created chunk template
+    """
+    manager = ctx.context
+    
+    if procedure_name not in manager.procedures:
+        return {"error": f"Procedure '{procedure_name}' not found"}
+    
+    procedure = manager.procedures[procedure_name]
+    
+    # Get the steps by ID
+    steps = []
+    for step_id in step_ids:
+        step = next((s for s in procedure.steps if s["id"] == step_id), None)
+        if step:
+            steps.append(step)
+    
+    if not steps:
+        return {"error": "No valid steps found"}
+    
+    # Use the procedure's domain if not specified
+    chunk_domain = domain or procedure.domain
+    
+    # Generate a unique template ID
+    template_id = f"template_{chunk_name}_{int(datetime.datetime.now().timestamp())}"
+    
+    # Create the chunk template
+    template = manager.chunk_library.create_chunk_template_from_steps(
+        chunk_id=template_id,
+        name=chunk_name,
+        steps=steps,
+        domain=chunk_domain
+    )
+    
+    if not template:
+        return {"error": "Failed to create chunk template"}
+    
+    return {
+        "template_id": template.id,
+        "name": template.name,
+        "domain": chunk_domain,
+        "actions_count": len(template.actions),
+        "can_transfer": True
+    }
+
+@function_tool
+async def find_matching_chunks(
+    ctx,
+    procedure_name: str,
+    target_domain: str
+) -> Dict[str, Any]:
+    """
+    Find library chunks that match a procedure's steps for transfer
+    
+    Args:
+        procedure_name: Name of the procedure to find chunks for
+        target_domain: Target domain to transfer to
+        
+    Returns:
+        List of matching chunks with similarity scores
+    """
+    manager = ctx.context
+    
+    if procedure_name not in manager.procedures:
+        return {"error": f"Procedure '{procedure_name}' not found"}
+    
+    procedure = manager.procedures[procedure_name]
+    
+    # Find matching chunks
+    matches = manager.chunk_library.find_matching_chunks(
+        steps=procedure.steps,
+        source_domain=procedure.domain,
+        target_domain=target_domain
+    )
+    
+    if not matches:
+        return {
+            "chunks_found": False,
+            "message": "No matching chunks found for transfer"
+        }
+    
+    return {
+        "chunks_found": True,
+        "matches": matches,
+        "count": len(matches),
+        "source_domain": procedure.domain,
+        "target_domain": target_domain
+    }
+
+@function_tool
+async def transfer_chunk(
+    ctx,
+    template_id: str,
+    target_domain: str
+) -> Dict[str, Any]:
+    """
+    Transfer a chunk template to a new domain
+    
+    Args:
+        template_id: ID of the chunk template to transfer
+        target_domain: Domain to transfer to
+        
+    Returns:
+        Mapped steps for the new domain
+    """
+    manager = ctx.context
+    
+    # Map the chunk to the new domain
+    mapped_steps = manager.chunk_library.map_chunk_to_new_domain(
+        template_id=template_id,
+        target_domain=target_domain
+    )
+    
+    if not mapped_steps:
+        return {
+            "success": False,
+            "error": "Failed to map chunk to new domain"
+        }
+    
+    return {
+        "success": True,
+        "steps": mapped_steps,
+        "steps_count": len(mapped_steps),
+        "target_domain": target_domain
+    }
+
+@function_tool
+async def transfer_with_chunking(
+    ctx,
+    source_name: str,
+    target_name: str,
+    target_domain: str
+) -> Dict[str, Any]:
+    """
+    Transfer a procedure from one domain to another using chunk-level transfer
+    
+    Args:
+        source_name: Name of the source procedure
+        target_name: Name for the new procedure
+        target_domain: Domain for the new procedure
+        
+    Returns:
+        Transfer results
+    """
+    manager = ctx.context
+    
+    if source_name not in manager.procedures:
+        return {"error": f"Source procedure '{source_name}' not found"}
+    
+    source = manager.procedures[source_name]
+    
+    # Get chunks from source if chunked
+    steps_from_chunks = set()
+    transferred_chunks = []
+    all_steps = []
+    
+    if source.is_chunked:
+        # Try to transfer each chunk
+        for chunk_id, step_ids in source.chunked_steps.items():
+            # Get chunk steps
+            chunk_steps = [s for s in source.steps if s["id"] in step_ids]
+            
+            # Find matching templates
+            matches = manager.chunk_library.find_matching_chunks(
+                steps=chunk_steps,
+                source_domain=source.domain,
+                target_domain=target_domain
+            )
+            
+            if matches:
+                # Use best match
+                best_match = matches[0]
+                template_id = best_match["template_id"]
+                
+                # Map template to new domain
+                mapped_steps = manager.chunk_library.map_chunk_to_new_domain(
+                    template_id=template_id,
+                    target_domain=target_domain
+                )
+                
+                if mapped_steps:
+                    # Add steps from this chunk
+                    all_steps.extend(mapped_steps)
+                    transferred_chunks.append({
+                        "chunk_id": chunk_id,
+                        "template_id": template_id,
+                        "steps_count": len(mapped_steps)
+                    })
+                    
+                    # Track which source steps were covered
+                    steps_from_chunks.update(step_ids)
+            
+            else:
+                # No matching templates, try to create one
+                template = manager.chunk_library.create_chunk_template_from_steps(
+                    chunk_id=f"template_{chunk_id}_{int(datetime.datetime.now().timestamp())}",
+                    name=f"{source_name}_{chunk_id}",
+                    steps=chunk_steps,
+                    domain=source.domain
+                )
+                
+                if template:
+                    # Map to new domain
+                    mapped_steps = manager.chunk_library.map_chunk_to_new_domain(
+                        template_id=template.id,
+                        target_domain=target_domain
+                    )
+                    
+                    if mapped_steps:
+                        all_steps.extend(mapped_steps)
+                        transferred_chunks.append({
+                            "chunk_id": chunk_id,
+                            "template_id": template.id,
+                            "steps_count": len(mapped_steps),
+                            "newly_created": True
+                        })
+                        
+                        # Track which source steps were covered
+                        steps_from_chunks.update(step_ids)
+    
+    # Get remaining steps not covered by chunks
+    remaining_steps = [s for s in source.steps if s["id"] not in steps_from_chunks]
+    
+    # Map remaining steps individually
+    for step in remaining_steps:
+        mapped_step = manager.map_step_to_domain(
+            step=step,
+            source_domain=source.domain,
+            target_domain=target_domain
+        )
+        
+        if mapped_step:
+            all_steps.append(mapped_step)
+    
+    if not all_steps:
+        return {
+            "success": False,
+            "error": "Could not map any steps or chunks to the target domain"
+        }
+    
+    # Create new procedure
+    new_procedure = await add_procedure(
+        ctx,
+        name=target_name,
+        steps=all_steps,
+        description=f"Transferred from {source_name} ({source.domain} to {target_domain})",
+        domain=target_domain
+    )
+    
+    # Record transfer
+    transfer_record = ProcedureTransferRecord(
+        source_procedure_id=source.id,
+        source_domain=source.domain,
+        target_procedure_id=new_procedure["procedure_id"],
+        target_domain=target_domain,
+        transfer_date=datetime.datetime.now().isoformat(),
+        adaptation_steps=[{
+            "chunk_id": info["chunk_id"],
+            "template_id": info["template_id"],
+            "steps_count": info["steps_count"]
+        } for info in transferred_chunks],
+        success_level=0.8,  # Initial estimate
+        practice_needed=5  # Initial estimate
+    )
+    
+    manager.chunk_library.record_transfer(transfer_record)
+    
+    # Update transfer stats
+    manager.transfer_stats["total_transfers"] += 1
+    manager.transfer_stats["successful_transfers"] += 1
+    
+    return {
+        "success": True,
+        "source_name": source_name,
+        "target_name": target_name,
+        "source_domain": source.domain,
+        "target_domain": target_domain,
+        "steps_count": len(all_steps),
+        "chunks_transferred": len(transferred_chunks),
+        "procedure_id": new_procedure["procedure_id"],
+        "chunk_transfer_details": transferred_chunks
+    }
+
+@function_tool
+async def find_similar_procedures(
+    ctx,
+    name: str, 
+    target_domain: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Find procedures similar to the specified one
+    
+    Args:
+        name: Name of the procedure to compare
+        target_domain: Optional domain to filter by
+        
+    Returns:
+        List of similar procedures with similarity scores
+    """
+    manager = ctx.context
+    
+    if name not in manager.procedures:
+        return []
+    
+    source = manager.procedures[name]
+    
+    similar_procedures = []
+    for proc_name, procedure in manager.procedures.items():
+        # Skip self
+        if proc_name == name:
+            continue
+            
+        # Filter by domain if specified
+        if target_domain and procedure.domain != target_domain:
+            continue
+            
+        # Calculate similarity
+        similarity = manager.calculate_procedure_similarity(source, procedure)
+        
+        if similarity > 0.3:  # Minimum similarity threshold
+            similar_procedures.append({
+                "name": proc_name,
+                "id": procedure.id,
+                "domain": procedure.domain,
+                "similarity": similarity,
+                "steps_count": len(procedure.steps),
+                "proficiency": procedure.proficiency
+            })
+    
+    # Sort by similarity
+    similar_procedures.sort(key=lambda x: x["similarity"], reverse=True)
+    
+    return similar_procedures
+
+@function_tool
+async def refine_step(
+    ctx,
+    procedure_name: str,
+    step_id: str,
+    new_function: Optional[str] = None,
+    new_parameters: Optional[Dict[str, Any]] = None,
+    new_description: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Refine a specific step in a procedure
+    
+    Args:
+        procedure_name: Name of the procedure
+        step_id: ID of the step to refine
+        new_function: Optional new function name
+        new_parameters: Optional new parameters
+        new_description: Optional new description
+        
+    Returns:
+        Result of the refinement
+    """
+    manager = ctx.context
+    
+    if procedure_name not in manager.procedures:
+        return {"error": f"Procedure '{procedure_name}' not found"}
+    
+    procedure = manager.procedures[procedure_name]
+    
+    # Find the step
+    step = None
+    for s in procedure.steps:
+        if s["id"] == step_id:
+            step = s
+            break
+            
+    if not step:
+        return {"error": f"Step '{step_id}' not found in procedure '{procedure_name}'"}
+        
+    # Update function if provided
+    if new_function:
+        if callable(new_function):
+            func_name = new_function.__name__
+            manager.register_function(func_name, new_function)
+            step["function"] = func_name
+        else:
+            step["function"] = new_function
+        
+    # Update parameters if provided
+    if new_parameters:
+        step["parameters"] = new_parameters
+        
+    # Update description if provided
+    if new_description:
+        step["description"] = new_description
+        
+    # Update procedure
+    procedure.last_updated = datetime.datetime.now().isoformat()
+    
+    # If this step is part of a chunk, unchunk
+    if procedure.is_chunked:
+        # Find chunks containing this step
+        affected_chunks = []
+        for chunk_id, step_ids in procedure.chunked_steps.items():
+            if step_id in step_ids:
+                affected_chunks.append(chunk_id)
+                
+        # If any chunks are affected, reset chunking
+        if affected_chunks:
+            procedure.is_chunked = False
+            procedure.chunked_steps = {}
+    
+    return {
+        "success": True,
+        "procedure_name": procedure_name,
+        "step_id": step_id,
+        "function_updated": new_function is not None,
+        "parameters_updated": new_parameters is not None,
+        "description_updated": new_description is not None,
+        "chunking_reset": len(affected_chunks) > 0 if 'affected_chunks' in locals() else False
+    }
+
+# ============================================================================
+# PROCEDURAL MEMORY MANAGER WITH AGENTS INTEGRATION
+# ============================================================================
+
+class ProceduralMemoryManager:
+    """
+    Procedural memory system integrated with Agents SDK
+    
+    Manages procedural knowledge including learning, execution,
+    chunking, and cross-domain transfer through agent-based architecture.
+    """
+    
+    def __init__(self, memory_core=None, knowledge_core=None):
+        self.procedures = {}  # name -> Procedure
+        self.memory_core = memory_core
+        self.knowledge_core = knowledge_core
+        
+        # Context awareness
+        self.chunk_selector = self._create_chunk_selector()
+        
+        # Generalization
+        self.chunk_library = self._create_chunk_library()
+        
+        # Function registry
+        self.function_registry = {}  # Global function registry
+        
+        # Transfer stats
+        self.transfer_stats = {
+            "total_transfers": 0,
+            "successful_transfers": 0,
+            "avg_success_level": 0.0,
+            "avg_practice_needed": 0
+        }
+        
+        # Initialize agents
+        self._proc_manager_agent = self._create_manager_agent()
+        self._proc_execution_agent = self._create_execution_agent()
+        self._proc_analysis_agent = self._create_analysis_agent()
+        
+        # Initialize common control mappings in a domain-agnostic way
+        self._initialize_control_mappings()
+    
+    def _create_manager_agent(self) -> Agent:
+        """Create the main procedural memory manager agent"""
+        return Agent(
+            name="Procedural Memory Manager",
+            instructions="""
+            You are a procedural memory manager agent that handles the storage, retrieval,
+            and execution of procedural knowledge. You help the system learn, optimize, and
+            transfer procedural skills across domains.
+            
+            Your responsibilities include:
+            - Managing procedural memory entries
+            - Facilitating procedural skill transfer between domains
+            - Tracking procedural memory statistics
+            - Optimizing procedures through chunking and refinement
+            
+            You have enhanced capabilities for cross-domain transfer:
+            - You can identify and transfer chunks of procedural knowledge
+            - You can generalize procedures across different domains
+            - You can find similar patterns across diverse procedural skills
+            - You can optimize transfer through specialized chunk mapping
+            """,
+            tools=[
+                add_procedure,
+                execute_procedure,
+                transfer_procedure,
+                get_procedure_proficiency,
+                list_procedures,
+                get_transfer_statistics,
+                apply_chunking,
+                find_similar_procedures,
+                refine_step,
+                # Enhanced chunk-based transfer tools
+                generalize_chunk_from_steps,
+                find_matching_chunks,
+                transfer_chunk,
+                transfer_with_chunking
+            ]
+        )
+    
+    def _create_execution_agent(self) -> Agent:
+        """Create the agent responsible for procedure execution"""
+        return Agent(
+            name="Procedure Execution Agent",
+            instructions="""
+            You are a procedure execution agent that carries out procedural skills.
+            Your job is to execute procedures efficiently, adapting to context and
+            making appropriate decisions during execution.
+            
+            Your responsibilities include:
+            - Executing procedure steps in the correct order
+            - Adapting to different execution contexts
+            - Monitoring execution success and performance
+            - Providing feedback on execution quality
+            """,
+            tools=[
+                execute_procedure,
+                function_tool(self.execute_step)
+            ]
+        )
+    
+    def _create_analysis_agent(self) -> Agent:
+        """Create the agent responsible for procedure analysis"""
+        return Agent(
+            name="Procedure Analysis Agent",
+            instructions="""
+            You are a procedure analysis agent that examines procedural knowledge.
+            Your job is to identify patterns, optimization opportunities, and
+            potential transfers between domains.
+            
+            Your responsibilities include:
+            - Identifying chunking opportunities
+            - Finding similarities between procedures
+            - Recommending procedure refinements
+            - Analyzing procedure performance
+            - Identifying generalizable chunks across domains
+            - Evaluating transfer potential between domains
+            - Finding optimal chunking strategies for transfer
+            """,
+            tools=[
+                identify_chunking_opportunities,
+                find_similar_procedures,
+                get_procedure_proficiency,
+                function_tool(self.analyze_execution_history),
+                # Enhanced chunk analysis tools
+                generalize_chunk_from_steps,
+                find_matching_chunks
+            ]
+        )
+    
+    def _create_chunk_selector(self):
+        """Create the chunk selector for context-aware execution"""
+        # Implementation of the context-aware chunk selector
+        # This is a simplified version of what was in the original code
+        return {
+            "context_patterns": {},
+            "recent_contexts": [],
+            "recent_selections": []
+        }
+    
+    def _create_chunk_library(self):
+        """Create the chunk library for cross-domain generalization"""
+        # Now using the full ProceduralChunkLibrary implementation
+        return ProceduralChunkLibrary()
+    
+    def _initialize_control_mappings(self):
+        """Initialize common control mappings between domains in a domain-agnostic way"""
+        # Generic control mappings between domains
+        # These are now domain-agnostic, not tied to specific gaming platforms
+        
+        # Input method mappings (touch to mouse/keyboard)
+        self.chunk_library["control_mappings"].append({
+            "source_domain": "touch_interface",
+            "target_domain": "mouse_interface",
+            "action_type": "select",
+            "source_control": "tap",
+            "target_control": "click"
+        })
+        
+        self.chunk_library["control_mappings"].append({
+            "source_domain": "voice_interface",
+            "target_domain": "touch_interface",
+            "action_type": "activate",
+            "source_control": "speak_command",
+            "target_control": "tap"
+        })
+        
+        # Cross-domain action mappings (driving to flying)
+        self.chunk_library["control_mappings"].append({
+            "source_domain": "driving",
+            "target_domain": "flying",
+            "action_type": "accelerate",
+            "source_control": "pedal_press",
+            "target_control": "throttle_forward"
+        })
+        
+        # Professional domain mappings (cooking to chemistry)
+        self.chunk_library["control_mappings"].append({
+            "source_domain": "cooking",
+            "target_domain": "chemistry",
+            "action_type": "mix",
+            "source_control": "stir",
+            "target_control": "agitate"
+        })
+        
+        # Creative domain mappings (writing to speaking)
+        self.chunk_library["control_mappings"].append({
+            "source_domain": "writing",
+            "target_domain": "speaking",
+            "action_type": "emphasize",
+            "source_control": "bold_text",
+            "target_control": "vocal_stress"
+        })
+    
+    def register_function(self, name: str, func: Callable):
+        """Register a function for use in procedures"""
+        self.function_registry[name] = func
+    
+    async def execute_procedure_steps(self, 
+                                    procedure: Procedure, 
+                                    context: Dict[str, Any], 
+                                    conscious_execution: bool) -> Dict[str, Any]:
+        """Execute the steps of a procedure"""
+        start_time = datetime.datetime.now()
+        results = []
+        success = True
+        
+        # Execute in different modes based on proficiency and settings
+        if conscious_execution or procedure.proficiency < 0.8:
+            # Deliberate step-by-step execution
+            for step in procedure.steps:
+                step_result = await self.execute_step(step, context)
+                results.append(step_result)
+                
+                # Update context with step result
+                context[f"step_{step['id']}_result"] = step_result
+                
+                # Stop execution if a step fails and we're in conscious mode
+                if not step_result["success"] and conscious_execution:
+                    success = False
+                    break
+        else:
+            # Automatic chunked execution if available
+            if procedure.is_chunked:
+                # Get available chunks
+                for chunk_id, step_ids in procedure.chunked_steps.items():
+                    # Get steps for this chunk
+                    chunk_steps = [s for s in procedure.steps if s["id"] in step_ids]
+                    
+                    # Execute chunk steps
+                    for step in chunk_steps:
+                        step_result = await self.execute_step(step, context, minimal_monitoring=True)
+                        results.append(step_result)
+                        
+                        if not step_result["success"]:
+                            success = False
+                            break
+                    
+                    if not success:
+                        break
+                
+                # Execute remaining steps that aren't in chunks
+                chunked_step_ids = set()
+                for step_ids in procedure.chunked_steps.values():
+                    chunked_step_ids.update(step_ids)
+                
+                remaining_steps = [s for s in procedure.steps if s["id"] not in chunked_step_ids]
+                
+                if remaining_steps and success:
+                    for step in remaining_steps:
+                        step_result = await self.execute_step(step, context, minimal_monitoring=True)
+                        results.append(step_result)
+                        
+                        if not step_result["success"]:
+                            success = False
+                            break
+            else:
+                # No chunks, execute all steps with minimal monitoring
+                for step in procedure.steps:
+                    step_result = await self.execute_step(step, context, minimal_monitoring=True)
+                    results.append(step_result)
+                    
+                    if not step_result["success"]:
+                        success = False
+                        break
+        
+        # Calculate execution time
+        execution_time = (datetime.datetime.now() - start_time).total_seconds()
+        
+        return {
+            "success": success,
+            "results": results,
+            "execution_time": execution_time
+        }
+    
+    async def execute_step(self, 
+                         step: Dict[str, Any], 
+                         context: Dict[str, Any], 
+                         minimal_monitoring: bool = False) -> StepResult:
+        """Execute a single step of a procedure"""
+        # Get the actual function to call
+        func_name = step["function"]
+        func = self.function_registry.get(func_name)
+        
+        if not func:
+            return StepResult(
+                success=False,
+                error=f"Function {func_name} not registered",
+                execution_time=0.0
+            )
+        
+        # Execute with timing
+        step_start = datetime.datetime.now()
+        try:
+            # Prepare parameters with context
+            params = step.get("parameters", {}).copy()
+            
+            # Check if function accepts context parameter
+            if callable(func) and hasattr(func, "__code__") and "context" in func.__code__.co_varnames:
+                params["context"] = context
+                
+            # Execute the function
+            result = await func(**params)
+            
+            # Check result format and standardize
+            if isinstance(result, dict):
+                success = "error" not in result
+                step_result = StepResult(
+                    success=success,
+                    data=result,
+                    execution_time=0.0
+                )
+                
+                if not success:
+                    step_result.error = result.get("error")
+            else:
+                step_result = StepResult(
+                    success=True,
+                    data={"result": result},
+                    execution_time=0.0
+                )
+        except Exception as e:
+            logger.error(f"Error executing step {step['id']}: {str(e)}")
+            step_result = StepResult(
+                success=False,
+                error=str(e),
+                execution_time=0.0
+            )
+        
+        # Calculate execution time
+        step_time = (datetime.datetime.now() - step_start).total_seconds()
+        step_result.execution_time = step_time
+        
+        return step_result
+    
+    def update_procedure_stats(self, procedure: Procedure, execution_time: float, success: bool):
+        """Update statistics for a procedure after execution"""
+        # Update average time
+        if procedure.execution_count == 0:
+            procedure.average_execution_time = execution_time
+        else:
+            procedure.average_execution_time = (procedure.average_execution_time * 0.8) + (execution_time * 0.2)
+        
+        # Update counts
+        procedure.execution_count += 1
+        if success:
+            procedure.successful_executions += 1
+        
+        # Update proficiency based on multiple factors
+        count_factor = min(procedure.execution_count / 100, 1.0)
+        success_rate = procedure.successful_executions / max(1, procedure.execution_count)
+        
+        # Calculate time factor (simplified)
+        time_factor = 0.5
+        
+        # Combine factors with weights
+        procedure.proficiency = (count_factor * 0.3) + (success_rate * 0.5) + (time_factor * 0.2)
+        
+        # Update last execution timestamp
+        procedure.last_updated = datetime.datetime.now().isoformat()
+    
+    def calculate_step_co_occurrence(self, procedure: Procedure, step1_id: str, step2_id: str) -> float:
+        """Calculate how often step2 follows step1 in successful executions"""
+        # This is a stub - in practice, this would analyze execution history
+        # For now, we'll return a default high value for adjacent steps
+        if procedure.execution_count > 5:
+            return 0.9
+        return 0.5
+    
+    def calculate_procedure_similarity(self, proc1: Procedure, proc2: Procedure) -> float:
+        """Calculate similarity between two procedures"""
+        # If either doesn't have steps, return 0
+        if not proc1.steps or not proc2.steps:
+            return 0.0
+        
+        # If they have the same domain, higher base similarity
+        domain_similarity = 0.3 if proc1.domain == proc2.domain else 0.0
+        
+        # Compare steps
+        steps1 = [(s["function"], s.get("description", "")) for s in proc1.steps]
+        steps2 = [(s["function"], s.get("description", "")) for s in proc2.steps]
+        
+        # Calculate Jaccard similarity on functions
+        funcs1 = set(f for f, _ in steps1)
+        funcs2 = set(f for f, _ in steps2)
+        
+        if not funcs1 or not funcs2:
+            func_similarity = 0.0
+        else:
+            intersection = len(funcs1.intersection(funcs2))
+            union = len(funcs1.union(funcs2))
+            func_similarity = intersection / union
+        
+        # Calculate approximate sequence similarity
+        step_similarity = 0.0
+        if len(steps1) > 0 and len(steps2) > 0:
+            # Simplified sequence comparison
+            matched_steps = 0
+            for i in range(min(len(steps1), len(steps2))):
+                if steps1[i][0] == steps2[i][0]:
+                    matched_steps += 1
+            
+            step_similarity = matched_steps / min(len(steps1), len(steps2))
+        
+        # Calculate final similarity
+        return 0.3 * domain_similarity + 0.4 * func_similarity + 0.3 * step_similarity
+    
+    def map_step_to_domain(self, step: Dict[str, Any], source_domain: str, target_domain: str) -> Optional[Dict[str, Any]]:
+        """Map a procedure step from one domain to another"""
+        # Get original function and parameters
+        function = step.get("function")
+        params = step.get("parameters", {})
+        
+        if not function:
+            return None
+        
+        # Try to find a control mapping
+        mapped_params = params.copy()
+        
+        if "control" in params:
+            control = params["control"]
+            
+            # Look for control mappings
+            for mapping in self.chunk_library["control_mappings"]:
+                if (mapping["source_domain"] == source_domain and
+                    mapping["target_domain"] == target_domain and
+                    mapping["source_control"] == control):
+                    mapped_params["control"] = mapping["target_control"]
+                    break
+        
+        # Create mapped step
+        mapped_step = {
+            "id": step["id"],
+            "description": step["description"],
+            "function": function,
+            "parameters": mapped_params,
+            "original_id": step["id"]
+        }
+        
+        return mapped_step
+    
+    async def analyze_execution_history(self, procedure_name: str) -> Dict[str, Any]:
+        """Analyze execution history of a procedure for patterns"""
+        if procedure_name not in self.procedures:
+            return {"error": f"Procedure '{procedure_name}' not found"}
+        
+        procedure = self.procedures[procedure_name]
+        
+        # This is a placeholder for actual analysis
+        # In a real implementation, this would analyze detailed execution history
+        
+        return {
+            "procedure_name": procedure_name,
+            "executions": procedure.execution_count,
+            "success_rate": procedure.successful_executions / max(1, procedure.execution_count),
+            "avg_execution_time": procedure.average_execution_time,
+            "proficiency": procedure.proficiency,
+            "is_chunked": procedure.is_chunked,
+            "chunks_count": len(procedure.chunked_steps) if procedure.is_chunked else 0,
+            "potential_optimizations": []
+        }
+    
+    async def get_manager_agent(self) -> Agent:
+        """Get the procedural memory manager agent"""
+        return self._proc_manager_agent
+    
+    async def get_execution_agent(self) -> Agent:
+        """Get the procedure execution agent"""
+        return self._proc_execution_agent
+    
+    async def get_analysis_agent(self) -> Agent:
+        """Get the procedure analysis agent"""
+        return self._proc_analysis_agent
+
+# ============================================================================
+# EXAMPLE USAGE
+# ============================================================================
+
+async def demonstrate_procedural_memory():
+    """Demonstrate the procedural memory system with Agents SDK"""
+    
+    # Create the procedural memory manager
+    manager = ProceduralMemoryManager()
+    
+    # Register example functions
+    async def perform_action(action_name: str, action_target: str, context: Dict[str, Any] = None):
+        print(f"Performing action: {action_name} on {action_target}")
+        return {"action": action_name, "target": action_target, "performed": True}
+    
+    async def check_condition(condition_name: str, context: Dict[str, Any] = None):
+        print(f"Checking condition: {condition_name}")
+        # Simulate condition check
+        result = True  # In real usage, this would evaluate something
+        return {"condition": condition_name, "result": result}
+        
+    async def select_item(item_id: str, control: str, context: Dict[str, Any] = None):
+        print(f"Selecting item {item_id} using {control}")
+        return {"item": item_id, "selected": True}
+        
+    async def navigate_to(location: str, method: str, context: Dict[str, Any] = None):
+        print(f"Navigating to {location} using {method}")
+        return {"location": location, "arrived": True}
+    
+    # Register functions
+    manager.register_function("perform_action", perform_action)
+    manager.register_function("check_condition", check_condition)
+    manager.register_function("select_item", select_item)
+    manager.register_function("navigate_to", navigate_to)
+    
+    # Create RunContextWrapper
+    class RunContextWrapper:
+        def __init__(self, context):
+            self.context = context
+    
+    ctx = RunContextWrapper(manager)
+    
+    # Create a procedure in the "touch_interface" domain
+    touch_procedure_steps = [
+        {
+            "id": "step_1",
+            "description": "Navigate to menu",
+            "function": "navigate_to",
+            "parameters": {"location": "main_menu", "method": "swipe"}
+        },
+        {
+            "id": "step_2",
+            "description": "Select item from menu",
+            "function": "select_item",
+            "parameters": {"item_id": "settings", "control": "tap"}
+        },
+        {
+            "id": "step_3",
+            "description": "Adjust settings",
+            "function": "perform_action",
+            "parameters": {"action_name": "adjust", "action_target": "brightness"}
+        }
+    ]
+    
+    print("Creating touch interface procedure...")
+    
+    touch_result = await add_procedure(
+        ctx,
+        name="touch_settings_procedure",
+        steps=touch_procedure_steps,
+        description="Adjust settings using touch interface",
+        domain="touch_interface"
+    )
+    
+    print(f"Created procedure: {touch_result}")
+    
+    # Execute the procedure multiple times to develop proficiency
+    print("\nPracticing touch procedure...")
+    for i in range(5):
+        await execute_procedure(ctx, "touch_settings_procedure")
+    
+    # Apply chunking to identify patterns
+    print("\nApplying chunking to the procedure...")
+    
+    chunking_result = await apply_chunking(ctx, "touch_settings_procedure")
+    print(f"Chunking result: {chunking_result}")
+    
+    # Generalize a chunk for navigation and selection
+    print("\nGeneralizing a chunk for navigation and selection...")
+    
+    chunk_result = await generalize_chunk_from_steps(
+        ctx,
+        chunk_name="navigate_and_select",
+        procedure_name="touch_settings_procedure",
+        step_ids=["step_1", "step_2"]
+    )
+    
+    print(f"Chunk generalization result: {chunk_result}")
+    
+    # Transfer the procedure to mouse_interface domain
+    print("\nTransferring procedure to mouse interface domain...")
+    
+    transfer_result = await transfer_with_chunking(
+        ctx,
+        source_name="touch_settings_procedure",
+        target_name="mouse_settings_procedure",
+        target_domain="mouse_interface"
+    )
+    
+    print(f"Transfer result: {transfer_result}")
+    
+    # Execute the transferred procedure
+    print("\nExecuting transferred procedure...")
+    
+    transfer_execution = await execute_procedure(
+        ctx,
+        name="mouse_settings_procedure"
+    )
+    
+    print(f"Transferred procedure execution: {transfer_execution}")
+    
+    # Compare the two procedures
+    print("\nFinding similar procedures to our touch procedure...")
+    
+    similar = await find_similar_procedures(ctx, "touch_settings_procedure")
+    
+    print(f"Similar procedures: {similar}")
+    
+    # Get transfer statistics
+    print("\nGetting transfer statistics...")
+    
+    stats = await get_transfer_statistics(ctx)
+    
+    print(f"Transfer statistics: {stats}")
+    
+    # List all procedures
+    print("\nListing all procedures:")
+    
+    procedures = await list_procedures(ctx)
+    
+    for proc in procedures:
+        print(f"- {proc['name']} ({proc['domain']}) - Proficiency: {proc['proficiency']:.2f}")
+
+if __name__ == "__main__":
+    asyncio.run(demonstrate_procedural_memory())
