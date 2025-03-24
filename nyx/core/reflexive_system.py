@@ -727,4 +727,366 @@ class ReflexiveSystem:
         
         stats["top_patterns"] = [p.to_dict() for p in top_patterns]
         
-        # Add domain-
+    async def optimize_reflexes(self) -> Dict[str, Any]:
+            """
+            Optimize reflexes through analysis and pattern refinement
+            
+            Returns:
+                Optimization results
+            """
+            if not self.reflex_patterns:
+                return {"success": False, "error": "No reflex patterns to optimize"}
+            
+            optimization_results = {}
+            
+            # Sort patterns by execution count to focus on most used
+            sorted_patterns = sorted(
+                self.reflex_patterns.values(),
+                key=lambda p: p.execution_count,
+                reverse=True
+            )
+            
+            for pattern in sorted_patterns:
+                if pattern.execution_count < 5:
+                    continue  # Skip patterns without enough data
+                
+                # Calculate success rate
+                success_rate = pattern.get_success_rate()
+                
+                # If success rate is low, try to improve pattern
+                if success_rate < 0.7:
+                    if self.pattern_recognition.can_optimize(pattern.pattern_data):
+                        # Try to optimize pattern
+                        old_pattern = pattern.pattern_data.copy()
+                        optimized_pattern = self.pattern_recognition.optimize_pattern(pattern.pattern_data)
+                        
+                        if optimized_pattern:
+                            pattern.pattern_data = optimized_pattern
+                            optimization_results[pattern.name] = {
+                                "status": "optimized",
+                                "original_success_rate": success_rate,
+                                "optimization_type": "pattern_refinement"
+                            }
+                            
+                            logger.info(f"Optimized pattern '{pattern.name}' with success rate {success_rate:.2f}")
+                    else:
+                        # If pattern can't be optimized further, adjust threshold
+                        old_threshold = pattern.threshold
+                        if success_rate < 0.5 and pattern.threshold > 0.6:
+                            pattern.threshold = max(0.6, pattern.threshold - 0.1)
+                        elif success_rate > 0.9 and pattern.threshold < 0.9:
+                            pattern.threshold = min(0.9, pattern.threshold + 0.05)
+                        
+                        if old_threshold != pattern.threshold:
+                            optimization_results[pattern.name] = {
+                                "status": "threshold_adjusted",
+                                "original_success_rate": success_rate,
+                                "old_threshold": old_threshold,
+                                "new_threshold": pattern.threshold
+                            }
+                            
+                            logger.info(f"Adjusted threshold for pattern '{pattern.name}' from {old_threshold:.2f} to {pattern.threshold:.2f}")
+                
+                # For high success rate but slow reaction time, try simplifying pattern
+                elif success_rate > 0.8 and pattern.get_avg_response_time() > 50:  # 50ms threshold
+                    if self.pattern_recognition.can_simplify(pattern.pattern_data):
+                        old_pattern = pattern.pattern_data.copy()
+                        simplified_pattern = self.pattern_recognition.simplify_pattern(pattern.pattern_data)
+                        
+                        if simplified_pattern:
+                            pattern.pattern_data = simplified_pattern
+                            optimization_results[pattern.name] = {
+                                "status": "simplified",
+                                "original_avg_response_time": pattern.get_avg_response_time(),
+                                "optimization_type": "pattern_simplification"
+                            }
+                            
+                            logger.info(f"Simplified pattern '{pattern.name}' for faster reaction time")
+            
+            return {
+                "success": True,
+                "optimizations": optimization_results,
+                "patterns_examined": len(sorted_patterns),
+                "patterns_optimized": len(optimization_results)
+            }
+
+
+class SimplePatternRecognition:
+    """Simple pattern recognition system for the reflexive system"""
+    
+    def __init__(self):
+        """Initialize the pattern recognition system"""
+        pass
+    
+    def fast_match(self, stimulus: Dict[str, Any], pattern: Dict[str, Any]) -> float:
+        """
+        Perform fast pattern matching
+        
+        Args:
+            stimulus: Stimulus data
+            pattern: Pattern to match against
+            
+        Returns:
+            Match score (0.0-1.0)
+        """
+        # Handle empty cases
+        if not stimulus or not pattern:
+            return 0.0
+        
+        # Get keys present in both
+        common_keys = set(stimulus.keys()) & set(pattern.keys())
+        if not common_keys:
+            return 0.0
+        
+        # Calculate match score
+        match_points = 0
+        total_points = 0
+        
+        for key in common_keys:
+            # Skip metadata keys
+            if key.startswith('_'):
+                continue
+                
+            total_points += 1
+            
+            # Simple equality check for strings
+            if isinstance(pattern[key], str) and isinstance(stimulus[key], str):
+                if stimulus[key].lower() == pattern[key].lower():
+                    match_points += 1
+                elif pattern[key].lower() in stimulus[key].lower():
+                    match_points += 0.7
+                elif stimulus[key].lower() in pattern[key].lower():
+                    match_points += 0.5
+            
+            # Numeric range check
+            elif isinstance(pattern[key], dict) and 'min' in pattern[key] and 'max' in pattern[key] and isinstance(stimulus[key], (int, float)):
+                min_val = pattern[key]['min']
+                max_val = pattern[key]['max']
+                
+                if min_val <= stimulus[key] <= max_val:
+                    match_points += 1
+                else:
+                    # Partial match based on distance to range
+                    distance = min(abs(stimulus[key] - min_val), abs(stimulus[key] - max_val))
+                    range_size = max_val - min_val
+                    if range_size > 0:
+                        match_points += max(0, 1 - (distance / range_size))
+            
+            # Array/list contains check
+            elif isinstance(pattern[key], list) and isinstance(stimulus[key], list):
+                # Calculate overlap
+                pattern_set = set(pattern[key])
+                stimulus_set = set(stimulus[key])
+                
+                if pattern_set and stimulus_set:
+                    overlap = len(pattern_set & stimulus_set)
+                    match_points += overlap / max(len(pattern_set), len(stimulus_set))
+            
+            # Simple equality for other types
+            elif pattern[key] == stimulus[key]:
+                match_points += 1
+        
+        # Add special handling for required keys
+        required_keys = {k for k, v in pattern.items() if isinstance(v, dict) and v.get('required', False)}
+        if required_keys:
+            for key in required_keys:
+                if key not in stimulus:
+                    return 0.0  # Required key missing, no match
+        
+        # If we have significant keys to check
+        if total_points > 0:
+            return match_points / total_points
+        
+        return 0.0
+    
+    def generate_similar_stimulus(self, pattern: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate a stimulus similar to the given pattern for training
+        
+        Args:
+            pattern: Pattern to generate similar stimulus for
+            
+        Returns:
+            Generated stimulus
+        """
+        stimulus = {}
+        
+        for key, value in pattern.items():
+            # Skip metadata keys
+            if key.startswith('_'):
+                continue
+            
+            # String handling
+            if isinstance(value, str):
+                if random.random() < 0.8:  # 80% keep the same
+                    stimulus[key] = value
+                else:
+                    # Generate variation
+                    stimulus[key] = value + " (variant)"
+            
+            # Numeric range handling
+            elif isinstance(value, dict) and 'min' in value and 'max' in value:
+                min_val = value['min']
+                max_val = value['max']
+                
+                # Generate random value in range
+                stimulus[key] = min_val + random.random() * (max_val - min_val)
+            
+            # List handling
+            elif isinstance(value, list):
+                # Use subset of list items
+                use_count = max(1, len(value) - random.randint(0, min(2, len(value))))
+                stimulus[key] = random.sample(value, use_count)
+            
+            # Other types
+            else:
+                stimulus[key] = value
+        
+        return stimulus
+    
+    def generate_gaming_stimulus(self, pattern: Dict[str, Any], difficulty: float = 0.5) -> Dict[str, Any]:
+        """
+        Generate a gaming-specific stimulus with appropriate timing and visual elements
+        
+        Args:
+            pattern: Base pattern
+            difficulty: Difficulty level (0.0-1.0)
+            
+        Returns:
+            Gaming-specific stimulus
+        """
+        # Start with base stimulus
+        stimulus = self.generate_similar_stimulus(pattern)
+        
+        # Add gaming-specific elements
+        stimulus["_timing"] = {
+            "frame_number": random.randint(1, 1000),
+            "time_to_impact": max(100, 500 - int(300 * difficulty)),  # ms, less time at higher difficulty
+            "frame_window": max(3, 10 - int(difficulty * 7))  # Fewer frames at higher difficulty
+        }
+        
+        # Add visual elements
+        visual_noise = difficulty * 0.5  # More visual noise at higher difficulty
+        stimulus["visual_clarity"] = max(0.2, 1.0 - visual_noise)
+        
+        # Add opponent state
+        stimulus["opponent"] = {
+            "state": random.choice(["attacking", "defending", "neutral", "special"]),
+            "position": random.choice(["close", "mid", "far"]),
+            "orientation": random.choice(["facing", "side", "away"])
+        }
+        
+        return stimulus
+    
+    def can_optimize(self, pattern: Dict[str, Any]) -> bool:
+        """
+        Determine if a pattern can be optimized
+        
+        Args:
+            pattern: Pattern to check
+            
+        Returns:
+            Whether pattern can be optimized
+        """
+        # Check if pattern has enough complexity to optimize
+        return len(pattern) >= 3
+    
+    def optimize_pattern(self, pattern: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Optimize a pattern for better recognition
+        
+        Args:
+            pattern: Pattern to optimize
+            
+        Returns:
+            Optimized pattern
+        """
+        optimized = pattern.copy()
+        
+        # Find most distinctive features
+        for key, value in optimized.items():
+            # Skip metadata keys
+            if key.startswith('_'):
+                continue
+            
+            # Enhance string matching with variants
+            if isinstance(value, str) and len(value) > 5:
+                # Add variations or keywords for more robust matching
+                optimized[key] = {
+                    "primary": value,
+                    "variants": [value.lower(), value.upper(), value.capitalize()],
+                    "weight": 1.2  # Give this feature more weight
+                }
+            
+            # Enhance numeric ranges
+            elif isinstance(value, dict) and 'min' in value and 'max' in value:
+                # Expand range slightly for better matching
+                min_val = value['min']
+                max_val = value['max']
+                range_size = max_val - min_val
+                
+                optimized[key] = {
+                    'min': min_val - (range_size * 0.1),
+                    'max': max_val + (range_size * 0.1),
+                    'optimal': (min_val + max_val) / 2,
+                    'weight': 1.5
+                }
+        
+        return optimized
+    
+    def can_simplify(self, pattern: Dict[str, Any]) -> bool:
+        """
+        Determine if a pattern can be simplified
+        
+        Args:
+            pattern: Pattern to check
+            
+        Returns:
+            Whether pattern can be simplified
+        """
+        # Check if pattern has enough elements to simplify
+        return len(pattern) > 3
+    
+    def simplify_pattern(self, pattern: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Simplify a pattern for faster recognition
+        
+        Args:
+            pattern: Pattern to simplify
+            
+        Returns:
+            Simplified pattern
+        """
+        simplified = {}
+        
+        # Find most important features
+        feature_scores = {}
+        for key, value in pattern.items():
+            # Skip metadata keys
+            if key.startswith('_'):
+                continue
+            
+            # Score features by expected distinctiveness
+            if isinstance(value, dict) and value.get('weight', 0) > 0:
+                feature_scores[key] = value.get('weight', 1)
+            elif isinstance(value, dict) and ('min' in value or 'max' in value):
+                feature_scores[key] = 1.2  # Numeric ranges are distinctive
+            elif isinstance(value, str) and len(value) > 3:
+                feature_scores[key] = 1.0  # Strings are useful
+            elif isinstance(value, list) and len(value) > 0:
+                feature_scores[key] = 0.8  # Lists are somewhat useful
+            else:
+                feature_scores[key] = 0.5  # Other features
+        
+        # Keep only top 3 most distinctive features
+        top_features = sorted(feature_scores.items(), key=lambda x: x[1], reverse=True)[:3]
+        
+        for key, _ in top_features:
+            simplified[key] = pattern[key]
+        
+        # Ensure we keep metadata
+        for key, value in pattern.items():
+            if key.startswith('_'):
+                simplified[key] = value
+        
+        return simplified
