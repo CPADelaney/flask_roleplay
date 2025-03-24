@@ -181,3 +181,195 @@ class ProceduralMemoryConsolidator:
         self.consolidation_history = []
         self.max_history = 20
         self.templates = {}  # Template id -> template
+
+    async def consolidate_procedural_memory(self) -> Dict[str, Any]:
+        """Consolidate procedural memory during downtime"""
+        # Identify related procedures
+        related_procedures = self._find_related_procedures()
+        
+        # Extract common patterns
+        common_patterns = self._extract_common_patterns(related_procedures)
+        
+        # Create generalized templates
+        templates = []
+        for pattern in common_patterns:
+            template = self._create_template(pattern)
+            if template:
+                templates.append(template)
+                self.templates[template["id"]] = template
+        
+        # Update existing procedures with references to templates
+        updated = await self._update_procedures_with_templates(templates)
+        
+        # Record consolidation
+        self.consolidation_history.append({
+            "consolidated_templates": len(templates),
+            "procedures_updated": updated,
+            "timestamp": datetime.datetime.now().isoformat()
+        })
+        
+        # Trim history
+        if len(self.consolidation_history) > self.max_history:
+            self.consolidation_history = self.consolidation_history[-self.max_history:]
+        
+        return {
+            "consolidated_templates": len(templates),
+            "procedures_updated": updated
+        }
+    
+    def _find_related_procedures(self) -> List[Dict[str, Any]]:
+        """Find procedures that might share patterns"""
+        # In a real implementation, this would query the memory system
+        # For now, return a placeholder list
+        return []
+    
+    def _extract_common_patterns(self, procedures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Extract common patterns across procedures"""
+        # Group steps by function
+        step_groups = defaultdict(list)
+        
+        for procedure in procedures:
+            for step in procedure.get("steps", []):
+                function = step.get("function")
+                if function:
+                    step_groups[function].append({
+                        "step": step,
+                        "procedure_id": procedure.get("id"),
+                        "procedure_domain": procedure.get("domain")
+                    })
+        
+        # Find common sequences
+        common_patterns = []
+        
+        # Simple pattern: consecutive steps with same functions
+        for i in range(len(procedures)):
+            proc1 = procedures[i]
+            steps1 = proc1.get("steps", [])
+            
+            for j in range(i+1, len(procedures)):
+                proc2 = procedures[j]
+                steps2 = proc2.get("steps", [])
+                
+                # Find longest common subsequence of steps
+                common_seq = self._find_longest_common_subsequence(steps1, steps2)
+                
+                if len(common_seq) >= 2:  # At least 2 steps to form a pattern
+                    common_patterns.append({
+                        "steps": common_seq,
+                        "procedure_ids": [proc1.get("id"), proc2.get("id")],
+                        "domains": [proc1.get("domain"), proc2.get("domain")],
+                        "pattern_type": "sequence"
+                    })
+        
+        return common_patterns
+    
+    def _find_longest_common_subsequence(
+        self, 
+        steps1: List[Dict[str, Any]], 
+        steps2: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Find longest common subsequence of steps between two procedures"""
+        # Convert steps to function sequences for simpler comparison
+        funcs1 = [step.get("function") for step in steps1]
+        funcs2 = [step.get("function") for step in steps2]
+        
+        # DP table
+        m, n = len(funcs1), len(funcs2)
+        dp = [[0 for _ in range(n+1)] for _ in range(m+1)]
+        
+        # Fill DP table
+        for i in range(1, m+1):
+            for j in range(1, n+1):
+                if funcs1[i-1] == funcs2[j-1]:
+                    dp[i][j] = dp[i-1][j-1] + 1
+                else:
+                    dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+        
+        # Backtrack to find sequence
+        common_seq = []
+        i, j = m, n
+        
+        while i > 0 and j > 0:
+            if funcs1[i-1] == funcs2[j-1]:
+                common_seq.append(steps1[i-1])
+                i -= 1
+                j -= 1
+            elif dp[i-1][j] > dp[i][j-1]:
+                i -= 1
+            else:
+                j -= 1
+        
+        # Reverse to get correct order
+        common_seq.reverse()
+        
+        return common_seq
+    
+    def _create_template(self, pattern: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a generalized template from a pattern"""
+        if not pattern.get("steps"):
+            return None
+        
+        # Create template ID
+        template_id = f"template_{int(datetime.datetime.now().timestamp())}_{random.randint(1000, 9999)}"
+        
+        # Extract domains
+        domains = set(pattern.get("domains", []))
+        
+        # Create template steps - generalize parameters
+        template_steps = []
+        for i, step in enumerate(pattern["steps"]):
+            # Extract general parameters by comparing across instances
+            general_params = {}
+            specific_params = {}
+            
+            for key, value in step.get("parameters", {}).items():
+                # Check if this parameter is consistent across domains
+                is_general = True
+                
+                for domain in domains:
+                    # Check if domain-specific value exists for this parameter
+                    domain_specific = self._get_domain_specific_param(step, key, domain)
+                    if domain_specific is not None and domain_specific != value:
+                        is_general = False
+                        specific_params[domain] = specific_params.get(domain, {})
+                        specific_params[domain][key] = domain_specific
+                
+                if is_general:
+                    general_params[key] = value
+            
+            # Create template step
+            template_steps.append({
+                "id": f"step_{i+1}",
+                "function": step.get("function"),
+                "description": step.get("description", f"Step {i+1}"),
+                "general_parameters": general_params,
+                "domain_specific_parameters": specific_params
+            })
+        
+        # Create the template
+        return {
+            "id": template_id,
+            "name": f"Template for {pattern['pattern_type']}",
+            "steps": template_steps,
+            "domains": list(domains),
+            "created_at": datetime.datetime.now().isoformat()
+        }
+    
+    def _get_domain_specific_param(
+        self, 
+        step: Dict[str, Any], 
+        param_key: str, 
+        domain: str
+    ) -> Any:
+        """Get domain-specific value for a parameter"""
+        # This would require domain knowledge about parameter mappings
+        # For simplicity, just return the current value
+        return step.get("parameters", {}).get(param_key)
+    
+    async def _update_procedures_with_templates(self, templates: List[Dict[str, Any]]) -> int:
+        """Update existing procedures with references to templates"""
+        updated_count = 0
+        
+        # In a real implementation, this would update procedures in memory
+        # For now, just return a placeholder count
+        return updated_count
