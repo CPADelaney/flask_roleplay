@@ -12,7 +12,7 @@ import openai
 
 from routes.settings_routes import insert_missing_settings, generate_mega_setting_logic
 from logic.chatgpt_integration import get_chatgpt_response, get_openai_client
-from logic.aggregator import get_aggregated_roleplay_context
+from logic.aggregator_sdk import get_aggregated_roleplay_context
 from db.connection import get_db_connection  # Not used anymore if using asyncpg
 from routes.story_routes import build_aggregator_text
 
