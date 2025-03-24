@@ -11,7 +11,7 @@ import json
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union
 
-from context.unified_context_service import (
+from context.context_service import (
     get_context_service,
     get_comprehensive_context,
     cleanup_all_services
