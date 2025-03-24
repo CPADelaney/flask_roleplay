@@ -224,12 +224,36 @@ class MetaCore:
                 json.dumps(context_data),
                 context=self.context
             )
+
+        # Add self-improvement idea generation periodically
+        if self.context.cognitive_cycle_count % 20 == 0:  # Every 20 cycles
+            await self._generate_improvement_ideas()       
             
         # Update system metrics
         self._update_system_metrics(cycle_start)
         
         # Parse and return the result
         return json.loads(result.final_output) if isinstance(result.final_output, str) else result.final_output
+    
+    async def _generate_improvement_ideas(self):
+        """Generate ideas for system improvement"""
+        prompt = "What improvements could be made to my systems based on recent performance and interactions?"
+        
+        try:
+            result = await Runner.run(
+                self.reflection_agent,
+                prompt
+            )
+            
+            ideas = result.final_output
+            
+            # Log ideas to issue tracker
+            await self.issue_tracker.process_observation(
+                f"Self-generated improvement ideas: {ideas}",
+                context=f"Generated during cognitive cycle {self.context.cognitive_cycle_count}"
+            )
+        except Exception as e:
+            logger.error(f"Error generating improvement ideas: {str(e)}")
     
     def _create_meta_agent(self) -> Agent:
         """Create the main orchestration agent"""
