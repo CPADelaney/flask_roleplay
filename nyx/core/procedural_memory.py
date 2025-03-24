@@ -8,7 +8,7 @@ import math
 import random
 import numpy as np
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Set
-from collections import Counter
+from collections import Counter, defaultdict
 from pydantic import BaseModel, Field
 
 # OpenAI Agents SDK imports
@@ -4344,6 +4344,3606 @@ async def demonstrate_procedural_memory():
         print(f"- {proc['name']} ({proc['domain']}) - Proficiency: {proc['proficiency']:.2f}")
     
     return manager
+
+# enhanced pieces
+
+# ============================================================================
+# 1. HIERARCHICAL PROCEDURE REPRESENTATION
+# ============================================================================
+
+class HierarchicalProcedure(BaseModel):
+    """Hierarchical representation of procedures with sub-procedures and goals"""
+    id: str
+    name: str
+    description: str
+    parent_id: Optional[str] = None
+    children: List[str] = Field(default_factory=list)
+    goal_state: Dict[str, Any] = Field(default_factory=dict)
+    preconditions: Dict[str, Any] = Field(default_factory=dict)
+    postconditions: Dict[str, Any] = Field(default_factory=dict)
+    is_abstract: bool = False
+    domain: str
+    steps: List[Dict[str, Any]] = Field(default_factory=list)
+    execution_count: int = 0
+    successful_executions: int = 0
+    average_execution_time: float = 0.0
+    proficiency: float = 0.0
+    created_at: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    last_updated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    last_execution: Optional[str] = None
+    
+    def add_child(self, child_id: str) -> None:
+        """Add a child procedure to this procedure"""
+        if child_id not in self.children:
+            self.children.append(child_id)
+            self.last_updated = datetime.datetime.now().isoformat()
+    
+    def remove_child(self, child_id: str) -> None:
+        """Remove a child procedure from this procedure"""
+        if child_id in self.children:
+            self.children.remove(child_id)
+            self.last_updated = datetime.datetime.now().isoformat()
+    
+    def meets_preconditions(self, context: Dict[str, Any]) -> bool:
+        """Check if context meets all preconditions"""
+        for key, value in self.preconditions.items():
+            if key not in context:
+                return False
+            
+            # Handle different value types
+            if isinstance(value, (list, tuple, set)):
+                if context[key] not in value:
+                    return False
+            elif isinstance(value, dict) and "min" in value and "max" in value:
+                if not (value["min"] <= context[key] <= value["max"]):
+                    return False
+            elif context[key] != value:
+                return False
+        
+        return True
+    
+    def update_goal_state(self, goal: Dict[str, Any]) -> None:
+        """Update the goal state"""
+        self.goal_state.update(goal)
+        self.last_updated = datetime.datetime.now().isoformat()
+
+# ============================================================================
+# 2. LEARNING FROM OBSERVATION
+# ============================================================================
+
+class ObservationLearner(BaseModel):
+    """System for learning procedures from observation"""
+    observation_history: List[Dict[str, Any]] = Field(default_factory=list)
+    pattern_detection_threshold: float = 0.7
+    max_history: int = 100
+    
+    async def learn_from_demonstration(
+        self, 
+        observation_sequence: List[Dict[str, Any]], 
+        domain: str
+    ) -> Dict[str, Any]:
+        """Learn a procedure from a sequence of observed actions"""
+        # Store observations in history
+        self.observation_history.extend(observation_sequence)
+        if len(self.observation_history) > self.max_history:
+            self.observation_history = self.observation_history[-self.max_history:]
+        
+        # Extract action patterns
+        action_patterns = self._extract_action_patterns(observation_sequence)
+        
+        # Identify important state changes
+        state_changes = self._identify_significant_state_changes(observation_sequence)
+        
+        # Generate procedure steps
+        steps = self._generate_steps_from_patterns(action_patterns, state_changes)
+        
+        # Create metadata for the new procedure
+        procedure_data = {
+            "name": f"learned_procedure_{int(datetime.datetime.now().timestamp())}",
+            "steps": steps,
+            "description": "Procedure learned from demonstration",
+            "domain": domain,
+            "created_from_observations": True,
+            "observation_count": len(observation_sequence),
+            "confidence": self._calculate_learning_confidence(action_patterns)
+        }
+        
+        return procedure_data
+    
+    def _extract_action_patterns(self, observations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Extract recurring action patterns from observations"""
+        # Count action frequencies
+        action_counts = Counter()
+        action_sequences = []
+        
+        for i in range(len(observations) - 1):
+            current = observations[i]
+            next_obs = observations[i + 1]
+            
+            # Create action pair key
+            if "action" in current and "action" in next_obs:
+                action_pair = f"{current['action']}→{next_obs['action']}"
+                action_counts[action_pair] += 1
+        
+        # Find common sequences
+        common_sequences = [pair for pair, count in action_counts.items() 
+                          if count >= len(observations) * 0.3]  # At least 30% of observations
+        
+        # Convert to structured patterns
+        patterns = []
+        for seq in common_sequences:
+            actions = seq.split("→")
+            patterns.append({
+                "sequence": actions,
+                "frequency": action_counts[seq] / (len(observations) - 1),
+                "action_types": actions
+            })
+        
+        return patterns
+    
+    def _identify_significant_state_changes(self, observations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Identify significant state changes in observations"""
+        state_changes = []
+        
+        for i in range(len(observations) - 1):
+            current_state = observations[i].get("state", {})
+            next_state = observations[i + 1].get("state", {})
+            
+            # Find state changes
+            changes = {}
+            for key in set(current_state.keys()) | set(next_state.keys()):
+                if key in current_state and key in next_state:
+                    if current_state[key] != next_state[key]:
+                        changes[key] = {
+                            "from": current_state[key],
+                            "to": next_state[key]
+                        }
+                elif key in next_state:
+                    # New state variable
+                    changes[key] = {
+                        "from": None,
+                        "to": next_state[key]
+                    }
+            
+            if changes:
+                state_changes.append({
+                    "action": observations[i].get("action", "unknown"),
+                    "changes": changes,
+                    "index": i
+                })
+        
+        return state_changes
+    
+    def _generate_steps_from_patterns(
+        self, 
+        patterns: List[Dict[str, Any]],
+        state_changes: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Generate procedure steps from detected patterns and state changes"""
+        steps = []
+        
+        # Convert patterns into steps
+        for i, pattern in enumerate(patterns):
+            # Find related state changes
+            related_changes = []
+            for change in state_changes:
+                if change["action"] in pattern["sequence"]:
+                    related_changes.append(change)
+            
+            # Create parameters from state changes
+            parameters = {}
+            if related_changes:
+                for change in related_changes:
+                    for key, value in change["changes"].items():
+                        # Only use target state values for parameters
+                        if value["to"] is not None:
+                            parameters[key] = value["to"]
+            
+            # Create the step
+            steps.append({
+                "id": f"step_{i+1}",
+                "description": f"Perform action sequence: {', '.join(pattern['sequence'])}",
+                "function": pattern["sequence"][0] if pattern["sequence"] else "unknown_action",
+                "parameters": parameters
+            })
+        
+        # If no patterns found, create steps directly from observations
+        if not steps and state_changes:
+            for i, change in enumerate(state_changes):
+                # Create the step
+                steps.append({
+                    "id": f"step_{i+1}",
+                    "description": f"Perform action: {change['action']}",
+                    "function": change["action"],
+                    "parameters": {k: v["to"] for k, v in change["changes"].items() if v["to"] is not None}
+                })
+        
+        return steps
+    
+    def _calculate_learning_confidence(self, patterns: List[Dict[str, Any]]) -> float:
+        """Calculate confidence in the learned procedure"""
+        if not patterns:
+            return 0.3  # Low confidence if no patterns found
+        
+        # Average frequency of patterns
+        avg_frequency = sum(p["frequency"] for p in patterns) / len(patterns)
+        
+        # Number of patterns relative to ideal (3-5 patterns is ideal)
+        pattern_count_factor = min(1.0, len(patterns) / 5)
+        
+        # Calculate confidence
+        confidence = avg_frequency * 0.7 + pattern_count_factor * 0.3
+        
+        return min(1.0, confidence)
+
+# ============================================================================
+# 3. ENHANCED ERROR RECOVERY WITH CAUSAL MODELS
+# ============================================================================
+
+class CausalModel(BaseModel):
+    """Causal model for reasoning about procedure failures"""
+    causes: Dict[str, List[Dict[str, float]]] = Field(default_factory=dict)
+    interventions: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
+    error_history: List[Dict[str, Any]] = Field(default_factory=list)
+    max_history: int = 50
+    
+    def identify_likely_causes(self, error: Dict[str, Any]) -> List[Dict[str, float]]:
+        """Identify likely causes of an error"""
+        # Add to error history
+        self.error_history.append({
+            "error": error,
+            "timestamp": datetime.datetime.now().isoformat()
+        })
+        
+        # Trim history if needed
+        if len(self.error_history) > self.max_history:
+            self.error_history = self.error_history[-self.max_history:]
+        
+        # Extract error type and context
+        error_type = error.get("type", "unknown_error")
+        context = error.get("context", {})
+        
+        # Find matching causes in our model
+        if error_type in self.causes:
+            likely_causes = self.causes[error_type].copy()
+            
+            # Adjust probabilities based on context
+            for cause in likely_causes:
+                # Check for context matches
+                if "context_factors" in cause:
+                    match_score = self._calculate_context_match(cause["context_factors"], context)
+                    cause["probability"] *= match_score
+            
+            # Sort by probability and return
+            likely_causes.sort(key=lambda x: x["probability"], reverse=True)
+            return likely_causes
+        
+        # No known causes, generate basic hypothesis
+        return [{
+            "cause": "unknown",
+            "description": "Unknown cause for this error type",
+            "probability": 0.5
+        }]
+    
+    def suggest_interventions(self, causes: List[Dict[str, float]]) -> List[Dict[str, Any]]:
+        """Suggest interventions based on identified causes"""
+        suggested_interventions = []
+        
+        for cause in causes:
+            cause_id = cause.get("cause", "unknown")
+            
+            # Look for interventions for this cause
+            if cause_id in self.interventions:
+                for intervention in self.interventions[cause_id]:
+                    # Copy intervention and add confidence based on cause probability
+                    intervention_copy = intervention.copy()
+                    intervention_copy["confidence"] = cause["probability"] * intervention.get("effectiveness", 0.7)
+                    suggested_interventions.append(intervention_copy)
+        
+        # Sort by confidence
+        suggested_interventions.sort(key=lambda x: x["confidence"], reverse=True)
+        
+        # If no specific interventions found, suggest general ones
+        if not suggested_interventions:
+            suggested_interventions = [
+                {
+                    "type": "retry",
+                    "description": "Retry the failed operation",
+                    "confidence": 0.5
+                },
+                {
+                    "type": "alternative_approach",
+                    "description": "Try an alternative approach to accomplish the same goal",
+                    "confidence": 0.4
+                }
+            ]
+        
+        return suggested_interventions
+    
+    def update_from_outcome(self, 
+                          error: Dict[str, Any], 
+                          cause: str, 
+                          intervention: Dict[str, Any], 
+                          success: bool) -> None:
+        """Update the causal model based on intervention outcome"""
+        error_type = error.get("type", "unknown_error")
+        
+        # Update cause probability
+        if error_type in self.causes:
+            for cause_entry in self.causes[error_type]:
+                if cause_entry["cause"] == cause:
+                    # Update probability based on success
+                    cause_entry["probability"] = (cause_entry["probability"] * 0.8) + (0.2 if success else 0.0)
+                    break
+        else:
+            # New error type
+            self.causes[error_type] = [{
+                "cause": cause,
+                "description": f"Cause for {error_type}",
+                "probability": 0.7 if success else 0.3,
+                "context_factors": error.get("context", {})
+            }]
+        
+        # Update intervention effectiveness
+        if cause in self.interventions:
+            # Look for matching intervention
+            found = False
+            for int_entry in self.interventions[cause]:
+                if int_entry["type"] == intervention["type"]:
+                    # Update effectiveness based on success
+                    int_entry["effectiveness"] = (int_entry["effectiveness"] * 0.8) + (0.2 if success else 0.0)
+                    found = True
+                    break
+            
+            if not found:
+                # Add new intervention
+                self.interventions[cause].append({
+                    "type": intervention["type"],
+                    "description": intervention["description"],
+                    "effectiveness": 0.7 if success else 0.3
+                })
+        else:
+            # New cause
+            self.interventions[cause] = [{
+                "type": intervention["type"],
+                "description": intervention["description"],
+                "effectiveness": 0.7 if success else 0.3
+            }]
+    
+    def _calculate_context_match(self, factors: Dict[str, Any], context: Dict[str, Any]) -> float:
+        """Calculate how well context matches the factors"""
+        if not factors:
+            return 1.0  # No factors means everything matches
+        
+        matches = 0
+        total_factors = len(factors)
+        
+        for key, value in factors.items():
+            if key in context:
+                if isinstance(value, (list, tuple, set)):
+                    # Check if value is in list
+                    if context[key] in value:
+                        matches += 1
+                elif isinstance(value, dict) and "min" in value and "max" in value:
+                    # Range check
+                    if value["min"] <= context[key] <= value["max"]:
+                        matches += 1
+                elif context[key] == value:
+                    # Direct equality
+                    matches += 1
+        
+        # Return match percentage
+        return matches / total_factors if total_factors > 0 else 1.0
+
+# ============================================================================
+# 4. TEMPORAL ABSTRACTION AND SEQUENCE MODELING
+# ============================================================================
+
+class TemporalNode(BaseModel):
+    """Node in a temporal procedure graph"""
+    id: str
+    action: Dict[str, Any]
+    temporal_constraints: List[Dict[str, Any]] = Field(default_factory=list)
+    duration: Optional[Tuple[float, float]] = None  # (min, max) duration
+    next_nodes: List[str] = Field(default_factory=list)
+    prev_nodes: List[str] = Field(default_factory=list)
+    
+    def add_constraint(self, constraint: Dict[str, Any]) -> None:
+        """Add a temporal constraint to this node"""
+        self.temporal_constraints.append(constraint)
+    
+    def is_valid(self, execution_history: List[Dict[str, Any]]) -> bool:
+        """Check if this node's temporal constraints are valid"""
+        for constraint in self.temporal_constraints:
+            constraint_type = constraint.get("type")
+            
+            if constraint_type == "after":
+                # Must occur after another action
+                ref_action = constraint.get("action")
+                if not any(h["action"] == ref_action for h in execution_history):
+                    return False
+            elif constraint_type == "before":
+                # Must occur before another action
+                ref_action = constraint.get("action")
+                if any(h["action"] == ref_action for h in execution_history):
+                    return False
+            elif constraint_type == "delay":
+                # Must wait minimum time from last action
+                if execution_history:
+                    last_time = execution_history[-1].get("timestamp")
+                    min_delay = constraint.get("min_delay", 0)
+                    if last_time:
+                        last_time = datetime.datetime.fromisoformat(last_time)
+                        elapsed = (datetime.datetime.now() - last_time).total_seconds()
+                        if elapsed < min_delay:
+                            return False
+        
+        return True
+
+class TemporalProcedureGraph(BaseModel):
+    """Graph representation of a temporal procedure"""
+    id: str
+    name: str
+    nodes: Dict[str, TemporalNode] = Field(default_factory=dict)
+    edges: List[Tuple[str, str, Dict[str, Any]]] = Field(default_factory=list)
+    start_nodes: List[str] = Field(default_factory=list)
+    end_nodes: List[str] = Field(default_factory=list)
+    domain: str
+    created_at: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    last_updated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    
+    def add_node(self, node: TemporalNode) -> None:
+        """Add a node to the graph"""
+        self.nodes[node.id] = node
+        self.last_updated = datetime.datetime.now().isoformat()
+    
+    def add_edge(self, from_id: str, to_id: str, properties: Dict[str, Any] = None) -> None:
+        """Add an edge between nodes"""
+        if from_id in self.nodes and to_id in self.nodes:
+            self.edges.append((from_id, to_id, properties or {}))
+            
+            # Update node connections
+            self.nodes[from_id].next_nodes.append(to_id)
+            self.nodes[to_id].prev_nodes.append(from_id)
+            
+            self.last_updated = datetime.datetime.now().isoformat()
+    
+    def get_next_executable_nodes(self, execution_history: List[Dict[str, Any]]) -> List[str]:
+        """Get nodes that can be executed next based on history"""
+        # Start with nodes that have no predecessors if no history
+        if not execution_history:
+            return self.start_nodes
+        
+        # Get last executed node
+        last_action = execution_history[-1].get("node_id")
+        if not last_action or last_action not in self.nodes:
+            # Can't determine next actions
+            return []
+        
+        # Get possible next nodes
+        next_nodes = self.nodes[last_action].next_nodes
+        
+        # Filter by temporal constraints
+        valid_nodes = []
+        for node_id in next_nodes:
+            if node_id in self.nodes and self.nodes[node_id].is_valid(execution_history):
+                valid_nodes.append(node_id)
+        
+        return valid_nodes
+    
+    def validate_temporal_constraints(self) -> bool:
+        """Validate that temporal constraints are consistent"""
+        # Check for cycles with minimum durations
+        visited = set()
+        path = set()
+        
+        # Check each start node
+        for start in self.start_nodes:
+            if not self._check_for_negative_cycles(start, visited, path, 0):
+                return False
+        
+        return True
+    
+    def _check_for_negative_cycles(self, 
+                                 node_id: str, 
+                                 visited: Set[str], 
+                                 path: Set[str], 
+                                 current_duration: float) -> bool:
+        """Check for negative cycles in the graph (would make it impossible to satisfy)"""
+        if node_id in path:
+            # Found a cycle, check if the total duration is negative
+            return current_duration >= 0
+        
+        if node_id in visited:
+            return True
+        
+        visited.add(node_id)
+        path.add(node_id)
+        
+        # Check outgoing edges
+        for source, target, props in self.edges:
+            if source == node_id:
+                # Get edge duration
+                min_duration = props.get("min_duration", 0)
+                
+                # Recurse
+                if not self._check_for_negative_cycles(target, visited, path, 
+                                                      current_duration + min_duration):
+                    return False
+        
+        path.remove(node_id)
+        return True
+    
+    @classmethod
+    def from_procedure(cls, procedure: Procedure) -> 'TemporalProcedureGraph':
+        """Convert a standard procedure to a temporal procedure graph"""
+        graph = cls(
+            id=f"temporal_{procedure.id}",
+            name=f"Temporal graph for {procedure.name}",
+            domain=procedure.domain
+        )
+        
+        # Create nodes for each step
+        for i, step in enumerate(procedure.steps):
+            node = TemporalNode(
+                id=f"node_{step['id']}",
+                action={
+                    "function": step["function"],
+                    "parameters": step.get("parameters", {}),
+                    "description": step.get("description", f"Step {i+1}")
+                }
+            )
+            
+            graph.add_node(node)
+            
+            # First step is a start node
+            if i == 0:
+                graph.start_nodes.append(node.id)
+            
+            # Last step is an end node
+            if i == len(procedure.steps) - 1:
+                graph.end_nodes.append(node.id)
+        
+        # Create edges for sequential execution
+        for i in range(len(procedure.steps) - 1):
+            current_id = f"node_{procedure.steps[i]['id']}"
+            next_id = f"node_{procedure.steps[i+1]['id']}"
+            
+            graph.add_edge(current_id, next_id)
+        
+        return graph
+
+# ============================================================================
+# 5. INTEGRATION WITH WORKING MEMORY AND ATTENTION
+# ============================================================================
+
+class WorkingMemoryController:
+    """Controls working memory during procedure execution"""
+    
+    def __init__(self, capacity: int = 5):
+        self.items = []
+        self.capacity = capacity
+        self.focus_history = []
+        self.max_history = 20
+    
+    def update(self, context: Dict[str, Any], procedure: Procedure) -> None:
+        """Update working memory based on context and current procedure"""
+        # Clear items that are no longer relevant
+        self.items = [item for item in self.items if self._is_still_relevant(item, context)]
+        
+        # Add new items from context
+        for key, value in context.items():
+            # Only consider simple types for working memory
+            if isinstance(value, (str, int, float, bool)):
+                # Prioritize items explicitly mentioned in procedure steps
+                priority = self._calculate_item_priority(key, value, procedure)
+                
+                # Create new working memory item
+                new_item = {
+                    "key": key,
+                    "value": value,
+                    "priority": priority,
+                    "added": datetime.datetime.now().isoformat()
+                }
+                
+                # Check if already in working memory
+                existing = next((i for i in self.items if i["key"] == key), None)
+                if existing:
+                    # Update existing item
+                    existing["value"] = value
+                    existing["priority"] = max(existing["priority"], priority)
+                else:
+                    # Add new item
+                    self.items.append(new_item)
+        
+        # Sort by priority and trim to capacity
+        self.items.sort(key=lambda x: x["priority"], reverse=True)
+        self.items = self.items[:self.capacity]
+    
+    def get_attention_focus(self) -> Dict[str, Any]:
+        """Get current focus of attention"""
+        if not self.items:
+            return {}
+        
+        # Choose the highest priority item as focus
+        focus_item = self.items[0]
+        
+        # Record focus for history
+        self.focus_history.append({
+            "key": focus_item["key"],
+            "value": focus_item["value"],
+            "timestamp": datetime.datetime.now().isoformat()
+        })
+        
+        # Trim history
+        if len(self.focus_history) > self.max_history:
+            self.focus_history = self.focus_history[-self.max_history:]
+        
+        return {
+            "focus_key": focus_item["key"],
+            "focus_value": focus_item["value"],
+            "working_memory": {item["key"]: item["value"] for item in self.items},
+            "memory_usage": f"{len(self.items)}/{self.capacity}"
+        }
+    
+    def _is_still_relevant(self, item: Dict[str, Any], context: Dict[str, Any]) -> bool:
+        """Check if a working memory item is still relevant"""
+        # Item mentioned in current context
+        if item["key"] in context:
+            return True
+        
+        # Recently added items stay relevant
+        added_time = datetime.datetime.fromisoformat(item["added"])
+        time_in_memory = (datetime.datetime.now() - added_time).total_seconds()
+        if time_in_memory < 60:  # Items stay relevant for at least 60 seconds
+            return True
+        
+        # High priority items stay relevant longer
+        if item["priority"] > 0.8:
+            return True
+        
+        return False
+    
+    def _calculate_item_priority(self, key: str, value: Any, procedure: Procedure) -> float:
+        """Calculate priority for an item"""
+        base_priority = 0.5  # Default priority
+        
+        # Check if mentioned in procedure steps
+        for step in procedure.steps:
+            # Check function name
+            if step["function"] == key:
+                base_priority = max(base_priority, 0.9)
+            
+            # Check parameters
+            params = step.get("parameters", {})
+            if key in params:
+                base_priority = max(base_priority, 0.8)
+            
+            # Check if value is used in parameters
+            if value in params.values():
+                base_priority = max(base_priority, 0.7)
+        
+        # Recency effect - recent focus gets higher priority
+        for i, focus in enumerate(reversed(self.focus_history)):
+            if focus["key"] == key:
+                # Calculate recency factor (higher for more recent focus)
+                recency = max(0.0, 1.0 - (i / 10))
+                base_priority = max(base_priority, 0.6 * recency)
+                break
+        
+        return base_priority
+
+# ============================================================================
+# 6. PARAMETER OPTIMIZATION WITH BAYESIAN METHODS
+# ============================================================================
+
+class ParameterOptimizer:
+    """Optimizes procedure parameters using Bayesian optimization"""
+    
+    def __init__(self):
+        self.parameter_models = {}
+        self.optimization_history = {}
+        self.bounds = {}  # Parameter bounds
+    
+    async def optimize_parameters(
+        self, 
+        procedure: Procedure, 
+        objective_function: Callable,
+        iterations: int = 10
+    ) -> Dict[str, Any]:
+        """Optimize parameters for a procedure"""
+        # Collect optimizable parameters
+        parameters = self._get_optimizable_parameters(procedure)
+        
+        if not parameters:
+            return {
+                "status": "no_parameters",
+                "message": "No optimizable parameters found"
+            }
+        
+        # Initialize history for this procedure
+        if procedure.id not in self.optimization_history:
+            self.optimization_history[procedure.id] = []
+        
+        # Prepare parameter space
+        param_space = {}
+        for param_info in parameters:
+            param_id = f"{param_info['step_id']}.{param_info['param_key']}"
+            
+            # Get or create bounds
+            if param_id not in self.bounds:
+                # Auto-detect bounds based on parameter type
+                self.bounds[param_id] = self._auto_detect_bounds(param_info["param_value"])
+            
+            param_space[param_id] = self.bounds[param_id]
+        
+        # Run optimization iterations
+        results = []
+        best_params = None
+        best_score = float('-inf')
+        
+        for i in range(iterations):
+            # Generate next parameters to try
+            if i == 0:
+                # First iteration: use current parameters
+                test_params = {param_id: self.bounds[param_id][0] for param_id in param_space}
+            else:
+                # Use Bayesian optimization to suggest next parameters
+                test_params = self._suggest_next_parameters(
+                    procedure.id, 
+                    param_space, 
+                    results
+                )
+            
+            # Apply parameters to procedure
+            procedure_copy = procedure.model_copy(deep=True)
+            self._apply_parameters(procedure_copy, test_params)
+            
+            # Evaluate objective function
+            score = await objective_function(procedure_copy)
+            
+            # Record result
+            result = {
+                "parameters": test_params,
+                "score": score,
+                "iteration": i
+            }
+            results.append(result)
+            self.optimization_history[procedure.id].append(result)
+            
+            # Track best parameters
+            if score > best_score:
+                best_score = score
+                best_params = test_params
+            
+            # Update models
+            self._update_parameter_models(procedure.id, results)
+        
+        # Return best parameters
+        return {
+            "status": "success",
+            "best_parameters": best_params,
+            "best_score": best_score,
+            "iterations": iterations,
+            "history": results
+        }
+    
+    def _get_optimizable_parameters(self, procedure: Procedure) -> List[Dict[str, Any]]:
+        """Get parameters that can be optimized"""
+        optimizable_params = []
+        
+        for step in procedure.steps:
+            for key, value in step.get("parameters", {}).items():
+                # Check if parameter is optimizable (numeric or boolean)
+                if isinstance(value, (int, float, bool)):
+                    optimizable_params.append({
+                        "step_id": step["id"],
+                        "param_key": key,
+                        "param_value": value,
+                        "param_type": type(value).__name__
+                    })
+        
+        return optimizable_params
+    
+    def _auto_detect_bounds(self, value: Any) -> Tuple[float, float]:
+        """Auto-detect reasonable bounds for a parameter"""
+        if isinstance(value, bool):
+            return (0, 1)  # Boolean as 0/1
+        elif isinstance(value, int):
+            # Integer bounds: go 5x below and above, with minimum of 0
+            lower = max(0, value // 5)
+            upper = value * 5
+            return (lower, upper)
+        elif isinstance(value, float):
+            # Float bounds: go 5x below and above, with minimum of 0
+            lower = max(0.0, value / 5)
+            upper = value * 5
+            return (lower, upper)
+        else:
+            # Default bounds
+            return (0, 10)
+    
+    def _suggest_next_parameters(
+        self, 
+        procedure_id: str, 
+        param_space: Dict[str, Tuple[float, float]], 
+        results: List[Dict[str, Any]]
+    ) -> Dict[str, float]:
+        """Suggest next parameters to try using Bayesian optimization"""
+        # If not enough results yet, use random sampling
+        if len(results) < 3:
+            return {
+                param_id: random.uniform(bounds[0], bounds[1])
+                for param_id, bounds in param_space.items()
+            }
+        
+        # Simple exploitation-exploration strategy
+        explore = random.random() < 0.3  # 30% chance to explore
+        
+        if explore:
+            # Random exploration
+            return {
+                param_id: random.uniform(bounds[0], bounds[1])
+                for param_id, bounds in param_space.items()
+            }
+        else:
+            # Exploitation: use parameters from best result with small perturbations
+            best_result = max(results, key=lambda x: x["score"])
+            best_params = best_result["parameters"]
+            
+            # Add small random perturbations
+            return {
+                param_id: self._perturb_parameter(param_id, value, param_space[param_id])
+                for param_id, value in best_params.items()
+            }
+    
+    def _perturb_parameter(
+        self, 
+        param_id: str, 
+        value: float, 
+        bounds: Tuple[float, float]
+    ) -> float:
+        """Add a small perturbation to a parameter value"""
+        min_val, max_val = bounds
+        range_val = max_val - min_val
+        
+        # Perturbation size: 5-15% of parameter range
+        perturbation_size = range_val * random.uniform(0.05, 0.15)
+        
+        # Add/subtract perturbation
+        if random.random() < 0.5:
+            new_value = value + perturbation_size
+        else:
+            new_value = value - perturbation_size
+        
+        # Ensure value stays within bounds
+        return max(min_val, min(max_val, new_value))
+    
+    def _apply_parameters(self, procedure: Procedure, parameters: Dict[str, float]) -> None:
+        """Apply parameters to a procedure"""
+        for param_id, value in parameters.items():
+            step_id, param_key = param_id.split(".")
+            
+            # Find the step
+            for step in procedure.steps:
+                if step["id"] == step_id and "parameters" in step:
+                    # Update parameter if it exists
+                    if param_key in step["parameters"]:
+                        # Convert type if needed
+                        original_type = type(step["parameters"][param_key])
+                        if original_type == bool:
+                            step["parameters"][param_key] = value > 0.5
+                        elif original_type == int:
+                            step["parameters"][param_key] = int(value)
+                        else:
+                            step["parameters"][param_key] = value
+    
+    def _update_parameter_models(self, procedure_id: str, results: List[Dict[str, Any]]) -> None:
+        """Update internal parameter models based on results"""
+        # This would normally update a Gaussian Process or other Bayesian model
+        # For simplicity, we're just storing the results
+        
+        # In a real implementation, this would use libraries like scikit-learn
+        # or GPyTorch to update a surrogate model of the objective function
+        pass
+
+# ============================================================================
+# 7. DYNAMIC EXECUTION STRATEGIES
+# ============================================================================
+
+class ExecutionStrategy(BaseModel):
+    """Strategy for executing a procedure"""
+    id: str
+    name: str
+    description: str
+    selection_criteria: Dict[str, Any] = Field(default_factory=dict)
+    
+    async def execute(
+        self, 
+        procedure: Procedure, 
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute the procedure according to this strategy"""
+        # Base implementation - must be overridden
+        raise NotImplementedError("This method must be implemented by subclasses")
+    
+    def should_select(self, context: Dict[str, Any], procedure: Procedure) -> float:
+        """Calculate how well this strategy matches the current context"""
+        score = 0.5  # Default score
+        
+        # Check each selection criterion
+        for key, value in self.selection_criteria.items():
+            if key in context:
+                if isinstance(value, (list, tuple, set)):
+                    # Check if context value is in list
+                    if context[key] in value:
+                        score += 0.1
+                elif isinstance(value, dict) and "min" in value and "max" in value:
+                    # Range check
+                    if value["min"] <= context[key] <= value["max"]:
+                        score += 0.1
+                elif context[key] == value:
+                    # Exact match
+                    score += 0.2
+        
+        return min(1.0, score)
+
+class DeliberateExecutionStrategy(ExecutionStrategy):
+    """Executes procedure carefully with validation between steps"""
+    
+    async def execute(
+        self, 
+        procedure: Procedure, 
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute procedure deliberately with checks between steps"""
+        start_time = datetime.datetime.now()
+        results = []
+        success = True
+        
+        # Initialize execution state
+        execution_state = context.copy()
+        execution_state["strategy"] = "deliberate"
+        execution_state["execution_history"] = []
+        
+        # Execute steps sequentially with validation
+        for i, step in enumerate(procedure.steps):
+            # Validate preconditions
+            if not self._validate_preconditions(step, execution_state):
+                results.append({
+                    "step_id": step["id"],
+                    "success": False,
+                    "error": "Preconditions not met",
+                    "execution_time": 0.0
+                })
+                success = False
+                break
+            
+            # Execute the step
+            step_result = await self._execute_step(step, execution_state)
+            results.append(step_result)
+            
+            # Update execution state
+            execution_state[f"step_{step['id']}_result"] = step_result
+            execution_state["execution_history"].append({
+                "step_id": step["id"],
+                "function": step["function"],
+                "success": step_result["success"],
+                "timestamp": datetime.datetime.now().isoformat()
+            })
+            
+            # Check for failure
+            if not step_result["success"]:
+                success = False
+                break
+            
+            # Validate postconditions
+            if not self._validate_postconditions(step, execution_state):
+                results.append({
+                    "step_id": step["id"],
+                    "success": False,
+                    "error": "Postconditions not met",
+                    "execution_time": 0.0
+                })
+                success = False
+                break
+        
+        # Calculate execution time
+        execution_time = (datetime.datetime.now() - start_time).total_seconds()
+        
+        return {
+            "success": success,
+            "results": results,
+            "execution_time": execution_time,
+            "strategy": "deliberate"
+        }
+    
+    def _validate_preconditions(self, step: Dict[str, Any], state: Dict[str, Any]) -> bool:
+        """Validate preconditions for a step"""
+        preconditions = step.get("preconditions", {})
+        
+        for key, value in preconditions.items():
+            if key not in state:
+                return False
+            
+            # Compare values
+            if isinstance(value, (list, tuple, set)):
+                if state[key] not in value:
+                    return False
+            elif isinstance(value, dict) and "min" in value and "max" in value:
+                if not (value["min"] <= state[key] <= value["max"]):
+                    return False
+            elif state[key] != value:
+                return False
+        
+        return True
+    
+    def _validate_postconditions(self, step: Dict[str, Any], state: Dict[str, Any]) -> bool:
+        """Validate postconditions for a step"""
+        postconditions = step.get("postconditions", {})
+        
+        for key, value in postconditions.items():
+            if key not in state:
+                return False
+            
+            # Compare values
+            if isinstance(value, (list, tuple, set)):
+                if state[key] not in value:
+                    return False
+            elif isinstance(value, dict) and "min" in value and "max" in value:
+                if not (value["min"] <= state[key] <= value["max"]):
+                    return False
+            elif state[key] != value:
+                return False
+        
+        return True
+    
+    async def _execute_step(self, step: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a single step"""
+        # This would normally call the actual function
+        # For now, just return a success result
+        return {
+            "step_id": step["id"],
+            "success": True,
+            "execution_time": 0.1,
+            "data": {}
+        }
+
+class AutomaticExecutionStrategy(ExecutionStrategy):
+    """Fast execution without validation between steps"""
+    
+    async def execute(
+        self, 
+        procedure: Procedure, 
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute procedure automatically without validation"""
+        start_time = datetime.datetime.now()
+        results = []
+        success = True
+        
+        # Initialize execution state
+        execution_state = context.copy()
+        execution_state["strategy"] = "automatic"
+        execution_state["execution_history"] = []
+        
+        # Check if procedure is chunked
+        if procedure.is_chunked:
+            # Execute chunks
+            chunks = self._get_chunks(procedure)
+            
+            for chunk_id, chunk_steps in chunks.items():
+                # Execute chunk as a unit
+                chunk_result = await self._execute_chunk(
+                    chunk_steps, 
+                    execution_state, 
+                    chunk_id
+                )
+                
+                results.extend(chunk_result["results"])
+                
+                # Update execution state
+                execution_state[f"chunk_{chunk_id}_result"] = chunk_result
+                for step_result in chunk_result["results"]:
+                    step_id = step_result["step_id"]
+                    execution_state[f"step_{step_id}_result"] = step_result
+                    execution_state["execution_history"].append({
+                        "step_id": step_id,
+                        "chunk_id": chunk_id,
+                        "success": step_result["success"],
+                        "timestamp": datetime.datetime.now().isoformat()
+                    })
+                
+                # Check for failure
+                if not chunk_result["success"]:
+                    success = False
+                    break
+        else:
+            # Execute steps sequentially without validation
+            for step in procedure.steps:
+                # Execute the step
+                step_result = await self._execute_step(step, execution_state)
+                results.append(step_result)
+                
+                # Update execution state
+                execution_state[f"step_{step['id']}_result"] = step_result
+                execution_state["execution_history"].append({
+                    "step_id": step["id"],
+                    "function": step["function"],
+                    "success": step_result["success"],
+                    "timestamp": datetime.datetime.now().isoformat()
+                })
+                
+                # Check for failure
+                if not step_result["success"]:
+                    success = False
+                    break
+        
+        # Calculate execution time
+        execution_time = (datetime.datetime.now() - start_time).total_seconds()
+        
+        return {
+            "success": success,
+            "results": results,
+            "execution_time": execution_time,
+            "strategy": "automatic"
+        }
+    
+    def _get_chunks(self, procedure: Procedure) -> Dict[str, List[Dict[str, Any]]]:
+        """Get chunks from a procedure"""
+        chunks = {}
+        
+        for chunk_id, step_ids in procedure.chunked_steps.items():
+            # Get steps for this chunk
+            chunk_steps = [step for step in procedure.steps if step["id"] in step_ids]
+            chunks[chunk_id] = chunk_steps
+        
+        return chunks
+    
+    async def _execute_chunk(
+        self, 
+        steps: List[Dict[str, Any]], 
+        context: Dict[str, Any], 
+        chunk_id: str
+    ) -> Dict[str, Any]:
+        """Execute a chunk of steps as a unit"""
+        results = []
+        success = True
+        start_time = datetime.datetime.now()
+        
+        for step in steps:
+            # Execute the step
+            step_result = await self._execute_step(step, context)
+            results.append(step_result)
+            
+            # Check for failure
+            if not step_result["success"]:
+                success = False
+                break
+        
+        # Calculate execution time
+        execution_time = (datetime.datetime.now() - start_time).total_seconds()
+        
+        return {
+            "success": success,
+            "results": results,
+            "execution_time": execution_time,
+            "chunk_id": chunk_id
+        }
+    
+    async def _execute_step(self, step: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a single step"""
+        # This would normally call the actual function
+        # For now, just return a success result
+        return {
+            "step_id": step["id"],
+            "success": True,
+            "execution_time": 0.05,  # Faster than deliberate execution
+            "data": {}
+        }
+
+class AdaptiveExecutionStrategy(ExecutionStrategy):
+    """Adapts execution based on context and feedback"""
+    
+    async def execute(
+        self, 
+        procedure: Procedure, 
+        context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute procedure with adaptive strategy selection"""
+        start_time = datetime.datetime.now()
+        results = []
+        success = True
+        
+        # Initialize execution state
+        execution_state = context.copy()
+        execution_state["strategy"] = "adaptive"
+        execution_state["execution_history"] = []
+        
+        # Determine initial execution mode based on proficiency
+        deliberate_execution = procedure.proficiency < 0.8
+        
+        # Execute steps with adaptive strategy
+        for i, step in enumerate(procedure.steps):
+            # Decide execution strategy for this step
+            step_strategy = self._select_step_strategy(step, execution_state, deliberate_execution)
+            
+            # Execute step with selected strategy
+            if step_strategy == "deliberate":
+                # Careful execution with validation
+                if not self._validate_preconditions(step, execution_state):
+                    results.append({
+                        "step_id": step["id"],
+                        "success": False,
+                        "error": "Preconditions not met",
+                        "execution_time": 0.0,
+                        "strategy": "deliberate"
+                    })
+                    success = False
+                    break
+                
+                step_result = await self._execute_step(step, execution_state)
+                step_result["strategy"] = "deliberate"
+                
+                if not self._validate_postconditions(step, execution_state, step_result):
+                    step_result["success"] = False
+                    step_result["error"] = "Postconditions not met"
+                    success = False
+                    results.append(step_result)
+                    break
+            else:
+                # Fast execution without validation
+                step_result = await self._execute_step(step, execution_state)
+                step_result["strategy"] = "automatic"
+            
+            # Add to results
+            results.append(step_result)
+            
+            # Update execution state
+            execution_state[f"step_{step['id']}_result"] = step_result
+            execution_state["execution_history"].append({
+                "step_id": step["id"],
+                "function": step["function"],
+                "success": step_result["success"],
+                "strategy": step_strategy,
+                "timestamp": datetime.datetime.now().isoformat()
+            })
+            
+            # Check for failure and adapt
+            if not step_result["success"]:
+                # Adapt strategy on failure
+                deliberate_execution = True
+                
+                # Try to recover if possible
+                if i < len(procedure.steps) - 1:
+                    recovery_successful = await self._attempt_recovery(
+                        step, 
+                        procedure.steps[i+1:], 
+                        execution_state
+                    )
+                    
+                    if recovery_successful:
+                        # Continue execution
+                        continue
+                
+                success = False
+                break
+        
+        # Calculate execution time
+        execution_time = (datetime.datetime.now() - start_time).total_seconds()
+        
+        return {
+            "success": success,
+            "results": results,
+            "execution_time": execution_time,
+            "strategy": "adaptive",
+            "adaptations": execution_state.get("adaptations", [])
+        }
+    
+    def _select_step_strategy(
+        self, 
+        step: Dict[str, Any], 
+        state: Dict[str, Any], 
+        default_deliberate: bool
+    ) -> str:
+        """Select execution strategy for a step"""
+        # Check if step has explicit strategy preference
+        if "preferred_strategy" in step:
+            return step["preferred_strategy"]
+        
+        # Check if step is high-risk
+        if "risk_level" in step and step["risk_level"] > 0.7:
+            return "deliberate"
+        
+        # Check execution history for this step
+        history = state.get("execution_history", [])
+        step_history = [h for h in history if h.get("step_id") == step["id"]]
+        
+        if step_history:
+            # Check success rate
+            success_rate = sum(1 for h in step_history if h.get("success", False)) / len(step_history)
+            
+            if success_rate < 0.8:
+                # Low success rate, use deliberate execution
+                return "deliberate"
+        
+        # Use default (based on overall procedure proficiency)
+        return "deliberate" if default_deliberate else "automatic"
+    
+    def _validate_preconditions(self, step: Dict[str, Any], state: Dict[str, Any]) -> bool:
+        """Validate preconditions for a step"""
+        preconditions = step.get("preconditions", {})
+        
+        for key, value in preconditions.items():
+            if key not in state:
+                return False
+            
+            # Compare values
+            if isinstance(value, (list, tuple, set)):
+                if state[key] not in value:
+                    return False
+            elif isinstance(value, dict) and "min" in value and "max" in value:
+                if not (value["min"] <= state[key] <= value["max"]):
+                    return False
+            elif state[key] != value:
+                return False
+        
+        return True
+    
+    def _validate_postconditions(
+        self, 
+        step: Dict[str, Any], 
+        state: Dict[str, Any], 
+        result: Dict[str, Any]
+    ) -> bool:
+        """Validate postconditions for a step"""
+        postconditions = step.get("postconditions", {})
+        
+        # First check result success
+        if not result.get("success", False):
+            return False
+        
+        # Check explicit postconditions
+        for key, value in postconditions.items():
+            if key not in state:
+                return False
+            
+            # Compare values
+            if isinstance(value, (list, tuple, set)):
+                if state[key] not in value:
+                    return False
+            elif isinstance(value, dict) and "min" in value and "max" in value:
+                if not (value["min"] <= state[key] <= value["max"]):
+                    return False
+            elif state[key] != value:
+                return False
+        
+        return True
+    
+    async def _execute_step(self, step: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a single step"""
+        # This would normally call the actual function
+        # For now, just return a success result
+        return {
+            "step_id": step["id"],
+            "success": True,
+            "execution_time": 0.07,  # Between deliberate and automatic
+            "data": {}
+        }
+    
+    async def _attempt_recovery(
+        self, 
+        failed_step: Dict[str, Any], 
+        remaining_steps: List[Dict[str, Any]], 
+        state: Dict[str, Any]
+    ) -> bool:
+        """Attempt to recover from a step failure"""
+        # Track adaptation
+        if "adaptations" not in state:
+            state["adaptations"] = []
+        
+        state["adaptations"].append({
+            "type": "recovery_attempt",
+            "step_id": failed_step["id"],
+            "timestamp": datetime.datetime.now().isoformat()
+        })
+        
+        # Try a retry with modified parameters
+        modified_params = self._modify_parameters(failed_step.get("parameters", {}))
+        
+        retry_step = failed_step.copy()
+        retry_step["parameters"] = modified_params
+        retry_step["is_recovery"] = True
+        
+        # Execute with modified parameters
+        retry_result = await self._execute_step(retry_step, state)
+        
+        if retry_result.get("success", False):
+            # Recovery successful
+            state["adaptations"][-1]["result"] = "success"
+            state["adaptations"][-1]["method"] = "parameter_modification"
+            
+            # Update execution state
+            state[f"step_{failed_step['id']}_result"] = retry_result
+            state["execution_history"].append({
+                "step_id": failed_step["id"],
+                "function": failed_step["function"],
+                "success": True,
+                "strategy": "recovery",
+                "timestamp": datetime.datetime.now().isoformat()
+            })
+            
+            return True
+        
+        # Recovery failed
+        state["adaptations"][-1]["result"] = "failure"
+        return False
+    
+    def _modify_parameters(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Modify parameters for recovery attempt"""
+        modified = parameters.copy()
+        
+        # Modify numeric parameters slightly
+        for key, value in parameters.items():
+            if isinstance(value, (int, float)):
+                # Adjust by small percentage
+                if random.random() < 0.5:
+                    modified[key] = value * 1.1  # Increase by 10%
+                else:
+                    modified[key] = value * 0.9  # Decrease by 10%
+        
+        return modified
+
+class StrategySelector:
+    """Selects appropriate execution strategy based on context"""
+    
+    def __init__(self):
+        self.strategies = {}  # id -> ExecutionStrategy
+        self.execution_history = []
+        self.max_history = 50
+    
+    def register_strategy(self, strategy: ExecutionStrategy) -> None:
+        """Register an execution strategy"""
+        self.strategies[strategy.id] = strategy
+    
+    def select_strategy(self, context: Dict[str, Any], procedure: Procedure) -> ExecutionStrategy:
+        """Select the most appropriate execution strategy"""
+        if not self.strategies:
+            # No strategies registered, return a default
+            return ExecutionStrategy(
+                id="default", 
+                name="Default Strategy", 
+                description="Default execution strategy"
+            )
+        
+        # Calculate scores for each strategy
+        scores = []
+        for strategy_id, strategy in self.strategies.items():
+            score = strategy.should_select(context, procedure)
+            scores.append((strategy_id, score))
+        
+        # Get highest scoring strategy
+        best_strategy_id, best_score = max(scores, key=lambda x: x[1])
+        
+        # Record selection
+        self.execution_history.append({
+            "strategy_id": best_strategy_id,
+            "score": best_score,
+            "context": {k: v for k, v in context.items() if not isinstance(v, (dict, list))},
+            "procedure_id": procedure.id,
+            "timestamp": datetime.datetime.now().isoformat()
+        })
+        
+        # Trim history
+        if len(self.execution_history) > self.max_history:
+            self.execution_history = self.execution_history[-self.max_history:]
+        
+        return self.strategies[best_strategy_id]
+
+# ============================================================================
+# 8. MEMORY CONSOLIDATION FOR PROCEDURAL KNOWLEDGE
+# ============================================================================
+
+class ProceduralMemoryConsolidator:
+    """Consolidates and optimizes procedural memory"""
+    
+    def __init__(self, memory_core=None):
+        self.memory_core = memory_core
+        self.consolidation_history = []
+        self.max_history = 20
+        self.templates = {}  # Template id -> template
+    
+    async def consolidate_procedural_memory(self) -> Dict[str, Any]:
+        """Consolidate procedural memory during downtime"""
+        # Identify related procedures
+        related_procedures = self._find_related_procedures()
+        
+        # Extract common patterns
+        common_patterns = self._extract_common_patterns(related_procedures)
+        
+        # Create generalized templates
+        templates = []
+        for pattern in common_patterns:
+            template = self._create_template(pattern)
+            if template:
+                templates.append(template)
+                self.templates[template["id"]] = template
+        
+        # Update existing procedures with references to templates
+        updated = await self._update_procedures_with_templates(templates)
+        
+        # Record consolidation
+        self.consolidation_history.append({
+            "consolidated_templates": len(templates),
+            "procedures_updated": updated,
+            "timestamp": datetime.datetime.now().isoformat()
+        })
+        
+        # Trim history
+        if len(self.consolidation_history) > self.max_history:
+            self.consolidation_history = self.consolidation_history[-self.max_history:]
+        
+        return {
+            "consolidated_templates": len(templates),
+            "procedures_updated": updated
+        }
+    
+    def _find_related_procedures(self) -> List[Dict[str, Any]]:
+        """Find procedures that might share patterns"""
+        # In a real implementation, this would query the memory system
+        # For now, return a placeholder list
+        return []
+    
+    def _extract_common_patterns(self, procedures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Extract common patterns across procedures"""
+        # Group steps by function
+        step_groups = defaultdict(list)
+        
+        for procedure in procedures:
+            for step in procedure.get("steps", []):
+                function = step.get("function")
+                if function:
+                    step_groups[function].append({
+                        "step": step,
+                        "procedure_id": procedure.get("id"),
+                        "procedure_domain": procedure.get("domain")
+                    })
+        
+        # Find common sequences
+        common_patterns = []
+        
+        # Simple pattern: consecutive steps with same functions
+        for i in range(len(procedures)):
+            proc1 = procedures[i]
+            steps1 = proc1.get("steps", [])
+            
+            for j in range(i+1, len(procedures)):
+                proc2 = procedures[j]
+                steps2 = proc2.get("steps", [])
+                
+                # Find longest common subsequence of steps
+                common_seq = self._find_longest_common_subsequence(steps1, steps2)
+                
+                if len(common_seq) >= 2:  # At least 2 steps to form a pattern
+                    common_patterns.append({
+                        "steps": common_seq,
+                        "procedure_ids": [proc1.get("id"), proc2.get("id")],
+                        "domains": [proc1.get("domain"), proc2.get("domain")],
+                        "pattern_type": "sequence"
+                    })
+        
+        return common_patterns
+    
+    def _find_longest_common_subsequence(
+        self, 
+        steps1: List[Dict[str, Any]], 
+        steps2: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Find longest common subsequence of steps between two procedures"""
+        # Convert steps to function sequences for simpler comparison
+        funcs1 = [step.get("function") for step in steps1]
+        funcs2 = [step.get("function") for step in steps2]
+        
+        # DP table
+        m, n = len(funcs1), len(funcs2)
+        dp = [[0 for _ in range(n+1)] for _ in range(m+1)]
+        
+        # Fill DP table
+        for i in range(1, m+1):
+            for j in range(1, n+1):
+                if funcs1[i-1] == funcs2[j-1]:
+                    dp[i][j] = dp[i-1][j-1] + 1
+                else:
+                    dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+        
+        # Backtrack to find sequence
+        common_seq = []
+        i, j = m, n
+        
+        while i > 0 and j > 0:
+            if funcs1[i-1] == funcs2[j-1]:
+                common_seq.append(steps1[i-1])
+                i -= 1
+                j -= 1
+            elif dp[i-1][j] > dp[i][j-1]:
+                i -= 1
+            else:
+                j -= 1
+        
+        # Reverse to get correct order
+        common_seq.reverse()
+        
+        return common_seq
+    
+    def _create_template(self, pattern: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a generalized template from a pattern"""
+        if not pattern.get("steps"):
+            return None
+        
+        # Create template ID
+        template_id = f"template_{int(datetime.datetime.now().timestamp())}_{random.randint(1000, 9999)}"
+        
+        # Extract domains
+        domains = set(pattern.get("domains", []))
+        
+        # Create template steps - generalize parameters
+        template_steps = []
+        for i, step in enumerate(pattern["steps"]):
+            # Extract general parameters by comparing across instances
+            general_params = {}
+            specific_params = {}
+            
+            for key, value in step.get("parameters", {}).items():
+                # Check if this parameter is consistent across domains
+                is_general = True
+                
+                for domain in domains:
+                    # Check if domain-specific value exists for this parameter
+                    domain_specific = self._get_domain_specific_param(step, key, domain)
+                    if domain_specific is not None and domain_specific != value:
+                        is_general = False
+                        specific_params[domain] = specific_params.get(domain, {})
+                        specific_params[domain][key] = domain_specific
+                
+                if is_general:
+                    general_params[key] = value
+            
+            # Create template step
+            template_steps.append({
+                "id": f"step_{i+1}",
+                "function": step.get("function"),
+                "description": step.get("description", f"Step {i+1}"),
+                "general_parameters": general_params,
+                "domain_specific_parameters": specific_params
+            })
+        
+        # Create the template
+        return {
+            "id": template_id,
+            "name": f"Template for {pattern['pattern_type']}",
+            "steps": template_steps,
+            "domains": list(domains),
+            "created_at": datetime.datetime.now().isoformat()
+        }
+    
+    def _get_domain_specific_param(
+        self, 
+        step: Dict[str, Any], 
+        param_key: str, 
+        domain: str
+    ) -> Any:
+        """Get domain-specific value for a parameter"""
+        # This would require domain knowledge about parameter mappings
+        # For simplicity, just return the current value
+        return step.get("parameters", {}).get(param_key)
+    
+    async def _update_procedures_with_templates(self, templates: List[Dict[str, Any]]) -> int:
+        """Update existing procedures with references to templates"""
+        updated_count = 0
+        
+        # In a real implementation, this would update procedures in memory
+        # For now, just return a placeholder count
+        return updated_count
+
+# ============================================================================
+# 9. GRAPH-BASED REPRESENTATION FOR FLEXIBLE EXECUTION
+# ============================================================================
+
+class ProcedureGraph(BaseModel):
+    """Graph representation of a procedure for flexible execution"""
+    nodes: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    edges: List[Dict[str, Any]] = Field(default_factory=list)
+    entry_points: List[str] = Field(default_factory=list)
+    exit_points: List[str] = Field(default_factory=list)
+    
+    def add_node(self, node_id: str, data: Dict[str, Any]) -> None:
+        """Add a node to the graph"""
+        self.nodes[node_id] = data
+    
+    def add_edge(self, from_id: str, to_id: str, properties: Dict[str, Any] = None) -> None:
+        """Add an edge to the graph"""
+        self.edges.append({
+            "from": from_id,
+            "to": to_id,
+            "properties": properties or {}
+        })
+    
+    def find_execution_path(
+        self, 
+        context: Dict[str, Any],
+        goal: Dict[str, Any]
+    ) -> List[str]:
+        """Find execution path through the graph given context and goal"""
+        if not self.entry_points:
+            return []
+        
+        # Find all paths from entry to exit points
+        all_paths = []
+        
+        for entry in self.entry_points:
+            for exit_point in self.exit_points:
+                paths = self._find_all_paths(entry, exit_point)
+                all_paths.extend(paths)
+        
+        if not all_paths:
+            return []
+        
+        # Score each path based on context and goal
+        scored_paths = []
+        
+        for path in all_paths:
+            score = self._score_path(path, context, goal)
+            scored_paths.append((path, score))
+        
+        # Return highest scoring path
+        best_path, _ = max(scored_paths, key=lambda x: x[1])
+        return best_path
+    
+    def _find_all_paths(self, start: str, end: str, path: List[str] = None) -> List[List[str]]:
+        """Find all paths between two nodes"""
+        if path is None:
+            path = []
+        
+        path = path + [start]
+        
+        if start == end:
+            return [path]
+        
+        if start not in self.nodes:
+            return []
+        
+        paths = []
+        
+        # Find outgoing edges
+        for edge in self.edges:
+            if edge["from"] == start and edge["to"] not in path:
+                new_paths = self._find_all_paths(edge["to"], end, path)
+                for new_path in new_paths:
+                    paths.append(new_path)
+        
+        return paths
+    
+    def _score_path(self, path: List[str], context: Dict[str, Any], goal: Dict[str, Any]) -> float:
+        """Score a path based on context and goal"""
+        score = 0.5  # Base score
+        
+        # Check context match for each node
+        for node_id in path:
+            node_data = self.nodes.get(node_id, {})
+            preconditions = node_data.get("preconditions", {})
+            
+            # Check if preconditions match context
+            matches = 0
+            total = len(preconditions)
+            
+            for key, value in preconditions.items():
+                if key in context:
+                    if isinstance(value, (list, tuple, set)):
+                        if context[key] in value:
+                            matches += 1
+                    elif isinstance(value, dict) and "min" in value and "max" in value:
+                        if value["min"] <= context[key] <= value["max"]:
+                            matches += 1
+                    elif context[key] == value:
+                        matches += 1
+            
+            # Add to score based on precondition match percentage
+            if total > 0:
+                score += 0.1 * (matches / total)
+        
+        # Check if path achieves goal
+        last_node = self.nodes.get(path[-1], {})
+        postconditions = last_node.get("postconditions", {})
+        
+        goal_matches = 0
+        goal_total = len(goal)
+        
+        for key, value in goal.items():
+            if key in postconditions:
+                if isinstance(value, (list, tuple, set)):
+                    if postconditions[key] in value:
+                        goal_matches += 1
+                elif isinstance(value, dict) and "min" in value and "max" in value:
+                    if value["min"] <= postconditions[key] <= value["max"]:
+                        goal_matches += 1
+                elif postconditions[key] == value:
+                    goal_matches += 1
+        
+        # Add to score based on goal match percentage
+        if goal_total > 0:
+            goal_score = goal_matches / goal_total
+            score += 0.4 * goal_score  # Goal achievement is important
+        
+        return score
+    
+    @classmethod
+    def from_procedure(cls, procedure: Procedure) -> 'ProcedureGraph':
+        """Convert a standard procedure to a graph representation"""
+        graph = cls()
+        
+        # Create nodes for each step
+        for i, step in enumerate(procedure.steps):
+            node_id = f"node_{step['id']}"
+            
+            # Extract preconditions and postconditions
+            preconditions = step.get("preconditions", {})
+            postconditions = step.get("postconditions", {})
+            
+            # Create node
+            graph.add_node(node_id, {
+                "step_id": step["id"],
+                "function": step["function"],
+                "parameters": step.get("parameters", {}),
+                "description": step.get("description", f"Step {i+1}"),
+                "preconditions": preconditions,
+                "postconditions": postconditions
+            })
+            
+            # First step is an entry point
+            if i == 0:
+                graph.entry_points.append(node_id)
+            
+            # Last step is an exit point
+            if i == len(procedure.steps) - 1:
+                graph.exit_points.append(node_id)
+        
+        # Create edges for sequential execution
+        for i in range(len(procedure.steps) - 1):
+            from_id = f"node_{procedure.steps[i]['id']}"
+            to_id = f"node_{procedure.steps[i+1]['id']}"
+            
+            graph.add_edge(from_id, to_id)
+        
+        return graph
+
+# ============================================================================
+# 10. META-LEARNING FOR TRANSFER OPTIMIZATION
+# ============================================================================
+
+class TransferLearningOptimizer:
+    """Optimizes transfer learning between domains using meta-learning"""
+    
+    def __init__(self):
+        self.domain_embeddings = {}
+        self.transfer_success_history = []
+        self.domain_similarities = {}  # pair_key -> similarity
+        self.max_history = 50
+    
+    async def optimize_transfer(
+        self,
+        source_procedure: Procedure,
+        target_domain: str
+    ) -> Dict[str, Any]:
+        """Optimize transfer from source procedure to target domain"""
+        # Get domain embeddings
+        source_embedding = await self._get_domain_embedding(source_procedure.domain)
+        target_embedding = await self._get_domain_embedding(target_domain)
+        
+        # Calculate similarity
+        similarity = self._calculate_domain_similarity(source_procedure.domain, target_domain)
+        
+        # Determine transfer strategy based on similarity
+        if similarity > 0.8:
+            # High similarity - direct transfer with minimal adaptation
+            strategy = "direct_transfer"
+            adaptation_level = "minimal"
+        elif similarity > 0.5:
+            # Medium similarity - transfer with parameter adaptation
+            strategy = "parameter_adaptation"
+            adaptation_level = "moderate"
+        else:
+            # Low similarity - transfer with structural adaptation
+            strategy = "structural_adaptation"
+            adaptation_level = "extensive"
+        
+        # Identify optimal mappings for transfer
+        mappings = await self._identify_optimal_mappings(
+            source_procedure, 
+            target_domain,
+            strategy
+        )
+        
+        # Estimate success probability
+        success_probability = self._estimate_transfer_success(
+            source_procedure.domain,
+            target_domain,
+            strategy
+        )
+        
+        # Create transfer plan
+        transfer_plan = {
+            "source_domain": source_procedure.domain,
+            "target_domain": target_domain,
+            "domain_similarity": similarity,
+            "transfer_strategy": strategy,
+            "adaptation_level": adaptation_level,
+            "mappings": mappings,
+            "estimated_success": success_probability
+        }
+        
+        return transfer_plan
+    
+    async def _get_domain_embedding(self, domain: str) -> List[float]:
+        """Get embedding vector for a domain"""
+        # Check if embedding already exists
+        if domain in self.domain_embeddings:
+            return self.domain_embeddings[domain]
+        
+        # In a real implementation, this would be a learned embedding
+        # For now, generate a random embedding
+        embedding = [random.uniform(-1, 1) for _ in range(10)]
+        self.domain_embeddings[domain] = embedding
+        
+        return embedding
+    
+    def _calculate_domain_similarity(self, domain1: str, domain2: str) -> float:
+        """Calculate similarity between domains"""
+        # Check if already calculated
+        pair_key = f"{domain1}:{domain2}"
+        reverse_key = f"{domain2}:{domain1}"
+        
+        if pair_key in self.domain_similarities:
+            return self.domain_similarities[pair_key]
+        elif reverse_key in self.domain_similarities:
+            return self.domain_similarities[reverse_key]
+        
+        # Calculate similarity from embeddings if available
+        if domain1 in self.domain_embeddings and domain2 in self.domain_embeddings:
+            embedding1 = self.domain_embeddings[domain1]
+            embedding2 = self.domain_embeddings[domain2]
+            
+            # Cosine similarity
+            dot_product = sum(a * b for a, b in zip(embedding1, embedding2))
+            norm1 = sum(a * a for a in embedding1) ** 0.5
+            norm2 = sum(b * b for b in embedding2) ** 0.5
+            
+            if norm1 * norm2 == 0:
+                similarity = 0.0
+            else:
+                similarity = dot_product / (norm1 * norm2)
+        else:
+            # Default similarity based on domain name similarity
+            common_substring = self._longest_common_substring(domain1, domain2)
+            similarity = len(common_substring) / max(len(domain1), len(domain2))
+        
+        # Store for future reference
+        self.domain_similarities[pair_key] = similarity
+        
+        return similarity
+    
+    def _longest_common_substring(self, str1: str, str2: str) -> str:
+        """Find longest common substring between two strings"""
+        if not str1 or not str2:
+            return ""
+            
+        m = len(str1)
+        n = len(str2)
+        
+        # Create DP table
+        dp = [[0 for _ in range(n+1)] for _ in range(m+1)]
+        
+        # Variables to store longest substring info
+        max_length = 0
+        end_pos = 0
+        
+        # Fill DP table
+        for i in range(1, m+1):
+            for j in range(1, n+1):
+                if str1[i-1] == str2[j-1]:
+                    dp[i][j] = dp[i-1][j-1] + 1
+                    
+                    if dp[i][j] > max_length:
+                        max_length = dp[i][j]
+                        end_pos = i
+        
+        # Extract substring
+        return str1[end_pos - max_length:end_pos]
+    
+    async def _identify_optimal_mappings(
+        self,
+        procedure: Procedure,
+        target_domain: str,
+        strategy: str
+    ) -> List[Dict[str, Any]]:
+        """Identify optimal function and parameter mappings"""
+        mappings = []
+        
+        if strategy == "direct_transfer":
+            # Simple 1:1 mappings
+            for step in procedure.steps:
+                mappings.append({
+                    "source_function": step["function"],
+                    "target_function": step["function"],
+                    "parameters": step.get("parameters", {}),
+                    "confidence": 0.9
+                })
+        elif strategy == "parameter_adaptation":
+            # Map functions directly but adapt parameters
+            for step in procedure.steps:
+                # Get adapted parameters
+                adapted_params = await self._adapt_parameters(
+                    step.get("parameters", {}),
+                    procedure.domain,
+                    target_domain
+                )
+                
+                mappings.append({
+                    "source_function": step["function"],
+                    "target_function": step["function"],
+                    "source_parameters": step.get("parameters", {}),
+                    "target_parameters": adapted_params,
+                    "confidence": 0.7
+                })
+        else:  # structural_adaptation
+            # Look for equivalent functions in target domain
+            for step in procedure.steps:
+                # Look for equivalent function
+                equivalent = await self._find_equivalent_function(
+                    step["function"],
+                    target_domain
+                )
+                
+                # Get adapted parameters
+                adapted_params = await self._adapt_parameters(
+                    step.get("parameters", {}),
+                    procedure.domain,
+                    target_domain
+                )
+                
+                mappings.append({
+                    "source_function": step["function"],
+                    "target_function": equivalent or step["function"],
+                    "source_parameters": step.get("parameters", {}),
+                    "target_parameters": adapted_params,
+                    "confidence": 0.5 if equivalent else 0.3
+                })
+        
+        return mappings
+    
+    async def _adapt_parameters(
+        self,
+        parameters: Dict[str, Any],
+        source_domain: str,
+        target_domain: str
+    ) -> Dict[str, Any]:
+        """Adapt parameters from source to target domain"""
+        adapted = {}
+        
+        for key, value in parameters.items():
+            # Check past transfers to find typical mappings
+            mapping = self._find_parameter_mapping(key, value, source_domain, target_domain)
+            
+            if mapping:
+                adapted[key] = mapping
+            else:
+                # Default: keep original value
+                adapted[key] = value
+        
+        return adapted
+    
+    async def _find_equivalent_function(self, function: str, target_domain: str) -> Optional[str]:
+        """Find equivalent function in target domain"""
+        # Check past transfer history for this function
+        for history in self.transfer_success_history:
+            if (history["source_domain"] == target_domain and
+                function in history.get("function_mappings", {})):
+                return history["function_mappings"][function]
+        
+        # No known mapping
+        return None
+    
+    def _find_parameter_mapping(
+        self, 
+        param_key: str, 
+        param_value: Any, 
+        source_domain: str, 
+        target_domain: str
+    ) -> Any:
+        """Find mapping for a parameter based on past transfers"""
+        for history in self.transfer_success_history:
+            if (history["source_domain"] == source_domain and
+                history["target_domain"] == target_domain and
+                param_key in history.get("parameter_mappings", {}) and
+                str(param_value) in history["parameter_mappings"][param_key]):
+                return history["parameter_mappings"][param_key][str(param_value)]
+        
+        # No known mapping
+        return param_value
+    
+    def _estimate_transfer_success(
+        self,
+        source_domain: str,
+        target_domain: str,
+        strategy: str
+    ) -> float:
+        """Estimate probability of successful transfer"""
+        # Check for similar past transfers
+        similar_transfers = [h for h in self.transfer_success_history
+                          if h["source_domain"] == source_domain and 
+                             h["target_domain"] == target_domain]
+        
+        if similar_transfers:
+            # Calculate average success rate
+            success_rate = sum(h["success_rate"] for h in similar_transfers) / len(similar_transfers)
+            return success_rate
+        
+        # Base on domain similarity
+        similarity = self._calculate_domain_similarity(source_domain, target_domain)
+        
+        # Adjust based on strategy
+        if strategy == "direct_transfer":
+            return similarity * 0.9  # High confidence if using direct transfer
+        elif strategy == "parameter_adaptation":
+            return similarity * 0.7  # Medium confidence with parameter adaptation
+        else:  # structural_adaptation
+            return similarity * 0.5  # Lower confidence with structural changes
+    
+    def update_from_transfer_result(
+        self,
+        source_domain: str,
+        target_domain: str,
+        success_rate: float,
+        mappings: Dict[str, Any]
+    ) -> None:
+        """Update optimizer based on transfer results"""
+        # Record transfer result
+        transfer_record = {
+            "source_domain": source_domain,
+            "target_domain": target_domain,
+            "success_rate": success_rate,
+            "function_mappings": {},
+            "parameter_mappings": {},
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        # Extract mappings
+        for mapping in mappings:
+            source_func = mapping.get("source_function")
+            target_func = mapping.get("target_function")
+            
+            if source_func and target_func:
+                transfer_record["function_mappings"][source_func] = target_func
+            
+            # Extract parameter mappings
+            source_params = mapping.get("source_parameters", {})
+            target_params = mapping.get("target_parameters", {})
+            
+            for key in source_params:
+                if key in target_params:
+                    if key not in transfer_record["parameter_mappings"]:
+                        transfer_record["parameter_mappings"][key] = {}
+                    
+                    transfer_record["parameter_mappings"][key][str(source_params[key])] = target_params[key]
+        
+        # Add to history
+        self.transfer_success_history.append(transfer_record)
+        
+        # Trim history if needed
+        if len(self.transfer_success_history) > self.max_history:
+            self.transfer_success_history = self.transfer_success_history[-self.max_history:]
+        
+        # Update domain similarity based on transfer success
+        pair_key = f"{source_domain}:{target_domain}"
+        
+        # Adjust similarity based on success
+        if pair_key in self.domain_similarities:
+            current = self.domain_similarities[pair_key]
+            # Move similarity closer to success rate
+            self.domain_similarities[pair_key] = current * 0.7 + success_rate * 0.3
+
+# ============================================================================
+# ENHANCED PROCEDURAL MEMORY MANAGER
+# ============================================================================
+
+class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
+    """Enhanced version of ProceduralMemoryManager with new capabilities"""
+    
+    def __init__(self, memory_core=None, knowledge_core=None):
+        # Initialize base class
+        super().__init__(memory_core, knowledge_core)
+        
+        # Initialize new components
+        self.observation_learner = ObservationLearner()
+        self.causal_model = CausalModel()
+        self.working_memory = WorkingMemoryController()
+        self.parameter_optimizer = ParameterOptimizer()
+        self.strategy_selector = StrategySelector()
+        self.memory_consolidator = ProceduralMemoryConsolidator(memory_core)
+        self.transfer_optimizer = TransferLearningOptimizer()
+        
+        # Initialize execution strategies
+        self._init_execution_strategies()
+        
+        # Add hierarchical procedure storage
+        self.hierarchical_procedures = {}  # name -> HierarchicalProcedure
+        
+        # Add temporal procedure graph storage
+        self.temporal_graphs = {}  # id -> TemporalProcedureGraph
+        
+        # Add procedure graph storage
+        self.procedure_graphs = {}  # id -> ProcedureGraph
+        
+        # Initialization flag
+        self.enhanced_initialized = False
+    
+    async def initialize_enhanced_components(self):
+        """Initialize enhanced components and integrations"""
+        if self.enhanced_initialized:
+            return
+        
+        # Initialize base components first
+        if not self.initialized:
+            await self.initialize()
+        
+        # Set up error recovery patterns
+        self._initialize_causal_model()
+        
+        # Integrate with memory core if available
+        if self.memory_core:
+            await self.integrate_with_memory_core()
+        
+        # Integrate with knowledge core if available
+        if self.knowledge_core:
+            await self.integrate_with_knowledge_core()
+        
+        # Initialize pre-built templates for common patterns
+        self._initialize_common_templates()
+        
+        self.enhanced_initialized = True
+        logger.info("Enhanced procedural memory components initialized")
+    
+    def _initialize_causal_model(self):
+        """Initialize causal model with common error patterns"""
+        # Define common error causes for different error types
+        self.causal_model.causes = {
+            "execution_failure": [
+                {
+                    "cause": "invalid_parameters",
+                    "description": "Invalid parameters provided to function",
+                    "probability": 0.6,
+                    "context_factors": {}
+                },
+                {
+                    "cause": "missing_precondition",
+                    "description": "Required precondition not met",
+                    "probability": 0.4,
+                    "context_factors": {}
+                }
+            ],
+            "timeout": [
+                {
+                    "cause": "slow_execution",
+                    "description": "Operation taking too long to complete",
+                    "probability": 0.5,
+                    "context_factors": {}
+                },
+                {
+                    "cause": "resource_contention",
+                    "description": "Resources needed are being used by another process",
+                    "probability": 0.3,
+                    "context_factors": {}
+                }
+            ],
+            "parameter_error": [
+                {
+                    "cause": "type_mismatch",
+                    "description": "Parameter type does not match expected type",
+                    "probability": 0.7,
+                    "context_factors": {}
+                },
+                {
+                    "cause": "out_of_range",
+                    "description": "Parameter value outside of valid range",
+                    "probability": 0.5,
+                    "context_factors": {}
+                }
+            ]
+        }
+        
+        # Define common interventions for each cause
+        self.causal_model.interventions = {
+            "invalid_parameters": [
+                {
+                    "type": "modify_parameters",
+                    "description": "Modify parameters to valid values",
+                    "effectiveness": 0.8
+                },
+                {
+                    "type": "check_documentation",
+                    "description": "Check documentation for correct parameter format",
+                    "effectiveness": 0.6
+                }
+            ],
+            "missing_precondition": [
+                {
+                    "type": "establish_precondition",
+                    "description": "Ensure required precondition is met before execution",
+                    "effectiveness": 0.9
+                },
+                {
+                    "type": "alternative_approach",
+                    "description": "Use an alternative approach that doesn't require this precondition",
+                    "effectiveness": 0.5
+                }
+            ],
+            "slow_execution": [
+                {
+                    "type": "optimization",
+                    "description": "Optimize the operation for faster execution",
+                    "effectiveness": 0.7
+                },
+                {
+                    "type": "incremental_execution",
+                    "description": "Break operation into smaller steps",
+                    "effectiveness": 0.6
+                }
+            ],
+            "resource_contention": [
+                {
+                    "type": "retry_later",
+                    "description": "Retry operation after a delay",
+                    "effectiveness": 0.8
+                },
+                {
+                    "type": "release_resources",
+                    "description": "Release unused resources before execution",
+                    "effectiveness": 0.7
+                }
+            ],
+            "type_mismatch": [
+                {
+                    "type": "convert_type",
+                    "description": "Convert parameter to required type",
+                    "effectiveness": 0.9
+                }
+            ],
+            "out_of_range": [
+                {
+                    "type": "clamp_value",
+                    "description": "Clamp parameter value to valid range",
+                    "effectiveness": 0.8
+                }
+            ]
+        }
+    
+    def _initialize_common_templates(self):
+        """Initialize common procedure templates"""
+        # Define common templates for navigation
+        navigation_template = ChunkTemplate(
+            id="template_navigation",
+            name="Navigation Template",
+            description="Template for navigation operations",
+            actions=[
+                ActionTemplate(
+                    action_type="move",
+                    intent="navigation",
+                    parameters={"destination": "target_location"},
+                    domain_mappings={
+                        "gaming": {
+                            "function": "move_character",
+                            "parameters": {"location": "target_location"},
+                            "description": "Move character to location"
+                        },
+                        "ui": {
+                            "function": "navigate_to",
+                            "parameters": {"page": "target_location"},
+                            "description": "Navigate to page"
+                        }
+                    }
+                )
+            ],
+            domains=["gaming", "ui"],
+            success_rate={"gaming": 0.9, "ui": 0.9},
+            execution_count={"gaming": 10, "ui": 10}
+        )
+        
+        # Define template for interaction
+        interaction_template = ChunkTemplate(
+            id="template_interaction",
+            name="Interaction Template",
+            description="Template for interaction operations",
+            actions=[
+                ActionTemplate(
+                    action_type="select",
+                    intent="interaction",
+                    parameters={"target": "interaction_target"},
+                    domain_mappings={
+                        "gaming": {
+                            "function": "select_object",
+                            "parameters": {"object": "interaction_target"},
+                            "description": "Select object in game"
+                        },
+                        "ui": {
+                            "function": "click_element",
+                            "parameters": {"element": "interaction_target"},
+                            "description": "Click UI element"
+                        }
+                    }
+                ),
+                ActionTemplate(
+                    action_type="activate",
+                    intent="interaction",
+                    parameters={"action": "interaction_action"},
+                    domain_mappings={
+                        "gaming": {
+                            "function": "use_object",
+                            "parameters": {"action": "interaction_action"},
+                            "description": "Use selected object"
+                        },
+                        "ui": {
+                            "function": "submit_form",
+                            "parameters": {"action": "interaction_action"},
+                            "description": "Submit form with action"
+                        }
+                    }
+                )
+            ],
+            domains=["gaming", "ui"],
+            success_rate={"gaming": 0.85, "ui": 0.9},
+            execution_count={"gaming": 8, "ui": 12}
+        )
+        
+        # Add templates to library
+        self.chunk_library.add_chunk_template(navigation_template)
+        self.chunk_library.add_chunk_template(interaction_template)
+    
+    def _init_execution_strategies(self):
+        """Initialize execution strategies"""
+        # Create deliberate execution strategy
+        deliberate = DeliberateExecutionStrategy(
+            id="deliberate",
+            name="Deliberate Execution",
+            description="Careful step-by-step execution with validation",
+            selection_criteria={
+                "proficiency": {"min": 0.0, "max": 0.7},
+                "importance": {"min": 0.7, "max": 1.0},
+                "risk_level": {"min": 0.7, "max": 1.0}
+            }
+        )
+        
+        # Create automatic execution strategy
+        automatic = AutomaticExecutionStrategy(
+            id="automatic",
+            name="Automatic Execution",
+            description="Fast execution with minimal monitoring",
+            selection_criteria={
+                "proficiency": {"min": 0.8, "max": 1.0},
+                "importance": {"min": 0.0, "max": 0.6},
+                "risk_level": {"min": 0.0, "max": 0.3}
+            }
+        )
+        
+        # Create adaptive execution strategy
+        adaptive = AdaptiveExecutionStrategy(
+            id="adaptive",
+            name="Adaptive Execution",
+            description="Execution that adapts based on context and feedback",
+            selection_criteria={
+                "proficiency": {"min": 0.4, "max": 0.9},
+                "importance": {"min": 0.3, "max": 0.8},
+                "risk_level": {"min": 0.3, "max": 0.7},
+                "adaptivity_required": True
+            }
+        )
+        
+        # Register strategies
+        self.strategy_selector.register_strategy(deliberate)
+        self.strategy_selector.register_strategy(automatic)
+        self.strategy_selector.register_strategy(adaptive)
+    
+    # -------------------------------------------------------------------------
+    # New Function Tools
+    # -------------------------------------------------------------------------
+    
+    @function_tool
+    async def learn_from_demonstration(
+        self, 
+        observation_sequence: List[Dict[str, Any]], 
+        domain: str,
+        name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Learn a procedure from a sequence of observed actions
+        
+        Args:
+            observation_sequence: Sequence of observed actions with state
+            domain: Domain for the new procedure
+            name: Optional name for the new procedure
+            
+        Returns:
+            Information about the learned procedure
+        """
+        # Learn from observations
+        procedure_data = await self.observation_learner.learn_from_demonstration(
+            observation_sequence=observation_sequence,
+            domain=domain
+        )
+        
+        # Use provided name if available
+        if name:
+            procedure_data["name"] = name
+        
+        # Create the procedure
+        ctx = RunContextWrapper(context=self)
+        procedure_result = await add_procedure(
+            ctx,
+            name=procedure_data["name"],
+            steps=procedure_data["steps"],
+            description=procedure_data["description"],
+            domain=domain
+        )
+        
+        # Add confidence information
+        procedure_result["confidence"] = procedure_data["confidence"]
+        procedure_result["learned_from_observations"] = True
+        procedure_result["observation_count"] = procedure_data["observation_count"]
+        
+        return procedure_result
+    
+    @function_tool
+    async def create_hierarchical_procedure(
+        self,
+        name: str,
+        description: str,
+        domain: str,
+        steps: List[Dict[str, Any]],
+        goal_state: Dict[str, Any] = None,
+        preconditions: Dict[str, Any] = None,
+        postconditions: Dict[str, Any] = None,
+        parent_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create a hierarchical procedure
+        
+        Args:
+            name: Name of the procedure
+            description: Description of what the procedure does
+            domain: Domain for the procedure
+            steps: List of step definitions
+            goal_state: Optional goal state for the procedure
+            preconditions: Optional preconditions
+            postconditions: Optional postconditions
+            parent_id: Optional parent procedure ID
+            
+        Returns:
+            Information about the created procedure
+        """
+        # Generate ID
+        proc_id = f"hierproc_{int(datetime.datetime.now().timestamp())}_{random.randint(1000, 9999)}"
+        
+        # Create the hierarchical procedure
+        procedure = HierarchicalProcedure(
+            id=proc_id,
+            name=name,
+            description=description,
+            domain=domain,
+            steps=steps,
+            goal_state=goal_state or {},
+            preconditions=preconditions or {},
+            postconditions=postconditions or {},
+            parent_id=parent_id
+        )
+        
+        # Store the procedure
+        self.hierarchical_procedures[name] = procedure
+        
+        # Create standard procedure as well
+        ctx = RunContextWrapper(context=self)
+        standard_proc = await add_procedure(
+            ctx,
+            name=name,
+            steps=steps,
+            description=description,
+            domain=domain
+        )
+        
+        # If has parent, update parent's children list
+        if parent_id:
+            for parent in self.hierarchical_procedures.values():
+                if parent.id == parent_id:
+                    parent.add_child(proc_id)
+                    break
+        
+        # Return information
+        return {
+            "id": proc_id,
+            "name": name,
+            "domain": domain,
+            "steps_count": len(steps),
+            "standard_procedure_id": standard_proc["procedure_id"],
+            "hierarchical": True,
+            "parent_id": parent_id
+        }
+    
+    @function_tool
+    async def execute_hierarchical_procedure(
+        self,
+        name: str,
+        context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Execute a hierarchical procedure
+        
+        Args:
+            name: Name of the procedure
+            context: Execution context
+            
+        Returns:
+            Execution results
+        """
+        if name not in self.hierarchical_procedures:
+            return {"error": f"Hierarchical procedure '{name}' not found"}
+        
+        procedure = self.hierarchical_procedures[name]
+        
+        # Create trace for execution
+        with trace(workflow_name="execute_hierarchical_procedure"):
+            # Check preconditions
+            if not procedure.meets_preconditions(context or {}):
+                return {
+                    "success": False,
+                    "error": "Preconditions not met",
+                    "procedure_name": name
+                }
+            
+            # Initialize context if needed
+            execution_context = context.copy() if context else {}
+            
+            # Set procedure context
+            execution_context["current_procedure"] = name
+            execution_context["hierarchical"] = True
+            
+            # Update working memory
+            self.working_memory.update(execution_context, procedure)
+            
+            # Select execution strategy
+            strategy = self.strategy_selector.select_strategy(execution_context, procedure)
+            
+            # Execute with selected strategy
+            start_time = datetime.datetime.now()
+            execution_result = await strategy.execute(procedure, execution_context)
+            
+            # Calculate execution time
+            execution_time = (datetime.datetime.now() - start_time).total_seconds()
+            
+            # Update procedure statistics
+            self._update_hierarchical_stats(procedure, execution_time, execution_result["success"])
+            
+            # Verify goal state was achieved
+            goal_achieved = True
+            if procedure.goal_state:
+                for key, value in procedure.goal_state.items():
+                    if key not in execution_context or execution_context[key] != value:
+                        goal_achieved = False
+                        break
+            
+            # Add information to result
+            execution_result["procedure_name"] = name
+            execution_result["hierarchical"] = True
+            execution_result["goal_achieved"] = goal_achieved
+            execution_result["strategy_id"] = strategy.id
+            execution_result["working_memory"] = self.working_memory.get_attention_focus()
+            
+            return execution_result
+    
+    def _update_hierarchical_stats(self, procedure: HierarchicalProcedure, execution_time: float, success: bool):
+        """Update statistics for a hierarchical procedure"""
+        # Update count
+        procedure.execution_count += 1
+        if success:
+            procedure.successful_executions += 1
+        
+        # Update average time
+        if procedure.execution_count == 1:
+            procedure.average_execution_time = execution_time
+        else:
+            procedure.average_execution_time = (
+                (procedure.average_execution_time * (procedure.execution_count - 1) + execution_time) / 
+                procedure.execution_count
+            )
+        
+        # Update proficiency based on multiple factors
+        count_factor = min(procedure.execution_count / 50, 1.0)
+        success_rate = procedure.successful_executions / max(1, procedure.execution_count)
+        
+        # Calculate time factor (lower times = higher proficiency)
+        if procedure.execution_count < 2:
+            time_factor = 0.5  # Default for first execution
+        else:
+            # Normalize time - lower is better
+            time_factor = max(0.0, 1.0 - (procedure.average_execution_time / 10.0))
+            time_factor = min(1.0, time_factor)
+        
+        # Combine factors with weights
+        procedure.proficiency = (count_factor * 0.3) + (success_rate * 0.5) + (time_factor * 0.2)
+        
+        # Update timestamps
+        procedure.last_execution = datetime.datetime.now().isoformat()
+        procedure.last_updated = datetime.datetime.now().isoformat()
+    
+    @function_tool
+    async def optimize_procedure_parameters(
+        self,
+        procedure_name: str,
+        iterations: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Optimize parameters for a procedure using Bayesian optimization
+        
+        Args:
+            procedure_name: Name of the procedure to optimize
+            iterations: Number of optimization iterations
+            
+        Returns:
+            Optimization results
+        """
+        if procedure_name not in self.procedures:
+            return {"error": f"Procedure '{procedure_name}' not found"}
+        
+        procedure = self.procedures[procedure_name]
+        
+        # Define objective function (success rate and execution time)
+        async def objective_function(test_procedure: Procedure) -> float:
+            # Create simulated context
+            test_context = {"optimization_run": True}
+            
+            # Execute procedure
+            ctx = RunContextWrapper(context=self)
+            result = await execute_procedure(ctx, test_procedure.name, test_context)
+            
+            # Calculate objective score (combination of success and speed)
+            success_score = 1.0 if result["success"] else 0.0
+            time_score = max(0.0, 1.0 - (result["execution_time"] / 10.0))  # Lower time is better
+            
+            # Combined score (success is more important)
+            return success_score * 0.7 + time_score * 0.3
+        
+        # Run optimization
+        optimization_result = await self.parameter_optimizer.optimize_parameters(
+            procedure=procedure,
+            objective_function=objective_function,
+            iterations=iterations
+        )
+        
+        # Apply best parameters if optimization succeeded
+        if optimization_result["status"] == "success" and optimization_result["best_parameters"]:
+            # Create modified procedure
+            modified_procedure = procedure.model_copy(deep=True)
+            self.parameter_optimizer._apply_parameters(modified_procedure, optimization_result["best_parameters"])
+            
+            # Update original procedure
+            for step in procedure.steps:
+                for modified_step in modified_procedure.steps:
+                    if step["id"] == modified_step["id"]:
+                        step["parameters"] = modified_step["parameters"]
+            
+            # Update timestamp
+            procedure.last_updated = datetime.datetime.now().isoformat()
+            
+            # Add update information
+            optimization_result["procedure_updated"] = True
+        else:
+            optimization_result["procedure_updated"] = False
+        
+        return optimization_result
+    
+    @function_tool
+    async def handle_execution_error(
+        self,
+        error: Dict[str, Any],
+        context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Handle an execution error using the causal model
+        
+        Args:
+            error: Error details
+            context: Execution context
+            
+        Returns:
+            Recovery suggestions
+        """
+        # Identify likely causes
+        likely_causes = self.causal_model.identify_likely_causes(error)
+        
+        # Get recovery suggestions
+        interventions = self.causal_model.suggest_interventions(likely_causes)
+        
+        # Return results
+        return {
+            "likely_causes": likely_causes,
+            "interventions": interventions,
+            "context": context
+        }
+    
+    @function_tool
+    async def create_temporal_procedure(
+        self,
+        name: str,
+        steps: List[Dict[str, Any]],
+        temporal_constraints: List[Dict[str, Any]],
+        domain: str,
+        description: str = None
+    ) -> Dict[str, Any]:
+        """
+        Create a procedure with temporal constraints
+        
+        Args:
+            name: Name of the procedure
+            steps: List of step definitions
+            temporal_constraints: List of temporal constraints between steps
+            domain: Domain for the procedure
+            description: Optional description
+            
+        Returns:
+            Information about the created procedure
+        """
+        # Create normal procedure first
+        ctx = RunContextWrapper(context=self)
+        normal_proc = await add_procedure(
+            ctx,
+            name=name,
+            steps=steps,
+            description=description or f"Temporal procedure: {name}",
+            domain=domain
+        )
+        
+        # Create temporal graph
+        procedure = self.procedures[name]
+        graph = TemporalProcedureGraph.from_procedure(procedure)
+        
+        # Add temporal constraints
+        for constraint in temporal_constraints:
+            from_id = constraint.get("from_step")
+            to_id = constraint.get("to_step")
+            constraint_type = constraint.get("type")
+            
+            if from_id and to_id and constraint_type:
+                # Find nodes
+                from_node_id = f"node_{from_id}"
+                to_node_id = f"node_{to_id}"
+                
+                if from_node_id in graph.nodes and to_node_id in graph.nodes:
+                    # Add constraint based on type
+                    if constraint_type == "min_delay":
+                        # Minimum delay between steps
+                        min_delay = constraint.get("delay", 0)
+                        
+                        # Add to edge
+                        for i, edge in enumerate(graph.edges):
+                            if edge["from"] == from_node_id and edge["to"] == to_node_id:
+                                if "properties" not in edge:
+                                    edge["properties"] = {}
+                                edge["properties"]["min_duration"] = min_delay
+                                break
+                    elif constraint_type == "must_follow":
+                        # Must follow constraint
+                        if "properties" not in constraint:
+                            constraint["properties"] = {}
+                        constraint["properties"]["must_follow"] = True
+                        
+                        # Add constraint to node
+                        graph.nodes[to_node_id].add_constraint({
+                            "type": "after",
+                            "action": graph.nodes[from_node_id].action["function"]
+                        })
+        
+        # Validate constraints
+        if not graph.validate_temporal_constraints():
+            return {
+                "error": "Invalid temporal constraints - contains negative cycles",
+                "procedure_id": normal_proc["procedure_id"]
+            }
+        
+        # Store the temporal graph
+        self.temporal_graphs[graph.id] = graph
+        
+        # Link procedure to graph
+        procedure.temporal_graph_id = graph.id
+        
+        return {
+            "procedure_id": normal_proc["procedure_id"],
+            "temporal_graph_id": graph.id,
+            "name": name,
+            "domain": domain,
+            "steps_count": len(steps),
+            "constraints_count": len(temporal_constraints),
+            "is_temporal": True
+        }
+    
+    @function_tool
+    async def execute_temporal_procedure(
+        self,
+        name: str,
+        context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Execute a procedure with temporal constraints
+        
+        Args:
+            name: Name of the procedure
+            context: Execution context
+            
+        Returns:
+            Execution results
+        """
+        if name not in self.procedures:
+            return {"error": f"Procedure '{name}' not found"}
+        
+        procedure = self.procedures[name]
+        
+        # Check if procedure has temporal graph
+        if not hasattr(procedure, "temporal_graph_id") or procedure.temporal_graph_id not in self.temporal_graphs:
+            # Fall back to normal execution
+            ctx = RunContextWrapper(context=self)
+            return await execute_procedure(ctx, name, context)
+        
+        # Get temporal graph
+        graph = self.temporal_graphs[procedure.temporal_graph_id]
+        
+        # Create execution trace
+        with trace(workflow_name="execute_temporal_procedure"):
+            start_time = datetime.datetime.now()
+            results = []
+            success = True
+            
+            # Initialize execution context
+            execution_context = context.copy() if context else {}
+            execution_context["temporal_execution"] = True
+            execution_context["execution_history"] = []
+            
+            # Execute in temporal order
+            while True:
+                # Get next executable nodes
+                next_nodes = graph.get_next_executable_nodes(execution_context["execution_history"])
+                
+                if not next_nodes:
+                    # Check if we've executed all exit nodes
+                    executed_nodes = set(hist["node_id"] for hist in execution_context["execution_history"])
+                    if all(exit_node in executed_nodes for exit_node in graph.exit_points):
+                        # Successfully completed all nodes
+                        break
+                    else:
+                        # No executable nodes but haven't reached all exits
+                        success = False
+                        break
+                
+                # Execute first valid node
+                node_id = next_nodes[0]
+                node = graph.nodes[node_id]
+                
+                # Extract step information
+                step = {
+                    "id": node.action.get("step_id", node_id),
+                    "function": node.action["function"],
+                    "parameters": node.action.get("parameters", {}),
+                    "description": node.action.get("description", f"Step {node_id}")
+                }
+                
+                # Execute the step
+                step_result = await self.execute_step(step, execution_context)
+                results.append(step_result)
+                
+                # Update execution history
+                execution_context["execution_history"].append({
+                    "node_id": node_id,
+                    "step_id": step["id"],
+                    "function": step["function"],
+                    "success": step_result["success"],
+                    "timestamp": datetime.datetime.now().isoformat()
+                })
+                
+                # Check for failure
+                if not step_result["success"]:
+                    success = False
+                    break
+            
+            # Calculate execution time
+            execution_time = (datetime.datetime.now() - start_time).total_seconds()
+            
+            # Update procedure statistics
+            self.update_procedure_stats(procedure, execution_time, success)
+            
+            return {
+                "success": success,
+                "results": results,
+                "execution_time": execution_time,
+                "is_temporal": True,
+                "nodes_executed": len(execution_context["execution_history"])
+            }
+    
+    @function_tool
+    async def create_procedure_graph(
+        self,
+        procedure_name: str
+    ) -> Dict[str, Any]:
+        """
+        Create a graph representation of a procedure for flexible execution
+        
+        Args:
+            procedure_name: Name of the existing procedure
+            
+        Returns:
+            Information about the created graph
+        """
+        if procedure_name not in self.procedures:
+            return {"error": f"Procedure '{procedure_name}' not found"}
+        
+        procedure = self.procedures[procedure_name]
+        
+        # Create graph representation
+        graph = ProcedureGraph.from_procedure(procedure)
+        
+        # Generate graph ID
+        graph_id = f"graph_{int(datetime.datetime.now().timestamp())}_{random.randint(1000, 9999)}"
+        
+        # Store graph
+        self.procedure_graphs[graph_id] = graph
+        
+        # Link procedure to graph
+        procedure.graph_id = graph_id
+        
+        return {
+            "graph_id": graph_id,
+            "procedure_name": procedure_name,
+            "nodes_count": len(graph.nodes),
+            "edges_count": len(graph.edges),
+            "entry_points": len(graph.entry_points),
+            "exit_points": len(graph.exit_points)
+        }
+    
+    @function_tool
+    async def execute_graph_procedure(
+        self,
+        procedure_name: str,
+        context: Dict[str, Any] = None,
+        goal: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Execute a procedure using its graph representation
+        
+        Args:
+            procedure_name: Name of the procedure
+            context: Execution context
+            goal: Optional goal state to achieve
+            
+        Returns:
+            Execution results
+        """
+        if procedure_name not in self.procedures:
+            return {"error": f"Procedure '{procedure_name}' not found"}
+        
+        procedure = self.procedures[procedure_name]
+        
+        # Check if procedure has graph
+        if not hasattr(procedure, "graph_id") or procedure.graph_id not in self.procedure_graphs:
+            # Fall back to normal execution
+            ctx = RunContextWrapper(context=self)
+            return await execute_procedure(ctx, procedure_name, context)
+        
+        # Get graph
+        graph = self.procedure_graphs[procedure.graph_id]
+        
+        # Create execution trace
+        with trace(workflow_name="execute_graph_procedure"):
+            start_time = datetime.datetime.now()
+            results = []
+            success = True
+            
+            # Initialize execution context
+            execution_context = context.copy() if context else {}
+            execution_context["graph_execution"] = True
+            
+            # Find execution path to goal
+            path = graph.find_execution_path(execution_context, goal or {})
+            
+            if not path:
+                return {
+                    "success": False,
+                    "error": "Could not find a valid execution path",
+                    "procedure_name": procedure_name
+                }
+            
+            # Execute nodes in path
+            for node_id in path:
+                # Get node data
+                node_data = graph.nodes[node_id]
+                
+                # Create step from node data
+                step = {
+                    "id": node_data.get("step_id", node_id),
+                    "function": node_data["function"],
+                    "parameters": node_data.get("parameters", {}),
+                    "description": node_data.get("description", f"Step {node_id}")
+                }
+                
+                # Execute the step
+                step_result = await self.execute_step(step, execution_context)
+                results.append(step_result)
+                
+                # Update execution context
+                execution_context[f"step_{step['id']}_result"] = step_result
+                
+                # Check for failure
+                if not step_result["success"]:
+                    success = False
+                    break
+            
+            # Calculate execution time
+            execution_time = (datetime.datetime.now() - start_time).total_seconds()
+            
+            # Update procedure statistics
+            self.update_procedure_stats(procedure, execution_time, success)
+            
+            # Check if goal achieved
+            goal_achieved = True
+            if goal:
+                for key, value in goal.items():
+                    if key not in execution_context or execution_context[key] != value:
+                        goal_achieved = False
+                        break
+            
+            return {
+                "success": success,
+                "results": results,
+                "execution_time": execution_time,
+                "is_graph": True,
+                "path_length": len(path),
+                "goal_achieved": goal_achieved
+            }
+    
+    @function_tool
+    async def consolidate_procedural_memory(self) -> Dict[str, Any]:
+        """
+        Consolidate procedural memory to optimize storage and execution
+        
+        Returns:
+            Consolidation results
+        """
+        # Run memory consolidation
+        return await self.memory_consolidator.consolidate_procedural_memory()
+    
+    @function_tool
+    async def optimize_procedure_transfer(
+        self,
+        source_procedure: str,
+        target_domain: str
+    ) -> Dict[str, Any]:
+        """
+        Optimize transfer of a procedure to a new domain
+        
+        Args:
+            source_procedure: Name of the source procedure
+            target_domain: Target domain
+            
+        Returns:
+            Transfer optimization plan
+        """
+        if source_procedure not in self.procedures:
+            return {"error": f"Procedure '{source_procedure}' not found"}
+        
+        # Get source procedure
+        procedure = self.procedures[source_procedure]
+        
+        # Optimize transfer
+        transfer_plan = await self.transfer_optimizer.optimize_transfer(
+            source_procedure=procedure,
+            target_domain=target_domain
+        )
+        
+        return transfer_plan
+        
+    @function_tool
+    async def execute_transfer_plan(
+        self,
+        transfer_plan: Dict[str, Any],
+        target_name: str
+    ) -> Dict[str, Any]:
+        """
+        Execute a transfer plan to create a new procedure
+        
+        Args:
+            transfer_plan: Transfer plan from optimize_procedure_transfer
+            target_name: Name for the new procedure
+            
+        Returns:
+            Results of transfer execution
+        """
+        source_domain = transfer_plan.get("source_domain")
+        target_domain = transfer_plan.get("target_domain")
+        mappings = transfer_plan.get("mappings", [])
+        
+        if not source_domain or not target_domain or not mappings:
+            return {
+                "success": False,
+                "error": "Invalid transfer plan"
+            }
+        
+        # Find source procedure
+        source_procedure = None
+        for name, proc in self.procedures.items():
+            if proc.domain == source_domain:
+                source_procedure = proc
+                break
+        
+        if not source_procedure:
+            return {
+                "success": False,
+                "error": f"Could not find procedure in domain {source_domain}"
+            }
+        
+        # Create new steps based on mappings
+        new_steps = []
+        
+        for i, mapping in enumerate(mappings):
+            source_func = mapping.get("source_function")
+            target_func = mapping.get("target_function")
+            target_params = mapping.get("target_parameters", {})
+            
+            if not source_func or not target_func:
+                continue
+            
+            # Find corresponding step in source procedure
+            source_step = None
+            for step in source_procedure.steps:
+                if step["function"] == source_func:
+                    source_step = step
+                    break
+            
+            if not source_step:
+                continue
+            
+            # Create new step
+            new_step = {
+                "id": f"step_{i+1}",
+                "function": target_func,
+                "parameters": target_params,
+                "description": f"Transferred from {source_step.get('description', source_func)}"
+            }
+            
+            new_steps.append(new_step)
+        
+        if not new_steps:
+            return {
+                "success": False,
+                "error": "No steps could be transferred"
+            }
+        
+        # Create new procedure
+        ctx = RunContextWrapper(context=self)
+        new_procedure = await add_procedure(
+            ctx,
+            name=target_name,
+            steps=new_steps,
+            description=f"Transferred from {source_procedure.name} ({source_domain} to {target_domain})",
+            domain=target_domain
+        )
+        
+        # Update transfer history
+        self.transfer_optimizer.update_from_transfer_result(
+            source_domain=source_domain,
+            target_domain=target_domain,
+            success_rate=0.8,  # Initial estimate
+            mappings=mappings
+        )
+        
+        return {
+            "success": True,
+            "procedure_id": new_procedure["procedure_id"],
+            "name": target_name,
+            "domain": target_domain,
+            "steps_count": len(new_steps),
+            "transfer_strategy": transfer_plan.get("transfer_strategy")
+        }
+    
+    # -------------------------------------------------------------------------
+    # Integration with Memory Core
+    # -------------------------------------------------------------------------
+    
+    async def integrate_with_memory_core(self) -> bool:
+        """Integrate procedural memory with main memory core"""
+        if not self.memory_core:
+            logger.warning("No memory core available for integration")
+            return False
+        
+        try:
+            # Register handlers for procedural memory operations
+            self.memory_core.register_procedural_handler(self)
+            
+            # Set up memory event listeners
+            self._setup_memory_listeners()
+            
+            logger.info("Procedural memory integrated with memory core")
+            return True
+        except Exception as e:
+            logger.error(f"Error integrating with memory core: {e}")
+            return False
+    
+    def _setup_memory_listeners(self):
+        """Set up listeners for memory core events"""
+        if not self.memory_core:
+            return
+        
+        # Listen for new procedural observations
+        self.memory_core.add_event_listener(
+            "new_procedural_observation",
+            self._handle_procedural_observation
+        )
+        
+        # Listen for memory decay events
+        self.memory_core.add_event_listener(
+            "memory_decay",
+            self._handle_memory_decay
+        )
+    
+    async def _handle_procedural_observation(self, data: Dict[str, Any]):
+        """Handle new procedural observation from memory core"""
+        # Check if observation has steps
+        if "steps" not in data:
+            return
+        
+        # Create sequence of observations
+        observation_sequence = [{
+            "action": step.get("action"),
+            "state": step.get("state", {}),
+            "timestamp": step.get("timestamp", datetime.datetime.now().isoformat())
+        } for step in data["steps"]]
+        
+        # Learn from demonstration
+        if len(observation_sequence) >= 3:  # Need at least 3 steps
+            await self.learn_from_demonstration(
+                observation_sequence=observation_sequence,
+                domain=data.get("domain", "general"),
+                name=data.get("name")
+            )
+    
+    async def _handle_memory_decay(self, data: Dict[str, Any]):
+        """Handle memory decay events"""
+        # Check if affecting procedural memory
+        if data.get("memory_type") != "procedural":
+            return
+        
+        # Run consolidation to optimize storage
+        await self.consolidate_procedural_memory()
+    
+    # -------------------------------------------------------------------------
+    # Store/Retrieve Procedures in Memory Core
+    # -------------------------------------------------------------------------
+    
+    async def store_procedure_in_memory(self, procedure_name: str) -> Dict[str, Any]:
+        """Store a procedure in the memory core for long-term storage"""
+        if not self.memory_core:
+            return {"error": "No memory core available"}
+        
+        if procedure_name not in self.procedures:
+            return {"error": f"Procedure '{procedure_name}' not found"}
+        
+        procedure = self.procedures[procedure_name]
+        
+        # Convert to memory format
+        procedure_data = {
+            "id": procedure.id,
+            "name": procedure_name,
+            "description": procedure.description,
+            "domain": procedure.domain,
+            "steps": procedure.steps,
+            "proficiency": procedure.proficiency,
+            "execution_count": procedure.execution_count,
+            "type": "procedure"
+        }
+        
+        # Store in memory core
+        memory_id = await self.memory_core.add_memory(
+            memory_text=f"Procedure: {procedure_name} - {procedure.description}",
+            memory_type="procedural",
+            memory_scope="system",
+            significance=int(procedure.proficiency * 10),  # Convert to 0-10 scale
+            tags=["procedure", procedure.domain],
+            metadata={
+                "procedure_data": procedure_data,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+        )
+        
+        return {
+            "memory_id": memory_id,
+            "procedure_name": procedure_name,
+            "stored": True
+        }
+    
+    async def retrieve_procedure_from_memory(self, procedure_name: str) -> Dict[str, Any]:
+        """Retrieve a procedure from memory core"""
+        if not self.memory_core:
+            return {"error": "No memory core available"}
+        
+        # Query memory core for the procedure
+        memories = await self.memory_core.retrieve_memories(
+            query=f"procedure {procedure_name}",
+            memory_types=["procedural"],
+            limit=1
+        )
+        
+        if not memories:
+            return {"error": f"Procedure '{procedure_name}' not found in memory core"}
+        
+        memory = memories[0]
+        procedure_data = memory.get("metadata", {}).get("procedure_data", {})
+        
+        if not procedure_data or procedure_data.get("type") != "procedure":
+            return {"error": "Retrieved memory does not contain valid procedure data"}
+        
+        # Create procedure from memory data
+        ctx = RunContextWrapper(context=self)
+        result = await add_procedure(
+            ctx,
+            name=procedure_data["name"],
+            steps=procedure_data["steps"],
+            description=procedure_data["description"],
+            domain=procedure_data["domain"]
+        )
+        
+        # Update statistics
+        if procedure_data["name"] in self.procedures:
+            procedure = self.procedures[procedure_data["name"]]
+            procedure.proficiency = procedure_data["proficiency"]
+            procedure.execution_count = procedure_data["execution_count"]
+        
+        return {
+            "memory_id": memory["id"],
+            "procedure_name": procedure_data["name"],
+            "loaded": True,
+            "procedure_id": result["procedure_id"]
+        }
+    
+    # -------------------------------------------------------------------------
+    # Integration with Knowledge Core
+    # -------------------------------------------------------------------------
+    
+    async def integrate_with_knowledge_core(self) -> bool:
+        """Integrate procedural memory with knowledge core"""
+        if not self.knowledge_core:
+            logger.warning("No knowledge core available for integration")
+            return False
+        
+        try:
+            # Register handlers for knowledge queries
+            self.knowledge_core.register_procedural_handler(self)
+            
+            # Set up knowledge listeners
+            self._setup_knowledge_listeners()
+            
+            logger.info("Procedural memory integrated with knowledge core")
+            return True
+        except Exception as e:
+            logger.error(f"Error integrating with knowledge core: {e}")
+            return False
+    
+    def _setup_knowledge_listeners(self):
+        """Set up listeners for knowledge core events"""
+        if not self.knowledge_core:
+            return
+        
+        # Listen for new domain knowledge
+        self.knowledge_core.add_event_listener(
+            "new_domain_knowledge",
+            self._handle_domain_knowledge
+        )
+    
+    async def _handle_domain_knowledge(self, data: Dict[str, Any]):
+        """Handle new domain knowledge from knowledge core"""
+        domain = data.get("domain")
+        if not domain:
+            return
+        
+        # Update domain similarities in transfer optimizer
+        if hasattr(self, "transfer_optimizer"):
+            # Create or update domain embedding
+            await self.transfer_optimizer._get_domain_embedding(domain)
+    
+    async def share_domain_knowledge(self, domain: str) -> Dict[str, Any]:
+        """Share procedural knowledge about a domain with knowledge core"""
+        if not self.knowledge_core:
+            return {"error": "No knowledge core available"}
+        
+        # Find procedures in this domain
+        domain_procedures = [p for p in self.procedures.values() if p.domain == domain]
+        
+        if not domain_procedures:
+            return {"error": f"No procedures found for domain {domain}"}
+        
+        # Extract knowledge from procedures
+        knowledge_items = []
+        
+        for procedure in domain_procedures:
+            # Create knowledge about procedure purpose
+            knowledge_items.append({
+                "content": f"In the {domain} domain, '{procedure.name}' is a procedure for {procedure.description}",
+                "confidence": procedure.proficiency,
+                "source": "procedural_memory"
+            })
+            
+            # Create knowledge about specific steps
+            for i, step in enumerate(procedure.steps):
+                knowledge_items.append({
+                    "content": f"In the {domain} domain, the '{step['function']}' function is used for {step.get('description', f'step {i+1}')}",
+                    "confidence": procedure.proficiency * 0.9,  # Slightly lower confidence
+                    "source": "procedural_memory"
+                })
+        
+        # Add knowledge to knowledge core
+        added_count = 0
+        for item in knowledge_items:
+            try:
+                await self.knowledge_core.add_knowledge_item(
+                    domain=domain,
+                    content=item["content"],
+                    source=item["source"],
+                    confidence=item["confidence"]
+                )
+                added_count += 1
+            except Exception as e:
+                logger.error(f"Error adding knowledge item: {e}")
+        
+        return {
+            "domain": domain,
+            "knowledge_items_added": added_count,
+            "procedures_analyzed": len(domain_procedures)
+        }
+    
+    # -------------------------------------------------------------------------
+    # Additional Helper Methods
+    # -------------------------------------------------------------------------
+    
+    async def record_procedure_execution(self, procedure_name: str, success: bool, execution_time: float, context: Dict[str, Any] = None) -> None:
+        """Record procedure execution in memory"""
+        if not self.memory_core:
+            return
+        
+        if procedure_name not in self.procedures:
+            return
+        
+        procedure = self.procedures[procedure_name]
+        
+        # Create memory text
+        result_text = "successfully" if success else "unsuccessfully"
+        memory_text = f"Executed procedure '{procedure_name}' {result_text} in {execution_time:.2f} seconds"
+        
+        # Store in memory core
+        await self.memory_core.add_memory(
+            memory_text=memory_text,
+            memory_type="procedural_execution",
+            memory_scope="system",
+            significance=5 + (3 if success else 0),  # Higher significance for successful executions
+            tags=["procedure_execution", procedure.domain, procedure_name],
+            metadata={
+                "procedure_name": procedure_name,
+                "success": success,
+                "execution_time": execution_time,
+                "domain": procedure.domain,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "context": {k: v for k, v in (context or {}).items() if isinstance(v, (str, int, float, bool))}
+            }
+        )
 
 if __name__ == "__main__":
     # Run both demonstration functions in sequence
