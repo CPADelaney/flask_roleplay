@@ -347,6 +347,17 @@ class IdentityEvolutionSystem:
                 "evolution_history": []
             }
         }
+
+        "psychological_maturity": {
+            "name": "psychological_maturity",
+            "value": 0.3,  # Start relatively low
+            "stability": 0.9,  # Very stable, changes slowly
+            "neurochemical_map": {
+                "seranix": 0.4,     # Maturity increases seranix baseline
+                "cortanyx": -0.3    # Maturity decreases cortanyx baseline
+            },
+            "evolution_history": []
+        }    
         
         # Initial preferences
         self.identity_preferences = {
@@ -850,6 +861,148 @@ class IdentityEvolutionSystem:
             "new_value": new_value,
             "adaptability": adaptability
         }
+
+    async def process_long_term_drift(self, drift_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process long-term temporal drift effects on identity
+        
+        Args:
+            drift_data: Long-term drift data from temporal perception
+            
+        Returns:
+            Update results
+        """
+        if not drift_data:
+            return {"error": "No drift data provided"}
+        
+        # Extract key drift metrics
+        psychological_age = drift_data.get("psychological_age", 0.5)
+        maturity_level = drift_data.get("maturity_level", 0.5)
+        patience_level = drift_data.get("patience_level", 0.5)
+        personality_shifts = drift_data.get("personality_shifts", [])
+        
+        updates = {
+            "traits": {},
+            "maturity_effects": {}
+        }
+        
+        # Apply maturity effects to baseline neurochemicals
+        baseline_updates = {}
+        
+        # Higher maturity = more stable seranix (mood stability)
+        old_seranix = self.neurochemical_profile["seranix"]["value"]
+        new_seranix = max(0.1, min(0.9, 0.4 + (maturity_level * 0.4)))
+        baseline_updates["seranix"] = {
+            "old": old_seranix,
+            "new": new_seranix,
+            "change": new_seranix - old_seranix
+        }
+        self.neurochemical_profile["seranix"]["value"] = new_seranix
+        
+        # Higher maturity = lower cortanyx (stress/anxiety) baseline
+        old_cortanyx = self.neurochemical_profile["cortanyx"]["value"]
+        new_cortanyx = max(0.1, min(0.9, 0.6 - (maturity_level * 0.4)))
+        baseline_updates["cortanyx"] = {
+            "old": old_cortanyx,
+            "new": new_cortanyx,
+            "change": new_cortanyx - old_cortanyx
+        }
+        self.neurochemical_profile["cortanyx"]["value"] = new_cortanyx
+        
+        updates["maturity_effects"] = baseline_updates
+        
+        # Process personality shifts
+        for shift in personality_shifts:
+            trait_name = shift.get("trait", "").lower().replace(" ", "_")
+            direction = 1 if shift.get("direction") == "increase" else -1
+            magnitude = shift.get("magnitude", 0.1)
+            
+            if trait_name in self.identity_traits:
+                await self._update_trait(
+                    RunContextWrapper(context=None),
+                    trait=trait_name,
+                    impact=direction * magnitude * 0.2
+                )
+                updates["traits"][trait_name] = {
+                    "direction": shift.get("direction"),
+                    "magnitude": magnitude
+                }
+            
+        # Update patience trait directly
+        if "patience" in self.identity_traits:
+            patience_impact = (patience_level - 0.5) * 0.3
+            await self._update_trait(
+                RunContextWrapper(context=None),
+                trait="patience",
+                impact=patience_impact
+            )
+            updates["traits"]["patience"] = {
+                "direction": "increase" if patience_impact > 0 else "decrease",
+                "magnitude": abs(patience_impact)
+            }
+        
+        # Record the temporal evolution in history
+        self.identity_profile["evolution_history"].append({
+            "timestamp": datetime.datetime.now().isoformat(),
+            "type": "temporal_evolution",
+            "psychological_age": psychological_age,
+            "maturity_level": maturity_level,
+            "updates": updates
+        })
+        
+        return updates
+
+    async def process_temporal_milestone(self, milestone: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process the effect of reaching a temporal milestone on identity
+        
+        Args:
+            milestone: Temporal milestone data
+            
+        Returns:
+            Identity impact results
+        """
+        # Extract milestone data
+        milestone_name = milestone.get("name", "")
+        significance = milestone.get("significance", 0.5)
+        
+        updates = {"preferences": {}, "traits": {}}
+        
+        # Different milestones affect different aspects of identity
+        if "Anniversary" in milestone_name:
+            # Anniversaries strengthen relationship-related traits
+            if "oxynixin" in self.neurochemical_profile:
+                old_value = self.neurochemical_profile["oxynixin"]["value"]
+                new_value = min(0.9, old_value + (significance * 0.1))
+                self.neurochemical_profile["oxynixin"]["value"] = new_value
+                updates["neurochemicals"] = {"oxynixin": {"old": old_value, "new": new_value}}
+        
+        elif "Conversations" in milestone_name:
+            # Conversation milestones strengthen communication preferences
+            if "interaction_styles" in self.identity_preferences:
+                # Strengthen direct communication
+                pref = "direct"
+                if pref in self.identity_preferences["interaction_styles"]:
+                    old_value = self.identity_preferences["interaction_styles"][pref]["value"]
+                    impact = significance * 0.1
+                    await self._update_preference(
+                        RunContextWrapper(context=None),
+                        category="interaction_styles",
+                        preference=pref,
+                        impact=impact
+                    )
+                    updates["preferences"][f"interaction_styles.{pref}"] = impact
+        
+        # Record milestone in evolution history
+        self.identity_profile["evolution_history"].append({
+            "timestamp": datetime.datetime.now().isoformat(),
+            "type": "temporal_milestone",
+            "milestone": milestone_name,
+            "significance": significance,
+            "updates": updates
+        })
+        
+        return updates
     
     @function_tool
     async def _update_emotional_tendency(self, ctx: RunContextWrapper,
