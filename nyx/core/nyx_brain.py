@@ -13,6 +13,7 @@ from agents import Agent, Runner, trace, function_tool, handoff, RunContextWrapp
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from pydantic import BaseModel, Field
 
+from issue_tracking_system import IssueTrackingSystem
 
 # Import core systems
 from nyx.core.emotional_core import EmotionalCore
@@ -103,6 +104,20 @@ class IdentityState(BaseModel):
     identity_evolution: Dict[str, Any] = Field(..., description="Identity evolution metrics")
 
 # =============== Brain Function Tools ===============
+
+async def track_issues(self, func, *args, **kwargs):
+    """Decorator to track issues in method execution"""
+    try:
+        return await func(*args, **kwargs)
+    except Exception as e:
+        # Log the error to the issue tracking system
+        context = f"Method: {func.__name__}, Args: {args}, Kwargs: {kwargs}"
+        await self.issue_tracker.process_observation(
+            f"Exception encountered: {str(e)}\nTraceback: {traceback.format_exc()}",
+            context=context
+        )
+        # Re-raise the exception
+        raise
 
 async def initialize_streaming(self, video_source=0, audio_source=None):
     """
@@ -461,6 +476,8 @@ class NyxBrain:
         self.initialized = False
         self.last_interaction = datetime.datetime.now()
         self.interaction_count = 0
+
+        self.issue_tracker = IssueTrackingSystem(f"nyx_issues_db_{user_id}.json")
         
         # Bidirectional influence settings
         self.memory_to_emotion_influence = 0.3  # How much memories influence emotions
@@ -1202,7 +1219,30 @@ class NyxBrain:
                 hormone_levels = {name: data["value"] for name, data in self.hormone_system.hormones.items()}
                 result["hormone_levels"] = hormone_levels
             
+            # Check for potential limitations after processing
+            if len(memories) < 2 and self.interaction_count > 10:
+                await self.issue_tracker.process_observation(
+                    "Memory retrieval returning fewer than expected results",
+                    context=f"User input: '{user_input[:50]}...', Retrieved only {len(memories)} memories"
+                )
+                
+            # Check response time for performance issues
+            end_time = datetime.datetime.now()
+            response_time = (end_time - start_time).total_seconds()
+            if response_time > 2.0:  # Threshold for slow performance
+                await self.issue_tracker.process_observation(
+                    f"Slow performance in process_input: {response_time:.2f} seconds",
+                    context=f"User input length: {len(user_input)}, Memories retrieved: {len(memories)}"
+                )
+                
             return result
+            
+        except Exception as e:
+            await self.issue_tracker.process_observation(
+                f"Error in process_input: {str(e)}",
+                context=f"User input: '{user_input[:50]}...'"
+            )
+            raise
 
     async def get_identity_profile(self) -> Dict[str, Any]:
         """
@@ -1405,6 +1445,29 @@ class NyxBrain:
                     response_data["identity_reflection"] = identity_state
                 except Exception as e:
                     logger.error(f"Error generating identity reflection: {str(e)}")
+
+            # Check for fallback responses which might indicate limitations
+            if response_type == "standard" and len(memories) > 0:
+                await self.issue_tracker.process_observation(
+                    "Using standard response despite having relevant memories",
+                    context=f"User input: '{user_input[:50]}...', Found {len(memories)} memories but didn't use them"
+                )
+                
+            # Check emotional expression issues
+            if should_express_emotion and not emotional_expression:
+                await self.issue_tracker.process_observation(
+                    "Failed to generate emotional expression when needed",
+                    context=f"Emotional state: {self.emotional_core.get_formatted_emotional_state()}"
+                )
+                
+            return response_data
+            
+        except Exception as e:
+            await self.issue_tracker.process_observation(
+                f"Error in generate_response: {str(e)}",
+                context=f"User input: '{user_input[:50]}...'"
+            )
+            raise
             
             return response_data
     
@@ -1562,8 +1625,78 @@ class NyxBrain:
                     logger.error(f"Error updating user clusters: {str(e)}")
                     results["user_clustering"] = {"error": str(e)}
             
-            results["maintenance_time"] = datetime.datetime.now().isoformat()
+            # Get issue stats
+            issue_summary = await self.issue_tracker.get_issue_summary()
+            results["issue_tracker"] = {
+                "open_issues": issue_summary["stats"]["open_issues"],
+                "categories": issue_summary["stats"]["by_category"],
+                "recently_updated": issue_summary["stats"]["recently_updated"]
+            }
+            
+            # Self-analyze capabilities and suggest improvements
+            await self._analyze_capabilities()
+            
             return results
+            
+        except Exception as e:
+            await self.issue_tracker.process_observation(
+                f"Error in run_maintenance: {str(e)}",
+                context="Periodic maintenance run"
+            )
+            return {"error": str(e)}
+
+    async def _analyze_capabilities(self):
+        """Analyze current capabilities and suggest improvements"""
+        # Check memory efficiency
+        memory_stats = await self.memory_core.get_memory_stats()
+        if memory_stats.get("retrieval_success_rate", 1.0) < 0.7:
+            await self.issue_tracker.process_observation(
+                f"Low memory retrieval success rate: {memory_stats.get('retrieval_success_rate', 0):.2f}",
+                context="Memory system may need optimization"
+            )
+        
+        # Check efficiency issues
+        if len(self.performance_metrics["response_times"]) > 10:
+            avg_time = sum(self.performance_metrics["response_times"]) / len(self.performance_metrics["response_times"])
+            if avg_time > 1.5:  # Threshold for concern
+                await self.issue_tracker.process_observation(
+                    f"Response times trending high: {avg_time:.2f}s average",
+                    context="Performance optimization may be needed"
+                )
+        
+        # Check for feature gaps
+        if self.cross_user_enabled and self.performance_metrics.get("cross_user_experiences_shared", 0) == 0:
+            await self.issue_tracker.process_observation(
+                "Cross-user experience sharing is enabled but never used",
+                context="Potential unused feature or implementation gap"
+            )
+
+    async def _safe_call_dependency(self, module_name: str, method_name: str, *args, **kwargs):
+        """Safely call a dependency and track failures"""
+        module = getattr(self, module_name, None)
+        if not module:
+            await self.issue_tracker.process_observation(
+                f"Missing module dependency: {module_name}",
+                context=f"Called from method requesting {method_name}"
+            )
+            return None
+            
+        method = getattr(module, method_name, None)
+        if not method:
+            await self.issue_tracker.process_observation(
+                f"Missing method in module {module_name}: {method_name}",
+                context=f"Method not found when needed"
+            )
+            return None
+            
+        try:
+            return await method(*args, **kwargs)
+        except Exception as e:
+            await self.issue_tracker.process_observation(
+                f"Error in dependency {module_name}.{method_name}: {str(e)}",
+                context=f"Args: {args}, Kwargs: {kwargs}"
+            )
+            return None
     
     async def get_system_stats(self) -> Dict[str, Any]:
         """Get statistics about all systems"""
