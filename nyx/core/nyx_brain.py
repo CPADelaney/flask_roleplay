@@ -846,6 +846,8 @@ class NyxBrain:
         
         # Use integrated reasoning agent as reasoning core
         self.reasoning_core = integrated_reasoning_agent
+
+        await self.temporal_perception.initialize(self, first_interaction_timestamp=None)
         
         # Initialize meta core last, as it needs references to other systems
         self.meta_core = MetaCore()
@@ -858,8 +860,8 @@ class NyxBrain:
             "feedback": self.internal_feedback,
             "identity": self.identity_evolution,
             "experience": self.experience_interface,
-            "hormone": self.hormone_system  # Add hormone system reference
-            "time": self.temporal_perception  # Add temporal system reference
+            "hormone": self.hormone_system  
+            "time": self.temporal_perception  
         })
         
         # Initialize main brain agent
