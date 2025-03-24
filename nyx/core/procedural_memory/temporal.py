@@ -1,10 +1,14 @@
 # nyx/core/procedural_memory/temporal.py
 
 import datetime
-from typing import Dict, List, Any, Optional, Tuple, Set
+import threading
+import functools
+import heapq
+import logging
+from typing import Dict, List, Any, Optional, Tuple, Set, Iterator
 from pydantic import BaseModel, Field
 
-from ..models import Procedure
+from .models import Procedure
 
 class TemporalNode(BaseModel):
     """Node in a temporal procedure graph"""
@@ -140,13 +144,13 @@ class TemporalProcedureGraph(BaseModel):
     domain: str
     created_at: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
     last_updated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    _graph_lock = threading.RLock()  # Class level lock for thread safety
     
     def add_node(self, node: TemporalNode) -> None:
-        """Add a node to the graph"""
-        self.nodes[node.id] = node
-        self.last_updated = datetime.datetime.now().isoformat()
-
-_graph_lock = threading.RLock()  # Class level lock for thread safety
+        """Add a node to the graph (thread-safe)"""
+        with self._graph_lock:
+            self.nodes[node.id] = node
+            self.last_updated = datetime.datetime.now().isoformat()
 
 def add_node(self, node: TemporalNode) -> None:
     """Add a node to the graph (thread-safe)"""
@@ -619,10 +623,12 @@ class ProcedureGraph(BaseModel):
     edges: List[Dict[str, Any]] = Field(default_factory=list)
     entry_points: List[str] = Field(default_factory=list)
     exit_points: List[str] = Field(default_factory=list)
+    _procedure_graph_lock = threading.RLock()  # Class level lock for thread safety
     
     def add_node(self, node_id: str, data: Dict[str, Any]) -> None:
-        """Add a node to the graph"""
-        self.nodes[node_id] = data
+        """Add a node to the graph (thread-safe)"""
+        with self._procedure_graph_lock:
+            self.nodes[node_id] = data
     
     def add_edge(self, from_id: str, to_id: str, properties: Dict[str, Any] = None) -> None:
         """Add an edge to the graph"""
