@@ -393,7 +393,7 @@ class CausalModel(BaseModel):
     interventions: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
     error_history: List[Dict[str, Any]] = Field(default_factory=list)
     max_history: int = 50
-    
+
     def identify_likely_causes(self, error: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Identify likely causes of an error based on causal model"""
         error_type = error.get("type", "execution_failure")
@@ -467,7 +467,7 @@ class CausalModel(BaseModel):
             self.error_history = self.error_history[-self.max_history:]
         
         return scored_causes
-
+    
     def suggest_interventions(self, causes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Suggest interventions for the likely causes"""
         suggested_interventions = []
