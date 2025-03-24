@@ -9,6 +9,9 @@ import numpy as np
 from functools import lru_cache
 import concurrent.futures
 from threading import Lock
+import concurrent.futures
+from functools import lru_cache
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,257 @@ class ProceduralChunkLibrary:
             self._clear_related_caches(template.domains)
         
         return template.id
+
+    def process_templates_batch(self, templates: List[ChunkTemplate]) -> None:
+        """Process multiple templates in a batch for efficiency"""
+        with self.library_lock:
+            for template in templates:
+                self.chunk_templates[template.id] = template
+                
+                # Update domain index
+                for domain in template.domains:
+                    if domain not in self.domain_chunks:
+                        self.domain_chunks[domain] = []
+                    if template.id not in self.domain_chunks[domain]:
+                        self.domain_chunks[domain].append(template.id)
+            
+            # Clear all caches since we added multiple templates
+            self.template_cache = {}
+            self.similarity_cache = {}
+    
+    @lru_cache(maxsize=128)
+    def _calculate_action_similarity(self, action1: ActionTemplate, action2: ActionTemplate) -> float:
+        """
+        Calculate similarity between two actions
+        
+        Args:
+            action1: First action
+            action2: Second action
+            
+        Returns:
+            Similarity score (0.0-1.0)
+        """
+        # Exact match on action type
+        if action1.action_type == action2.action_type:
+            return 1.0
+            
+        # Match on intent
+        if action1.intent == action2.intent:
+            return 0.8
+            
+        # Otherwise low similarity
+        return 0.2
+    
+    # Enhance find_matching_chunks method with parallel processing
+    def find_matching_chunks(self, 
+                           steps: List[Dict[str, Any]], 
+                           source_domain: str,
+                           target_domain: str) -> List[Dict[str, Any]]:
+        """
+        Find library chunks that match a sequence of steps
+        
+        Args:
+            steps: List of step definitions from source procedure
+            source_domain: Domain of the source procedure
+            target_domain: Domain where we want to apply the chunk
+            
+        Returns:
+            List of matching chunks with similarity scores
+        """
+        # Generate cache key
+        steps_hash = hash(str([(s.get("function"), str(s.get("parameters", {}))) for s in steps]))
+        cache_key = f"{steps_hash}_{source_domain}_{target_domain}"
+        
+        # Check cache first
+        if cache_key in self.template_cache:
+            return self.template_cache[cache_key]
+            
+        # Convert steps to action templates
+        action_sequences = self._extract_action_sequence(steps, source_domain)
+        
+        # Skip if we couldn't extract actions
+        if not action_sequences:
+            return []
+        
+        # Prepare list for multithreaded processing
+        template_items = list(self.chunk_templates.items())
+        
+        # Use threading for better performance with many templates
+        matches = []
+        
+        # Check if we should use threading based on number of templates
+        if len(template_items) > 10:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                # Submit tasks
+                future_to_template = {
+                    executor.submit(
+                        self._check_template_match, 
+                        template_id, 
+                        template, 
+                        action_sequences,
+                        source_domain,
+                        target_domain
+                    ): (template_id, template) 
+                    for template_id, template in template_items
+                }
+                
+                # Collect results
+                for future in concurrent.futures.as_completed(future_to_template):
+                    result = future.result()
+                    if result:
+                        matches.append(result)
+        else:
+            # Simple sequential processing for small template sets
+            for template_id, template in template_items:
+                match = self._check_template_match(
+                    template_id,
+                    template,
+                    action_sequences,
+                    source_domain,
+                    target_domain
+                )
+                if match:
+                    matches.append(match)
+        
+        # Sort by overall score
+        matches.sort(key=lambda x: x["overall_score"], reverse=True)
+        
+        # Cache the result
+        self.template_cache[cache_key] = matches
+        
+        return matches
+    
+    # Add a helper method for checking template matches (used by multithreaded processing)
+    def _check_template_match(self,
+                          template_id: str,
+                          template: ChunkTemplate,
+                          action_sequences: List[ActionTemplate],
+                          source_domain: str,
+                          target_domain: str) -> Optional[Dict[str, Any]]:
+        """Check if a template matches the action sequence (helper for concurrent processing)"""
+        # Skip if template doesn't support source domain
+        if source_domain not in template.domains:
+            return None
+            
+        # Calculate similarity between template and action sequence
+        # Use vectorized version for performance if available
+        try:
+            similarity = self._calculate_sequence_similarity_vectorized(template.actions, action_sequences)
+        except Exception:
+            # Fall back to regular version
+            similarity = self._calculate_sequence_similarity(template.actions, action_sequences)
+        
+        if similarity >= self.similarity_threshold:
+            # Check if template has been applied to target domain
+            target_applicability = 0.5  # Default medium applicability
+            
+            if target_domain in template.domains:
+                # Template already used in target domain
+                target_applicability = 0.9
+                
+                # Adjust based on success rate if available
+                if target_domain in template.success_rate:
+                    target_applicability *= template.success_rate[target_domain]
+            
+            return {
+                "template_id": template_id,
+                "template_name": template.name,
+                "similarity": similarity,
+                "target_applicability": target_applicability,
+                "overall_score": similarity * 0.6 + target_applicability * 0.4,
+                "action_count": len(template.actions)
+            }
+        
+        return None
+    
+    # Add method to optimize memory usage
+    def optimize_memory_usage(self) -> Dict[str, Any]:
+        """Optimize memory usage by cleaning up rarely used templates"""
+        start_time = datetime.datetime.now()
+        
+        with self.library_lock:
+            # Count templates before optimization
+            templates_before = len(self.chunk_templates)
+            
+            # Find rarely used templates
+            rarely_used = []
+            for template_id, template in self.chunk_templates.items():
+                # Check usage frequency
+                if template.usage_frequency < 2:
+                    # Check last used timestamp
+                    if not template.last_used:
+                        rarely_used.append(template_id)
+                    else:
+                        # Check if not used in last 30 days
+                        last_used = datetime.datetime.fromisoformat(template.last_used)
+                        days_since_use = (datetime.datetime.now() - last_used).days
+                        
+                        if days_since_use > 30:
+                            rarely_used.append(template_id)
+            
+            # Don't remove all rarely used templates, keep some headroom
+            templates_to_remove = rarely_used
+            if len(templates_to_remove) > templates_before * 0.3:  # Don't remove more than 30%
+                templates_to_remove = templates_to_remove[:int(templates_before * 0.3)]
+            
+            # Remove templates
+            removed_count = 0
+            for template_id in templates_to_remove:
+                if template_id in self.chunk_templates:
+                    template = self.chunk_templates[template_id]
+                    
+                    # Remove from domain index
+                    for domain in template.domains:
+                        if domain in self.domain_chunks and template_id in self.domain_chunks[domain]:
+                            self.domain_chunks[domain].remove(template_id)
+                    
+                    # Remove template
+                    del self.chunk_templates[template_id]
+                    removed_count += 1
+            
+            # Clear caches
+            self.template_cache = {}
+            self.similarity_cache = {}
+            
+            # Calculate time taken
+            execution_time = (datetime.datetime.now() - start_time).total_seconds()
+            
+            return {
+                "templates_before": templates_before,
+                "templates_removed": removed_count,
+                "templates_after": len(self.chunk_templates),
+                "execution_time": execution_time
+            }
+    
+    # Add method for getting library statistics
+    def get_library_statistics(self) -> Dict[str, Any]:
+        """Get statistics about the chunk library"""
+        stats = {
+            "templates_count": len(self.chunk_templates),
+            "actions_count": len(self.action_templates),
+            "domains_count": len(self.domain_chunks),
+            "control_mappings_count": len(self.control_mappings),
+            "transfer_records_count": len(self.transfer_records),
+            "cache_sizes": {
+                "template_cache": len(self.template_cache),
+                "similarity_cache": len(self.similarity_cache)
+            },
+            "domain_usage": self.domain_usage_stats,
+            "top_domains": [],
+            "transfer_success_rate": 0.0
+        }
+        
+        # Calculate top domains
+        domain_templates = [(domain, len(templates)) for domain, templates in self.domain_chunks.items()]
+        domain_templates.sort(key=lambda x: x[1], reverse=True)
+        stats["top_domains"] = domain_templates[:5]  # Top 5 domains
+        
+        # Calculate transfer success rate
+        if self.transfer_records:
+            success_rates = [record.success_level for record in self.transfer_records]
+            stats["transfer_success_rate"] = sum(success_rates) / len(success_rates)
+        
+        return stats
     
     def add_action_template(self, template: ActionTemplate) -> str:
         """Add an action template to the library"""
