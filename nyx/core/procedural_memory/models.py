@@ -586,6 +586,47 @@ class TransferLearningOptimizer:
         }
         
         return transfer_plan
+
+    async def _generate_domain_embeddings_batch(self, domains: List[str]) -> Dict[str, List[float]]:
+        """Generate embeddings for multiple domains in batch"""
+        # Check which domains need new embeddings
+        domains_to_generate = [d for d in domains if d not in self.domain_embeddings]
+        
+        if not domains_to_generate:
+            return {d: self.domain_embeddings[d] for d in domains}
+        
+        # In a real implementation, you would use a batched call to an embedding model
+        # For example, using a pre-trained model via HuggingFace:
+        try:
+            from transformers import AutoTokenizer, AutoModel
+            import torch
+            
+            # Load model (only once)
+            if not hasattr(self, '_tokenizer') or not hasattr(self, '_model'):
+                self._tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
+                self._model = AutoModel.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
+            
+            # Tokenize domains (or domain descriptions)
+            domain_descriptions = [f"Domain for {d} related procedures and actions" for d in domains_to_generate]
+            inputs = self._tokenizer(domain_descriptions, padding=True, truncation=True, return_tensors="pt")
+            
+            # Generate embeddings
+            with torch.no_grad():
+                outputs = self._model(**inputs)
+                embeddings = outputs.last_hidden_state[:, 0].numpy()  # Use [CLS] token embedding
+            
+            # Store embeddings
+            for i, domain in enumerate(domains_to_generate):
+                self.domain_embeddings[domain] = embeddings[i].tolist()
+            
+            return {d: self.domain_embeddings[d] for d in domains}
+            
+        except ImportError:
+            # Fallback if transformers not available
+            for domain in domains_to_generate:
+                self.domain_embeddings[domain] = [random.uniform(-1, 1) for _ in range(10)]
+            
+            return {d: self.domain_embeddings[d] for d in domains}
     
     async def _get_domain_embedding(self, domain: str) -> List[float]:
         """Get embedding vector for a domain"""
