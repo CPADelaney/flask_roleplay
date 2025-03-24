@@ -11,7 +11,7 @@ import atexit  # For cleanup functions
 from datetime import timedelta
 from flasgger import Swagger
 from flask_talisman import Talisman
-from flask_seasurf import SeaSurf
+from flask_wtf.csrf import CSRFProtect
 from prometheus_flask_exporter import PrometheusMetrics
 
 # Blueprint imports
@@ -393,7 +393,7 @@ def create_flask_app():
         'script-src': ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
         'style-src': ["'self'", "'unsafe-inline'"],
     })
-    csrf = SeaSurf(app)
+    csrf = CSRFProtect(app)
     
     # Metrics
     metrics = PrometheusMetrics(app)
