@@ -13,7 +13,7 @@ from context.unified_cache import context_cache
 from context.vector_service import get_vector_service
 from context.memory_manager import get_memory_manager
 from context.context_manager import get_context_manager
-from context.performance import PerformanceMonitor, track_performance
+from context.context_performance import PerformanceMonitor, track_performance
 
 logger = logging.getLogger(__name__)
 
