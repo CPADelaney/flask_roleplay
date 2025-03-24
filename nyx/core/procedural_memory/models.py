@@ -167,6 +167,38 @@ class Procedure(BaseModel):
             self.context_history = self.context_history[-keep_count:]
             return saved_contexts * 200  # Approximate bytes saved
         return 0
+
+    def estimate_memory_usage(self) -> int:
+        """Estimate memory usage of this procedure in bytes"""
+        # Base size
+        memory = 1000  # Base object overhead
+        
+        # Add size for steps
+        memory += len(self.steps) * 500  # Approximate size per step
+        
+        # Add size for context history
+        memory += len(self.context_history) * 200  # Approximate size per context entry
+        
+        # Add size for other lists and dicts
+        memory += len(self.chunked_steps) * 100
+        memory += len(self.generalized_chunks) * 100
+        memory += len(self.refinement_opportunities) * 200
+        memory += len(self.optimization_history) * 200
+        
+        # Add size for semantic embedding if present
+        if self.semantic_embedding:
+            memory += len(self.semantic_embedding) * 8  # 8 bytes per float
+        
+        return memory
+    
+    def cleanup_history(self, keep_count: int = 10) -> int:
+        """Clean up history to reduce memory usage, returns bytes saved"""
+        original_size = len(self.context_history)
+        if len(self.context_history) > keep_count:
+            saved_contexts = len(self.context_history) - keep_count
+            self.context_history = self.context_history[-keep_count:]
+            return saved_contexts * 200  # Approximate bytes saved
+        return 0
     
 class StepResult(BaseModel):
     """Result from executing a step"""
