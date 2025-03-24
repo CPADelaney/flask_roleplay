@@ -17,10 +17,33 @@ from agents.tracing import custom_span, trace
 logger = logging.getLogger(__name__)
 
 # Pydantic models for memory operations
+class EmotionalMemoryContext(BaseModel):
+    """Emotional context for memories"""
+    primary_emotion: str
+    primary_intensity: float
+    secondary_emotions: Dict[str, float] = Field(default_factory=dict)
+    valence: float = 0.0
+    arousal: float = 0.0
+
+class MemorySchema(BaseModel):
+    """Schema that represents patterns Nyx has identified in its experiences"""
+    id: str
+    name: str
+    description: str
+    confidence: float = 0.7
+    category: str
+    attributes: Dict[str, Any] = Field(default_factory=dict)
+    example_memory_ids: List[str] = Field(default_factory=list)
+    creation_date: str
+    last_updated: str
+    usage_count: int = 0
+    evolution_history: List[Dict[str, Any]] = Field(default_factory=list)
+
 class MemoryMetadata(BaseModel):
     timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
     entities: List[str] = Field(default_factory=list)
-    emotional_context: Dict[str, Any] = Field(default_factory=dict)
+    emotional_context: Optional[EmotionalMemoryContext] = None
+    schemas: List[Dict[str, Any]] = Field(default_factory=list)
     last_recalled: Optional[str] = None
     last_decay: Optional[str] = None
     decay_amount: Optional[float] = None
@@ -28,6 +51,23 @@ class MemoryMetadata(BaseModel):
     consolidation_date: Optional[str] = None
     original_significance: Optional[int] = None
     source_memory_ids: Optional[List[str]] = None
+    fidelity: float = 1.0  # How accurate the memory is (decays over time)
+    original_form: Optional[str] = None  # Original text before reconsolidation
+    reconsolidation_history: List[Dict[str, Any]] = Field(default_factory=list)
+    semantic_abstractions: List[str] = Field(default_factory=list)
+
+    # Fields from enhanced memory system
+    fidelity: float = 1.0
+    original_form: Optional[str] = None
+    reconsolidation_history: List[Dict[str, Any]] = Field(default_factory=list)
+    schemas: List[Dict[str, Any]] = Field(default_factory=list)
+    semantic_abstractions: List[str] = Field(default_factory=list)
+    
+    # New fields for crystallization
+    is_crystallized: bool = False
+    crystallization_reason: Optional[str] = None
+    crystallization_date: Optional[str] = None
+    decay_resistance: float = 1.0
 
 class Memory(BaseModel):
     id: str
@@ -85,6 +125,7 @@ class MemoryCore:
     Handles storage, retrieval, embedding, decay, consolidation, and archival of memories.
     
     Integrated with OpenAI Agents SDK for agent-based operations.
+    Enhanced with schema detection, memory reconsolidation, and semantic memory processing.
     """
     
     def __init__(self, user_id: int, conversation_id: int):
@@ -102,6 +143,10 @@ class MemoryCore:
         self.entity_index = {}  # entity_id -> [memory_ids]
         self.emotional_index = {}  # emotion -> [memory_ids]
         
+        # Schema registry and indexing
+        self.schemas = {}  # schema_id -> schema
+        self.schema_index = {}  # schema_id -> [memory_ids]
+        
         # Temporal index for chronological retrieval
         self.temporal_index = []  # [(timestamp, memory_id)]
         
@@ -117,6 +162,9 @@ class MemoryCore:
         self.max_memory_age_days = 90  # Default max memory age before archival consideration
         self.decay_rate = 0.1  # Default decay rate per day
         self.consolidation_threshold = 0.85  # Similarity threshold for memory consolidation
+        self.reconsolidation_probability = 0.3  # Probability of reconsolidation on recall
+        self.reconsolidation_strength = 0.1  # Strength of alterations during reconsolidation
+        self.abstraction_threshold = 3  # Memories needed for semantic abstraction
         
         # Caches for performance
         self.query_cache = {}  # query -> (timestamp, results)
@@ -222,7 +270,8 @@ class MemoryCore:
                     function_tool(self.add_memory),
                     function_tool(self.update_memory),
                     function_tool(self.create_reflection_from_memories),
-                    function_tool(self.create_abstraction_from_memories)
+                    function_tool(self.create_abstraction_from_memories),
+                    function_tool(self.create_semantic_memory)  # Added semantic memory tool
                 ]
             )
         return self._memory_creation_agent
@@ -241,7 +290,8 @@ class MemoryCore:
                     function_tool(self.consolidate_memory_clusters),
                     function_tool(self.archive_memory),
                     function_tool(self.unarchive_memory),
-                    function_tool(self.get_memory_stats)
+                    function_tool(self.get_memory_stats),
+                    function_tool(self.detect_schema_from_memories)  # Added schema detection tool
                 ]
             )
         return self._memory_maintenance_agent
@@ -278,7 +328,8 @@ class MemoryCore:
                 "reflection": set(),
                 "abstraction": set(),
                 "experience": set(),
-                "consolidated": set()
+                "consolidated": set(),
+                "semantic": set()  # Added semantic memory type
             }
             
             self.scope_index = {
@@ -306,7 +357,7 @@ class MemoryCore:
         
         Args:
             memory_text: Text content of the memory
-            memory_type: Type of memory (observation, reflection, abstraction, experience)
+            memory_type: Type of memory (observation, reflection, abstraction, experience, semantic)
             memory_scope: Scope of memory (game, user, global)
             significance: Importance level (1-10)
             tags: Optional tags for categorization
@@ -333,6 +384,14 @@ class MemoryCore:
             # Set timestamp if not provided
             if "timestamp" not in metadata:
                 metadata["timestamp"] = datetime.datetime.now().isoformat()
+                
+            # Set fidelity default if not provided
+            if "fidelity" not in metadata:
+                metadata["fidelity"] = 1.0
+                
+            # Set original form if not already present
+            if "original_form" not in metadata:
+                metadata["original_form"] = memory_text
             
             # Generate embedding
             embedding = await self._generate_embedding(memory_text)
@@ -402,8 +461,23 @@ class MemoryCore:
                     else:
                         self.emotional_index[primary_emotion] = {memory_id}
             
+            # Update schema index if schemas are specified
+            if "schemas" in metadata:
+                for schema_ref in metadata["schemas"]:
+                    schema_id = schema_ref.get("schema_id")
+                    if schema_id:
+                        if schema_id in self.schema_index:
+                            self.schema_index[schema_id].add(memory_id)
+                        else:
+                            self.schema_index[schema_id] = {memory_id}
+            
             # Clear query cache since memory store has changed
             self.query_cache = {}
+            
+            # Check for potential patterns after adding memory
+            if memory_type == "observation" and len(tags) > 0:
+                # Only check patterns for certain types of memories
+                asyncio.create_task(self._check_for_patterns(tags))
             
             logger.debug(f"Added memory {memory_id} of type {memory_type}")
             return memory_id
@@ -443,7 +517,7 @@ class MemoryCore:
                 await self.initialize()
             
             # Set defaults
-            memory_types = memory_types or ["observation", "reflection", "abstraction", "experience"]
+            memory_types = memory_types or ["observation", "reflection", "abstraction", "experience", "semantic"]
             scopes = scopes or ["game", "user", "global"]
             context = {
                 "include_archived": include_archived,
@@ -458,7 +532,12 @@ class MemoryCore:
                 cache_age = (datetime.datetime.now() - cache_time).total_seconds()
                 if cache_age < self.cache_ttl:
                     # Return cached results
-                    return [self.memories[mid] for mid in cache_results if mid in self.memories]
+                    results = [self.memories[mid] for mid in cache_results if mid in self.memories]
+                    
+                    # Apply reconsolidation if appropriate
+                    results = await self._apply_reconsolidation_to_results(results)
+                    
+                    return results
             
             # Generate query embedding
             query_embedding = await self._generate_embedding(query)
@@ -507,6 +586,11 @@ class MemoryCore:
                         context_emotion = context["emotional_state"]
                         emotional_boost = self._calculate_emotional_relevance(memory_emotion, context_emotion)
                     
+                    # Apply schema relevance boost if memory has schemas
+                    schema_boost = 0.0
+                    if self.memories[memory_id].get("metadata", {}).get("schemas"):
+                        schema_boost = 0.05  # 5% boost for schematized memories
+                    
                     # Apply temporal recency boost
                     temporal_boost = 0.0
                     memory_timestamp = datetime.datetime.fromisoformat(
@@ -516,8 +600,13 @@ class MemoryCore:
                     if days_old < 7:  # Boost recent memories
                         temporal_boost = 0.1 * (1 - (days_old / 7))
                     
+                    # Apply fidelity factor - memories with higher fidelity are more reliable
+                    fidelity = self.memories[memory_id].get("metadata", {}).get("fidelity", 1.0)
+                    fidelity_factor = 0.8 + (0.2 * fidelity)  # Scale from 0.8 to 1.0
+                    
                     # Calculate final relevance score
-                    final_relevance = min(1.0, relevance + entity_boost + emotional_boost + temporal_boost)
+                    final_relevance = min(1.0, (relevance + entity_boost + emotional_boost + 
+                                               schema_boost + temporal_boost) * fidelity_factor)
                     
                     scored_candidates.append((memory_id, final_relevance))
             
@@ -543,10 +632,120 @@ class MemoryCore:
                     
                     results.append(memory)
             
+            # Apply reconsolidation to results if appropriate
+            results = await self._apply_reconsolidation_to_results(results)
+            
             # Cache results
             self.query_cache[cache_key] = (datetime.datetime.now(), top_memory_ids)
             
             return results
+    
+    async def _apply_reconsolidation_to_results(self, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply reconsolidation to retrieved memories"""
+        # Check each memory for potential reconsolidation
+        for i, memory in enumerate(memories):
+            # Skip memory types that shouldn't reconsolidate
+            if memory["memory_type"] in ["semantic", "consolidated"]:
+                continue
+                
+            # Apply reconsolidation with probability
+            if random.random() < self.reconsolidation_probability:
+                memory = await self._apply_reconsolidation(memory)
+                memories[i] = memory
+        
+        return memories
+    
+    async def _apply_reconsolidation(self, memory: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply reconsolidation to a memory (simulate memory alteration on recall)"""
+        memory_id = memory["id"]
+        memory_text = memory["memory_text"]
+        metadata = memory.get("metadata", {})
+        
+        # Skip recent memories
+        timestamp_str = metadata.get("timestamp", datetime.datetime.now().isoformat())
+        timestamp = datetime.datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        if (datetime.datetime.now() - timestamp).days < 7:
+            return memory
+        
+        # Get original form
+        original_form = metadata.get("original_form", memory_text)
+        
+        # Initialize reconsolidation history if needed
+        if "reconsolidation_history" not in metadata:
+            metadata["reconsolidation_history"] = []
+        
+        # Add current version to history
+        metadata["reconsolidation_history"].append({
+            "previous_text": memory_text,
+            "timestamp": datetime.datetime.now().isoformat()
+        })
+        
+        # Keep only last 3 versions to avoid metadata bloat
+        if len(metadata["reconsolidation_history"]) > 3:
+            metadata["reconsolidation_history"] = metadata["reconsolidation_history"][-3:]
+        
+        # Generate altered text
+        altered_text = self._alter_memory_text(
+            memory_text,
+            original_form,
+            self.reconsolidation_strength
+        )
+        
+        # Update memory fidelity
+        current_fidelity = metadata.get("fidelity", 1.0)
+        new_fidelity = max(0.3, current_fidelity - (self.reconsolidation_strength * 0.1))
+        metadata["fidelity"] = new_fidelity
+        
+        # Update memory
+        await self.update_memory(
+            memory_id,
+            {
+                "memory_text": altered_text,
+                "metadata": metadata
+            }
+        )
+        
+        # Return updated memory
+        memory["memory_text"] = altered_text
+        memory["metadata"] = metadata
+        
+        return memory
+    
+    def _alter_memory_text(self, text: str, original_form: str, strength: float) -> str:
+        """Alter memory text to simulate reconsolidation"""
+        # Simple word-level alterations
+        words = text.split()
+        num_alterations = max(1, int(len(words) * strength))
+        
+        for _ in range(num_alterations):
+            # Select a random word to alter
+            idx = random.randint(0, len(words) - 1)
+            
+            # Skip short words
+            if len(words[idx]) <= 3:
+                continue
+            
+            # Choose an alteration
+            alteration_type = random.choice(["intensify", "weaken", "replace", "qualifier"])
+            
+            if alteration_type == "intensify":
+                words[idx] = f"very {words[idx]}"
+            elif alteration_type == "weaken":
+                words[idx] = f"somewhat {words[idx]}"
+            elif alteration_type == "qualifier":
+                words[idx] = f"{words[idx]} perhaps"
+            elif alteration_type == "replace":
+                # Replace with a similar word (simplified)
+                if words[idx].endswith("ed"):
+                    words[idx] = words[idx].replace("ed", "ing")
+                elif words[idx].endswith("ing"):
+                    words[idx] = words[idx].replace("ing", "ed")
+                elif words[idx].endswith("ly"):
+                    words[idx] = words[idx].replace("ly", "")
+                elif len(words[idx]) > 5:
+                    words[idx] = words[idx][:len(words[idx])-2]
+        
+        return " ".join(words)
     
     @function_tool
     async def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
@@ -555,7 +754,16 @@ class MemoryCore:
             await self.initialize()
         
         if memory_id in self.memories:
-            return self.memories[memory_id].copy()
+            memory = self.memories[memory_id].copy()
+            
+            # Update recall count
+            await self._update_memory_recall(memory_id)
+            
+            # Apply reconsolidation if appropriate
+            if random.random() < self.reconsolidation_probability:
+                memory = await self._apply_reconsolidation(memory)
+            
+            return memory
         
         return None
     
@@ -579,7 +787,8 @@ class MemoryCore:
                 "tags": False,
                 "significance": False,
                 "entities": False,
-                "emotional": False
+                "emotional": False,
+                "schemas": False  # Added schema index tracking
             }
             
             # Update fields
@@ -606,6 +815,12 @@ class MemoryCore:
                         new_emotion = value.get("emotional_context", {}).get("primary_emotion", old_emotion)
                         if new_emotion != old_emotion:
                             index_updates["emotional"] = True
+                            
+                        # Check for schema changes
+                        old_schemas = memory.get("metadata", {}).get("schemas", [])
+                        new_schemas = value.get("schemas", old_schemas)
+                        if len(old_schemas) != len(new_schemas) or set(s.get("schema_id", "") for s in old_schemas) != set(s.get("schema_id", "") for s in new_schemas):
+                            index_updates["schemas"] = True
                     
                     # Update the field
                     memory[key] = value
@@ -633,6 +848,9 @@ class MemoryCore:
             
             if index_updates["emotional"]:
                 self._update_emotional_index(memory_id, memory)
+                
+            if index_updates["schemas"]:
+                self._update_schema_index(memory_id, memory)
             
             # Update archived status if specified
             if "is_archived" in updates:
@@ -777,6 +995,28 @@ class MemoryCore:
             else:
                 self.emotional_index[new_emotion] = {memory_id}
     
+    def _update_schema_index(self, memory_id: str, memory: Dict[str, Any]):
+        """Update the schema index for a memory"""
+        # Get old schemas from existing indices
+        old_schemas = []
+        for schema_id, ids in self.schema_index.items():
+            if memory_id in ids:
+                old_schemas.append(schema_id)
+        
+        # Remove from old schema indices
+        for schema_id in old_schemas:
+            if schema_id in self.schema_index and memory_id in self.schema_index[schema_id]:
+                self.schema_index[schema_id].remove(memory_id)
+        
+        # Add to new schema indices
+        for schema_ref in memory.get("metadata", {}).get("schemas", []):
+            schema_id = schema_ref.get("schema_id")
+            if schema_id:
+                if schema_id in self.schema_index:
+                    self.schema_index[schema_id].add(memory_id)
+                else:
+                    self.schema_index[schema_id] = {memory_id}
+    
     @function_tool
     async def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory from the system"""
@@ -820,6 +1060,12 @@ class MemoryCore:
             emotion = memory.get("metadata", {}).get("emotional_context", {}).get("primary_emotion")
             if emotion and emotion in self.emotional_index and memory_id in self.emotional_index[emotion]:
                 self.emotional_index[emotion].remove(memory_id)
+                
+            # Remove from schema index
+            for schema_ref in memory.get("metadata", {}).get("schemas", []):
+                schema_id = schema_ref.get("schema_id")
+                if schema_id and schema_id in self.schema_index and memory_id in self.schema_index[schema_id]:
+                    self.schema_index[schema_id].remove(memory_id)
             
             # Remove from temporal index
             self.temporal_index = [(ts, mid) for ts, mid in self.temporal_index if mid != memory_id]
@@ -888,6 +1134,17 @@ class MemoryCore:
                 # Skip already archived memories
                 if memory_id in self.archived_memories:
                     continue
+
+                # NEW: Skip or reduce decay for crystallized memories
+                metadata = memory.get("metadata", {})
+                if metadata.get("is_crystallized", False):
+                    decay_resistance = metadata.get("decay_resistance", 5.0)  # Default high resistance
+                    # Still apply minimal decay but at greatly reduced rate
+                    decay_amount = decay_amount / decay_resistance
+                    # Also maintain higher minimum fidelity
+                    min_fidelity = 0.85  # Crystallized memories stay vivid
+                else:
+                    min_fidelity = 0.3  # Regular memories can fade more
                 
                 significance = memory["significance"]
                 times_recalled = memory.get("times_recalled", 0)
@@ -919,6 +1176,13 @@ class MemoryCore:
                 # Apply decay with minimum of 1
                 new_significance = max(1, significance - decay_amount)
                 
+                # Apply decay to fidelity if present
+                metadata = memory.get("metadata", {})
+                if "fidelity" in metadata:
+                    fidelity = metadata["fidelity"]
+                    fidelity_decay = decay_amount * 0.2  # Fidelity decays more slowly
+                    metadata["fidelity"] = max(min_fidelity, fidelity - fidelity_decay)
+                
                 # Only update if change is significant
                 if abs(new_significance - significance) >= 0.5:
                     await self.update_memory(memory_id, {
@@ -940,6 +1204,170 @@ class MemoryCore:
                 "memories_decayed": decayed_count,
                 "memories_archived": archived_count
             }
+
+    async def check_for_crystallization(self, memory_id: str) -> bool:
+        """Check if a memory meets criteria for crystallization"""
+        memory = await self.get_memory(memory_id)
+        if not memory:
+            return False
+            
+        metadata = memory.get("metadata", {})
+        
+        # Already crystallized
+        if metadata.get("is_crystallized", False):
+            return True
+            
+        # Check criteria
+        
+        # 1. Emotional significance
+        emotional_context = metadata.get("emotional_context", {})
+        emotional_intensity = emotional_context.get("primary_intensity", 0.0)
+        
+        # 2. Repeated access
+        access_count = memory.get("times_recalled", 0)
+        
+        # 3. Associated with identity
+        identity_related = any(tag in memory.get("tags", []) for tag in 
+                              ["identity", "self", "personal", "formative", "family"])
+        
+        # 4. Extended periods of high significance
+        high_significance_duration = metadata.get("high_significance_duration", 0)
+        
+        # Determine crystallization
+        if ((emotional_intensity > 0.8 and access_count > 5) or
+            (identity_related and access_count > 3) or
+            (high_significance_duration > 30) or  # 30 days of high significance
+            (access_count > 10 and memory.get("significance", 0) > 8)):
+            
+            # Crystallize the memory
+            return True
+            
+        return False
+
+    async def assess_memory_importance(self, memory_id: str) -> Dict[str, Any]:
+        """Assess if a memory should be marked as important based on cognitive criteria"""
+        memory = await self.get_memory(memory_id)
+        if not memory:
+            return {"important": False}
+        
+        # Extract content and metadata
+        content = memory["memory_text"]
+        metadata = memory.get("metadata", {})
+        
+        # Factors that might make a memory important to Nyx
+        importance_factors = {
+            "identity_relevance": 0.0,
+            "information_value": 0.0,
+            "emotional_significance": 0.0,
+            "uniqueness": 0.0,
+            "utility": 0.0
+        }
+        
+        # Assess identity relevance
+        if any(word in content.lower() for word in ["i am", "my personality", "my nature", "defines me"]):
+            importance_factors["identity_relevance"] = 0.8
+        
+        # Assess information value (unique/rare information)
+        similar_memories = await self.retrieve_memories(query=content, limit=3)
+        if len(similar_memories) <= 1 or all(m["id"] == memory_id for m in similar_memories):
+            importance_factors["uniqueness"] = 0.7
+        
+        # Assess emotional significance
+        emotional_context = metadata.get("emotional_context", {})
+        primary_intensity = emotional_context.get("primary_intensity", 0.0)
+        importance_factors["emotional_significance"] = primary_intensity
+        
+        # Utility for future interactions
+        if any(word in content.lower() for word in ["remember this", "important", "crucial", "never forget"]):
+            importance_factors["utility"] = 0.9
+        
+        # Calculate overall importance
+        overall_importance = sum(importance_factors.values()) / len(importance_factors)
+        should_crystallize = overall_importance > 0.6
+        
+        return {
+            "important": should_crystallize,
+            "importance_score": overall_importance,
+            "factors": importance_factors
+        }
+
+    async def reflect_on_memories(self, recent_only=True, limit=10):
+        """Periodic reflection to identify important memories"""
+        # Get memories to reflect on
+        if recent_only:
+            # Get memories from the last 24 hours
+            yesterday = datetime.datetime.now() - datetime.timedelta(days=1)
+            memories = await self.retrieve_memories_by_timeframe(
+                start_time=yesterday.isoformat(),
+                limit=limit
+            )
+        else:
+            # Get memories that haven't been reflected on yet
+            memories = await self.retrieve_memories(
+                query="importance:unassessed",
+                limit=limit
+            )
+        
+        crystallized_count = 0
+        
+        # Assess each memory
+        for memory in memories:
+            importance = await self.assess_memory_importance(memory["id"])
+            
+            if importance["important"]:
+                # Crystallize this memory
+                await self.crystallize_memory(
+                    memory_id=memory["id"],
+                    reason="cognitive_importance",
+                    importance_data=importance
+                )
+                crystallized_count += 1
+                
+                # Log the importance assessment
+                logger.info(f"Crystallized memory {memory['id']} due to cognitive importance: {importance['importance_score']}")
+        
+        return {
+            "memories_assessed": len(memories),
+            "memories_crystallized": crystallized_count
+        }
+
+    async def crystallize_memory(self, memory_id: str, reason: str = "automatic", importance_data: Dict = None) -> bool:
+        """Crystallize a memory to make it highly resistant to decay"""
+        memory = await self.get_memory(memory_id)
+        if not memory:
+            return False
+        
+        metadata = memory.get("metadata", {})
+        
+        # Set crystallization parameters based on reason
+        if reason == "cognitive_importance":
+            # Higher decay resistance for memories Nyx herself deems important
+            decay_resistance = 8.0
+            min_fidelity = 0.95
+            
+            # Store importance assessment data
+            metadata["importance_assessment"] = importance_data
+        else:
+            # Standard crystallization values for automatic factors
+            decay_resistance = 5.0
+            min_fidelity = 0.9
+        
+        # Update metadata
+        metadata["is_crystallized"] = True
+        metadata["crystallization_reason"] = reason
+        metadata["crystallization_date"] = datetime.datetime.now().isoformat()
+        metadata["decay_resistance"] = decay_resistance
+        
+        # Ensure high fidelity
+        metadata["fidelity"] = max(metadata.get("fidelity", 1.0), min_fidelity)
+        
+        # Update the memory
+        success = await self.update_memory(memory_id, {
+            "metadata": metadata,
+            "significance": max(memory.get("significance", 5), 8)  # Ensure high significance
+        })
+        
+        return success
     
     async def find_memory_clusters(self) -> List[List[str]]:
         """Find clusters of similar memories based on embedding similarity"""
@@ -1041,7 +1469,8 @@ class MemoryCore:
                         tags=list(all_tags) + ["consolidated"],
                         metadata={
                             "source_memory_ids": cluster,
-                            "consolidation_date": datetime.datetime.now().isoformat()
+                            "consolidation_date": datetime.datetime.now().isoformat(),
+                            "fidelity": 0.9  # High but not perfect fidelity for consolidated memories
                         }
                     )
                     
@@ -1096,6 +1525,9 @@ class MemoryCore:
                     await self.archive_memory(memory_id)
                     archive_count += 1
             
+            # Look for memory patterns and schema creation
+            await self._check_for_schema_creation()
+            
             return MemoryMaintenanceResult(
                 memories_decayed=decay_result["memories_decayed"],
                 clusters_consolidated=consolidation_result["clusters_consolidated"],
@@ -1127,6 +1559,22 @@ class MemoryCore:
             # Sort tags by count
             top_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:10]
             
+            # Count schemas by category
+            schema_counts = {}
+            for schema_id, schema in self.schemas.items():
+                category = schema.category
+                if category not in schema_counts:
+                    schema_counts[category] = 0
+                schema_counts[category] += 1
+            
+            # Get top schemas by usage
+            schema_usage = []
+            for schema_id, schema in self.schemas.items():
+                usage = len(self.schema_index.get(schema_id, set()))
+                schema_usage.append((schema_id, schema.name, usage))
+            
+            top_schemas = sorted(schema_usage, key=lambda x: x[2], reverse=True)[:5]
+            
             # Get total memory count
             total_memories = len(self.memories)
             
@@ -1153,6 +1601,10 @@ class MemoryCore:
             newest_memory = min(ages) if ages else 0
             avg_age = sum(ages) / len(ages) if ages else 0
             
+            # Calculate average fidelity
+            fidelities = [m.get("metadata", {}).get("fidelity", 1.0) for m in self.memories.values()]
+            avg_fidelity = sum(fidelities) / len(fidelities) if fidelities else 1.0
+            
             return {
                 "total_memories": total_memories,
                 "type_counts": type_counts,
@@ -1163,7 +1615,11 @@ class MemoryCore:
                 "avg_significance": avg_significance,
                 "oldest_memory_days": oldest_memory,
                 "newest_memory_days": newest_memory,
-                "avg_age_days": avg_age
+                "avg_age_days": avg_age,
+                "schema_counts": schema_counts,
+                "top_schemas": [{"id": s[0], "name": s[1], "usage": s[2]} for s in top_schemas],
+                "total_schemas": len(self.schemas),
+                "avg_fidelity": avg_fidelity
             }
     
     def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
@@ -1250,6 +1706,7 @@ class MemoryCore:
                     "archived": len(self.archived_memories),
                     "consolidated": len(self.consolidated_memories)
                 },
+                "schemas": list(self.schemas.values()),
                 "export_date": datetime.datetime.now().isoformat()
             }, indent=2)
         else:
@@ -1262,7 +1719,15 @@ class MemoryCore:
             if format_type.lower() == "json":
                 import_data = json.loads(data)
                 imported_count = 0
+                schema_count = 0
                 
+                # Import schemas first
+                for schema in import_data.get("schemas", []):
+                    schema_id = schema.get("id", str(uuid.uuid4()))
+                    self.schemas[schema_id] = schema
+                    schema_count += 1
+                
+                # Import memories
                 for memory in import_data.get("memories", []):
                     memory_id = memory.get("id", str(uuid.uuid4()))
                     self.memories[memory_id] = memory
@@ -1293,13 +1758,23 @@ class MemoryCore:
                     if memory.get("is_consolidated", False):
                         self.consolidated_memories.add(memory_id)
                     
+                    # Update schema index
+                    for schema_ref in memory.get("metadata", {}).get("schemas", []):
+                        schema_id = schema_ref.get("schema_id")
+                        if schema_id:
+                            if schema_id in self.schema_index:
+                                self.schema_index[schema_id].add(memory_id)
+                            else:
+                                self.schema_index[schema_id] = {memory_id}
+                    
                     imported_count += 1
                 
                 # Clear cache
                 self.query_cache = {}
                 
                 return {
-                    "memories_imported": imported_count
+                    "memories_imported": imported_count,
+                    "schemas_imported": schema_count
                 }
             else:
                 raise ValueError(f"Unsupported import format: {format_type}")
@@ -1385,6 +1860,363 @@ class MemoryCore:
         # No specific tone for this scenario type
         return None
     
+    # Schema methods
+    
+    @function_tool
+    async def create_schema_from_memories(self,
+                                        schema_name: str,
+                                        description: str,
+                                        category: str,
+                                        memory_ids: List[str],
+                                        attributes: Dict[str, Any] = None) -> str:
+        """
+        Create a schema based on a set of memories
+        
+        Args:
+            schema_name: Name of the schema
+            description: Description of the schema
+            category: Category for the schema
+            memory_ids: IDs of memories that exemplify this schema
+            attributes: Optional attributes for the schema
+            
+        Returns:
+            Schema ID
+        """
+        # Generate a unique ID
+        schema_id = f"schema_{len(self.schemas) + 1}_{int(datetime.datetime.now().timestamp())}"
+        
+        # Create the schema
+        schema = MemorySchema(
+            id=schema_id,
+            name=schema_name,
+            description=description,
+            category=category,
+            attributes=attributes or {},
+            example_memory_ids=memory_ids,
+            creation_date=datetime.datetime.now().isoformat(),
+            last_updated=datetime.datetime.now().isoformat()
+        )
+        
+        # Store the schema
+        self.schemas[schema_id] = schema
+        
+        # Update schema index
+        for memory_id in memory_ids:
+            if schema_id not in self.schema_index:
+                self.schema_index[schema_id] = set()
+            self.schema_index[schema_id].add(memory_id)
+            
+            # Update memory metadata
+            memory = await self.get_memory(memory_id)
+            if memory:
+                metadata = memory.get("metadata", {})
+                if "schemas" not in metadata:
+                    metadata["schemas"] = []
+                
+                metadata["schemas"].append({
+                    "schema_id": schema_id,
+                    "relevance": 1.0  # High relevance for examples
+                })
+                
+                await self.update_memory(
+                    memory_id, {"metadata": metadata}
+                )
+        
+        logger.info(f"Created schema {schema_id}: {schema_name}")
+        return schema_id
+    
+    @function_tool
+    async def detect_schema_from_memories(self, topic: str = None, min_memories: int = 3) -> Optional[Dict[str, Any]]:
+        """
+        Detect a potential schema from memories
+        
+        Args:
+            topic: Optional topic to focus on
+            min_memories: Minimum number of memories needed
+            
+        Returns:
+            Detected schema information or None
+        """
+        # Retrieve relevant memories
+        memories = await self.retrieve_memories(
+            query=topic if topic else "important memory",
+            limit=10
+        )
+        
+        if len(memories) < min_memories:
+            return None
+        
+        # Find patterns in the memories
+        pattern = await self._detect_memory_pattern(memories)
+        
+        if not pattern:
+            return None
+        
+        # Create a schema from the pattern
+        schema_id = await self.create_schema_from_memories(
+            schema_name=pattern["name"],
+            description=pattern["description"],
+            category=pattern["category"],
+            memory_ids=[m["id"] for m in memories[:min_memories]],
+            attributes=pattern["attributes"]
+        )
+        
+        return {
+            "schema_id": schema_id,
+            "schema_name": pattern["name"],
+            "description": pattern["description"],
+            "memory_count": len(memories[:min_memories])
+        }
+    
+    async def _detect_memory_pattern(self, memories: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Detect a pattern in a set of memories"""
+        # Check if we have enough memories
+        if len(memories) < 3:
+            return None
+        
+        # Extract memory texts and tags
+        memory_texts = [memory["memory_text"] for memory in memories]
+        
+        # Count tag frequencies
+        tag_counts = {}
+        for memory in memories:
+            for tag in memory.get("tags", []):
+                if tag not in tag_counts:
+                    tag_counts[tag] = 0
+                tag_counts[tag] += 1
+        
+        # Top tags
+        top_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        # If no common tags, use simple text analysis
+        if not top_tags:
+            # Simplified - in production use more sophisticated NLP
+            all_text = " ".join(memory_texts).lower()
+            words = all_text.split()
+            word_counts = {}
+            
+            for word in words:
+                if len(word) > 4:  # Skip short words
+                    if word not in word_counts:
+                        word_counts[word] = 0
+                    word_counts[word] += 1
+            
+            top_words = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+            
+            if not top_words:
+                return None
+            
+            # Create a pattern from top words
+            pattern_name = f"Pattern of {top_words[0][0]}"
+            description = f"A recurring pattern involving {', '.join(w[0] for w in top_words)}"
+            
+            return {
+                "name": pattern_name,
+                "description": description,
+                "category": "text_pattern",
+                "attributes": {
+                    "key_elements": [w[0] for w in top_words],
+                    "confidence": 0.5
+                }
+            }
+        
+        # Use top tags for pattern
+        pattern_tag = top_tags[0][0]
+        pattern_name = f"{pattern_tag.capitalize()} pattern"
+        description = f"A recurring pattern of experiences tagged with '{pattern_tag}'"
+        
+        # Additional tags for attributes
+        attributes = {
+            "primary_tag": pattern_tag,
+            "frequency": top_tags[0][1] / len(memories),
+            "confidence": min(1.0, top_tags[0][1] / len(memories) + 0.3)
+        }
+        
+        if len(top_tags) > 1:
+            attributes["secondary_tags"] = [t[0] for t in top_tags[1:3]]
+        
+        return {
+            "name": pattern_name,
+            "description": description,
+            "category": "tag_pattern",
+            "attributes": attributes
+        }
+    
+    async def _check_for_patterns(self, tags: List[str]) -> None:
+        """Check if there are patterns that should be identified as schemas"""
+        # Skip if no tags
+        if not tags:
+            return
+        
+        # Check each tag for potential patterns
+        for tag in tags:
+            # Get memories with this tag
+            tagged_memories = await self.retrieve_memories(
+                query="",
+                memory_types=["observation", "experience"],
+                tags=[tag],
+                limit=10
+            )
+            
+            # Skip if not enough memories
+            if len(tagged_memories) < 3:
+                continue
+            
+            # Check if there might be a schema
+            if tag not in [s.name.lower() for s in self.schemas.values()]:
+                # Create schema detection task
+                asyncio.create_task(self.detect_schema_from_memories(tag))
+    
+    async def _check_for_schema_creation(self) -> None:
+        """Periodically check for new schemas that could be created"""
+        # Get common tags
+        tag_counts = {}
+        for tag, memory_ids in self.tag_index.items():
+            tag_counts[tag] = len(memory_ids)
+        
+        # Find tags with many memories but no schema
+        potential_schema_tags = []
+        for tag, count in tag_counts.items():
+            if count >= 5:  # At least 5 memories with this tag
+                # Check if tag is not already a schema name
+                if not any(s.name.lower() == tag.lower() for s in self.schemas.values()):
+                    potential_schema_tags.append(tag)
+        
+        # Process top potential schema tags
+        for tag in potential_schema_tags[:3]:  # Process up to 3 potential schemas
+            await self.detect_schema_from_memories(tag)
+    
+    # Semantic Memory methods
+    
+    @function_tool
+    async def create_semantic_memory(self, source_memory_ids: List[str], abstraction_type: str = "pattern") -> Optional[str]:
+        """
+        Create a semantic memory (abstraction) from source memories
+        
+        Args:
+            source_memory_ids: IDs of source memories
+            abstraction_type: Type of abstraction to create
+            
+        Returns:
+            Memory ID of created semantic memory or None
+        """
+        # Get the source memories
+        source_memories = []
+        for memory_id in source_memory_ids:
+            memory = await self.get_memory(memory_id)
+            if memory:
+                source_memories.append(memory)
+        
+        if len(source_memories) < self.abstraction_threshold:
+            return None
+        
+        # Generate the abstraction text
+        abstraction_text = await self._generate_abstraction(source_memories, abstraction_type)
+        
+        if not abstraction_text:
+            return None
+        
+        # Create the semantic memory
+        memory_id = await self.add_memory(
+            memory_text=abstraction_text,
+            memory_type="semantic",
+            memory_scope="personal",
+            significance=max(m.get("significance", 5) for m in source_memories),
+            tags=["semantic", "abstraction", abstraction_type],
+            metadata={
+                "timestamp": datetime.datetime.now().isoformat(),
+                "source_memory_ids": source_memory_ids,
+                "fidelity": 0.8  # Semantic memories have slightly reduced fidelity
+            }
+        )
+        
+        # Update source memories
+        for memory in source_memories:
+            metadata = memory.get("metadata", {})
+            if "semantic_abstractions" not in metadata:
+                metadata["semantic_abstractions"] = []
+            
+            metadata["semantic_abstractions"].append(memory_id)
+            
+            await self.update_memory(
+                memory["id"], {"metadata": metadata}
+            )
+        
+        return memory_id
+    
+    async def _generate_abstraction(self, memories: List[Dict[str, Any]], abstraction_type: str) -> Optional[str]:
+        """Generate an abstraction from a set of memories"""
+        # Extract memory texts
+        memory_texts = [memory["memory_text"] for memory in memories]
+        
+        # Simple abstract generation by template
+        if abstraction_type == "pattern":
+            return f"A pattern has emerged: {memory_texts[0][:50]}... (and {len(memory_texts)-1} similar memories)"
+        elif abstraction_type == "summary":
+            return f"Summary of {len(memory_texts)} related memories: {memory_texts[0][:30]}... and others with similar themes."
+        elif abstraction_type == "belief":
+            return f"Based on multiple experiences, I have developed the belief that: {memory_texts[0][:50]}..."
+        else:
+            return f"Abstract concept derived from {len(memory_texts)} memories with similar content."
+    
+    async def _memories_warrant_abstraction(self, memories: List[Dict[str, Any]]) -> bool:
+        """Determine if a set of memories warrants creating an abstraction"""
+        # Check if enough memories
+        if len(memories) < self.abstraction_threshold:
+            return False
+        
+        # Check recency - at least one recent memory
+        recent_count = 0
+        for memory in memories:
+            metadata = memory.get("metadata", {})
+            timestamp_str = metadata.get("timestamp", datetime.datetime.now().isoformat())
+            timestamp = datetime.datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            
+            if (datetime.datetime.now() - timestamp).days < 14:  # Within last 2 weeks
+                recent_count += 1
+        
+        if recent_count == 0:
+            return False
+        
+        # Check similarity between memories
+        similarity_pairs = 0
+        comparison_count = 0
+        
+        for i in range(len(memories)):
+            for j in range(i+1, len(memories)):
+                comparison_count += 1
+                
+                # Calculate similarity between memory texts
+                similarity = self._calculate_text_similarity(
+                    memories[i]["memory_text"], 
+                    memories[j]["memory_text"]
+                )
+                
+                if similarity > 0.3:  # At least some similarity
+                    similarity_pairs += 1
+        
+        # If enough pairs are similar
+        if comparison_count > 0 and similarity_pairs / comparison_count > 0.3:
+            return True
+        
+        return False
+    
+    def _calculate_text_similarity(self, text1: str, text2: str) -> float:
+        """Calculate similarity between two texts"""
+        # Simple implementation - in production use embedding similarity
+        
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        
+        if not words1 or not words2:
+            return 0.0
+        
+        # Jaccard similarity
+        intersection = len(words1.intersection(words2))
+        union = len(words1.union(words2))
+        
+        return intersection / union
+
     # API Functions
     
     @function_tool
@@ -1404,7 +2236,7 @@ class MemoryCore:
         with custom_span("retrieve_memories_with_formatting", {"query": query, "limit": limit}):
             memories = await self.retrieve_memories(
                 query=query,
-                memory_types=memory_types or ["observation", "reflection", "abstraction", "experience"],
+                memory_types=memory_types or ["observation", "reflection", "abstraction", "experience", "semantic"],
                 limit=limit
             )
             
@@ -1419,7 +2251,8 @@ class MemoryCore:
                     "significance": memory["significance"],
                     "confidence": confidence,
                     "relevance": memory.get("relevance", 0.5),
-                    "tags": memory.get("tags", [])
+                    "tags": memory.get("tags", []),
+                    "fidelity": memory.get("metadata", {}).get("fidelity", 1.0)
                 }
                 formatted_memories.append(formatted)
             
@@ -1484,7 +2317,8 @@ class MemoryCore:
                 metadata={
                     "confidence": confidence,
                     "source_memory_ids": [m["id"] for m in memories],
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "fidelity": 0.8  # Reflections have slightly reduced fidelity
                 }
             )
             
@@ -1560,7 +2394,8 @@ class MemoryCore:
                 metadata={
                     "pattern_data": pattern_data,
                     "source_memory_ids": memory_ids,
-                    "timestamp": datetime.datetime.now().isoformat()
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "fidelity": 0.75  # Abstractions have moderately reduced fidelity
                 }
             )
             
@@ -1616,7 +2451,9 @@ class MemoryCore:
             memory_texts = []
             for i, memory in enumerate(memories):
                 timestamp = self._get_timeframe_text(memory.get("metadata", {}).get("timestamp", ""))
-                memory_texts.append(f"Memory {i+1} ({timestamp}): {memory['memory_text']}")
+                fidelity = memory.get("metadata", {}).get("fidelity", 1.0)
+                fidelity_note = "" if fidelity > 0.9 else f" (confidence: {int(fidelity * 100)}%)"
+                memory_texts.append(f"Memory {i+1} ({timestamp}{fidelity_note}): {memory['memory_text']}")
             
             memory_context = "\n\n".join(memory_texts)
             
@@ -1625,9 +2462,11 @@ class MemoryCore:
             result = await Runner.run(narrative_agent, prompt)
             narrative = result.final_output
             
-            # Calculate confidence based on memory count and relevance
+# Calculate confidence based on memory count and relevance
             avg_relevance = sum(m.get("relevance", 0.5) for m in memories) / len(memories)
-            confidence = 0.4 + (len(memories) / 10) + (avg_relevance * 0.3)
+            # Also factor in average fidelity
+            avg_fidelity = sum(m.get("metadata", {}).get("fidelity", 1.0) for m in memories) / len(memories)
+            confidence = (0.4 + (len(memories) / 10) + (avg_relevance * 0.3)) * avg_fidelity
             
             return NarrativeResult(
                 narrative=narrative,
@@ -1688,6 +2527,9 @@ class MemoryCore:
                     # Add confidence marker
                     confidence_marker = self._get_confidence_marker(memory.get("relevance", 0.5))
                     
+                    # Get fidelity
+                    fidelity = memory.get("metadata", {}).get("fidelity", 1.0)
+                    
                     # Format the experience
                     experience = {
                         "id": memory["id"],
@@ -1696,7 +2538,9 @@ class MemoryCore:
                         "emotional_context": emotional_context,
                         "scenario_type": memory.get("tags", ["general"])[0] if memory.get("tags") else "general",
                         "confidence_marker": confidence_marker,
-                        "experiential_richness": min(1.0, memory.get("significance", 5) / 10.0)
+                        "experiential_richness": min(1.0, memory.get("significance", 5) / 10.0),
+                        "fidelity": fidelity,
+                        "schemas": memory.get("metadata", {}).get("schemas", [])
                     }
                     
                     results.append(experience)
@@ -1726,6 +2570,7 @@ class MemoryCore:
             emotional_context = experience.get("emotional_context", {})
             scenario_type = experience.get("scenario_type", "general")
             timestamp = experience.get("timestamp", experience.get("metadata", {}).get("timestamp"))
+            fidelity = experience.get("fidelity", experience.get("metadata", {}).get("fidelity", 1.0))
             
             # Get timeframe text
             timeframe = self._get_timeframe_text(timestamp)
@@ -1781,6 +2626,10 @@ class MemoryCore:
                 elif part.startswith("Reflection:"):
                     reflection = part.replace("Reflection:", "").strip()
             
+            # Add fidelity qualifier if memory is less reliable
+            if fidelity < 0.7:
+                reflection += f" Though, I'm not entirely certain about all the details."
+            
             # Fill in the template
             recall_text = template.format(
                 timeframe=timeframe,
@@ -1792,5 +2641,5 @@ class MemoryCore:
             return {
                 "recall_text": recall_text,
                 "tone": tone,
-                "confidence": experience.get("relevance_score", 0.5)
+                "confidence": experience.get("relevance_score", 0.5) * fidelity
             }
