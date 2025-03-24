@@ -542,6 +542,36 @@ class NyxBrain:
         self.cross_user_enabled = True
         self.cross_user_sharing_threshold = 0.7
 
+    async def process_user_feedback(self, user_input: str, feedback_type: str):
+        """Process explicit or implicit user feedback to identify issues"""
+        # Check for implicit negative feedback
+        negative_phrases = ["that's wrong", "that's not right", "incorrect", 
+                            "you don't understand", "that's not what I meant"]
+        
+        if any(phrase in user_input.lower() for phrase in negative_phrases):
+            await self.issue_tracker.process_observation(
+                "User indicated response was incorrect or inadequate",
+                context=f"User input: '{user_input}'"
+            )
+        
+        # For explicit feedback
+        if feedback_type == "negative":
+            await self.issue_tracker.process_observation(
+                "Explicit negative feedback received from user",
+                context=f"User input: '{user_input}'"
+            )
+
+    async def report_limitation(self, limitation: str, details: Dict[str, Any] = None):
+        """Method for the bot to directly report a limitation it's encountering"""
+        context = json.dumps(details) if details else None
+        
+        await self.issue_tracker.process_observation(
+            f"Self-reported limitation: {limitation}",
+            context=context
+        )
+        
+        logger.warning(f"Bot reported limitation: {limitation}")
+
     async def process_user_input_with_thinking(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Process user input with optional thinking phase"""
         if not self.initialized:
@@ -616,6 +646,21 @@ class NyxBrain:
                     self.thinking_config["thinking_stats"]["thinking_time_avg"] = thinking_time
             else:
                 result["thinking_applied"] = False
+            
+            # Check if thinking was needed but not available
+            if thinking_decision.get("should_think", False) and not self.thinking_config["thinking_enabled"]:
+                await self.issue_tracker.process_observation(
+                    "Thinking was needed but the capability is disabled",
+                    context=f"User input: '{user_input[:50]}...'"
+                )
+            
+            # Report thinking limitations if identified during thinking
+            if context.get("thinking_applied", False) and "limitations" in context.get("thinking_result", {}):
+                for limitation in context["thinking_result"]["limitations"]:
+                    await self.issue_tracker.process_observation(
+                        f"Thinking limitation identified: {limitation}",
+                        context=f"During thinking about: '{user_input[:50]}...'"
+                    )
             
             return result
     
