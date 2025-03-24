@@ -4,6 +4,8 @@ import datetime
 import logging
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable, Set
 from pydantic import BaseModel, Field
+import random
+from collections import Counter
 
 logger = logging.getLogger(__name__)
 
@@ -126,3 +128,119 @@ class TransferStats(BaseModel):
     recent_transfers: List[Dict[str, Any]] = Field(default_factory=list)
     templates_count: int = 0
     actions_count: int = 0
+class HierarchicalProcedure(BaseModel):
+    """Hierarchical representation of procedures with sub-procedures and goals"""
+    id: str
+    name: str
+    description: str
+    parent_id: Optional[str] = None
+    children: List[str] = Field(default_factory=list)
+    goal_state: Dict[str, Any] = Field(default_factory=dict)
+    preconditions: Dict[str, Any] = Field(default_factory=dict)
+    postconditions: Dict[str, Any] = Field(default_factory=dict)
+    is_abstract: bool = False
+    domain: str
+    steps: List[Dict[str, Any]] = Field(default_factory=list)
+    execution_count: int = 0
+    successful_executions: int = 0
+    average_execution_time: float = 0.0
+    proficiency: float = 0.0
+    created_at: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    last_updated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    last_execution: Optional[str] = None
+    
+    def add_child(self, child_id: str) -> None:
+        """Add a child procedure to this procedure"""
+        if child_id not in self.children:
+            self.children.append(child_id)
+            self.last_updated = datetime.datetime.now().isoformat()
+    
+    def remove_child(self, child_id: str) -> None:
+        """Remove a child procedure from this procedure"""
+        if child_id in self.children:
+            self.children.remove(child_id)
+            self.last_updated = datetime.datetime.now().isoformat()
+    
+    def meets_preconditions(self, context: Dict[str, Any]) -> bool:
+        """Check if context meets all preconditions"""
+        for key, value in self.preconditions.items():
+            if key not in context:
+                return False
+            
+            # Handle different value types
+            if isinstance(value, (list, tuple, set)):
+                if context[key] not in value:
+                    return False
+            elif isinstance(value, dict) and "min" in value and "max" in value:
+                if not (value["min"] <= context[key] <= value["max"]):
+                    return False
+            elif context[key] != value:
+                return False
+        
+        return True
+    
+    def update_goal_state(self, goal: Dict[str, Any]) -> None:
+        """Update the goal state"""
+        self.goal_state.update(goal)
+        self.last_updated = datetime.datetime.now().isoformat()
+
+class CausalModel(BaseModel):
+    """Causal model for reasoning about procedure failures"""
+    causes: Dict[str, List[Dict[str, float]]] = Field(default_factory=dict)
+    interventions: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
+    error_history: List[Dict[str, Any]] = Field(default_factory=list)
+    max_history: int = 50
+
+class TemporalNode(BaseModel):
+    """Node in a temporal procedure graph"""
+    id: str
+    action: Dict[str, Any]
+    temporal_constraints: List[Dict[str, Any]] = Field(default_factory=list)
+    duration: Optional[Tuple[float, float]] = None  # (min, max) duration
+    next_nodes: List[str] = Field(default_factory=list)
+    prev_nodes: List[str] = Field(default_factory=list)
+
+class TemporalProcedureGraph(BaseModel):
+    """Graph representation of a temporal procedure"""
+    id: str
+    name: str
+    nodes: Dict[str, TemporalNode] = Field(default_factory=dict)
+    edges: List[Tuple[str, str, Dict[str, Any]]] = Field(default_factory=list)
+    start_nodes: List[str] = Field(default_factory=list)
+    end_nodes: List[str] = Field(default_factory=list)
+    domain: str
+    created_at: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    last_updated: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+
+class ProcedureGraph(BaseModel):
+    """Graph representation of a procedure for flexible execution"""
+    nodes: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    edges: List[Dict[str, Any]] = Field(default_factory=list)
+    entry_points: List[str] = Field(default_factory=list)
+    exit_points: List[str] = Field(default_factory=list)
+
+class WorkingMemoryController:
+    """Controls working memory during procedure execution"""
+    
+    def __init__(self, capacity: int = 5):
+        self.items = []
+        self.capacity = capacity
+        self.focus_history = []
+        self.max_history = 20
+
+class ParameterOptimizer:
+    """Optimizes procedure parameters using Bayesian optimization"""
+    
+    def __init__(self):
+        self.parameter_models = {}
+        self.optimization_history = {}
+        self.bounds = {}  # Parameter bounds
+
+class TransferLearningOptimizer:
+    """Optimizes transfer learning between domains using meta-learning"""
+    
+    def __init__(self):
+        self.domain_embeddings = {}
+        self.transfer_success_history = []
+        self.domain_similarities = {}  # pair_key -> similarity
+        self.max_history = 50
