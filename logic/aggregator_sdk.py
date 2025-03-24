@@ -14,7 +14,7 @@ from typing import Dict, List, Any, Optional, Union
 from context.context_service import (
     get_context_service,
     get_comprehensive_context,
-    cleanup_all_services
+    cleanup_context_services
 )
 from context.context_config import get_config
 from context.context_performance import PerformanceMonitor, track_performance
