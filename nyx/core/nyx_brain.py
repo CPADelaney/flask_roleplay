@@ -1051,6 +1051,45 @@ class NyxBrain:
             
             results["maintenance_time"] = datetime.datetime.now().isoformat()
             return results
+
+    async def process_temporal_effects(self, 
+                                    temporal_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process temporal effects across all systems
+        
+        Args:
+            temporal_context: Temporal context data
+            
+        Returns:
+            Processing results
+        """
+        results = {}
+        
+        # Apply to emotional core
+        if self.emotional_core and "time_effects" in temporal_context:
+            self.emotional_core.process_temporal_effects(temporal_context["time_effects"])
+            results["emotional_effects_applied"] = True
+        
+        # Apply to identity evolution
+        if self.identity_evolution:
+            # Check for long-term drift
+            if "long_term_drift" in temporal_context:
+                identity_updates = await self.identity_evolution.process_long_term_drift(
+                    temporal_context["long_term_drift"]
+                )
+                results["identity_updates"] = identity_updates
+            
+            # Check for milestone
+            if "milestone_reached" in temporal_context:
+                milestone_impact = await self.identity_evolution.process_temporal_milestone(
+                    temporal_context["milestone_reached"]
+                )
+                results["milestone_impact"] = milestone_impact
+        
+        # Track for future reference
+        self.last_temporal_context = temporal_context
+        
+        return results
     
     async def process_input(self, user_input: str, context: Dict[str, Any] = None):
         """
