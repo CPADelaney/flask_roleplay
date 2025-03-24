@@ -30,6 +30,17 @@ from nyx.core.experience_consolidation import ExperienceConsolidationSystem
 from nyx.core.identity_evolution import IdentityEvolutionSystem
 from nyx.core.cross_user_experience import CrossUserExperienceManager
 
+from nyx.core.procedural_memory import (
+    ProceduralMemoryManager, EnhancedProceduralMemoryManager,
+    add_procedure, execute_procedure, transfer_procedure,
+    get_procedure_proficiency, list_procedures, get_transfer_statistics,
+    identify_chunking_opportunities, apply_chunking,
+    generalize_chunk_from_steps, find_matching_chunks,
+    transfer_chunk, transfer_with_chunking, find_similar_procedures,
+    refine_step
+)
+from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
+
 from nyx.streamer.gamer_girl import (
     AdvancedGameAgentSystem, 
     GameSessionLearningManager,
@@ -143,6 +154,8 @@ async def initialize_streaming(self, video_source=0, audio_source=None):
     self.store_streaming_memory = self.streaming_core.memory_mapper.store_gameplay_memory
     self.retrieve_streaming_memories = self.streaming_core.memory_mapper.retrieve_relevant_memories
     self.create_streaming_reflection = self.streaming_core.memory_mapper.create_streaming_reflection
+    self.add_streaming_procedure = self.agent_enhanced_memory.create_procedure
+    self.execute_streaming_procedure = self.agent_enhanced_memory.execute_procedure
     
     # Register streaming control functions
     self.start_streaming = self.streaming_core.start_streaming
@@ -311,6 +324,43 @@ async def integrate_streaming_knowledge(self, game_name: str):
             logger.error(f"Error consolidating streaming experiences: {e}")
     
     return results
+
+@function_tool
+async def add_procedural_knowledge(ctx, name: str, steps: List[Dict[str, Any]], domain: str = "general") -> Dict[str, Any]:
+    """
+    Add procedural knowledge to the system
+    
+    Args:
+        name: Name of the procedure
+        steps: List of procedure steps
+        domain: Knowledge domain
+    
+    Returns:
+        Procedure creation result
+    """
+    brain = ctx.context
+    
+    # Add procedure
+    result = await brain.add_procedure(name, steps, domain=domain)
+    return result
+
+@function_tool
+async def run_procedure(ctx, name: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Execute a stored procedure
+    
+    Args:
+        name: Name of the procedure to run
+        context: Optional execution context
+    
+    Returns:
+        Execution result
+    """
+    brain = ctx.context
+    
+    # Execute procedure
+    result = await brain.execute_procedure(name, context)
+    return result
 
 @function_tool
 async def process_user_message(ctx, user_input: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -535,6 +585,9 @@ class NyxBrain:
         # Initialize streaming system if needed
         if os.environ.get("ENABLE_STREAMING", "false").lower() == "true":
             await self.initialize_streaming()
+
+        self.procedural_memory = ProceduralMemoryManager()
+        self.agent_enhanced_memory = AgentEnhancedMemoryManager(self.procedural_memory)
     
         self.initialized = True
         logger.info(f"NyxBrain initialized for user {self.user_id}, conversation {self.conversation_id}")    
@@ -862,6 +915,7 @@ class NyxBrain:
             "experience": self.experience_interface,
             "hormone": self.hormone_system  
             "time": self.temporal_perception  
+            "procedural": self.agent_enhanced_memory  
         })
         
         # Initialize main brain agent
@@ -869,6 +923,111 @@ class NyxBrain:
         
         self.initialized = True
         logger.info(f"NyxBrain initialized for user {self.user_id}, conversation {self.conversation_id}")
+
+    async def add_procedure(self, 
+                          name: str, 
+                          steps: List[Dict[str, Any]],
+                          description: str = None,
+                          domain: str = "general") -> Dict[str, Any]:
+        """
+        Add a new procedure to procedural memory
+        
+        Args:
+            name: Procedure name
+            steps: List of procedure steps
+            description: Optional description
+            domain: Domain for this procedure
+            
+        Returns:
+            Creation result
+        """
+        if not self.initialized:
+            await self.initialize()
+            
+        return await self.agent_enhanced_memory.create_procedure(
+            name=name,
+            steps=steps,
+            description=description,
+            domain=domain
+        )
+    
+    async def execute_procedure(self,
+                              name: str,
+                              context: Dict[str, Any] = None,
+                              force_conscious: bool = False) -> Dict[str, Any]:
+        """
+        Execute a procedure from procedural memory
+        
+        Args:
+            name: Procedure name to execute
+            context: Execution context
+            force_conscious: Whether to use deliberate execution
+            
+        Returns:
+            Execution result
+        """
+        if not self.initialized:
+            await self.initialize()
+            
+        return await self.agent_enhanced_memory.execute_procedure(
+            name=name,
+            context=context,
+            force_conscious=force_conscious
+        )
+    
+    async def transfer_procedure(self,
+                              source_name: str,
+                              target_name: str,
+                              target_domain: str) -> Dict[str, Any]:
+        """
+        Transfer a procedure to another domain
+        
+        Args:
+            source_name: Source procedure name
+            target_name: Target procedure name
+            target_domain: Target domain
+            
+        Returns:
+            Transfer result
+        """
+        if not self.initialized:
+            await self.initialize()
+            
+        return await self.agent_enhanced_memory.transfer_procedure(
+            source_name=source_name,
+            target_name=target_name,
+            target_domain=target_domain
+        )
+    
+    async def analyze_chunking(self, procedure_name: str) -> Dict[str, Any]:
+        """
+        Analyze a procedure for chunking opportunities
+        
+        Args:
+            procedure_name: Name of procedure to analyze
+            
+        Returns:
+            Chunking analysis result
+        """
+        if not self.initialized:
+            await self.initialize()
+            
+        return await self.agent_enhanced_memory.analyze_chunking(procedure_name)
+    
+    async def process_procedural_query(self, query: str) -> str:
+        """
+        Process a natural language query about procedural memory
+        
+        Args:
+            query: Natural language query
+            
+        Returns:
+            Response from procedural memory system
+        """
+        if not self.initialized:
+            await self.initialize()
+            
+        return await self.agent_enhanced_memory.process_query(query)
     
     def _create_brain_agent(self) -> Agent:
         """Create the main brain agent that coordinates all subsystems"""
@@ -892,6 +1051,7 @@ class NyxBrain:
             - Experience Consolidation: Consolidates similar experiences into higher-level abstractions
             - Cross-User Experience: Manages sharing experiences across users
             - Thinking Capability: Enables deliberate reasoning before responding when appropriate
+            - Procedural Memory: Manages, executes, and transfers procedural knowledge
             
             Use your tools to process user messages, generate responses, maintain the system,
             and facilitate Nyx's identity evolution through experiences and adaptation.
@@ -906,6 +1066,13 @@ class NyxBrain:
                 get_identity_state,
                 adapt_experience_sharing,
                 run_experience_consolidation,
+
+                # Add procedural memory tools
+                function_tool(self.add_procedure),
+                function_tool(self.execute_procedure),
+                function_tool(self.transfer_procedure),
+                function_tool(self.analyze_chunking),
+                function_tool(self.process_procedural_query),
                 
                 # Add new thinking tools
                 function_tool(self.process_user_input_with_thinking),
@@ -1154,6 +1321,22 @@ class NyxBrain:
             # Process emotional impact of input
             emotional_stimuli = self.emotional_core.analyze_text_sentiment(user_input)
             emotional_state = self.emotional_core.update_from_stimuli(emotional_stimuli)
+
+            procedural_knowledge = None
+            if self.agent_enhanced_memory:
+                try:
+                    # Find relevant procedures for this input
+                    relevant_procedures = await self.agent_enhanced_memory.find_similar_procedures(user_input)
+                    if relevant_procedures:
+                        procedural_knowledge = {
+                            "relevant_procedures": relevant_procedures,
+                            "can_execute": len(relevant_procedures) > 0
+                        }
+                except Exception as e:
+                    logger.error(f"Error checking procedural knowledge: {str(e)}")
+            
+            # Add to result
+            result["procedural_knowledge"] = procedural_knowledge
             
             # Update hormone system interaction quality based on emotional valence
             if self.hormone_system:
@@ -1776,6 +1959,15 @@ class NyxBrain:
                 except Exception as e:
                     logger.error(f"Error updating user clusters: {str(e)}")
                     results["user_clustering"] = {"error": str(e)}
+
+            if self.agent_enhanced_memory:
+                try:
+                    # Perform chunk consolidation and optimization
+                    procedural_result = await self.agent_enhanced_memory.memory_manager.run_maintenance()
+                    results["procedural_maintenance"] = procedural_result
+                except Exception as e:
+                    logger.error(f"Error in procedural maintenance: {str(e)}")
+                    results["procedural_maintenance"] = {"error": str(e)}
             
             # Get issue stats
             issue_summary = await self.issue_tracker.get_issue_summary()
@@ -1905,6 +2097,24 @@ class NyxBrain:
                 except Exception as e:
                     logger.error(f"Error getting knowledge stats: {str(e)}")
                     knowledge_stats = {"error": str(e)}
+
+            procedural_stats = {}
+            if self.agent_enhanced_memory:
+                try:
+                    procedures = list(self.agent_enhanced_memory.procedures.keys())
+                    procedural_stats = {
+                        "total_procedures": len(procedures),
+                        "available_procedures": procedures[:10] if len(procedures) > 10 else procedures,
+                        "procedure_domains": list(set(p.domain for p in self.agent_enhanced_memory.procedures.values())),
+                        "execution_count": self.agent_enhanced_memory.agents.agent_context.run_stats.get("total_runs", 0),
+                        "success_rate": (
+                            self.agent_enhanced_memory.agents.agent_context.run_stats.get("successful_runs", 0) / 
+                            max(1, self.agent_enhanced_memory.agents.agent_context.run_stats.get("total_runs", 1))
+                        )
+                    }
+                except Exception as e:
+                    logger.error(f"Error getting procedural memory stats: {str(e)}")
+                    procedural_stats = {"error": str(e)}        
             
             # Get identity state if available
             identity_stats = {}
@@ -1992,7 +2202,8 @@ class NyxBrain:
                     "valence": self.emotional_core.get_emotional_valence(),
                     "arousal": self.emotional_core.get_emotional_arousal()
                 },
-                "hormone_stats": hormone_stats,  # Add this line
+                "procedural_stats": procedural_stats,
+                "hormone_stats": hormone_stats,  
                 "interaction_stats": {
                     "interaction_count": self.interaction_count,
                     "last_interaction": self.last_interaction.isoformat()
