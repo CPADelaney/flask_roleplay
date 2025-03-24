@@ -116,7 +116,56 @@ class IdentityState(BaseModel):
     identity_reflection: str = Field(..., description="Reflection on identity")
     identity_evolution: Dict[str, Any] = Field(..., description="Identity evolution metrics")
 
+class StimulusData(BaseModel):
+    """Input stimulus that may trigger a reflexive response"""
+    data: Dict[str, Any] = Field(..., description="Stimulus data patterns")
+    domain: Optional[str] = Field(None, description="Optional domain to limit patterns")
+    context: Optional[Dict[str, Any]] = Field(None, description="Additional context information")
+    priority: Optional[str] = Field("normal", description="Processing priority (normal, high, critical)")
+
+class ReflexRegistrationInput(BaseModel):
+    """Input for registering a new reflex pattern"""
+    name: str = Field(..., description="Unique name for this pattern")
+    pattern_data: Dict[str, Any] = Field(..., description="Pattern definition data")
+    procedure_name: str = Field(..., description="Name of procedure to execute when triggered")
+    threshold: float = Field(0.7, description="Matching threshold (0.0-1.0)")
+    priority: int = Field(1, description="Priority level (higher values take precedence)")
+    domain: Optional[str] = Field(None, description="Optional domain for specialized responses")
+    context_template: Optional[Dict[str, Any]] = Field(None, description="Template for context to pass to procedure")
+
+class ReflexResponse(BaseModel):
+    """Result of processing a stimulus with reflexes"""
+    success: bool = Field(..., description="Whether a reflex was successfully triggered")
+    pattern_name: Optional[str] = Field(None, description="Name of the triggered pattern if successful")
+    reaction_time_ms: float = Field(..., description="Reaction time in milliseconds")
+    output: Optional[Dict[str, Any]] = Field(None, description="Output from the procedure execution")
+    match_score: Optional[float] = Field(None, description="Match score for the pattern")
+
+
 # =============== Brain Function Tools ===============
+
+def create_reflex_agent(reflexive_system):
+    """Create an agent specifically for handling reflexes"""
+    return Agent(
+        name="Reflex Agent",
+        instructions="""
+        You are a specialized agent for handling reflexive, fast responses without deliberate thinking.
+        You process stimuli that need immediate reactions, similar to human reflexes or muscle memory.
+        
+        When presented with a stimulus, you will:
+        1. Quickly determine if it matches any known reflex patterns
+        2. If a match is found, execute the associated procedure immediately
+        3. Return the result of the procedure execution
+        
+        You focus on speed and pattern recognition, not deliberate reasoning.
+        """,
+        tools=[
+            function_tool(reflexive_system.process_stimulus_fast, 
+                         name_override="process_reflex",
+                         description_override="Process stimulus with minimal overhead for fastest possible reaction")
+        ],
+        output_type=ReflexResponse
+    )
 
 async def track_issues(self, func, *args, **kwargs):
     """Decorator to track issues in method execution"""
@@ -524,7 +573,7 @@ class NyxBrain:
         self.experience_consolidation = None
         self.cross_user_manager = None
         self.reflexive_system = None
-            
+    
         # State tracking
         self.initialized = False
         self.last_interaction = datetime.datetime.now()
@@ -597,6 +646,358 @@ class NyxBrain:
 
         self.cross_user_enabled = True
         self.cross_user_sharing_threshold = 0.7
+
+    async def initialize_reflexive_system(brain):
+        """Initialize reflexive system integration with NyxBrain"""
+        brain.reflexive_system = ReflexiveSystem(brain.agent_enhanced_memory)
+        
+        # Initialize decision system
+        brain.reflexive_system.decision_system = ReflexDecisionSystem()
+        
+        # Create reflex-specific agent
+        brain.reflex_agent = create_reflex_agent(brain.reflexive_system)
+        
+        # Register reflexive system tools
+        # These will be added to the brain_agent
+        brain.register_reflex = brain.reflexive_system.register_reflex
+        brain.process_stimulus_fast = brain.reflexive_system.process_stimulus_fast
+        brain.train_reflexes = brain.reflexive_system.train_reflexes
+        brain.add_gaming_reflex = brain.reflexive_system.add_gaming_reflex
+        brain.simulate_gaming_scenarios = brain.reflexive_system.simulate_gaming_scenarios
+        brain.set_reflex_response_mode = brain.reflexive_system.set_response_mode
+        brain.get_reflexive_stats = brain.reflexive_system.get_reflexive_stats
+        brain.optimize_reflexes = brain.reflexive_system.optimize_reflexes
+        
+        # Register new methods for parallelized processing
+        brain.process_input_with_reflexes = process_input_with_reflexes.__get__(brain, type(brain))
+        brain.analyze_stimulus_for_reflexes = analyze_stimulus_for_reflexes.__get__(brain, type(brain))
+        brain.evaluate_reflex_performance = evaluate_reflex_performance.__get__(brain, type(brain))
+        
+        logger.info("Reflexive system initialized and integrated with brain")
+        
+        return brain.reflexive_system
+
+    async def process_input_with_reflexes(self, 
+                                        user_input: str, 
+                                        context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process input with potential for reflexive response while also enabling deeper processing
+        
+        Args:
+            user_input: User's input text
+            context: Additional context information
+            
+        Returns:
+            Processing results with reflexive and/or deliberate components
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        with trace(workflow_name="process_input_with_reflexes", group_id=self.trace_group_id):
+            # Convert user_input to stimulus format
+            stimulus = {"text": user_input}
+            if context:
+                # Extract relevant context features for stimulus
+                if "domain" in context:
+                    stimulus["domain"] = context["domain"]
+                if "urgency" in context:
+                    stimulus["urgency"] = context["urgency"]
+                if "scenario_type" in context:
+                    stimulus["scenario_type"] = context["scenario_type"]
+            
+            # Determine if reflexes should be used
+            domain = context.get("domain") if context else None
+            use_reflex, confidence = self.reflexive_system.decision_system.should_use_reflex(
+                stimulus, context, domain
+            )
+            
+            # Start timing
+            start_time = time.time()
+            
+            # Start procedural memory lookup in parallel
+            procedural_task = asyncio.create_task(
+                self.agent_enhanced_memory.find_similar_procedures(user_input)
+            )
+            
+            # Start reflex processing and deliberate thinking in parallel
+            reflex_result = None
+            thinking_task = None
+            
+            if use_reflex:
+                # Process with reflexes
+                reflex_task = asyncio.create_task(
+                    self.reflexive_system.process_stimulus_fast(stimulus, domain, context)
+                )
+                
+                # Start deliberate processing in parallel (we'll decide later whether to use it)
+                thinking_task = asyncio.create_task(
+                    self.process_user_input_with_thinking(user_input, context)
+                )
+                
+                # Wait for the reflex result first (it should be faster)
+                try:
+                    reflex_result = await asyncio.wait_for(reflex_task, timeout=0.2)  # 200ms timeout
+                except asyncio.TimeoutError:
+                    # Reflex took too long, we'll fallback to deliberate
+                    logger.info("Reflex processing timed out, falling back to deliberate processing")
+                    reflex_result = {"success": False, "reason": "timeout"}
+            else:
+                # Just start deliberate processing
+                thinking_task = asyncio.create_task(
+                    self.process_user_input_with_thinking(user_input, context)
+                )
+            
+            # Wait for procedural memory lookup to complete
+            try:
+                relevant_procedures = await asyncio.wait_for(procedural_task, timeout=0.3)  # 300ms timeout
+            except asyncio.TimeoutError:
+                relevant_procedures = []
+                logger.info("Procedural memory lookup timed out")
+            
+            # Decide which processing path to use
+            procedural_knowledge = None
+            if relevant_procedures:
+                procedural_knowledge = {
+                    "relevant_procedures": relevant_procedures,
+                    "can_execute": len(relevant_procedures) > 0
+                }
+            
+            # If reflexes succeeded and were fast enough, use that result
+            if reflex_result and reflex_result.get("success", False):
+                # Check if we've already waited for procedural memory
+                if not procedural_knowledge:
+                    # See if procedural_task is done
+                    if procedural_task.done():
+                        relevant_procedures = procedural_task.result()
+                        if relevant_procedures:
+                            procedural_knowledge = {
+                                "relevant_procedures": relevant_procedures,
+                                "can_execute": len(relevant_procedures) > 0
+                            }
+                
+                # Just let the deliberate thinking continue in background
+                # We don't need to wait for its result
+                
+                # Build result
+                result = {
+                    "response_type": "reflexive",
+                    "reaction_time_ms": reflex_result.get("reaction_time_ms", 0),
+                    "reflex_pattern": reflex_result.get("pattern_name", "unknown"),
+                    "confidence": confidence,
+                    "result": reflex_result,
+                    "procedural_knowledge": procedural_knowledge
+                }
+                
+                # Update decision system
+                self.reflexive_system.decision_system.update_from_result(
+                    stimulus, True, True
+                )
+                
+                return result
+            
+            # If reflexes failed or weren't used, wait for deliberate processing to complete
+            deliberate_result = await thinking_task
+            
+            # Build combined result
+            result = {
+                "response_type": "deliberate",
+                "processing_time_ms": (time.time() - start_time) * 1000,
+                "reflex_attempted": use_reflex,
+                "reflex_confidence": confidence if use_reflex else 0,
+                "result": deliberate_result,
+                "procedural_knowledge": procedural_knowledge
+            }
+            
+            # Update decision system
+            self.reflexive_system.decision_system.update_from_result(
+                stimulus, use_reflex, True
+            )
+            
+            return result
+    
+    @function_tool
+    async def analyze_stimulus_for_reflexes(ctx, stimulus: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze a stimulus to determine if it should trigger reflexes
+        
+        Args:
+            stimulus: Stimulus data to analyze
+        
+        Returns:
+            Analysis results including reflex potential
+        """
+        brain = ctx.context
+        
+        # Check if reflexes should be used
+        use_reflex, confidence = brain.reflexive_system.decision_system.should_use_reflex(
+            stimulus, None, None
+        )
+        
+        # Find potentially matching patterns
+        matching_patterns = []
+        for name, pattern in brain.reflexive_system.reflex_patterns.items():
+            match_score = brain.reflexive_system.pattern_recognition.fast_match(
+                stimulus, pattern.pattern_data
+            )
+            if match_score >= pattern.threshold * 0.8:  # Include near-matches
+                matching_patterns.append({
+                    "name": name,
+                    "match_score": match_score,
+                    "procedure": pattern.procedure_name
+                })
+        
+        # Sort by match score
+        matching_patterns.sort(key=lambda p: p["match_score"], reverse=True)
+        
+        return {
+            "should_use_reflex": use_reflex,
+            "confidence": confidence,
+            "potential_patterns": matching_patterns[:3],  # Top 3 matches
+            "stimulus_complexity": len(stimulus),
+            "reflex_count": len(brain.reflexive_system.reflex_patterns)
+        }
+    
+    @function_tool
+    async def evaluate_reflex_performance(ctx, scenario_type: str) -> Dict[str, Any]:
+        """
+        Evaluate reflex performance for a specific scenario type
+        
+        Args:
+            scenario_type: Type of scenario to evaluate
+        
+        Returns:
+            Performance evaluation results
+        """
+        brain = ctx.context
+        
+        # Collect relevant patterns
+        relevant_patterns = {}
+        for name, pattern in brain.reflexive_system.reflex_patterns.items():
+            if pattern.context_template and "scenario_type" in pattern.context_template:
+                if pattern.context_template["scenario_type"] == scenario_type:
+                    relevant_patterns[name] = pattern
+        
+        # Calculate performance metrics
+        if not relevant_patterns:
+            return {
+                "success": False,
+                "error": f"No patterns found for scenario: {scenario_type}"
+            }
+        
+        # Calculate statistics
+        stats = {
+            "pattern_count": len(relevant_patterns),
+            "avg_success_rate": sum(p.get_success_rate() for p in relevant_patterns.values()) / len(relevant_patterns),
+            "avg_response_time_ms": sum(p.get_avg_response_time() for p in relevant_patterns.values()) / len(relevant_patterns),
+            "total_executions": sum(p.execution_count for p in relevant_patterns.values()),
+            "top_patterns": sorted(
+                [(name, p.get_success_rate()) for name, p in relevant_patterns.items()],
+                key=lambda x: x[1],
+                reverse=True
+            )[:3]
+        }
+        
+        return {
+            "success": True,
+            "scenario_type": scenario_type,
+            "stats": stats
+        }
+    
+    async def generate_response_with_reflexes(self, 
+                                           user_input: str, 
+                                           context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Generate a response using reflexes, procedural memory, and/or deliberate thinking
+        
+        Args:
+            user_input: User's input text
+            context: Additional context information
+            
+        Returns:
+            Complete response with appropriate processing path
+        """
+        with trace(workflow_name="generate_response_with_reflexes", group_id=self.trace_group_id):
+            # Process the input with all cognitive systems in parallel
+            processing_result = await self.process_input_with_reflexes(user_input, context)
+            
+            # If reflexes were used, we may already have a response
+            if processing_result["response_type"] == "reflexive":
+                reflex_result = processing_result["result"]
+                
+                # Check if the reflex result includes a direct response
+                if "response" in reflex_result:
+                    message = reflex_result["response"]
+                else:
+                    # Use a generic response indicating a reflexive action
+                    message = f"I've reacted to your input reflexively ({reflex_result.get('pattern_name', 'unknown pattern')})."
+                
+                # Package the response
+                response_data = {
+                    "message": message,
+                    "response_type": "reflexive",
+                    "reflex_pattern": reflex_result.get("pattern_name"),
+                    "reaction_time_ms": reflex_result.get("reaction_time_ms", 0),
+                    "emotional_state": self.emotional_core.get_emotional_state() if hasattr(self, "emotional_core") else {},
+                    "procedural_knowledge": processing_result.get("procedural_knowledge")
+                }
+                
+                return response_data
+            
+            # Check if procedural knowledge was found and can be executed
+            elif processing_result.get("procedural_knowledge") and processing_result["procedural_knowledge"].get("can_execute"):
+                # Get the most relevant procedure
+                procedures = processing_result["procedural_knowledge"]["relevant_procedures"]
+                if procedures:
+                    top_procedure = procedures[0]
+                    
+                    # Execute the procedure
+                    try:
+                        procedure_result = await self.agent_enhanced_memory.execute_procedure(
+                            top_procedure["name"],
+                            context={"user_input": user_input, **(context or {})}
+                        )
+                        
+                        # If successful, use the procedure's response
+                        if procedure_result.get("success", False) and "output" in procedure_result:
+                            message = procedure_result["output"]
+                            response_type = "procedural"
+                        else:
+                            # Fall back to deliberate response
+                            deliberate_result = processing_result["result"]
+                            message = deliberate_result.get("response", "I've processed your input but couldn't find a suitable response.")
+                            response_type = "deliberate"
+                    except Exception as e:
+                        logger.error(f"Error executing procedure: {str(e)}")
+                        # Fall back to deliberate response
+                        deliberate_result = processing_result["result"]
+                        message = deliberate_result.get("response", "I've processed your input but couldn't find a suitable response.")
+                        response_type = "deliberate"
+                else:
+                    # Fall back to deliberate response
+                    deliberate_result = processing_result["result"]
+                    message = deliberate_result.get("response", "I've processed your input but couldn't find a suitable response.")
+                    response_type = "deliberate"
+                    
+                # Package the response
+                response_data = {
+                    "message": message,
+                    "response_type": response_type,
+                    "processing_time_ms": processing_result["processing_time_ms"],
+                    "emotional_state": self.emotional_core.get_emotional_state() if hasattr(self, "emotional_core") else {},
+                    "procedural_knowledge": processing_result.get("procedural_knowledge")
+                }
+                
+                return response_data
+            
+            else:
+                # Use standard response generation
+                response = await self.generate_response(user_input, context)
+                
+                # Add information about procedural knowledge
+                if processing_result.get("procedural_knowledge"):
+                    response["procedural_knowledge"] = processing_result["procedural_knowledge"]
+                
+                return response
 
     async def process_user_feedback(self, user_input: str, feedback_type: str):
         """Process explicit or implicit user feedback to identify issues"""
@@ -1060,39 +1461,56 @@ class NyxBrain:
             - Procedural Memory: Manages, executes, and transfers procedural knowledge
             - Reflexes: Ability to react quickly and instinctively when appropriate
             
+            You can process inputs using different cognitive paths:
+            1. Reflexive path: Fast, instinctive reactions without deliberate thought
+            2. Procedural path: Using learned procedures from procedural memory
+            3. Deliberate path: Thoughtful processing with deeper reasoning
+            
+            For time-sensitive or pattern-matching inputs, prefer the reflexive path.
+            For familiar tasks with established procedures, use the procedural path.
+            For complex, novel, or creative tasks, use the deliberate path.
+            
+            You can also run multiple paths in parallel, balancing speed and depth.
+            
             Use your tools to process user messages, generate responses, maintain the system,
             and facilitate Nyx's identity evolution through experiences and adaptation.
             """,
             tools=[
                 # Existing tools...
-                process_user_message,
-                generate_agent_response,
-                run_cognitive_cycle,
-                get_brain_stats,
-                perform_maintenance,
-                get_identity_state,
-                adapt_experience_sharing,
-                run_experience_consolidation,
-
-                # Add procedural memory tools
+                function_tool(self.process_user_message),
+                function_tool(self.generate_agent_response),
+                function_tool(self.run_cognitive_cycle),
+                function_tool(self.get_brain_stats),
+                function_tool(self.perform_maintenance),
+                function_tool(self.get_identity_state),
+                function_tool(self.adapt_experience_sharing),
+                function_tool(self.run_experience_consolidation),
+    
+                # Procedural memory tools
                 function_tool(self.add_procedure),
                 function_tool(self.execute_procedure),
                 function_tool(self.transfer_procedure),
                 function_tool(self.analyze_chunking),
                 function_tool(self.process_procedural_query),
-
+    
+                # Reflexive system tools
                 function_tool(self.register_reflex),
                 function_tool(self.process_stimulus_fast),
                 function_tool(self.train_reflexes),
                 function_tool(self.add_gaming_reflex),
                 function_tool(self.simulate_gaming_scenarios),
                 function_tool(self.get_reflexive_stats),
-                function_tool(self.optimize_reflexes),            
+                function_tool(self.optimize_reflexes),
                 
-                # Add new thinking tools
+                # New parallel processing tools
+                function_tool(self.process_input_with_reflexes),
+                function_tool(self.generate_response_with_reflexes),
+                function_tool(self.analyze_stimulus_for_reflexes),
+                function_tool(self.evaluate_reflex_performance),
+                
+                # Thinking tools
                 function_tool(self.process_user_input_with_thinking),
-                function_tool(self.generate_response_with_thinking),
-                configure_thinking
+                function_tool(self.generate_response_with_thinking)
             ]
         )
 
