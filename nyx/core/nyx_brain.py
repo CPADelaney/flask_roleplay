@@ -41,6 +41,8 @@ from nyx.core.procedural_memory import (
 )
 from nyx.core.procedural_memory.agent import AgentEnhancedMemoryManager
 
+from nyx.core.reflexive_system import ReflexiveSystem, initialize_reflexive_system
+
 from nyx.streamer.gamer_girl import (
     AdvancedGameAgentSystem, 
     GameSessionLearningManager,
@@ -521,6 +523,7 @@ class NyxBrain:
         self.identity_evolution = None
         self.experience_consolidation = None
         self.cross_user_manager = None
+        self.reflexive_system = None
             
         # State tracking
         self.initialized = False
@@ -890,6 +893,7 @@ class NyxBrain:
         # Initialize internal feedback system
         self.internal_feedback = InternalFeedbackSystem()
         
+        
         # Initialize dynamic adaptation system
         self.dynamic_adaptation = DynamicAdaptationSystem()
         
@@ -901,6 +905,8 @@ class NyxBrain:
         self.reasoning_core = integrated_reasoning_agent
 
         await self.temporal_perception.initialize(self, first_interaction_timestamp=None)
+        
+        await initialize_reflexive_system(self)
         
         # Initialize meta core last, as it needs references to other systems
         self.meta_core = MetaCore()
@@ -1052,6 +1058,7 @@ class NyxBrain:
             - Cross-User Experience: Manages sharing experiences across users
             - Thinking Capability: Enables deliberate reasoning before responding when appropriate
             - Procedural Memory: Manages, executes, and transfers procedural knowledge
+            - Reflexes: Ability to react quickly and instinctively when appropriate
             
             Use your tools to process user messages, generate responses, maintain the system,
             and facilitate Nyx's identity evolution through experiences and adaptation.
@@ -1073,6 +1080,14 @@ class NyxBrain:
                 function_tool(self.transfer_procedure),
                 function_tool(self.analyze_chunking),
                 function_tool(self.process_procedural_query),
+
+                function_tool(self.register_reflex),
+                function_tool(self.process_stimulus_fast),
+                function_tool(self.train_reflexes),
+                function_tool(self.add_gaming_reflex),
+                function_tool(self.simulate_gaming_scenarios),
+                function_tool(self.get_reflexive_stats),
+                function_tool(self.optimize_reflexes),            
                 
                 # Add new thinking tools
                 function_tool(self.process_user_input_with_thinking),
