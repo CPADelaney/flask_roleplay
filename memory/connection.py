@@ -5,6 +5,7 @@ import logging
 import asyncpg
 from typing import Optional, Dict, Any
 import time
+import functools
 import os
 
 # Import config
@@ -266,3 +267,21 @@ async def execute_transaction(func, *args, readonly: bool = False, **kwargs) -> 
     """
     async with TransactionContext(readonly=readonly) as conn:
         return await func(conn, *args, **kwargs)
+        
+def with_transaction(func):
+    """
+    Decorator that wraps a method in TransactionContext.
+    If 'conn' is already passed in, it uses that transaction;
+    otherwise it creates a new transaction automatically.
+    """
+    @functools.wraps(func)
+    async def wrapper(*args, conn=None, **kwargs):
+        # If a connection is already supplied, just use it.
+        if conn is not None:
+            return await func(*args, conn=conn, **kwargs)
+        else:
+            # Otherwise, create a new transaction context
+            async with TransactionContext() as transaction_conn:
+                return await func(*args, conn=transaction_conn, **kwargs)
+
+    return wrapper
