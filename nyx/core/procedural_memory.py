@@ -2818,6 +2818,1231 @@ class ProceduralMemoryManager:
         """Get the procedure analysis agent"""
         return self._proc_analysis_agent
 
+    # Add these methods to the ProceduralMemoryManager class
+    
+    async def adaptive_execute_step(self, 
+                                  step: Dict[str, Any], 
+                                  context: Dict[str, Any], 
+                                  alternatives: int = 3) -> Dict[str, Any]:
+        """
+        Execute a step with automatic adaptation if it fails
+        
+        Args:
+            step: Step definition to execute
+            context: Execution context
+            alternatives: Number of alternative implementations to try
+            
+        Returns:
+            Execution result
+        """
+        # Try the original mapping first
+        result = await self.execute_step(step, context)
+        
+        # If successful, return the result
+        if result["success"]:
+            return result
+        
+        # Record the original failure for debugging
+        original_failure = {
+            "step_id": step["id"],
+            "function": step["function"],
+            "parameters": step.get("parameters", {}),
+            "error": result.get("error")
+        }
+        
+        # If failed, try alternative mappings
+        for i in range(alternatives):
+            # Generate alternative mapping
+            alt_step = self._generate_alternative_mapping(step, context, i)
+            
+            # Skip if couldn't generate alternative
+            if not alt_step:
+                continue
+                
+            # Execute the alternative
+            alt_result = await self.execute_step(alt_step, context)
+            
+            # Add information about the alternative
+            alt_result["alternative_used"] = i + 1
+            alt_result["original_failure"] = original_failure
+            alt_result["alternative_mapping"] = {
+                "original_function": step["function"],
+                "alternative_function": alt_step["function"],
+                "original_parameters": step.get("parameters", {}),
+                "alternative_parameters": alt_step.get("parameters", {})
+            }
+            
+            if alt_result["success"]:
+                # Record successful alternative for future use
+                self._record_successful_alternative(step, alt_step)
+                
+                # Annotate with adaptation information
+                alt_result["adaptation"] = {
+                    "original_step": step,
+                    "adapted_step": alt_step,
+                    "adaptation_method": f"alternative_{i+1}"
+                }
+                
+                return alt_result
+        
+        # All alternatives failed, return the original failure
+        result["alternatives_tried"] = alternatives
+        return result
+    
+    def _generate_alternative_mapping(self, step: Dict[str, Any], context: Dict[str, Any], attempt: int) -> Optional[Dict[str, Any]]:
+        """
+        Generate an alternative mapping for a failed step
+        
+        Args:
+            step: Original step that failed
+            context: Execution context
+            attempt: Which attempt this is (0, 1, 2, etc.)
+            
+        Returns:
+            Alternative step implementation or None if no alternative available
+        """
+        # Get the original function and parameters
+        original_function = step["function"]
+        original_params = step.get("parameters", {}).copy()
+        
+        # Make a copy of the step
+        alt_step = step.copy()
+        alt_step["parameters"] = original_params.copy()
+        
+        # Different alternatives based on attempt number
+        if attempt == 0:
+            # First attempt: Try equivalent function if available
+            function_equivalents = self._get_function_equivalents(original_function)
+            if function_equivalents:
+                # Use the first equivalent function
+                alt_step["function"] = function_equivalents[0]
+                alt_step["description"] = f"Alternative to {step.get('description', step['id'])} using {function_equivalents[0]}"
+                return alt_step
+        
+        elif attempt == 1:
+            # Second attempt: Try parameter variation
+            alt_params = self._generate_parameter_variants(original_params, context)
+            if alt_params:
+                alt_step["parameters"] = alt_params
+                alt_step["description"] = f"Alternative to {step.get('description', step['id'])} with modified parameters"
+                return alt_step
+        
+        elif attempt == 2:
+            # Third attempt: Try decomposition into simpler steps
+            # For simplicity, just trying parameters + function substitution
+            function_equivalents = self._get_function_equivalents(original_function)
+            alt_params = self._generate_parameter_variants(original_params, context)
+            
+            if function_equivalents and alt_params:
+                alt_step["function"] = function_equivalents[0]
+                alt_step["parameters"] = alt_params
+                alt_step["description"] = f"Alternative to {step.get('description', step['id'])} with substitute function and parameters"
+                return alt_step
+        
+        # No viable alternative for this attempt
+        return None
+    
+    def _get_function_equivalents(self, function_name: str) -> List[str]:
+        """
+        Get equivalent functions for a given function
+        
+        Args:
+            function_name: Original function name
+            
+        Returns:
+            List of equivalent function names
+        """
+        # Define equivalence groups
+        equivalence_groups = {
+            "navigate_to": ["move_to", "goto", "approach", "travel_to"],
+            "select_item": ["choose_item", "click_item", "pick_item", "select_object"],
+            "press_button": ["click_button", "push_button", "activate_button", "trigger_button"],
+            "perform_action": ["do_action", "execute_action", "trigger_action", "run_action"],
+            "check_condition": ["test_condition", "evaluate_condition", "verify_condition"]
+        }
+        
+        # Add reverse mappings
+        all_equivalents = {}
+        for primary, equivalents in equivalence_groups.items():
+            all_equivalents[primary] = equivalents
+            for equiv in equivalents:
+                if equiv not in all_equivalents:
+                    all_equivalents[equiv] = [primary]
+        
+        # Return equivalents if found, empty list otherwise
+        return all_equivalents.get(function_name, [])
+    
+    def _generate_parameter_variants(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate parameter variations for a step
+        
+        Args:
+            params: Original parameters
+            context: Execution context
+            
+        Returns:
+            Modified parameter dictionary
+        """
+        # Make a copy of the parameters
+        variant_params = params.copy()
+        
+        # Check for common parameter types and generate variants
+        parameter_variants = {
+            "button": self._get_button_variants,
+            "control": self._get_control_variants,
+            "object_type": self._get_object_variants,
+            "location": self._get_location_variants,
+            "method": self._get_method_variants
+        }
+        
+        # Apply variants for each parameter type
+        for param_key, variant_func in parameter_variants.items():
+            if param_key in params:
+                # Get variants for this parameter
+                variants = variant_func(params[param_key], context)
+                
+                # Use the first variant
+                if variants:
+                    variant_params[param_key] = variants[0]
+        
+        # Only return if different from original
+        if variant_params != params:
+            return variant_params
+        
+        return params  # No variants generated
+    
+    def _get_button_variants(self, button: str, context: Dict[str, Any]) -> List[str]:
+        """Get variant button mappings"""
+        button_variants = {
+            # Playstation to Xbox mappings
+            "X": ["A", "Cross"],
+            "O": ["B", "Circle"],
+            "Square": ["X", "Box"],
+            "Triangle": ["Y", "Pyramid"],
+            "R1": ["RB", "R", "R Bumper"],
+            "R2": ["RT", "R Trigger"],
+            "L1": ["LB", "L", "L Bumper"],
+            "L2": ["LT", "L Trigger"],
+            # Touch to mouse mappings
+            "tap": ["click", "press", "select"],
+            "swipe": ["drag", "slide", "move"],
+            "pinch": ["zoom", "scale"],
+            # Generic variations
+            "confirm": ["accept", "yes", "ok"],
+            "cancel": ["back", "no", "escape"]
+        }
+        
+        # Add reverse mappings
+        all_variants = {}
+        for primary, variants in button_variants.items():
+            all_variants[primary] = variants
+            for variant in variants:
+                if variant not in all_variants:
+                    all_variants[variant] = [primary]
+        
+        return all_variants.get(button, [])
+    
+    def _get_control_variants(self, control: str, context: Dict[str, Any]) -> List[str]:
+        """Get variant control method mappings"""
+        # Similar to button variants but for general control methods
+        control_variants = {
+            "touch": ["click", "tap", "press"],
+            "mouse": ["cursor", "pointer"],
+            "keyboard": ["keys", "typing"],
+            "gamepad": ["controller", "joypad", "joystick"],
+            "voice": ["speech", "audio"],
+            "gesture": ["motion", "movement"]
+        }
+        
+        # Add reverse mappings
+        all_variants = {}
+        for primary, variants in control_variants.items():
+            all_variants[primary] = variants
+            for variant in variants:
+                if variant not in all_variants:
+                    all_variants[variant] = [primary]
+        
+        return all_variants.get(control, [])
+    
+    def _get_object_variants(self, object_type: str, context: Dict[str, Any]) -> List[str]:
+        """Get variant object type mappings"""
+        object_variants = {
+            "window": ["opening", "gap", "passage"],
+            "generator": ["gen", "machine", "power source"],
+            "door": ["entrance", "exit", "gate"],
+            "item": ["object", "thing", "element"],
+            "button": ["control", "switch", "trigger"]
+        }
+        
+        # Add reverse mappings
+        all_variants = {}
+        for primary, variants in object_variants.items():
+            all_variants[primary] = variants
+            for variant in variants:
+                if variant not in all_variants:
+                    all_variants[variant] = [primary]
+        
+        return all_variants.get(object_type, [])
+    
+    def _get_location_variants(self, location: str, context: Dict[str, Any]) -> List[str]:
+        """Get variant location mappings"""
+        location_variants = {
+            "main_menu": ["menu", "home screen", "start screen"],
+            "settings": ["options", "preferences", "configuration"],
+            "inventory": ["items", "backpack", "storage"],
+            "map": ["world map", "overview", "terrain view"]
+        }
+        
+        # Add reverse mappings
+        all_variants = {}
+        for primary, variants in location_variants.items():
+            all_variants[primary] = variants
+            for variant in variants:
+                if variant not in all_variants:
+                    all_variants[variant] = [primary]
+        
+        return all_variants.get(location, [])
+    
+    def _get_method_variants(self, method: str, context: Dict[str, Any]) -> List[str]:
+        """Get variant method mappings"""
+        method_variants = {
+            "swipe": ["drag", "slide", "flick"],
+            "click": ["tap", "press", "select"],
+            "type": ["enter", "input", "key in"],
+            "speak": ["say", "voice", "dictate"]
+        }
+        
+        # Add reverse mappings
+        all_variants = {}
+        for primary, variants in method_variants.items():
+            all_variants[primary] = variants
+            for variant in variants:
+                if variant not in all_variants:
+                    all_variants[variant] = [primary]
+        
+        return all_variants.get(method, [])
+    
+    def _record_successful_alternative(self, original_step: Dict[str, Any], successful_alt: Dict[str, Any]) -> None:
+        """
+        Record a successful alternative for future reference
+        
+        Args:
+            original_step: Original step that failed
+            successful_alt: Alternative step that succeeded
+        """
+        # Initialize successful alternatives storage if not exists
+        if not hasattr(self, "_successful_alternatives"):
+            self._successful_alternatives = {}
+        
+        # Create a key for this step
+        step_key = f"{original_step['function']}:{original_step.get('id', 'unknown')}"
+        
+        # Store the successful alternative
+        if step_key not in self._successful_alternatives:
+            self._successful_alternatives[step_key] = []
+        
+        # Add this alternative if not already present
+        alt_info = {
+            "original": {
+                "function": original_step["function"],
+                "parameters": original_step.get("parameters", {})
+            },
+            "alternative": {
+                "function": successful_alt["function"],
+                "parameters": successful_alt.get("parameters", {})
+            },
+            "success_count": 1,
+            "last_success": datetime.datetime.now().isoformat()
+        }
+        
+        # Check if this alternative already exists
+        exists = False
+        for existing in self._successful_alternatives[step_key]:
+            if (existing["alternative"]["function"] == alt_info["alternative"]["function"] and
+                existing["alternative"]["parameters"] == alt_info["alternative"]["parameters"]):
+                # Update existing record
+                existing["success_count"] += 1
+                existing["last_success"] = alt_info["last_success"]
+                exists = True
+                break
+        
+        # Add if new
+        if not exists:
+            self._successful_alternatives[step_key].append(alt_info)
+    
+    # Reinforcement Learning Approach
+    async def update_from_execution_feedback(self, 
+                                           procedure_id: str, 
+                                           step_id: str, 
+                                           success: bool, 
+                                           context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update transfer mappings based on execution feedback using simple RL
+        
+        Args:
+            procedure_id: ID of the procedure
+            step_id: ID of the step
+            success: Whether execution was successful
+            context: Execution context
+            
+        Returns:
+            Updated mapping information
+        """
+        # Initialize RL parameters storage if not exists
+        if not hasattr(self, "_mapping_q_values"):
+            self._mapping_q_values = {}
+        
+        # Get procedure and step
+        procedure = None
+        for p in self.procedures.values():
+            if p.id == procedure_id:
+                procedure = p
+                break
+        
+        if not procedure:
+            return {"error": f"Procedure with ID {procedure_id} not found"}
+        
+        # Find the step
+        step = None
+        for s in procedure.steps:
+            if s["id"] == step_id:
+                step = s
+                break
+        
+        if not step:
+            return {"error": f"Step {step_id} not found in procedure {procedure_id}"}
+        
+        # Identify which mapping was used
+        mapping = self._get_step_mapping(procedure, step)
+        
+        # Create mapping key
+        mapping_key = f"{mapping['source_domain']}:{mapping['target_domain']}:{mapping['function']}:{mapping['parameter_key']}"
+        
+        # Initialize Q-value if not exists
+        if mapping_key not in self._mapping_q_values:
+            self._mapping_q_values[mapping_key] = {
+                "q_value": 0.5,  # Initial neutral value
+                "attempts": 0,
+                "successes": 0,
+                "alternatives": {}
+            }
+        
+        # Update stats
+        self._mapping_q_values[mapping_key]["attempts"] += 1
+        if success:
+            self._mapping_q_values[mapping_key]["successes"] += 1
+        
+        # Calculate success rate
+        success_rate = self._mapping_q_values[mapping_key]["successes"] / self._mapping_q_values[mapping_key]["attempts"]
+        
+        # Update Q-value with simple update rule
+        reward = 1.0 if success else -0.5
+        alpha = 0.1  # Learning rate
+        current_q = self._mapping_q_values[mapping_key]["q_value"]
+        new_q = current_q + alpha * (reward - current_q)
+        self._mapping_q_values[mapping_key]["q_value"] = new_q
+        
+        # If failed, generate alternative mappings to try next time
+        alternatives = []
+        if not success:
+            alternatives = self._generate_mapping_alternatives(mapping, context)
+            
+            # Store alternatives in the Q-value table
+            for alt in alternatives:
+                alt_key = f"{alt['function']}:{alt['parameter_value']}"
+                if alt_key not in self._mapping_q_values[mapping_key]["alternatives"]:
+                    self._mapping_q_values[mapping_key]["alternatives"][alt_key] = {
+                        "function": alt["function"],
+                        "parameter_key": mapping["parameter_key"],
+                        "parameter_value": alt["parameter_value"],
+                        "q_value": 0.3,  # Initial lower value for untested alternatives
+                        "attempts": 0,
+                        "successes": 0
+                    }
+        
+        return {
+            "mapping_key": mapping_key,
+            "new_q_value": new_q,
+            "previous_q_value": current_q,
+            "success_rate": success_rate,
+            "alternatives_generated": len(alternatives),
+            "alternatives": alternatives
+        }
+    
+    def _get_step_mapping(self, procedure: Dict[str, Any], step: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Get the mapping information for a step
+        
+        Args:
+            procedure: Procedure containing the step
+            step: Step to get mapping for
+            
+        Returns:
+            Mapping information
+        """
+        # Extract parameter that looks like a control mapping
+        parameter_key = None
+        parameter_value = None
+        
+        for key in ["button", "control", "input_method", "key"]:
+            if key in step.get("parameters", {}):
+                parameter_key = key
+                parameter_value = step["parameters"][key]
+                break
+        
+        return {
+            "source_domain": procedure.domain,
+            "target_domain": procedure.domain,  # Same for non-transferred procedures
+            "function": step["function"],
+            "parameter_key": parameter_key,
+            "parameter_value": parameter_value
+        }
+    
+    def _generate_mapping_alternatives(self, mapping: Dict[str, Any], context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Generate alternative mappings to try
+        
+        Args:
+            mapping: Current mapping information
+            context: Execution context
+            
+        Returns:
+            List of alternative mappings
+        """
+        alternatives = []
+        
+        # Only generate alternatives if we have a parameter
+        if not mapping["parameter_key"] or not mapping["parameter_value"]:
+            return alternatives
+        
+        # Get parameter variants
+        parameter_variants = []
+        
+        if mapping["parameter_key"] == "button":
+            parameter_variants = self._get_button_variants(mapping["parameter_value"], context)
+        elif mapping["parameter_key"] == "control":
+            parameter_variants = self._get_control_variants(mapping["parameter_value"], context)
+        elif mapping["parameter_key"] == "object_type":
+            parameter_variants = self._get_object_variants(mapping["parameter_value"], context)
+        elif mapping["parameter_key"] == "location":
+            parameter_variants = self._get_location_variants(mapping["parameter_value"], context)
+        elif mapping["parameter_key"] == "method":
+            parameter_variants = self._get_method_variants(mapping["parameter_value"], context)
+        
+        # Get function equivalents
+        function_equivalents = self._get_function_equivalents(mapping["function"])
+        
+        # Create alternatives from parameter variants
+        for variant in parameter_variants:
+            alternatives.append({
+                "function": mapping["function"],
+                "parameter_key": mapping["parameter_key"],
+                "parameter_value": variant
+            })
+        
+        # Create alternatives from function equivalents
+        for func in function_equivalents:
+            alternatives.append({
+                "function": func,
+                "parameter_key": mapping["parameter_key"],
+                "parameter_value": mapping["parameter_value"]
+            })
+        
+        # Create combined alternatives (both function and parameter)
+        for func in function_equivalents:
+            for variant in parameter_variants:
+                alternatives.append({
+                    "function": func,
+                    "parameter_key": mapping["parameter_key"],
+                    "parameter_value": variant
+                })
+        
+        return alternatives
+    
+    def _prioritize_alternatives(self, alternatives: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Prioritize alternative mappings based on Q-values
+        
+        Args:
+            alternatives: List of alternative mappings
+            
+        Returns:
+            Prioritized list of alternatives
+        """
+        # If no Q-values storage, return as is
+        if not hasattr(self, "_mapping_q_values"):
+            return alternatives
+        
+        # Calculate priority for each alternative
+        prioritized = []
+        for alt in alternatives:
+            # Try to find Q-value for this alternative
+            q_value = 0.3  # Default for unknown alternatives
+            
+            # Check if we have this alternative in our Q-values
+            mapping_key = None
+            for key in self._mapping_q_values:
+                for alt_key, alt_data in self._mapping_q_values[key]["alternatives"].items():
+                    if (alt_data["function"] == alt["function"] and
+                        alt_data["parameter_key"] == alt["parameter_key"] and
+                        alt_data["parameter_value"] == alt["parameter_value"]):
+                        # Found a match
+                        q_value = alt_data["q_value"]
+                        break
+            
+            # Add to prioritized list with Q-value
+            prioritized.append({
+                "alternative": alt,
+                "q_value": q_value
+            })
+        
+        # Sort by Q-value, highest first
+        prioritized.sort(key=lambda x: x["q_value"], reverse=True)
+        
+        # Return just the alternatives in prioritized order
+        return [item["alternative"] for item in prioritized]
+    
+    # Incremental Transfer Testing
+    async def incremental_transfer(self, 
+                                 source_name: str, 
+                                 target_name: str, 
+                                 target_domain: str,
+                                 max_adaptation_attempts: int = 3) -> Dict[str, Any]:
+        """
+        Transfer and test procedure step by step
+        
+        Args:
+            source_name: Name of the source procedure
+            target_name: Name for the new procedure
+            target_domain: Domain for the new procedure
+            max_adaptation_attempts: Maximum number of adaptation attempts per step
+            
+        Returns:
+            Transfer results
+        """
+        if source_name not in self.procedures:
+            return {"error": f"Source procedure '{source_name}' not found"}
+        
+        procedure = self.procedures[source_name]
+        
+        # Create trace for the operation
+        with trace(workflow_name="incremental_transfer"):
+            # Prepare transfer results
+            transfer_stats = {
+                "total_steps": len(procedure.steps),
+                "successful_steps": 0,
+                "steps_requiring_adaptation": 0,
+                "adaptation_attempts": 0,
+                "steps_failed": 0,
+                "adaptation_success_rate": 0.0
+            }
+            
+            # Transfer and test each step individually
+            transferred_steps = []
+            failed_steps = []
+            
+            for step in procedure.steps:
+                # Try to transfer the step
+                mapped_step = self.map_step_to_domain(
+                    step=step,
+                    source_domain=procedure.domain,
+                    target_domain=target_domain
+                )
+                
+                if not mapped_step:
+                    # Couldn't map this step
+                    failed_steps.append({
+                        "step_id": step["id"],
+                        "error": "Could not map step to target domain"
+                    })
+                    transfer_stats["steps_failed"] += 1
+                    continue
+                
+                # Test execution of just this step
+                test_context = {"domain": target_domain, "test_mode": True}
+                step_result = await self.execute_step(mapped_step, test_context)
+                
+                if step_result["success"]:
+                    # Step executed successfully
+                    transferred_steps.append(mapped_step)
+                    transfer_stats["successful_steps"] += 1
+                else:
+                    # Step failed, try adaptation
+                    transfer_stats["steps_requiring_adaptation"] += 1
+                    adapted = False
+                    
+                    for attempt in range(max_adaptation_attempts):
+                        transfer_stats["adaptation_attempts"] += 1
+                        
+                        # Try to adapt the step
+                        adapted_step = await self._adapt_until_successful(
+                            original_step=step,
+                            mapped_step=mapped_step,
+                            target_domain=target_domain,
+                            attempt=attempt
+                        )
+                        
+                        if adapted_step:
+                            # Adaptation successful
+                            transferred_steps.append(adapted_step)
+                            adapted = True
+                            break
+                    
+                    if not adapted:
+                        # All adaptation attempts failed
+                        failed_steps.append({
+                            "step_id": step["id"],
+                            "error": "Failed to adapt step after maximum attempts",
+                            "last_error": step_result.get("error")
+                        })
+                        transfer_stats["steps_failed"] += 1
+            
+            # Calculate adaptation success rate
+            if transfer_stats["steps_requiring_adaptation"] > 0:
+                adaptation_successes = transfer_stats["steps_requiring_adaptation"] - transfer_stats["steps_failed"]
+                transfer_stats["adaptation_success_rate"] = adaptation_successes / transfer_stats["steps_requiring_adaptation"]
+            
+            # Create new procedure if we have any transferred steps
+            if not transferred_steps:
+                return {
+                    "success": False,
+                    "error": "No steps could be transferred successfully",
+                    "transfer_stats": transfer_stats,
+                    "failed_steps": failed_steps
+                }
+            
+            # Create the new procedure
+            ctx = RunContextWrapper(context=self)
+            new_procedure = await add_procedure(
+                ctx,
+                name=target_name,
+                steps=transferred_steps,
+                description=f"Incrementally transferred from {source_name} ({procedure.domain} to {target_domain})",
+                domain=target_domain
+            )
+            
+            # Record transfer
+            transfer_record = ProcedureTransferRecord(
+                source_procedure_id=procedure.id,
+                source_domain=procedure.domain,
+                target_procedure_id=new_procedure["procedure_id"],
+                target_domain=target_domain,
+                transfer_date=datetime.datetime.now().isoformat(),
+                adaptation_steps=[{
+                    "step_id": step["id"],
+                    "adapted": True
+                } for step in transferred_steps if "original_id" in step],
+                success_level=transfer_stats["successful_steps"] / transfer_stats["total_steps"],
+                practice_needed=5  # Initial estimate
+            )
+            
+            self.chunk_library.record_transfer(transfer_record)
+            
+            # Update transfer stats
+            self.transfer_stats["total_transfers"] += 1
+            if transfer_stats["steps_failed"] == 0:
+                self.transfer_stats["successful_transfers"] += 1
+            
+            return {
+                "success": transfer_stats["steps_failed"] == 0,
+                "source_name": source_name,
+                "target_name": target_name,
+                "source_domain": procedure.domain,
+                "target_domain": target_domain,
+                "steps_count": len(transferred_steps),
+                "procedure_id": new_procedure["procedure_id"],
+                "transfer_stats": transfer_stats,
+                "failed_steps": failed_steps
+            }
+    
+    async def _adapt_until_successful(self, 
+                                    original_step: Dict[str, Any], 
+                                    mapped_step: Dict[str, Any],
+                                    target_domain: str,
+                                    attempt: int) -> Optional[Dict[str, Any]]:
+        """
+        Adapt a step until it executes successfully or max attempts reached
+        
+        Args:
+            original_step: Original step from source procedure
+            mapped_step: Step mapped to target domain that failed
+            target_domain: Target domain
+            attempt: Current adaptation attempt
+            
+        Returns:
+            Successfully adapted step or None if adaptation failed
+        """
+        # Try different adaptation strategies based on attempt number
+        adapted_step = None
+        
+        if attempt == 0:
+            # First attempt: Try parameter variants
+            adapted_step = self._adapt_step_parameters(mapped_step, target_domain)
+        elif attempt == 1:
+            # Second attempt: Try function substitution
+            adapted_step = self._adapt_step_function(mapped_step, target_domain)
+        elif attempt == 2:
+            # Third attempt: Try contextual adaptation
+            adapted_step = await self._adapt_step_to_context(mapped_step, target_domain)
+        
+        if not adapted_step:
+            return None
+            
+        # Test execution of adapted step
+        test_context = {"domain": target_domain, "test_mode": True}
+        step_result = await self.execute_step(adapted_step, test_context)
+        
+        if step_result["success"]:
+            # Adaptation successful
+            return adapted_step
+        
+        # Adaptation failed
+        return None
+    
+    def _adapt_step_parameters(self, step: Dict[str, Any], target_domain: str) -> Optional[Dict[str, Any]]:
+        """Adapt a step by trying different parameter values"""
+        # Create a copy of the step
+        adapted_step = step.copy()
+        adapted_step["parameters"] = step.get("parameters", {}).copy()
+        
+        # Try parameter variants
+        modified = False
+        for key, value in step.get("parameters", {}).items():
+            # Get variants based on parameter type
+            variants = []
+            
+            if key == "button":
+                variants = self._get_button_variants(value, {})
+            elif key == "control":
+                variants = self._get_control_variants(value, {})
+            elif key == "object_type":
+                variants = self._get_object_variants(value, {})
+            elif key == "location":
+                variants = self._get_location_variants(value, {})
+            elif key == "method":
+                variants = self._get_method_variants(value, {})
+            
+            # Use first variant if available
+            if variants:
+                adapted_step["parameters"][key] = variants[0]
+                modified = True
+        
+        # If no modifications were made, return None
+        if not modified:
+            return None
+            
+        # Update description to indicate adaptation
+        adapted_step["description"] = f"{step.get('description', step['id'])} (parameter-adapted)"
+        
+        # Indicate this was adapted
+        adapted_step["adapted_from"] = step["id"]
+        adapted_step["adaptation_type"] = "parameter"
+        
+        return adapted_step
+    
+    def _adapt_step_function(self, step: Dict[str, Any], target_domain: str) -> Optional[Dict[str, Any]]:
+        """Adapt a step by trying a different function"""
+        # Get function equivalents
+        function_equivalents = self._get_function_equivalents(step["function"])
+        
+        if not function_equivalents:
+            return None
+            
+        # Create a copy of the step with the first equivalent function
+        adapted_step = step.copy()
+        adapted_step["function"] = function_equivalents[0]
+        
+        # Update description to indicate adaptation
+        adapted_step["description"] = f"{step.get('description', step['id'])} (function-adapted)"
+        
+        # Indicate this was adapted
+        adapted_step["adapted_from"] = step["id"]
+        adapted_step["adaptation_type"] = "function"
+        
+        return adapted_step
+    
+    async def _adapt_step_to_context(self, step: Dict[str, Any], target_domain: str) -> Optional[Dict[str, Any]]:
+        """
+        Adapt a step based on context from successful executions in similar domains
+        
+        Args:
+            step: Step to adapt
+            target_domain: Target domain
+            
+        Returns:
+            Adapted step or None if no adaptation found
+        """
+        # Find procedures in similar domains
+        similar_domains = self._find_similar_domains(target_domain)
+        
+        # Find similar steps from successful procedures
+        similar_steps = []
+        
+        for proc_name, procedure in self.procedures.items():
+            # Skip procedures with different domains
+            if procedure.domain not in similar_domains and procedure.domain != target_domain:
+                continue
+                
+            # Skip procedures with low proficiency
+            if procedure.proficiency < 0.7:
+                continue
+                
+            # Find steps with similar function or description
+            for proc_step in procedure.steps:
+                similarity = self._calculate_step_similarity(step, proc_step)
+                
+                if similarity > 0.6:  # Threshold for similarity
+                    similar_steps.append({
+                        "step": proc_step,
+                        "similarity": similarity,
+                        "domain": procedure.domain
+                    })
+        
+        # Sort by similarity (highest first)
+        similar_steps.sort(key=lambda x: x["similarity"], reverse=True)
+        
+        # Take the most similar step
+        if not similar_steps:
+            return None
+            
+        best_match = similar_steps[0]
+        
+        # Adapt using the best match
+        adapted_step = step.copy()
+        
+        # Adapt function if different
+        if best_match["step"]["function"] != step["function"]:
+            adapted_step["function"] = best_match["step"]["function"]
+            
+        # Adapt parameters
+        adapted_step["parameters"] = {}
+        
+        # Keep original parameters that likely don't need adaptation
+        for key, value in step.get("parameters", {}).items():
+            if key not in ["button", "control", "input_method", "method"]:
+                adapted_step["parameters"][key] = value
+        
+        # Copy parameters from best match that might need adaptation
+        for key, value in best_match["step"].get("parameters", {}).items():
+            if key in ["button", "control", "input_method", "method"]:
+                adapted_step["parameters"][key] = value
+        
+        # Update description to indicate adaptation
+        adapted_step["description"] = f"{step.get('description', step['id'])} (context-adapted)"
+        
+        # Indicate this was adapted
+        adapted_step["adapted_from"] = step["id"]
+        adapted_step["adaptation_type"] = "context"
+        adapted_step["adaptation_source"] = {
+            "domain": best_match["domain"],
+            "step_id": best_match["step"]["id"],
+            "similarity": best_match["similarity"]
+        }
+        
+        return adapted_step
+    
+    def _find_similar_domains(self, domain: str) -> List[str]:
+        """
+        Find domains similar to the given domain
+        
+        Args:
+            domain: Domain to find similar domains for
+            
+        Returns:
+            List of similar domain names
+        """
+        # Define domain similarities
+        domain_groups = [
+            ["playstation", "xbox", "nintendo", "gaming"],
+            ["touch_interface", "mouse_interface", "touchscreen"],
+            ["dbd", "horror_game", "survival_game"],
+            ["fps", "shooter", "call_of_duty", "battlefield"],
+            ["cooking", "baking", "food_preparation"],
+            ["driving", "racing", "vehicle_operation"],
+            ["programming", "coding", "software_development"]
+        ]
+        
+        # Find group containing the domain
+        for group in domain_groups:
+            if domain in group:
+                return [d for d in group if d != domain]
+        
+        # No similar domains found
+        return []
+    
+    def _calculate_step_similarity(self, step1: Dict[str, Any], step2: Dict[str, Any]) -> float:
+        """
+        Calculate similarity between two steps
+        
+        Args:
+            step1: First step
+            step2: Second step
+            
+        Returns:
+            Similarity score (0.0-1.0)
+        """
+        # Initialize similarity components
+        function_similarity = 0.0
+        description_similarity = 0.0
+        parameter_similarity = 0.0
+        
+        # Function similarity
+        if step1["function"] == step2["function"]:
+            function_similarity = 1.0
+        else:
+            # Check for equivalent functions
+            equivalents1 = self._get_function_equivalents(step1["function"])
+            if step2["function"] in equivalents1:
+                function_similarity = 0.8
+        
+        # Description similarity (simple word overlap)
+        desc1 = step1.get("description", "").lower().split()
+        desc2 = step2.get("description", "").lower().split()
+        
+        if desc1 and desc2:
+            common_words = set(desc1) & set(desc2)
+            description_similarity = len(common_words) / max(len(desc1), len(desc2))
+        
+        # Parameter similarity
+        params1 = set(step1.get("parameters", {}).keys())
+        params2 = set(step2.get("parameters", {}).keys())
+        
+        if params1 and params2:
+            common_params = params1 & params2
+            
+            # Check for common parameter values
+            common_values = 0
+            for param in common_params:
+                value1 = step1["parameters"][param]
+                value2 = step2["parameters"][param]
+                
+                if value1 == value2:
+                    common_values += 1
+                    continue
+                    
+                # Check for equivalent values
+                variant_func = None
+                if param == "button":
+                    variant_func = self._get_button_variants
+                elif param == "control":
+                    variant_func = self._get_control_variants
+                elif param == "object_type":
+                    variant_func = self._get_object_variants
+                elif param == "location":
+                    variant_func = self._get_location_variants
+                elif param == "method":
+                    variant_func = self._get_method_variants
+                
+                if variant_func:
+                    variants = variant_func(value1, {})
+                    if value2 in variants:
+                        common_values += 0.8  # Partial credit for equivalent values
+            
+            parameter_similarity = common_values / len(common_params) if common_params else 0.0
+        
+        # Weighted combination
+        return (function_similarity * 0.5) + (description_similarity * 0.3) + (parameter_similarity * 0.2)
+    
+    # Add a function tool for the new incremental transfer method
+    @function_tool
+    async def transfer_procedure_incrementally(
+        ctx,
+        source_name: str,
+        target_name: str,
+        target_domain: str,
+        max_adaptation_attempts: int = 3
+    ) -> Dict[str, Any]:
+        """
+        Transfer a procedure step by step with testing and adaptation
+        
+        Args:
+            source_name: Name of the source procedure
+            target_name: Name for the new procedure
+            target_domain: Domain for the new procedure
+            max_adaptation_attempts: Maximum adaptation attempts per step
+            
+        Returns:
+            Incremental transfer results with detailed statistics
+        """
+        manager = ctx.context
+        
+        return await manager.incremental_transfer(
+            source_name=source_name,
+            target_name=target_name,
+            target_domain=target_domain,
+            max_adaptation_attempts=max_adaptation_attempts
+        )
+    
+    # Add a function tool for updating from execution feedback
+    @function_tool
+    async def update_transfer_from_feedback(
+        ctx,
+        procedure_name: str,
+        step_id: str,
+        success: bool,
+        execution_context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Update transfer mappings based on execution feedback
+        
+        Args:
+            procedure_name: Name of the procedure
+            step_id: ID of the step
+            success: Whether execution was successful
+            execution_context: Execution context data
+            
+        Returns:
+            Update results with mapping information
+        """
+        manager = ctx.context
+        
+        # Get procedure ID
+        if procedure_name not in manager.procedures:
+            return {"error": f"Procedure '{procedure_name}' not found"}
+        
+        procedure_id = manager.procedures[procedure_name].id
+        
+        return await manager.update_from_execution_feedback(
+            procedure_id=procedure_id,
+            step_id=step_id,
+            success=success,
+            context=execution_context or {}
+        )
+    
+    # Add a function tool for adaptive execution
+    @function_tool
+    async def execute_step_adaptively(
+        ctx,
+        procedure_name: str,
+        step_id: str,
+        context: Dict[str, Any] = None,
+        alternatives: int = 3
+    ) -> Dict[str, Any]:
+        """
+        Execute a single step with automatic adaptation if it fails
+        
+        Args:
+            procedure_name: Name of the procedure
+            step_id: ID of the step to execute
+            context: Execution context
+            alternatives: Number of alternative implementations to try
+            
+        Returns:
+            Execution result
+        """
+        manager = ctx.context
+        
+        # Get the procedure
+        if procedure_name not in manager.procedures:
+            return {"error": f"Procedure '{procedure_name}' not found"}
+        
+        procedure = manager.procedures[procedure_name]
+        
+        # Find the step
+        step = None
+        for s in procedure.steps:
+            if s["id"] == step_id:
+                step = s
+                break
+                
+        if not step:
+            return {"error": f"Step '{step_id}' not found in procedure '{procedure_name}'"}
+        
+        # Execute the step adaptively
+        return await manager.adaptive_execute_step(
+            step=step,
+            context=context or {},
+            alternatives=alternatives
+        )
+    
+    # Add a function tool for executing a procedure with adaptation
+    @function_tool
+    async def execute_procedure_adaptively(
+        ctx,
+        name: str,
+        context: Dict[str, Any] = None,
+        max_alternatives: int = 3
+    ) -> Dict[str, Any]:
+        """
+        Execute a procedure with automatic adaptation for failing steps
+        
+        Args:
+            name: Name of the procedure to execute
+            context: Execution context
+            max_alternatives: Maximum number of alternatives to try per step
+            
+        Returns:
+            Execution results with adaptation details
+        """
+        manager = ctx.context
+        
+        if name not in manager.procedures:
+            return {"error": f"Procedure '{name}' not found"}
+        
+        procedure = manager.procedures[name]
+        
+        # Create execution trace
+        with trace(workflow_name="execute_procedure_adaptively"):
+            start_time = datetime.datetime.now()
+            results = []
+            success = True
+            adapted_steps = []
+            
+            # Execute each step
+            for step in procedure.steps:
+                # Try to execute with adaptation
+                step_result = await manager.adaptive_execute_step(
+                    step=step,
+                    context=context or {},
+                    alternatives=max_alternatives
+                )
+                
+                results.append(step_result)
+                
+                # Track adaptation
+                if "alternative_used" in step_result:
+                    adapted_steps.append({
+                        "step_id": step["id"],
+                        "alternative": step_result["alternative_used"],
+                        "adaptation": step_result.get("adaptation", {})
+                    })
+                
+                # Update context with step result
+                if context is None:
+                    context = {}
+                context[f"step_{step['id']}_result"] = step_result
+                
+                # Add to action history
+                if "action_history" not in context:
+                    context["action_history"] = []
+                context["action_history"].append({
+                    "step_id": step["id"],
+                    "function": step["function"],
+                    "success": step_result["success"]
+                })
+                
+                # Check for failure
+                if not step_result["success"]:
+                    success = False
+                    break
+            
+            # Calculate execution time
+            execution_time = (datetime.datetime.now() - start_time).total_seconds()
+            
+            # Update procedure statistics
+            manager.update_procedure_stats(procedure, execution_time, success)
+            
+            # Return execution results
+            return {
+                "success": success,
+                "results": results,
+                "execution_time": execution_time,
+                "proficiency": procedure.proficiency,
+                "adapted_steps": adapted_steps,
+                "adaptation_count": len(adapted_steps),
+                "procedure_name": name
+            }
+
 # ============================================================================
 # DEMONSTRATION FUNCTIONS
 # ============================================================================
