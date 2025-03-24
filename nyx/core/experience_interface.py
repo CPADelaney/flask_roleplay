@@ -202,6 +202,29 @@ class ExperienceInterface:
                 "I once dealt with someone who needed strict handling when they {brief_summary}. {reflection}"
             ]
         }
+
+        self.recall_templates.update({
+            # For long intervals
+            "long_interval": [
+                "After some time has passed, I'm reminded of when {brief_summary}... {reflection}",
+                "Thinking back across time, I recall when {brief_summary}. {detail}",
+                "The passage of time brings to mind when {brief_summary}... {reflection}"
+            ],
+            
+            # For milestone contexts
+            "milestone": [
+                "As we mark this moment in our conversations, I recall when {brief_summary}... {detail}",
+                "This milestone reminds me of when {brief_summary}. {reflection}",
+                "At this point in our interactions, I'm reminded of when {brief_summary}... {detail}"
+            ],
+            
+            # For psychological evolution contexts
+            "mature_reflection": [
+                "With perspective gained over time, I see differently how {brief_summary}... {reflection}",
+                "My understanding has evolved about when {brief_summary}. {detail}",
+                "Time has given me new insight into when {brief_summary}... {reflection}"
+            ]
+        })
         
         # Confidence mapping
         self.confidence_markers = {
@@ -952,6 +975,62 @@ class ExperienceInterface:
         except Exception as e:
             logger.error(f"Error finding similar experiences: {e}")
             return []
+
+    @function_tool
+    async def _retrieve_experiences_with_temporal_context(self, ctx: RunContextWrapper, 
+                                                      query: str,
+                                                      temporal_context: Dict[str, Any],
+                                                      limit: int = 3) -> List[Dict[str, Any]]:
+        """
+        Retrieve relevant experiences with temporal context influencing retrieval
+        
+        Args:
+            query: Search query
+            temporal_context: Temporal perception data
+            limit: Maximum number of experiences to return
+            
+        Returns:
+            List of relevant experiences with temporal influence
+        """
+        # Extract relevant temporal data
+        time_category = temporal_context.get("time_category", "medium")
+        time_since_last = temporal_context.get("time_since_last_interaction", 0)
+        
+        # Modify retrieval parameters based on temporal context
+        memory_params = {}
+        
+        # Long gaps favor significant memories
+        if time_category in ["long", "very_long"]:
+            memory_params["min_significance"] = 7  # Higher significance threshold
+            memory_params["recency_weight"] = 0.3  # Lower recency weight
+            memory_params["significance_weight"] = 0.7  # Higher significance weight
+            
+        # Short gaps favor continuation of recent context
+        elif time_category in ["very_short", "short"]:
+            memory_params["recency_weight"] = 0.7  # Higher recency weight
+            memory_params["significance_weight"] = 0.3  # Lower significance weight
+        
+        # Default balanced retrieval
+        else:
+            memory_params["recency_weight"] = 0.5
+            memory_params["significance_weight"] = 0.5
+        
+        # Call base retrieval with modified parameters
+        experiences = await self._retrieve_experiences(
+            ctx,
+            query=query,
+            limit=limit,
+            **memory_params
+        )
+        
+        # Add temporal retrieval metadata
+        for exp in experiences:
+            exp["temporal_retrieval_context"] = {
+                "time_category": time_category,
+                "retrieval_params": memory_params
+            }
+        
+        return experiences
     
     @function_tool
     async def _create_consolidated_experience(self, ctx: RunContextWrapper,
@@ -2453,3 +2532,102 @@ class ExperienceInterface:
             user_query=query,
             context_data=context_data
         )
+                                        
+    async def share_experience_with_temporal_context(self, 
+                                                  query: str,
+                                                  temporal_context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Share an experience with temporal context influencing selection and formatting
+        
+        Args:
+            query: Search query
+            temporal_context: Temporal perception data
+            
+        Returns:
+            Experience sharing result with temporal context
+        """
+        context_data = {}
+        template_type = "standard"
+        
+        # Process temporal context if provided
+        if temporal_context:
+            time_category = temporal_context.get("time_category", "medium")
+            context_data["time_category"] = time_category
+            
+            # Select template based on time category
+            if time_category in ["long", "very_long"]:
+                template_type = "long_interval"
+                
+            # Check for milestone
+            if "milestone_reached" in temporal_context:
+                template_type = "milestone"
+                context_data["milestone"] = temporal_context["milestone_reached"]
+                
+            # Check for psychological maturity influence
+            if "psychological_age" in temporal_context and temporal_context["psychological_age"] > 0.7:
+                template_type = "mature_reflection"
+                
+            # Set template for experience formatting
+            context_data["template_type"] = template_type
+        
+        # Share experience with context
+        result = await self.share_experience_enhanced(
+            query=query,
+            context_data=context_data
+        )
+        
+        # Add temporal influence context if experience was found
+        if result.get("has_experience", False):
+            result["temporal_context_applied"] = {
+                "template_type": template_type,
+                "time_category": context_data.get("time_category", "standard")
+            }
+        
+        return result
+
+    async def get_milestone_related_experiences(self, milestone: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Get experiences relevant to a temporal milestone
+        
+        Args:
+            milestone: Temporal milestone data
+            
+        Returns:
+            List of relevant experiences
+        """
+        milestone_name = milestone.get("name", "")
+        associated_memory_ids = milestone.get("associated_memory_ids", [])
+        
+        experiences = []
+        
+        # First try to get directly associated memories
+        if associated_memory_ids and self.memory_core:
+            for memory_id in associated_memory_ids:
+                try:
+                    memory = await self.memory_core.get_memory_by_id(memory_id)
+                    if memory:
+                        experience = await self._convert_memory_to_experience(
+                            memory,
+                            {}, # Empty emotional context to start
+                            0.8, # High relevance for milestone memories
+                            0.7  # Good experiential richness
+                        )
+                        experiences.append(experience)
+                except Exception as e:
+                    logger.error(f"Error getting milestone memory {memory_id}: {e}")
+        
+        # If not enough directly associated memories, search for relevant ones
+        if len(experiences) < 3:
+            # Create search query based on milestone type
+            search_query = f"milestone {milestone_name}"
+            
+            # Get additional experiences
+            additional_experiences = await self.retrieve_experiences_enhanced(
+                query=search_query,
+                limit=3 - len(experiences)
+            )
+            
+            if additional_experiences:
+                experiences.extend(additional_experiences)
+        
+        return experiences                                                     
