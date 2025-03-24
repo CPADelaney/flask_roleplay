@@ -32,3 +32,67 @@ from .manager import demonstrate_cross_game_transfer, demonstrate_procedural_mem
 
 # Version
 __version__ = "0.1.0"
+
+from .models import (
+    HierarchicalProcedure, 
+    ObservationLearner, 
+    CausalModel, 
+    TemporalNode, 
+    TemporalProcedureGraph,
+    ProcedureGraph,
+    WorkingMemoryController,
+    ParameterOptimizer,
+    TransferLearningOptimizer
+)
+
+from .execution import (
+    ExecutionStrategy,
+    DeliberateExecutionStrategy,
+    AutomaticExecutionStrategy,
+    AdaptiveExecutionStrategy,
+    StrategySelector
+)
+
+from .learning import (
+    ObservationLearner,
+    CausalModel,
+    ProceduralMemoryConsolidator
+)
+
+from .temporal import (
+    TemporalNode,
+    TemporalProcedureGraph,
+    ProcedureGraph
+)
+
+from .manager import (
+    EnhancedProceduralMemoryManager
+)
+
+__all__ = [
+    # Models
+    'HierarchicalProcedure',
+    'ObservationLearner',
+    'CausalModel',
+    'TemporalNode',
+    'TemporalProcedureGraph',
+    'ProcedureGraph',
+    'WorkingMemoryController',
+    'ParameterOptimizer',
+    'TransferLearningOptimizer',
+    
+    # Execution
+    'ExecutionStrategy',
+    'DeliberateExecutionStrategy',
+    'AutomaticExecutionStrategy',
+    'AdaptiveExecutionStrategy',
+    'StrategySelector',
+    
+    # Learning
+    'ObservationLearner',
+    'CausalModel',
+    'ProceduralMemoryConsolidator',
+    
+    # Manager
+    'EnhancedProceduralMemoryManager'
+]
