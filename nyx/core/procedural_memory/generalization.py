@@ -4,6 +4,8 @@ import datetime
 import random
 from typing import Dict, List, Any, Optional, Tuple
 from .models import ActionTemplate, ChunkTemplate, ControlMapping, ProcedureTransferRecord
+import numpy as np
+from functools import lru_cache
 
 class ProceduralChunkLibrary:
     """Library of generalizable procedural chunks that can transfer across domains"""
@@ -542,3 +544,58 @@ class ProceduralChunkLibrary:
                 steps.append(step)
         
         return steps
+    def _calculate_sequence_similarity_vectorized(self, 
+                                             template_actions: List[ActionTemplate], 
+                                             candidate_actions: List[ActionTemplate]) -> float:
+        """Calculate similarity between action sequences using vectorized operations"""
+        # Convert action sequences to feature vectors
+        template_features = np.array([self._action_to_feature_vector(action) for action in template_actions])
+        candidate_features = np.array([self._action_to_feature_vector(action) for action in candidate_actions])
+        
+        # Use dynamic time warping or other sequence matching algorithms
+        # For simple dot product similarity:
+        if len(template_features) == 0 or len(candidate_features) == 0:
+            return 0.0
+            
+        # Calculate cosine similarity between sequences
+        similarity_matrix = np.zeros((len(template_features), len(candidate_features)))
+        
+        for i in range(len(template_features)):
+            for j in range(len(candidate_features)):
+                dot_product = np.dot(template_features[i], candidate_features[j])
+                norm_a = np.linalg.norm(template_features[i])
+                norm_b = np.linalg.norm(candidate_features[j])
+                
+                if norm_a > 0 and norm_b > 0:
+                    similarity_matrix[i, j] = dot_product / (norm_a * norm_b)
+        
+        # Dynamic programming for sequence alignment
+        dp = np.zeros((len(template_features) + 1, len(candidate_features) + 1))
+        
+        for i in range(1, len(template_features) + 1):
+            for j in range(1, len(candidate_features) + 1):
+                if similarity_matrix[i-1, j-1] > 0.7:  # High similarity threshold
+                    dp[i, j] = dp[i-1, j-1] + 1
+                else:
+                    dp[i, j] = max(dp[i-1, j], dp[i, j-1])
+        
+        # Calculate similarity score
+        lcs = dp[-1, -1]
+        similarity = (2 * lcs) / (len(template_features) + len(candidate_features))
+        
+        return float(similarity)
+    
+    @lru_cache(maxsize=128)
+    def _action_to_feature_vector(self, action: ActionTemplate) -> np.ndarray:
+        """Convert an action to a feature vector for similarity calculations"""
+        # Create a feature vector based on action properties
+        # This is a simplified example - expand as needed
+        action_type_hash = hash(action.action_type) % 100
+        intent_hash = hash(action.intent) % 100
+        
+        # Create a simple feature vector (expand as needed)
+        features = np.zeros(200)
+        features[action_type_hash] = 1.0
+        features[intent_hash + 100] = 1.0
+        
+        return features
