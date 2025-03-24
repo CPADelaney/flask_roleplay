@@ -859,6 +859,7 @@ class NyxBrain:
             "identity": self.identity_evolution,
             "experience": self.experience_interface,
             "hormone": self.hormone_system  # Add hormone system reference
+            "time": self.temporal_perception  # Add temporal system reference
         })
         
         # Initialize main brain agent
@@ -1065,6 +1066,13 @@ class NyxBrain:
         
         with trace(workflow_name="process_input", group_id=self.trace_group_id):
             start_time = datetime.datetime.now()
+            
+            # Process temporal effects first
+            temporal_effects = await self.temporal_perception.on_interaction_start()
+            
+            # Add temporal context to the processing context
+            context = context or {}
+            context["temporal_context"] = temporal_effects
             
             # Update environmental factors for hormone system
             if self.hormone_system:
@@ -1280,6 +1288,8 @@ class NyxBrain:
                     context=f"User input length: {len(user_input)}, Memories retrieved: {len(memories)}"
                 )
                 
+            result["temporal_context"] = temporal_effects
+              
             return result
             
         except Exception as e:
@@ -1514,6 +1524,24 @@ class NyxBrain:
             )
             raise
             
+            # Generate time expressions occasionally
+            if random.random() < 0.2 or context.get("include_time_expression", False):
+                try:
+                    time_expression = await self.temporal_perception.generate_temporal_expression()
+                    if time_expression:
+                        # Prepend or append the time expression to the response
+                        if random.random() < 0.5 and not response_data["message"].startswith(time_expression["expression"]):
+                            response_data["message"] = f"{time_expression['expression']} {response_data['message']}"
+                        elif not response_data["message"].endswith(time_expression["expression"]):
+                            response_data["message"] = f"{response_data['message']} {time_expression['expression']}"
+                        
+                        response_data["time_expression"] = time_expression
+                except Exception as e:
+                    logger.error(f"Error generating time expression: {str(e)}")
+            
+            # Process end of interaction for temporal tracking
+            await self.temporal_perception.on_interaction_end()
+            
             return response_data
     
     async def generate_enhanced_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -1626,6 +1654,44 @@ class NyxBrain:
         with trace(workflow_name="run_maintenance", group_id=self.trace_group_id):
             results = {}
             
+            # Run psychological evolution if temporal perception is available
+            if hasattr(self, "temporal_perception"):
+                try:
+                    long_term_drift = await self.temporal_perception.get_long_term_drift()
+                    
+                    # Apply drift effects to identity evolution
+                    if self.identity_evolution:
+                        # Update personality traits based on psychological evolution
+                        for shift in long_term_drift.personality_shifts:
+                            trait = shift["trait"].lower().replace(" ", "_")
+                            direction = 1 if shift["direction"] == "increase" else -1
+                            magnitude = shift["magnitude"]
+                            
+                            await self.identity_evolution.update_trait(
+                                trait, 
+                                direction * magnitude * 0.1
+                            )
+                        
+                        # Update maturity-related traits
+                        await self.identity_evolution.update_trait(
+                            "patience", 
+                            (long_term_drift.patience_level - 0.5) * 0.2
+                        )
+                        
+                        await self.identity_evolution.update_trait(
+                            "wisdom", 
+                            (long_term_drift.maturity_level - 0.5) * 0.15
+                        )
+                    
+                    results["temporal_evolution"] = {
+                        "applied_to_identity": True,
+                        "psychological_age": long_term_drift.psychological_age,
+                        "traits_updated": [shift["trait"] for shift in long_term_drift.personality_shifts]
+                    }
+                except Exception as e:
+                    logger.error(f"Error in temporal evolution: {str(e)}")
+                    results["temporal_evolution"] = {"error": str(e)}
+            
             # Run memory maintenance
             try:
                 memory_result = await self.memory_orchestrator.run_maintenance()
@@ -1689,6 +1755,13 @@ class NyxBrain:
                 context="Periodic maintenance run"
             )
             return {"error": str(e)}
+    
+    async def get_temporal_milestones(self) -> List[Dict[str, Any]]:
+        """Get temporal milestones for the relationship"""
+        if not hasattr(self, "temporal_perception"):
+            return []
+            
+        return self.temporal_perception.milestones
 
     async def _analyze_capabilities(self):
         """Analyze current capabilities and suggest improvements"""
