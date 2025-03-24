@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional, Tuple, Set
 import asyncio
 import openai
 
-from .connection import with_transaction, TransactionContext
+from .connection import TransactionContext
 from .core import Memory, MemoryType, MemorySignificance, UnifiedMemoryManager
 
 logger = logging.getLogger("memory_schemas")
