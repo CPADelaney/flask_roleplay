@@ -15,6 +15,7 @@ asyncpg
 celery
 gunicorn
 eventlet>=0.24.1
+asgiref
 
 # Web framework
 flask==3.0.0
