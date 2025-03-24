@@ -553,6 +553,7 @@ class ObservationLearner:
         
         return AsyncLockManager(self.learning_lock)
     
+    # Add to ObservationLearner class
     async def apply_reinforcement_learning(
         self,
         procedure: Dict[str, Any],
@@ -690,6 +691,140 @@ class ObservationLearner:
                         new_step["description"] = "Modified: " + description
         
         return new_step
+    
+    # Enhance the incremental learning method
+    async def learn_incrementally(
+        self,
+        existing_procedure: Dict[str, Any],
+        new_observations: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Incrementally update an existing procedure with new observations"""
+        # Extract existing information
+        domain = existing_procedure.get("domain", "general")
+        steps = existing_procedure.get("steps", [])
+        confidence = existing_procedure.get("confidence", 0.5)
+        
+        # If no existing steps, treat as new learning
+        if not steps:
+            return await self.learn_from_demonstration(new_observations, domain)
+        
+        # Extract action patterns from new observations
+        new_patterns = self._extract_action_patterns(new_observations)
+        
+        # Compare with existing steps to find refinements
+        refined_steps = []
+        new_step_actions = set(p["sequence"][0] for p in new_patterns if p["sequence"])
+        existing_step_actions = set(s.get("function") for s in steps)
+        
+        # First add refined existing steps
+        for step in steps:
+            function = step.get("function")
+            # Check if this step function is in the new patterns
+            if function in new_step_actions:
+                # Find matching pattern
+                matching_pattern = next((p for p in new_patterns 
+                                      if p["sequence"] and p["sequence"][0] == function), None)
+                
+                if matching_pattern:
+                    # Refine parameters based on new observations
+                    # Look for state changes related to this function
+                    state_changes = []
+                    for i, obs in enumerate(new_observations):
+                        if obs.get("action") == function and i+1 < len(new_observations):
+                            before = obs.get("state", {})
+                            after = new_observations[i+1].get("state", {})
+                            
+                            changes = {}
+                            for key in set(before.keys()) | set(after.keys()):
+                                if key in before and key in after and before[key] != after[key]:
+                                    changes[key] = after[key]
+                                elif key not in before and key in after:
+                                    changes[key] = after[key]
+                            
+                            if changes:
+                                state_changes.append(changes)
+                    
+                    # Update parameters if we found state changes
+                    if state_changes:
+                        # Combine parameters from all state changes
+                        new_params = {}
+                        for change in state_changes:
+                            for key, value in change.items():
+                                new_params[key] = value
+                        
+                        # Update step with new parameters
+                        updated_step = step.copy()
+                        updated_step["parameters"] = {**step.get("parameters", {}), **new_params}
+                        refined_steps.append(updated_step)
+                    else:
+                        # No changes to parameters
+                        refined_steps.append(step)
+                else:
+                    # No matching pattern, keep as is
+                    refined_steps.append(step)
+            else:
+                # This step wasn't observed in new observations, keep as is
+                refined_steps.append(step)
+        
+        # Then add completely new steps
+        new_functions = new_step_actions - existing_step_actions
+        for function in new_functions:
+            # Find matching pattern
+            matching_pattern = next((p for p in new_patterns 
+                                  if p["sequence"] and p["sequence"][0] == function), None)
+            
+            if matching_pattern:
+                # Create a new step
+                # Find related state changes
+                state_changes = []
+                for i, obs in enumerate(new_observations):
+                    if obs.get("action") == function and i+1 < len(new_observations):
+                        before = obs.get("state", {})
+                        after = new_observations[i+1].get("state", {})
+                        
+                        changes = {}
+                        for key in set(before.keys()) | set(after.keys()):
+                            if key in before and key in after and before[key] != after[key]:
+                                changes[key] = after[key]
+                            elif key not in before and key in after:
+                                changes[key] = after[key]
+                        
+                        if changes:
+                            state_changes.append(changes)
+                
+                # Create parameters from state changes
+                parameters = {}
+                for change in state_changes:
+                    for key, value in change.items():
+                        parameters[key] = value
+                
+                # Add new step
+                refined_steps.append({
+                    "id": f"step_{len(refined_steps)+1}",
+                    "description": f"Perform action: {function}",
+                    "function": function,
+                    "parameters": parameters
+                })
+        
+        # Recalculate confidence
+        # Confidence increases with more observations, up to a point
+        total_observations = existing_procedure.get("observation_count", 0) + len(new_observations)
+        new_confidence = min(0.95, confidence + 0.05 * (total_observations / 10))
+        
+        # Create updated procedure data
+        updated_procedure = {
+            "name": existing_procedure.get("name"),
+            "steps": refined_steps,
+            "description": existing_procedure.get("description"),
+            "domain": domain,
+            "created_from_observations": True,
+            "observation_count": total_observations,
+            "confidence": new_confidence,
+            "incrementally_updated": True,
+            "last_updated": datetime.datetime.now().isoformat()
+        }
+        
+        return updated_procedure
 
 class ProceduralMemoryConsolidator:
     """Consolidates and optimizes procedural memory"""
