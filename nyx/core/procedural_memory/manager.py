@@ -1334,6 +1334,108 @@ class EnhancedProceduralMemoryManager(ProceduralMemoryManager):
             "hierarchical": True,
             "parent_id": parent_id
         }
+
+    async def optimize_procedural_memory(self) -> Dict[str, Any]:
+        """
+        Perform comprehensive optimization of procedural memory
+        
+        Returns:
+            Optimization results
+        """
+        start_time = datetime.datetime.now()
+        results = {
+            "memory_optimized": False,
+            "performance_optimized": False,
+            "procedures_cleaned": 0,
+            "memory_saved": 0,
+            "execution_time": 0.0
+        }
+        
+        # 1. Clean up old procedural data
+        old_procedures = []
+        for name, procedure in self.procedures.items():
+            # Check if procedure hasn't been used in a long time
+            if hasattr(procedure, "last_execution") and procedure.last_execution:
+                last_exec = datetime.datetime.fromisoformat(procedure.last_execution)
+                days_since_last_exec = (datetime.datetime.now() - last_exec).days
+                
+                if days_since_last_exec > 90:  # More than 90 days
+                    old_procedures.append(name)
+                    
+        # Remove old procedures or clean up their history
+        for name in old_procedures:
+            procedure = self.procedures[name]
+            
+            # Check if it's worth keeping
+            if procedure.proficiency > 0.8:  # High proficiency, keep but clean up
+                saved = procedure.cleanup_history(keep_count=5)
+                results["memory_saved"] += saved
+                results["procedures_cleaned"] += 1
+            else:
+                # Low proficiency and unused, remove
+                memory_estimate = procedure.estimate_memory_usage()
+                del self.procedures[name]
+                results["memory_saved"] += memory_estimate
+                results["procedures_cleaned"] += 1
+        
+        # 2. Optimize chunk library
+        if self.chunk_library:
+            try:
+                library_optimization = self.chunk_library.optimize_memory_usage()
+                results["chunk_library_optimized"] = True
+                results["chunk_templates_removed"] = library_optimization.get("templates_removed", 0)
+                results["memory_saved"] += library_optimization.get("templates_removed", 0) * 2000  # Rough estimate
+            except Exception as e:
+                logger.error(f"Error optimizing chunk library: {str(e)}")
+        
+        # 3. Optimize caches
+        # Clear old similarity cache entries
+        if hasattr(self.chunk_library, "similarity_cache"):
+            cache_size_before = len(self.chunk_library.similarity_cache)
+            self.chunk_library.similarity_cache = {}
+            results["memory_saved"] += cache_size_before * 100  # Rough estimate
+        
+        # 4. Consolidate similar procedures
+        consolidated = await self.consolidate_procedural_memory()
+        results["procedures_consolidated"] = consolidated.get("procedures_updated", 0)
+        
+        # Calculate total execution time
+        results["execution_time"] = (datetime.datetime.now() - start_time).total_seconds()
+        
+        # Record optimization event
+        logger.info(f"Procedural memory optimization completed in {results['execution_time']:.2f}s. "
+                    f"Saved {results['memory_saved']} bytes, cleaned {results['procedures_cleaned']} procedures.")
+        
+        return results
+    
+    # Add a method to handle execution errors
+    async def handle_execution_error(
+        self,
+        error: Dict[str, Any],
+        context: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Handle an execution error using the causal model
+        
+        Args:
+            error: Error details
+            context: Execution context
+            
+        Returns:
+            Recovery suggestions
+        """
+        # Identify likely causes
+        likely_causes = self.causal_model.identify_likely_causes(error)
+        
+        # Get recovery suggestions
+        interventions = self.causal_model.suggest_interventions(likely_causes)
+        
+        # Return results
+        return {
+            "likely_causes": likely_causes,
+            "interventions": interventions,
+            "context": context
+        }
     
     async def execute_hierarchical_procedure(
         self,
