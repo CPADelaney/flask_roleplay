@@ -164,6 +164,41 @@ class NyxAgentSession:
             if not is_valid:
                 # Action rejected by brain, generate safe fallback
                 result = await self._generate_safe_fallback(user_input, context)
+
+            # Report significant events based on result
+            if "emotional_state" in result and self._is_emotional_spike(result["emotional_state"]):
+                await self.report_significant_event(
+                    "emotional_spike",
+                    {
+                        "emotional_state": result["emotional_state"],
+                        "user_input": user_input,
+                        "context": context
+                    }
+                )
+            
+            if "context_change" in result and result["context_change"]:
+                await self.report_significant_event(
+                    "context_change",
+                    {
+                        "change_data": result["context_change"],
+                        "user_input": user_input,
+                        "context": context
+                    }
+                )
+                
+            if self._is_critical_action(result):
+                action_data = {
+                    "user_input": user_input,
+                    "result": result,
+                    "context": context
+                }
+                
+                # Validate action with brain
+                is_valid = await self.validate_action("response_generation", action_data)
+                
+                if not is_valid:
+                    # Action rejected by brain, generate safe fallback
+                    result = await self._generate_safe_fallback(user_input, context)
         
         return result
     
@@ -533,27 +568,6 @@ class NyxAgentSession:
             # Default to rejecting the action if validation fails
             return False
     
-    # Modify process_user_input to validate critical actions
-    async def process_user_input(self, user_input: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        # Existing code...
-        
-        # Check for critical actions that need validation
-        if self._is_critical_action(result):
-            action_data = {
-                "user_input": user_input,
-                "result": result,
-                "context": context
-            }
-            
-            # Validate action with brain
-            is_valid = await self.validate_action("response_generation", action_data)
-            
-            if not is_valid:
-                # Action rejected by brain, generate safe fallback
-                result = await self._generate_safe_fallback(user_input, context)
-        
-        return result
-    
     def _is_critical_action(self, result: Dict[str, Any]) -> bool:
         """Determine if an action is critical and needs brain validation."""
         # Check for potential risky actions
@@ -631,3 +645,19 @@ class NyxAgentSession:
             
             # Re-raise for local handling
             raise
+
+    async def report_significant_event(self, event_type: str, event_data: Dict[str, Any]) -> None:
+        """Report significant events back to the brain for tracking and learning."""
+        try:
+            await self._brain_request(
+                "record_significant_event",
+                {
+                    "session_id": self.session_id,
+                    "event_type": event_type,
+                    "event_data": event_data,
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "source": "agent_session"
+                }
+            )
+        except Exception as e:
+            logger.error(f"Failed to report significant event to brain: {e}")
