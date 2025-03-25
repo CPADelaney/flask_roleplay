@@ -1023,6 +1023,219 @@ class NyxBrain:
             }
             
             return result
+
+    async def register_session(self, user_id: int, conversation_id: int, initial_context: Dict[str, Any] = None) -> str:
+        """
+        Register a new agent session with the central brain.
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            initial_context: Optional initial context data
+            
+        Returns:
+            session_id: Unique identifier for the session
+        """
+        # Generate a unique session ID
+        session_id = f"session_{user_id}_{conversation_id}_{int(time.time())}"
+        
+        # Create session data structure
+        session_data = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "created_at": datetime.datetime.now().isoformat(),
+            "last_active": datetime.datetime.now().isoformat(),
+            "status": "active",  # Options: active, idle, paused, archived
+            "current_context": initial_context or {},
+            "emotional_state": {},
+            "user_preferences": {},
+            "session_tags": [],
+            "is_rehydrated": False,
+            "last_checkpoint": None,
+            "pending_feedback": False
+        }
+        
+        # Store session in brain's session registry
+        if not hasattr(self, "sessions"):
+            self.sessions = {}
+        
+        self.sessions[session_id] = session_data
+        
+        # Initialize cache for this session's memory
+        await self.memory_core.initialize_session_cache(session_id)
+        
+        # Log session creation
+        logger.info(f"New session registered: {session_id} for user {user_id}, conversation {conversation_id}")
+        
+        return session_id
+    
+    async def update_session(self, session_id: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update an existing session with new data.
+        
+        Args:
+            session_id: Session ID to update
+            update_data: New data to update session with
+            
+        Returns:
+            Updated session data
+        """
+        if not hasattr(self, "sessions") or session_id not in self.sessions:
+            raise ValueError(f"Session {session_id} not found")
+        
+        # Get session
+        session = self.sessions[session_id]
+        
+        # Update provided fields
+        for key, value in update_data.items():
+            if key in session:
+                session[key] = value
+        
+        # Always update last_active timestamp
+        session["last_active"] = datetime.datetime.now().isoformat()
+        
+        return session
+    
+    async def archive_session(self, session_id: str) -> Dict[str, Any]:
+        """
+        Archive a session when it's no longer active.
+        
+        Args:
+            session_id: Session ID to archive
+            
+        Returns:
+            Archived session data
+        """
+        if not hasattr(self, "sessions") or session_id not in self.sessions:
+            raise ValueError(f"Session {session_id} not found")
+        
+        # Get session
+        session = self.sessions[session_id]
+        
+        # Update status
+        session["status"] = "archived"
+        
+        # Store in persistent storage for later retrieval
+        if not hasattr(self, "archived_sessions"):
+            self.archived_sessions = {}
+        
+        self.archived_sessions[session_id] = session.copy()
+        
+        # Clean up memory resources
+        await self.memory_core.clear_session_cache(session_id)
+        
+        # Generate summary reflection of the session
+        if self.reflection_engine:
+            reflection = await self.reflection_engine.generate_reflection(
+                topic=f"Session {session_id} summary",
+                context={
+                    "user_id": session["user_id"],
+                    "conversation_id": session["conversation_id"],
+                    "session_data": session
+                }
+            )
+            
+            # Store reflection in memory
+            await self.memory_core.add_memory(
+                memory_text=reflection,
+                memory_type="reflection",
+                memory_scope="global",
+                significance=7,
+                tags=["session_summary", f"session_{session_id}"],
+                metadata={
+                    "session_id": session_id,
+                    "user_id": session["user_id"],
+                    "archived_at": datetime.datetime.now().isoformat()
+                }
+            )
+        
+        return session
+    
+    async def resume_session(self, session_id: str) -> Dict[str, Any]:
+        """
+        Resume an archived or paused session.
+        
+        Args:
+            session_id: Session ID to resume
+            
+        Returns:
+            Reactivated session data
+        """
+        # Check active sessions first
+        if hasattr(self, "sessions") and session_id in self.sessions:
+            session = self.sessions[session_id]
+            if session["status"] in ["paused", "idle"]:
+                # Just reactivate
+                session["status"] = "active"
+                session["last_active"] = datetime.datetime.now().isoformat()
+                return session
+        
+        # Check archived sessions
+        if hasattr(self, "archived_sessions") and session_id in self.archived_sessions:
+            # Get archived session
+            archived_session = self.archived_sessions[session_id]
+            
+            # Restore to active sessions
+            if not hasattr(self, "sessions"):
+                self.sessions = {}
+            
+            self.sessions[session_id] = archived_session
+            
+            # Update session data
+            self.sessions[session_id]["status"] = "active"
+            self.sessions[session_id]["last_active"] = datetime.datetime.now().isoformat()
+            self.sessions[session_id]["is_rehydrated"] = True
+            
+            # Rehydrate memory cache
+            await self.memory_core.rehydrate_session_cache(session_id)
+            
+            # Remove from archived sessions
+            del self.archived_sessions[session_id]
+            
+            return self.sessions[session_id]
+        
+        raise ValueError(f"Session {session_id} not found in active or archived sessions")
+    
+    async def get_session_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics about all active and archived sessions.
+        
+        Returns:
+            Session statistics
+        """
+        active_count = len(self.sessions) if hasattr(self, "sessions") else 0
+        archived_count = len(self.archived_sessions) if hasattr(self, "archived_sessions") else 0
+        
+        # Collect user counts
+        users = set()
+        conversations = set()
+        
+        if hasattr(self, "sessions"):
+            for session in self.sessions.values():
+                users.add(session["user_id"])
+                conversations.add(f"{session['user_id']}_{session['conversation_id']}")
+        
+        stats = {
+            "active_sessions": active_count,
+            "archived_sessions": archived_count,
+            "unique_users": len(users),
+            "unique_conversations": len(conversations),
+            "sessions_by_status": {}
+        }
+        
+        # Count sessions by status
+        if hasattr(self, "sessions"):
+            status_counts = {}
+            for session in self.sessions.values():
+                status = session["status"]
+                if status not in status_counts:
+                    status_counts[status] = 0
+                status_counts[status] += 1
+            
+            stats["sessions_by_status"] = status_counts
+        
+        return stats
     
     async def generate_integrated_response(self, 
                                          user_input: str, 
