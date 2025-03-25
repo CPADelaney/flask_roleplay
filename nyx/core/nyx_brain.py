@@ -3429,5 +3429,136 @@ async def process_user_input_enhanced(self, user_input: str, context: Dict[str, 
                 "error": str(e)
             }
 
+    # Helper methods for parallel processing in NyxBrain class
+    
+    async def _process_emotional_impact(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Process emotional impact of user input"""
+        # Process emotional impact
+        emotional_stimuli = self.emotional_core.analyze_text_sentiment(user_input)
+        emotional_state = self.emotional_core.update_from_stimuli(emotional_stimuli)
+        
+        # Update performance counter
+        self.performance_metrics["emotion_updates"] += 1
+        
+        return {
+            "emotional_state": emotional_state,
+            "stimuli": emotional_stimuli
+        }
+    
+    async def _retrieve_memories_with_emotion(self, 
+                                          user_input: str, 
+                                          context: Dict[str, Any],
+                                          emotional_state: Dict[str, float]) -> List[Dict[str, Any]]:
+        """Retrieve relevant memories with emotional influence"""
+        # Create emotional prioritization for memory types
+        # Based on current emotional state, prioritize different memory types
+        
+        # Example prioritization based on emotional valence and arousal
+        valence = self.emotional_core.get_emotional_valence()
+        arousal = self.emotional_core.get_emotional_arousal()
+        
+        # Prioritize experiences and reflections for high emotional states
+        if abs(valence) > 0.6 or arousal > 0.7:
+            prioritization = {
+                "experience": 0.5,
+                "reflection": 0.3,
+                "abstraction": 0.1,
+                "observation": 0.1
+            }
+        # Prioritize abstractions and reflections for low emotional states
+        elif arousal < 0.3:
+            prioritization = {
+                "abstraction": 0.4,
+                "reflection": 0.3,
+                "experience": 0.2,
+                "observation": 0.1
+            }
+        # Balanced prioritization for moderate emotional states
+        else:
+            prioritization = {
+                "experience": 0.3,
+                "reflection": 0.3,
+                "abstraction": 0.2,
+                "observation": 0.2
+            }
+        
+        # Adjust prioritization based on emotion-to-memory influence
+        for memory_type, priority in prioritization.items():
+            prioritization[memory_type] = priority * (1 + self.emotion_to_memory_influence)
+        
+        # Use prioritized retrieval
+        memories = await self.memory_orchestrator.retrieve_memories_with_prioritization(
+            query=user_input,
+            memory_types=context.get("memory_types", ["observation", "reflection", "abstraction", "experience"]),
+            prioritization=prioritization,
+            limit=context.get("memory_limit", 5)
+        )
+        
+        # Update performance counter
+        self.performance_metrics["memory_operations"] += 1
+        
+        return memories
+    
+    async def _check_experience_sharing(self, user_input: str, context: Dict[str, Any]) -> bool:
+        """Check if experience sharing should be used"""
+        return self._should_share_experience(user_input, context)
+    
+    async def _share_experience(self, 
+                            user_input: str, 
+                            context: Dict[str, Any], 
+                            emotional_state: Dict[str, float]) -> Dict[str, Any]:
+        """Share experience based on user input"""
+        # Enhanced experience sharing with cross-user support and adaptation
+        experience_result = await self.experience_interface.share_experience_enhanced(
+            query=user_input,
+            context_data={
+                "user_id": str(self.user_id),
+                "emotional_state": emotional_state,
+                "include_cross_user": self.cross_user_enabled and context.get("include_cross_user", True),
+                "scenario_type": context.get("scenario_type", ""),
+                "conversation_id": self.conversation_id
+            }
+        )
+        
+        if experience_result.get("has_experience", False):
+            self.performance_metrics["experiences_shared"] += 1
+            
+            # Track cross-user experiences
+            if experience_result.get("cross_user", False):
+                self.performance_metrics["cross_user_experiences_shared"] += 1
+        
+        return experience_result
+    
+    async def _process_adaptation(self,
+                               user_input: str,
+                               context: Dict[str, Any],
+                               emotional_state: Dict[str, float],
+                               experience_result: Optional[Dict[str, Any]],
+                               identity_impact: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Process adaptation based on context change"""
+        # Prepare context for change detection
+        context_for_adaptation = {
+            "user_input": user_input,
+            "emotional_state": emotional_state,
+            "has_experience": experience_result["has_experience"] if experience_result else False,
+            "cross_user_experience": experience_result.get("cross_user", False) if experience_result else False,
+            "interaction_count": self.interaction_count,
+            "identity_impact": True if identity_impact else False
+        }
+        
+        # Detect context change
+        context_change_result = await self.dynamic_adaptation.detect_context_change(context_for_adaptation)
+        
+        adaptation_result = None
+        
+        # If significant change, run adaptation cycle
+        if context_change_result.significant_change:
+            # Measure current performance
+            current_performance = {
+                "success_rate": context.get("success_rate", 0.7),
+                "error_rate": context.get("error_rate", 0.1),
+                "efficiency": context.get("efficiency", 0.8),
+                "response_time": 0.5
+
 # For backward compatibility in case directly imported
 NyxBrainInstance = NyxBrain
