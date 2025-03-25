@@ -1563,6 +1563,295 @@ class NyxBrain:
                 
                 return response
 
+    # Add these methods to nyx_brain.py to handle learning integration
+    
+    async def report_learning(self, session_id: str, learning: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process a learning payload from a session.
+        
+        Args:
+            session_id: Source session ID
+            learning: Learning data payload
+            
+        Returns:
+            Processing result
+        """
+        # Validate session
+        if not hasattr(self, "sessions") or session_id not in self.sessions:
+            raise ValueError(f"Session {session_id} not found")
+        
+        session = self.sessions[session_id]
+        
+        # Enrich learning with session metadata
+        enriched_learning = {
+            "session_id": session_id,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "user_id": session["user_id"],
+            "conversation_id": session["conversation_id"],
+            **learning
+        }
+        
+        # Initialize learning history if needed
+        if not hasattr(self, "learning_history"):
+            self.learning_history = []
+        
+        # Store in learning history
+        self.learning_history.append(enriched_learning)
+        
+        # Process based on trigger type
+        trigger = learning.get("trigger", "time_checkpoint")
+        
+        try:
+            if trigger == "emotional_spike":
+                await self._process_emotional_learning(enriched_learning)
+            elif trigger == "procedural_execution":
+                await self._process_procedural_learning(enriched_learning)
+            elif trigger == "user_reveal":
+                await self._process_user_revelation(enriched_learning)
+            elif trigger == "time_checkpoint":
+                await self._process_checkpoint_learning(enriched_learning)
+            elif trigger == "manual_trigger":
+                await self._process_manual_learning(enriched_learning)
+            elif trigger == "nyx2_triggered":
+                await self._process_nyx2_triggered_learning(enriched_learning)
+            else:
+                # Default processing
+                await self._process_general_learning(enriched_learning)
+                
+            logger.info(f"Processed learning from session {session_id}, trigger: {trigger}")
+            
+        except Exception as e:
+            logger.error(f"Error processing learning: {e}")
+            return {"status": "error", "error": str(e)}
+        
+        # Update session's last checkpoint
+        self.sessions[session_id]["last_checkpoint"] = trigger
+        
+        return {"status": "processed", "learning_id": len(self.learning_history) - 1}
+    
+    async def _process_emotional_learning(self, learning: Dict[str, Any]) -> None:
+        """Process an emotional spike learning event."""
+        # Extract emotional data
+        emotional_snapshot = learning.get("emotional_snapshot", {})
+        user_id = learning.get("user_id")
+        content = learning.get("content", "")
+        
+        # Process through emotional core
+        if self.emotional_core:
+            await self.emotional_core.process_emotional_pattern(emotional_snapshot)
+            
+        # Store significant emotional events in memory
+        await self.memory_core.add_memory(
+            memory_text=content,
+            memory_type="observation",
+            memory_scope="user",
+            significance=7,
+            tags=["emotional_event", f"user_{user_id}"],
+            metadata={
+                "emotional_data": emotional_snapshot,
+                "timestamp": learning.get("timestamp"),
+                "session_id": learning.get("session_id")
+            }
+        )
+    
+    async def _process_procedural_learning(self, learning: Dict[str, Any]) -> None:
+        """Process a procedural execution learning event."""
+        # Extract procedural data
+        procedural_ref = learning.get("procedural_reference", "")
+        content = learning.get("content", "")
+        
+        # Update procedural memory
+        if hasattr(self, "procedural_memory"):
+            try:
+                # Track execution statistics
+                await self.procedural_memory.update_execution_stats(
+                    procedural_ref,
+                    success=learning.get("success", True),
+                    execution_time=learning.get("execution_time", 0),
+                    context=learning.get("context", {})
+                )
+                
+                # If this is a new or improved procedure, store it
+                if "procedure_definition" in learning:
+                    await self.procedural_memory.store_procedure(
+                        procedural_ref,
+                        learning["procedure_definition"],
+                        source="session_learning"
+                    )
+            except Exception as e:
+                logger.warning(f"Error updating procedural memory: {e}")
+    
+    async def _process_user_revelation(self, learning: Dict[str, Any]) -> None:
+        """Process user revelation learning."""
+        # Extract revelation data
+        revelations = learning.get("revelations", [])
+        user_id = learning.get("user_id")
+        
+        if not revelations:
+            return
+        
+        # Process each revelation
+        for revelation in revelations:
+            # Add to user model if available
+            if hasattr(self, "user_model"):
+                await self.user_model.add_user_revelation(user_id, revelation)
+            
+            # Store significant revelations in memory
+            revelation_type = revelation.get("type", "unknown")
+            revelation_content = revelation.get("content", str(revelation))
+            
+            await self.memory_core.add_memory(
+                memory_text=f"User revealed: {revelation_content}",
+                memory_type="observation",
+                memory_scope="user",
+                significance=8,  # User revelations are highly significant
+                tags=["user_revelation", revelation_type, f"user_{user_id}"],
+                metadata={
+                    "revelation": revelation,
+                    "timestamp": learning.get("timestamp"),
+                    "session_id": learning.get("session_id")
+                }
+            )
+    
+    async def _process_checkpoint_learning(self, learning: Dict[str, Any]) -> None:
+        """Process regular checkpoint learning."""
+        # Most checkpoints don't need special processing
+        # But we could periodically generate reflections
+        
+        # Randomly generate reflections (about 10% of checkpoints)
+        if random.random() < 0.1 and self.reflection_engine:
+            session_id = learning.get("session_id")
+            user_id = learning.get("user_id")
+            
+            # Generate reflection based on recent memories
+            memories = await self.memory_core.retrieve_memories(
+                query="",  # Get recent memories
+                memory_scope="user",
+                limit=10,
+                metadata_filter={"user_id": user_id}
+            )
+            
+            if memories:
+                reflection = await self.reflection_engine.generate_reflection(
+                    topic="recent_interactions",
+                    context={"memories": memories}
+                )
+                
+                # Store reflection
+                await self.memory_core.add_memory(
+                    memory_text=reflection,
+                    memory_type="reflection",
+                    memory_scope="user",
+                    significance=6,
+                    tags=["checkpoint_reflection", f"user_{user_id}"],
+                    metadata={
+                        "timestamp": learning.get("timestamp"),
+                        "session_id": learning.get("session_id")
+                    }
+                )
+    
+    async def _process_manual_learning(self, learning: Dict[str, Any]) -> None:
+        """Process manually triggered learning."""
+        # This handles explicit learning requests from agents
+        content = learning.get("content", "")
+        source = learning.get("source", "agent")
+        
+        # Process based on content type
+        if "reflection" in learning.get("tags", []):
+            # Store as reflection
+            await self.memory_core.add_memory(
+                memory_text=content,
+                memory_type="reflection",
+                memory_scope="global",
+                significance=7,
+                tags=learning.get("tags", []),
+                metadata={
+                    "source": source,
+                    "timestamp": learning.get("timestamp"),
+                    "session_id": learning.get("session_id")
+                }
+            )
+        elif "abstraction" in learning.get("tags", []):
+            # Store as abstraction
+            await self.memory_core.add_memory(
+                memory_text=content,
+                memory_type="abstraction",
+                memory_scope="global",
+                significance=8,
+                tags=learning.get("tags", []),
+                metadata={
+                    "source": source,
+                    "timestamp": learning.get("timestamp"),
+                    "session_id": learning.get("session_id")
+                }
+            )
+        else:
+            # Default to observation
+            await self.memory_core.add_memory(
+                memory_text=content,
+                memory_type="observation",
+                memory_scope="global",
+                significance=5,
+                tags=learning.get("tags", ["learning_event"]),
+                metadata={
+                    "source": source,
+                    "timestamp": learning.get("timestamp"),
+                    "session_id": learning.get("session_id")
+                }
+            )
+    
+    async def _process_nyx2_triggered_learning(self, learning: Dict[str, Any]) -> None:
+        """Process learning triggered by Nyx2 (central brain)."""
+        # This is for processing requests from the brain itself
+        content = learning.get("content", "")
+        directives = learning.get("directives", [])
+        
+        # Apply any directives to the session
+        session_id = learning.get("session_id")
+        if session_id in self.sessions and directives:
+            for directive in directives:
+                directive_type = directive.get("type")
+                action = directive.get("action")
+                
+                if directive_type == "tone_adjustment":
+                    # Update session context with tone directive
+                    self.sessions[session_id]["current_context"]["tone_directive"] = action
+                
+                elif directive_type == "memory_reinforcement":
+                    # Add explicit memory
+                    await self.memory_core.add_memory(
+                        memory_text=directive.get("content", ""),
+                        memory_type="observation",
+                        memory_scope="user",
+                        significance=7,
+                        tags=["nyx2_reinforcement"],
+                        metadata={
+                            "source": "nyx2_directive",
+                            "timestamp": learning.get("timestamp"),
+                            "session_id": session_id
+                        }
+                    )
+    
+    async def _process_general_learning(self, learning: Dict[str, Any]) -> None:
+        """Process general learning that doesn't match other categories."""
+        # Default processing for any learning
+        content = learning.get("content", "")
+        
+        # Store in memory with appropriate tags
+        await self.memory_core.add_memory(
+            memory_text=content,
+            memory_type="observation",
+            memory_scope="global",
+            significance=4,  # Lower significance for general learning
+            tags=["learning_event"],
+            metadata={
+                "source": learning.get("source", "unknown"),
+                "timestamp": learning.get("timestamp"),
+                "session_id": learning.get("session_id"),
+                "trigger": learning.get("trigger", "general")
+            }
+        )
+
     async def generate_response_parallel(self, 
                                      user_input: str, 
                                      context: Dict[str, Any] = None) -> Dict[str, Any]:
