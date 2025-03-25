@@ -227,6 +227,118 @@ class MemoryOrchestrator:
             return result.final_output
     
     # Convenience methods for common operations
+
+    async def retrieve_memories_parallel(self, 
+                                      query: str, 
+                                      memory_types: List[str] = None,
+                                      limit_per_type: int = 3) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Retrieve memories of different types in parallel
+        
+        Args:
+            query: Search query
+            memory_types: List of memory types to retrieve
+            limit_per_type: Maximum number of memories per type
+            
+        Returns:
+            Dictionary of memories by type
+        """
+        if not self.memory_core.initialized:
+            await self.memory_core.initialize()
+        
+        # Default memory types if not specified
+        if memory_types is None:
+            memory_types = ["observation", "reflection", "abstraction", "experience"]
+        
+        # Create tasks for each memory type
+        tasks = {}
+        for memory_type in memory_types:
+            tasks[memory_type] = asyncio.create_task(
+                self.memory_core.retrieve_memories(
+                    query=query,
+                    memory_types=[memory_type],
+                    limit=limit_per_type
+                )
+            )
+        
+        # Wait for all tasks to complete
+        results = {}
+        for memory_type, task in tasks.items():
+            try:
+                memories = await task
+                results[memory_type] = memories
+            except Exception as e:
+                logger.error(f"Error retrieving {memory_type} memories: {str(e)}")
+                results[memory_type] = []
+        
+        return results
+    
+    async def retrieve_memories_with_prioritization(self,
+                                                 query: str,
+                                                 memory_types: List[str] = None,
+                                                 prioritization: Dict[str, float] = None,
+                                                 limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        Retrieve memories with type prioritization
+        
+        Args:
+            query: Search query
+            memory_types: List of memory types to retrieve
+            prioritization: Priority weights for each memory type
+            limit: Total number of memories to return
+            
+        Returns:
+            List of memories prioritized by type
+        """
+        # Retrieve memories in parallel
+        memories_by_type = await self.retrieve_memories_parallel(
+            query=query,
+            memory_types=memory_types,
+            limit_per_type=max(1, limit // (len(memory_types) if memory_types else 1))
+        )
+        
+        # Default prioritization if not provided
+        if prioritization is None:
+            prioritization = {
+                "experience": 0.4,
+                "reflection": 0.3,
+                "abstraction": 0.2,
+                "observation": 0.1
+            }
+        
+        # Calculate allocated slots based on prioritization
+        total_priority = sum(prioritization.values())
+        allocated_slots = {}
+        
+        for memory_type, priority in prioritization.items():
+            # Skip if memory type wasn't retrieved
+            if memory_type not in memories_by_type:
+                continue
+                
+            # Calculate allocated slots proportionally
+            allocated_slots[memory_type] = max(1, int(round((priority / total_priority) * limit)))
+        
+        # Ensure we don't exceed total limit
+        while sum(allocated_slots.values()) > limit:
+            # Find type with most slots and reduce by 1
+            max_type = max(allocated_slots.items(), key=lambda x: x[1])[0]
+            allocated_slots[max_type] -= 1
+        
+        # Combine memories according to allocation
+        combined_memories = []
+        
+        for memory_type, slot_count in allocated_slots.items():
+            # Get available memories for this type
+            available_memories = memories_by_type.get(memory_type, [])
+            
+            # Take up to allocated slot count
+            combined_memories.extend(available_memories[:slot_count])
+        
+        # Sort by relevance
+        combined_memories.sort(key=lambda x: x.get("relevance", 0), reverse=True)
+        
+        # Limit to requested number
+        return combined_memories[:limit]
     
     async def retrieve_memories(self, query: str, memory_types: List[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
         """Retrieve memories matching a query"""
