@@ -470,3 +470,71 @@ class NyxAgentSession:
                 
             except Exception as e:
                 logger.warning(f"Heartbeat failed: {e}")
+    
+    async def validate_action(self, action_type: str, action_data: Dict[str, Any]) -> bool:
+        """Validate critical actions with the brain before execution."""
+        try:
+            # Get validation from brain
+            validation_result = await self._brain_request(
+                "validate_action",
+                {
+                    "session_id": self.session_id,
+                    "action_type": action_type,
+                    "action_data": action_data,
+                    "timestamp": datetime.datetime.now().isoformat()
+                }
+            )
+            
+            return validation_result.get("valid", False)
+        except Exception as e:
+            logger.error(f"Error validating action with brain: {e}")
+            # Default to rejecting the action if validation fails
+            return False
+    
+    # Modify process_user_input to validate critical actions
+    async def process_user_input(self, user_input: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        # Existing code...
+        
+        # Check for critical actions that need validation
+        if self._is_critical_action(result):
+            action_data = {
+                "user_input": user_input,
+                "result": result,
+                "context": context
+            }
+            
+            # Validate action with brain
+            is_valid = await self.validate_action("response_generation", action_data)
+            
+            if not is_valid:
+                # Action rejected by brain, generate safe fallback
+                result = await self._generate_safe_fallback(user_input, context)
+        
+        return result
+    
+    def _is_critical_action(self, result: Dict[str, Any]) -> bool:
+        """Determine if an action is critical and needs brain validation."""
+        # Check for potential risky actions
+        if "response_type" in result and result["response_type"] in ["critical", "sensitive", "high_risk"]:
+            return True
+        
+        # Check for content sensitivity
+        if "content_sensitivity" in result and result["content_sensitivity"] >= 0.7:
+            return True
+        
+        # Check for user model changes
+        if "user_model_updates" in result and result["user_model_updates"]:
+            return True
+            
+        return False
+    
+    async def _generate_safe_fallback(self, user_input: str, context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Generate a safe fallback when a critical action is rejected."""
+        # Generate a non-committal, safe response
+        safe_result = {
+            "message": "I'd like to better understand your request before proceeding. Could you provide more context?",
+            "response_type": "clarification",
+            "emotional_state": self.emotional_state
+        }
+        
+        return safe_result
