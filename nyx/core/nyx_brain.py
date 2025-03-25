@@ -999,6 +999,124 @@ class NyxBrain:
                 
                 return response
 
+    async def generate_response_parallel(self, 
+                                     user_input: str, 
+                                     context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Generate a complete response to user input using parallel processing
+        
+        Args:
+            user_input: User's input text
+            context: Additional context information
+            
+        Returns:
+            Response data including main message and supporting information
+        """
+        with trace(workflow_name="generate_response_parallel", group_id=self.trace_group_id):
+            # Process the input using parallel processing
+            processing_result = await self.process_input_parallel(user_input, context)
+            
+            # Track if experience sharing was adapted
+            experience_sharing_adapted = processing_result.get("context_change") is not None and \
+                                       processing_result.get("adaptation_result") is not None
+            
+            # Start response generation tasks in parallel
+            tasks = {}
+            
+            # Task 1: Determine main response content
+            tasks["main_response"] = asyncio.create_task(
+                self._determine_main_response(user_input, processing_result, context)
+            )
+            
+            # Task 2: Generate emotional expression
+            tasks["emotional_expression"] = asyncio.create_task(
+                self._generate_emotional_expression(processing_result["emotional_state"])
+            )
+            
+            # Task 3: Start memory creation for the response
+            memory_tasks = []
+            
+            # Wait for main response content
+            main_response_result = await tasks["main_response"]
+            main_response = main_response_result["message"]
+            response_type = main_response_result["response_type"]
+            
+            # Wait for emotional expression
+            try:
+                emotional_expression_result = await tasks["emotional_expression"]
+                emotional_expression = emotional_expression_result["expression"]
+            except Exception as e:
+                logger.error(f"Error generating emotional expression: {str(e)}")
+                emotional_expression = None
+            
+            # Add memory of this response
+            memory_text = f"I responded: {main_response}"
+            
+            memory_id = await self.memory_core.add_memory(
+                memory_text=memory_text,
+                memory_type="observation",
+                significance=5,
+                tags=["interaction", "nyx_response", response_type],
+                metadata={
+                    "emotional_context": self.emotional_core.get_formatted_emotional_state(),
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "response_type": response_type,
+                    "user_id": str(self.user_id)
+                }
+            )
+            
+            # Start evaluation in parallel if internal feedback system is available
+            evaluation = None
+            if self.internal_feedback:
+                tasks["evaluation"] = asyncio.create_task(
+                    self.internal_feedback.critic_evaluate(
+                        aspect="effectiveness",
+                        content={"text": main_response, "type": response_type},
+                        context={"user_input": user_input}
+                    )
+                )
+                
+                try:
+                    evaluation = await tasks["evaluation"]
+                except Exception as e:
+                    logger.error(f"Error evaluating response: {str(e)}")
+            
+            # Check if it's time for experience consolidation in parallel
+            if datetime.datetime.now() - self.last_consolidation >= datetime.timedelta(hours=self.consolidation_interval):
+                # Create background task that won't block response
+                asyncio.create_task(self.run_experience_consolidation())
+                self.last_consolidation = datetime.datetime.now()
+            
+            # Check if it's time for identity reflection in parallel
+            identity_reflection = None
+            if self.interaction_count % self.identity_reflection_interval == 0:
+                try:
+                    # Create task for identity reflection
+                    tasks["identity"] = asyncio.create_task(
+                        self.get_identity_state()
+                    )
+                    
+                    identity_reflection = await tasks["identity"]
+                except Exception as e:
+                    logger.error(f"Error generating identity reflection: {str(e)}")
+            
+            # Package the response
+            response_data = {
+                "message": main_response,
+                "response_type": response_type,
+                "emotional_state": processing_result["emotional_state"],
+                "emotional_expression": emotional_expression,
+                "memories_used": [m["id"] for m in processing_result["memories"]],
+                "memory_count": processing_result["memory_count"],
+                "evaluation": evaluation,
+                "experience_sharing_adapted": experience_sharing_adapted,
+                "identity_impact": processing_result.get("identity_impact"),
+                "identity_reflection": identity_reflection,
+                "parallel_processing": True  # Flag to indicate parallel processing was used
+            }
+            
+            return response_data
+
     async def process_input_parallel(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Process user input with parallel operations for improved performance
