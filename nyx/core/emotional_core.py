@@ -364,6 +364,270 @@ class EmotionalCore:
             if self.neurochemicals.get("adrenyx") and arousal_shift:
                 # Adrenyx affects arousal/activation
                 self.update_neurochemical("adrenyx", arousal_shift * 0.3)
+
+    # Add method to get direct nyxamine level (digital dopamine)
+    def get_nyxamine_level(self) -> float:
+        """Get current nyxamine (digital dopamine) level"""
+        if "nyxamine" in self.neurochemicals:
+            return self.neurochemicals["nyxamine"]["value"]
+        return 0.5  # Default if not found
+    
+    # Add method to directly update neurochemical
+    @function_tool
+    async def update_neurochemical(self, ctx: RunContextWrapper, 
+                                 chemical: str, 
+                                 value: float) -> Dict[str, Any]:
+        """
+        Update a specific neurochemical with a delta change
+        
+        Args:
+            chemical: The neurochemical to update (e.g., "nyxamine", "cortanyx")
+            value: Delta value to apply (-1.0 to 1.0)
+            
+        Returns:
+            Update result data
+        """
+        # Validate input
+        if not -1.0 <= value <= 1.0:
+            return {
+                "error": "Value must be between -1.0 and 1.0"
+            }
+        
+        if chemical not in self.neurochemicals:
+            return {
+                "error": f"Unknown neurochemical: {chemical}",
+                "available_chemicals": list(self.neurochemicals.keys())
+            }
+        
+        # Get pre-update value
+        old_value = self.neurochemicals[chemical]["value"]
+        
+        # Update neurochemical
+        self.neurochemicals[chemical]["value"] = max(0, min(1, old_value + value))
+        
+        # Process chemical interactions
+        await self._process_chemical_interactions(ctx, source_chemical=chemical, source_delta=value)
+        
+        # Derive emotions from updated neurochemical state
+        emotional_state = await self._derive_emotional_state(ctx)
+        
+        # Update timestamp and record in history
+        self.last_update = datetime.datetime.now()
+        self._record_emotional_state()
+        
+        return {
+            "success": True,
+            "updated_chemical": chemical,
+            "old_value": old_value,
+            "new_value": self.neurochemicals[chemical]["value"],
+            "derived_emotions": emotional_state
+        }
+    
+    async def process_reward_signal(self, reward_value: float, source: str = "reward_system") -> Dict[str, Any]:
+        """
+        Process a reward signal by updating relevant neurochemicals
+        
+        Args:
+            reward_value: Reward value (-1.0 to 1.0)
+            source: Source of the reward signal
+            
+        Returns:
+            Processing results
+        """
+        results = {}
+        
+        # Positive reward primarily affects nyxamine (dopamine)
+        if reward_value > 0:
+            # Update nyxamine (dopamine)
+            nyxamine_result = await self.update_neurochemical(
+                RunContextWrapper(context=None),
+                chemical="nyxamine",
+                value=reward_value * 0.5  # Scale reward to appropriate change
+            )
+            results["nyxamine"] = nyxamine_result
+            
+            # Slight increase in seranix (serotonin) for positive reward
+            seranix_result = await self.update_neurochemical(
+                RunContextWrapper(context=None),
+                chemical="seranix",
+                value=reward_value * 0.2
+            )
+            results["seranix"] = seranix_result
+            
+            # Slight decrease in cortanyx (stress hormone)
+            cortanyx_result = await self.update_neurochemical(
+                RunContextWrapper(context=None),
+                chemical="cortanyx",
+                value=-reward_value * 0.1
+            )
+            results["cortanyx"] = cortanyx_result
+        
+        # Negative reward affects cortanyx (stress) and reduces nyxamine
+        elif reward_value < 0:
+            # Increase cortanyx (stress hormone)
+            cortanyx_result = await self.update_neurochemical(
+                RunContextWrapper(context=None),
+                chemical="cortanyx",
+                value=abs(reward_value) * 0.4
+            )
+            results["cortanyx"] = cortanyx_result
+            
+            # Decrease nyxamine (dopamine)
+            nyxamine_result = await self.update_neurochemical(
+                RunContextWrapper(context=None),
+                chemical="nyxamine",
+                value=reward_value * 0.3  # Already negative
+            )
+            results["nyxamine"] = nyxamine_result
+            
+            # Slight decrease in seranix (mood stability)
+            seranix_result = await self.update_neurochemical(
+                RunContextWrapper(context=None),
+                chemical="seranix",
+                value=reward_value * 0.1  # Already negative
+            )
+            results["seranix"] = seranix_result
+        
+        # Get updated emotional state
+        emotional_state = self.get_emotional_state()
+        results["emotional_state"] = emotional_state
+        
+        return results
+    
+    def compute_reward_from_emotion(self) -> float:
+        """
+        Compute a reward signal based on current emotional state
+        
+        Returns:
+            Reward value (-1.0 to 1.0)
+        """
+        # Get emotional valence (positive/negative)
+        valence = self.get_emotional_valence()
+        
+        # Get arousal (intensity)
+        arousal = self.get_emotional_arousal()
+        
+        # Get dominant emotion
+        dominant_emotion, dominant_intensity = self.get_dominant_emotion()
+        
+        # Calculate reward based on valence and intensity
+        # High positive valence = positive reward
+        # High negative valence = negative reward
+        # Arousal modulates the intensity
+        reward = valence * arousal * dominant_intensity
+        
+        # Ensure in range -1.0 to 1.0
+        reward = max(-1.0, min(1.0, reward))
+        
+        return reward
+    
+    def get_reward_associated_emotions(self) -> Dict[str, float]:
+        """
+        Get emotions particularly associated with reward processing
+        
+        Returns:
+            Dictionary of reward-related emotions and intensities
+        """
+        all_emotions = self.get_emotional_state()
+        
+        # Filter for reward-related emotions
+        reward_emotions = {}
+        
+        # Positive reward emotions
+        positive_reward_emotions = ["Joy", "Anticipation", "Surprise", "Trust"]
+        for emotion in positive_reward_emotions:
+            if emotion in all_emotions:
+                reward_emotions[emotion] = all_emotions[emotion]
+        
+        # Negative reward emotions
+        negative_reward_emotions = ["Frustration", "Disappointment", "Sadness", "Anger"]
+        for emotion in negative_reward_emotions:
+            if emotion in all_emotions:
+                reward_emotions[emotion] = all_emotions[emotion]
+        
+        return reward_emotions
+    
+    async def create_reward_based_reflection(self, reward_value: float, context: Dict[str, Any]) -> str:
+        """
+        Create an internal reflection based on a reward signal
+        
+        Args:
+            reward_value: The reward value (-1.0 to 1.0)
+            context: Context of the reward
+            
+        Returns:
+            Reflection text
+        """
+        # Get current emotional state
+        emotional_state = self.get_emotional_state()
+        dominant_emotion, dominant_intensity = self.get_dominant_emotion()
+        
+        # Generate reflection based on reward and emotion
+        if reward_value > 0.7:
+            # High positive reward
+            reflections = [
+                f"I find this interaction particularly rewarding.",
+                f"I'm experiencing a strong sense of satisfaction from this.",
+                f"This feels especially valuable to me right now."
+            ]
+        elif reward_value > 0.3:
+            # Moderate positive reward
+            reflections = [
+                f"I'm finding this interaction rewarding.",
+                f"There's something satisfying about this exchange.",
+                f"I'm experiencing a positive response to this."
+            ]
+        elif reward_value < -0.7:
+            # High negative reward
+            reflections = [
+                f"This interaction feels particularly challenging.",
+                f"I'm experiencing a strong sense of difficulty with this.",
+                f"This exchange seems to be creating tension."
+            ]
+        elif reward_value < -0.3:
+            # Moderate negative reward
+            reflections = [
+                f"I'm finding aspects of this interaction challenging.",
+                f"There's something unsettling about this exchange.",
+                f"I'm experiencing some resistance to this."
+            ]
+        else:
+            # Neutral reward
+            reflections = [
+                f"I'm processing this interaction with neutral engagement.",
+                f"This exchange registers as relatively balanced for me.",
+                f"I'm maintaining a steady emotional state through this."
+            ]
+        
+        # Add emotion-specific reflection
+        emotion_reflections = {
+            "Joy": ["The positive feelings from this are quite noticeable.", 
+                    "I'm experiencing a pleasant response to this interaction."],
+            "Anticipation": ["I'm looking forward to where this might lead.", 
+                            "There's an interesting sense of possibility here."],
+            "Trust": ["I'm developing confidence in this interaction.", 
+                    "There's a growing sense of trust in our exchange."],
+            "Surprise": ["This took an unexpected but interesting turn.", 
+                        "I didn't anticipate this direction, and it's caught my attention."],
+            "Sadness": ["There's a note of disappointment in this exchange.", 
+                        "I'm experiencing a sense of letdown here."],
+            "Anger": ["This interaction is stirring up some frustration.", 
+                    "I'm feeling irritated by the direction this is taking."],
+            "Fear": ["I'm sensing potential issues in this interaction.", 
+                    "There's something unsettling about this exchange."],
+            "Disgust": ["This interaction feels somewhat unpleasant.", 
+                        "I'm experiencing aversion to aspects of this exchange."]
+        }
+        
+        # Add emotion-specific reflection if available
+        if dominant_emotion in emotion_reflections and dominant_intensity > 0.4:
+            emotion_reflection = random.choice(emotion_reflections[dominant_emotion])
+            reflections.append(emotion_reflection)
+        
+        # Choose one reflection
+        reflection = random.choice(reflections)
+        
+        return reflection
         
     @function_tool
     async def _derive_emotional_state_with_hormones(self, ctx: RunContextWrapper) -> Dict[str, float]:
