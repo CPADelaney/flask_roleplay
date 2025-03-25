@@ -3689,5 +3689,64 @@ async def process_user_input_enhanced(self, user_input: str, context: Dict[str, 
             "adaptation_result": adaptation_result
         }
 
+    async def _determine_main_response(self, 
+                                   user_input: str, 
+                                   processing_result: Dict[str, Any],
+                                   context: Dict[str, Any]) -> Dict[str, str]:
+        """Determine the main response content based on processing results"""
+        # Determine if experience response should be used
+        if processing_result["has_experience"]:
+            main_response = processing_result["experience_response"]
+            response_type = "experience"
+            
+            # If it's a cross-user experience, mark it
+            if processing_result.get("cross_user_experience", False):
+                response_type = "cross_user_experience"
+        else:
+            # For reasoning-related queries, use the reasoning agents
+            if self._is_reasoning_query(user_input):
+                try:
+                    reasoning_result = await Runner.run(
+                        reasoning_triage_agent,
+                        user_input
+                    )
+                    main_response = reasoning_result.final_output
+                    response_type = "reasoning"
+                except Exception as e:
+                    logger.error(f"Error in reasoning response: {str(e)}")
+                    # Fallback to standard response
+                    main_response = "I understand your question and would like to reason through it with you."
+                    response_type = "standard"
+            else:
+                # No specific experience to share, generate standard response
+                # In a real implementation, this would be more sophisticated
+                main_response = "I acknowledge your message and have processed it through my systems."
+                response_type = "standard"
+        
+        return {
+            "message": main_response,
+            "response_type": response_type
+        }
+    
+    async def _generate_emotional_expression(self, emotional_state: Dict[str, float]) -> Dict[str, Any]:
+        """Generate emotional expression based on emotional state"""
+        # Determine if emotion should be expressed
+        should_express_emotion = self.emotional_core.should_express_emotion()
+        emotional_expression = None
+        
+        if should_express_emotion:
+            try:
+                expression_result = await self.emotional_core.generate_emotional_expression(force=False)
+                if expression_result.get("expressed", False):
+                    emotional_expression = expression_result.get("expression", "")
+            except Exception as e:
+                logger.error(f"Error generating emotional expression: {str(e)}")
+                emotional_expression = self.emotional_core.get_expression_for_emotion()
+        
+        return {
+            "expression": emotional_expression,
+            "should_express": should_express_emotion
+        }
+
 # For backward compatibility in case directly imported
 NyxBrainInstance = NyxBrain
