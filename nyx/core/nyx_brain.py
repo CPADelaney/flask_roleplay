@@ -655,6 +655,119 @@ class NyxBrain:
         self.cross_user_enabled = True
         self.cross_user_sharing_threshold = 0.7
 
+        self.error_registry = {
+            "unhandled_errors": [],
+            "handled_errors": [],
+            "error_counts": {},
+            "error_recovery_strategies": {},
+            "error_recovery_stats": {}
+        }
+    
+    async def register_error(self, error_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Register an error from any component for central management."""
+        # Extract error information
+        error_type = error_data.get("error_type", "unknown")
+        error_message = error_data.get("error_message", "")
+        component = error_data.get("component", "unknown")
+        context = error_data.get("context", {})
+        severity = error_data.get("severity", "medium")  # low, medium, high, critical
+        
+        # Create error record
+        error_record = {
+            "error_type": error_type,
+            "error_message": error_message,
+            "component": component,
+            "context": context,
+            "severity": severity,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "handled": False,
+            "recovery_action": None,
+            "recovery_success": None
+        }
+        
+        # Update error counts
+        if error_type not in self.error_registry["error_counts"]:
+            self.error_registry["error_counts"][error_type] = 0
+        self.error_registry["error_counts"][error_type] += 1
+        
+        # Check if we have a recovery strategy
+        recovery_success = False
+        if error_type in self.error_registry["error_recovery_strategies"]:
+            try:
+                # Execute recovery strategy
+                recovery_strategy = self.error_registry["error_recovery_strategies"][error_type]
+                recovery_result = await self._execute_recovery_strategy(recovery_strategy, error_record)
+                
+                # Update error record
+                error_record["handled"] = True
+                error_record["recovery_action"] = recovery_strategy["name"]
+                error_record["recovery_success"] = recovery_result["success"]
+                recovery_success = recovery_result["success"]
+                
+                # Update recovery stats
+                if error_type not in self.error_registry["error_recovery_stats"]:
+                    self.error_registry["error_recovery_stats"][error_type] = {
+                        "attempts": 0,
+                        "successes": 0
+                    }
+                self.error_registry["error_recovery_stats"][error_type]["attempts"] += 1
+                if recovery_result["success"]:
+                    self.error_registry["error_recovery_stats"][error_type]["successes"] += 1
+                
+                # Add to handled errors
+                self.error_registry["handled_errors"].append(error_record)
+            except Exception as e:
+                # Failed to execute recovery strategy
+                error_record["recovery_error"] = str(e)
+                self.error_registry["unhandled_errors"].append(error_record)
+        else:
+            # No recovery strategy available
+            self.error_registry["unhandled_errors"].append(error_record)
+        
+        # If critical error, trigger immediate handling
+        if severity == "critical" and not recovery_success:
+            await self._handle_critical_error(error_record)
+        
+        # Clean up old errors
+        self._clean_up_error_registry()
+        
+        return {
+            "registered": True,
+            "handled": error_record["handled"],
+            "recovery_success": error_record["recovery_success"]
+        }
+    
+    async def _execute_recovery_strategy(self, strategy: Dict[str, Any], error_record: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a recovery strategy for an error."""
+        strategy_type = strategy["type"]
+        
+        if strategy_type == "retry":
+            # Retry the operation
+            return await self._execute_retry_strategy(strategy, error_record)
+        elif strategy_type == "fallback":
+            # Use fallback mechanism
+            return await self._execute_fallback_strategy(strategy, error_record)
+        elif strategy_type == "reset":
+            # Reset component
+            return await self._execute_reset_strategy(strategy, error_record)
+        else:
+            return {"success": False, "message": f"Unknown strategy type: {strategy_type}"}
+    
+    # Implement recovery strategy methods...
+    
+    async def register_recovery_strategy(self, error_type: str, strategy: Dict[str, Any]) -> Dict[str, Any]:
+        """Register a recovery strategy for an error type."""
+        self.error_registry["error_recovery_strategies"][error_type] = strategy
+        return {"registered": True}
+    
+    def _clean_up_error_registry(self) -> None:
+        """Clean up old errors from the registry."""
+        # Keep only the latest 1000 errors
+        if len(self.error_registry["unhandled_errors"]) > 1000:
+            self.error_registry["unhandled_errors"] = self.error_registry["unhandled_errors"][-1000:]
+        if len(self.error_registry["handled_errors"]) > 1000:
+            self.error_registry["handled_errors"] = self.error_registry["handled_errors"][-1000:]
+
     async def initialize_reflexive_system(brain):
         """Initialize reflexive system integration with NyxBrain"""
         brain.reflexive_system = ReflexiveSystem(brain.agent_enhanced_memory)
@@ -822,75 +935,6 @@ class NyxBrain:
             )
             
             return result
-
-    async def validate_action(self, session_id: str, action_type: str, action_data: Dict[str, Any], timestamp: str) -> Dict[str, bool]:
-        """Validate critical actions from sessions before execution."""
-        # Initialize validation trackers if needed
-        if not hasattr(self, "validation_history"):
-            self.validation_history = []
-        
-        # Create validation record
-        validation_record = {
-            "session_id": session_id,
-            "action_type": action_type,
-            "action_data": action_data,
-            "timestamp": timestamp,
-            "decision": None,
-            "reasoning": None
-        }
-        
-        # Determine if action is valid
-        is_valid = True
-        reasoning = ""
-        
-        # Different validation logic based on action type
-        if action_type == "response_generation":
-            is_valid, reasoning = await self._validate_response_generation(action_data)
-        elif action_type == "user_model_update":
-            is_valid, reasoning = await self._validate_user_model_update(action_data)
-        elif action_type == "system_configuration":
-            is_valid, reasoning = await self._validate_system_configuration(action_data)
-        # Handle other action types...
-        
-        # Update validation record
-        validation_record["decision"] = is_valid
-        validation_record["reasoning"] = reasoning
-        
-        # Store in history
-        self.validation_history.append(validation_record)
-        
-        # Trim history if needed
-        if len(self.validation_history) > 1000:
-            self.validation_history = self.validation_history[-1000:]
-        
-        return {
-            "valid": is_valid,
-            "reasoning": reasoning
-        }
-    
-    async def _validate_response_generation(self, action_data: Dict[str, Any]) -> Tuple[bool, str]:
-        """Validate response generation actions."""
-        # Extract data
-        result = action_data.get("result", {})
-        user_input = action_data.get("user_input", "")
-        context = action_data.get("context", {})
-        
-        # Check for potentially harmful content
-        if "message" in result:
-            # Analyze message for problematic content
-            content_analysis = await self._analyze_content_safety(result["message"])
-            
-            if content_analysis["risk_level"] >= 0.8:
-                return False, f"Content safety risk: {content_analysis['risk_type']}"
-        
-        # Check for alignment with user preferences
-        if hasattr(self, "user_model") and self.user_model:
-            preference_alignment = await self.user_model.check_preference_alignment(result)
-            
-            if preference_alignment["score"] < 0.5:
-                return False, f"Low preference alignment: {preference_alignment['reason']}"
-        
-        return True, "Action validated"
 
     async def validate_action(self, session_id: str, action_type: str, action_data: Dict[str, Any], timestamp: str) -> Dict[str, bool]:
         """Validate critical actions from sessions before execution."""
