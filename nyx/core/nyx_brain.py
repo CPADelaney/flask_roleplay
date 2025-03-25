@@ -13,6 +13,9 @@ from agents import Agent, Runner, trace, function_tool, handoff, RunContextWrapp
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from pydantic import BaseModel, Field
 
+from nyx.core.distributed_processing import DistributedProcessingManager
+from nyx.core.prediction_engine import PredictionEngine
+
 from issue_tracking_system import IssueTrackingSystem
 
 # Import core systems
@@ -573,6 +576,8 @@ class NyxBrain:
         self.experience_consolidation = None
         self.cross_user_manager = None
         self.reflexive_system = None
+        self.distributed_processing = DistributedProcessingManager(max_parallel_tasks=10)
+        self.prediction_engine = PredictionEngine() 
     
         # State tracking
         self.initialized = False
@@ -1333,6 +1338,377 @@ class NyxBrain:
                 context=f"User input: '{user_input}'"
             )
 
+    async def process_input_auto(self, 
+                              user_input: str, 
+                              context: Dict[str, Any] = None,
+                              processing_mode: str = "auto") -> Dict[str, Any]:
+        """
+        Process user input using automatically selected or specified processing mode
+        
+        Args:
+            user_input: User's input text
+            context: Additional context information
+            processing_mode: Processing mode ("serial", "parallel", "distributed", or "auto")
+            
+        Returns:
+            Processing results
+        """
+        # Default context
+        context = context or {}
+        
+        # Determine processing mode if auto
+        if processing_mode == "auto":
+            processing_mode = self._determine_processing_mode(user_input, context)
+        
+        # Process using the appropriate method
+        if processing_mode == "parallel":
+            return await self.process_input_parallel(user_input, context)
+        elif processing_mode == "distributed":
+            return await self.process_input_distributed(user_input, context)
+        else:  # Default to serial
+            return await self.process_input(user_input, context)
+    
+    def _determine_processing_mode(self, user_input: str, context: Dict[str, Any]) -> str:
+        """
+        Determine the optimal processing mode based on input and context
+        
+        Args:
+            user_input: User's input text
+            context: Additional context information
+            
+        Returns:
+            Processing mode to use
+        """
+        # Define thresholds
+        input_length_threshold = 100  # Characters
+        complexity_threshold = 0.6  # Arbitrary complexity score
+        
+        # Calculate complexity score based on input and context
+        complexity_score = 0.0
+        
+        # 1. Input length
+        input_length_factor = min(1.0, len(user_input) / 500.0)  # Normalize to [0,1]
+        complexity_score += input_length_factor * 0.3  # 30% weight
+        
+        # 2. Content complexity
+        # Simple estimation based on unique words, punctuation, etc.
+        words = user_input.lower().split()
+        unique_words = len(set(words))
+        word_complexity = min(1.0, unique_words / 50.0)  # Normalize to [0,1]
+        
+        punctuation_count = sum(1 for c in user_input if c in "?!.,;:()[]{}\"'")
+        punctuation_complexity = min(1.0, punctuation_count / 20.0)  # Normalize to [0,1]
+        
+        content_complexity = (word_complexity * 0.7 + punctuation_complexity * 0.3)
+        complexity_score += content_complexity * 0.3  # 30% weight
+        
+        # 3. Context complexity
+        context_complexity = 0.0
+        if context:
+            context_complexity = min(1.0, len(str(context)) / 1000.0)  # Simple approximation
+        complexity_score += context_complexity * 0.2  # 20% weight
+        
+        # 4. History/state complexity
+        history_complexity = min(1.0, self.interaction_count / 50.0)
+        complexity_score += history_complexity * 0.2  # 20% weight
+        
+        # Select mode based on complexity score
+        if complexity_score < 0.4:
+            # Low complexity, use serial processing
+            return "serial"
+        elif complexity_score < 0.7:
+            # Medium complexity, use parallel processing
+            return "parallel"
+        else:
+            # High complexity, use distributed processing
+            return "distributed"
+
+    async def process_input_distributed(self, 
+                                    user_input: str, 
+                                    context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process user input using fully distributed processing
+        
+        Distributes cognitive processing across multiple subsystems in parallel,
+        with dynamic resource allocation and dependency resolution.
+        
+        Args:
+            user_input: User's input text
+            context: Additional context information
+            
+        Returns:
+            Processing results with relevant memories, emotional state, etc.
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        with trace(workflow_name="process_input_distributed", group_id=self.trace_group_id):
+            start_time = datetime.datetime.now()
+            
+            # Initialize context
+            context = context or {}
+            
+            # Add user_id to context if not present
+            if "user_id" not in context:
+                context["user_id"] = str(self.user_id)
+            
+            # Set up the distributed processing manager
+            manager = self.distributed_processing
+            
+            # 1. Register emotional processing task (no dependencies)
+            manager.register_task(
+                task_id="emotional_processing",
+                subsystem_name="emotional_core",
+                coroutine=self._process_emotional_impact(user_input, context),
+                priority=3,
+                group="emotion"
+            )
+            
+            # 2. Register meta-cognitive cycle task (no dependencies)
+            if self.meta_core:
+                meta_context = context.copy()
+                meta_context["user_input"] = user_input
+                
+                manager.register_task(
+                    task_id="meta_cycle",
+                    subsystem_name="meta_core",
+                    coroutine=self.meta_core.cognitive_cycle(meta_context),
+                    priority=1,
+                    group="meta"
+                )
+            
+            # 3. Register prediction task
+            if self.prediction_engine:
+                prediction_input = {
+                    "context": context.copy(),
+                    "user_input": user_input,
+                    "cycle": self.interaction_count
+                }
+                
+                manager.register_task(
+                    task_id="prediction",
+                    subsystem_name="prediction_engine",
+                    coroutine=self.prediction_engine.generate_prediction(prediction_input),
+                    priority=2,
+                    group="meta"
+                )
+            
+            # 4. Register memory retrieval task (depends on emotional processing)
+            manager.register_task(
+                task_id="memory_retrieval",
+                subsystem_name="memory_orchestrator",
+                coroutine=self._retrieve_memories_placeholder(user_input, context),
+                dependencies=["emotional_processing"],
+                priority=3,
+                group="memory"
+            )
+            
+            # 5. Register experience check task (no dependencies)
+            manager.register_task(
+                task_id="experience_check",
+                subsystem_name="experience_interface",
+                coroutine=self._check_experience_sharing(user_input, context),
+                priority=2,
+                group="memory"
+            )
+            
+            # 6. Register experience sharing task (depends on experience check and emotional processing)
+            manager.register_task(
+                task_id="experience_sharing",
+                subsystem_name="experience_interface",
+                coroutine=self._share_experience_placeholder(user_input, context),
+                dependencies=["experience_check", "emotional_processing"],
+                priority=2,
+                group="memory"
+            )
+            
+            # 7. Register memory storage task (no dependencies)
+            memory_text = f"User said: {user_input}"
+            manager.register_task(
+                task_id="memory_storage",
+                subsystem_name="memory_core",
+                coroutine=self.memory_core.add_memory(
+                    memory_text=memory_text,
+                    memory_type="observation",
+                    significance=5,
+                    tags=["interaction", "user_input"],
+                    metadata={
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "user_id": str(self.user_id)
+                    }
+                ),
+                priority=1,
+                group="memory"
+            )
+            
+            # 8. Register adaptation task (depends on multiple tasks)
+            manager.register_task(
+                task_id="adaptation",
+                subsystem_name="dynamic_adaptation",
+                coroutine=self._process_adaptation_placeholder(user_input, context),
+                dependencies=["emotional_processing", "experience_sharing", "memory_retrieval"],
+                priority=1,
+                group="adaptation"
+            )
+            
+            # 9. Register identity impact task (depends on experience sharing)
+            manager.register_task(
+                task_id="identity_impact",
+                subsystem_name="identity_evolution",
+                coroutine=self._process_identity_impact_placeholder(user_input, context),
+                dependencies=["experience_sharing"],
+                priority=1,
+                group="reflection"
+            )
+            
+            # Execute all tasks with dependency resolution
+            results = await manager.execute_tasks()
+            
+            # Process results from each task
+            emotional_state = results.get("emotional_processing", {}).get("emotional_state", {})
+            memories = results.get("memory_retrieval", [])
+            memory_id = results.get("memory_storage", "")
+            experience_result = results.get("experience_sharing", {"has_experience": False})
+            adaptation_result = results.get("adaptation", {})
+            identity_impact = results.get("identity_impact", None)
+            meta_result = results.get("meta_cycle", {})
+            prediction_result = results.get("prediction", {})
+            
+            # Update context change info
+            context_change_result = adaptation_result.get("context_change")
+            adaptation_cycle_result = adaptation_result.get("adaptation_result")
+            
+            # Update interaction tracking
+            self.last_interaction = datetime.datetime.now()
+            self.interaction_count += 1
+            
+            # Calculate response time
+            end_time = datetime.datetime.now()
+            response_time = (end_time - start_time).total_seconds()
+            self.performance_metrics["response_times"].append(response_time)
+            
+            # Performance metrics from distributed processing
+            performance_metrics = results.get("_performance", {})
+            
+            # Return processing results in a structured format
+            result = {
+                "user_input": user_input,
+                "emotional_state": emotional_state,
+                "memories": memories,
+                "memory_count": len(memories) if isinstance(memories, list) else 0,
+                "has_experience": experience_result["has_experience"] if experience_result else False,
+                "experience_response": experience_result.get("response_text", None) if experience_result else None,
+                "cross_user_experience": experience_result.get("cross_user", False) if experience_result else False,
+                "memory_id": memory_id,
+                "response_time": response_time,
+                "context_change": context_change_result,
+                "adaptation_result": adaptation_cycle_result,
+                "identity_impact": identity_impact,
+                "meta_result": meta_result,
+                "prediction": prediction_result,
+                "distributed_processing": True,
+                "performance_metrics": performance_metrics
+            }
+            
+            return result
+    
+    # Placeholder methods for tasks that need dynamic context from other tasks
+    async def _retrieve_memories_placeholder(self, user_input: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Placeholder method for memory retrieval that will be updated with emotional context"""
+        # This would normally wait for emotional processing, but in distributed processing,
+        # we handle dependencies at the manager level, so here we can just retrieve
+        # the emotional state directly from the core
+        emotional_state = self.emotional_core.get_emotional_state()
+        
+        # Now call the regular method
+        return await self._retrieve_memories_with_emotion(user_input, context, emotional_state)
+    
+    async def _share_experience_placeholder(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Placeholder method for experience sharing that will be updated with emotional context"""
+        # Get the latest emotional state
+        emotional_state = self.emotional_core.get_emotional_state()
+        
+        # Check if we should share experience
+        should_share = self._should_share_experience(user_input, context)
+        
+        if not should_share:
+            return {"has_experience": False}
+        
+        # Call the regular method
+        return await self._share_experience(user_input, context, emotional_state)
+    
+    async def _process_adaptation_placeholder(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Placeholder method for adaptation processing"""
+        # Get the latest state from other cores
+        emotional_state = self.emotional_core.get_emotional_state()
+        
+        # Try to get experience information
+        experience_result = None
+        try:
+            if hasattr(self, "experience_interface") and self.experience_interface:
+                # Check if experience is available
+                experiences = await self.experience_interface.retrieve_experiences_enhanced(
+                    query=user_input,
+                    limit=1,
+                    user_id=str(self.user_id)
+                )
+                
+                if experiences:
+                    experience_result = {
+                        "has_experience": True,
+                        "cross_user": False  # Default
+                    }
+                    
+                    # Check if it's a cross-user experience
+                    if "cross_user" in experiences[0]:
+                        experience_result["cross_user"] = experiences[0]["cross_user"]
+        except Exception as e:
+            logger.error(f"Error checking experience in adaptation placeholder: {str(e)}")
+            experience_result = {"has_experience": False}
+        
+        # Call the regular adaptation method
+        return await self._process_adaptation(
+            user_input, 
+            context, 
+            emotional_state, 
+            experience_result, 
+            None  # No identity impact yet
+        )
+    
+    async def _process_identity_impact_placeholder(self, user_input: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Placeholder method for identity impact processing"""
+        # Check if identity evolution system is available
+        if not hasattr(self, "identity_evolution") or not self.identity_evolution:
+            return None
+        
+        # Try to get experience information
+        try:
+            if hasattr(self, "experience_interface") and self.experience_interface:
+                # Get the most recent experience
+                experiences = await self.experience_interface.retrieve_experiences_enhanced(
+                    query=user_input,
+                    limit=1,
+                    user_id=str(self.user_id)
+                )
+                
+                if experiences:
+                    experience = experiences[0]
+                    
+                    # Calculate impact on identity
+                    identity_impact = await self.identity_evolution.calculate_experience_impact(experience)
+                    
+                    # Update identity based on experience
+                    await self.identity_evolution.update_identity_from_experience(
+                        experience=experience,
+                        impact=identity_impact
+                    )
+                    
+                    return identity_impact
+        except Exception as e:
+            logger.error(f"Error processing identity impact: {str(e)}")
+        
+        return None
+
     async def report_limitation(self, limitation: str, details: Dict[str, Any] = None):
         """Method for the bot to directly report a limitation it's encountering"""
         context = json.dumps(details) if details else None
@@ -2006,7 +2382,25 @@ class NyxBrain:
         
         return results
     
-    async def process_input(self, user_input: str, context: Dict[str, Any] = None):
+    async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process user input and update all systems.
+        
+        This method now serves as the compatibility layer for the original serial processing.
+        For new code, use process_input_auto() with the desired mode.
+        
+        Args:
+            user_input: User's input text
+            context: Additional context information
+            
+        Returns:
+            Processing results with relevant memories, emotional state, etc.
+        """
+        # Use the original implementation for backward compatibility
+        return await self._process_input_serial(user_input, context)
+    
+    # Rename the original implementation to _process_input_serial 
+    async def _process_input_serial(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Process user input and update all systems.
         
@@ -2358,9 +2752,30 @@ class NyxBrain:
         
         return await self.experience_consolidation.run_consolidation_cycle()
     
-    async def generate_response(self, 
-                             user_input: str, 
-                             context: Dict[str, Any] = None) -> Dict[str, Any]:
+    # Update the generate_response method to use the auto-mode selection
+    async def generate_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Generate a complete response to user input.
+        
+        Args:
+            user_input: User's input text
+            context: Additional context information
+            
+        Returns:
+            Response data including main message and supporting information
+        """
+        # Check if context specifies a processing mode
+        processing_mode = context.get("processing_mode", "auto") if context else "auto"
+        
+        # Process using appropriate mode
+        if processing_mode == "parallel":
+            return await self.generate_response_parallel(user_input, context)
+        else:
+            # Use original implementation for serial or auto modes
+            return await self._generate_response_serial(user_input, context)
+    
+    # Rename the original implementation to _generate_response_serial
+    async def _generate_response_serial(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Generate a complete response to user input.
         
