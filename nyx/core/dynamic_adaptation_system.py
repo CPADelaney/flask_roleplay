@@ -157,6 +157,8 @@ class DynamicAdaptationSystem:
         self.performance_monitor_agent = self._create_performance_monitor_agent()
         self.experience_adaptation_agent = self._create_experience_adaptation_agent()
         self.identity_adaptation_agent = self._create_identity_adaptation_agent()
+        self.prediction_error_threshold = 0.4  # Threshold for significant prediction error
+        self.last_prediction_evaluation = None  # Store last prediction evaluation
         
         # Create main orchestration agent
         self.orchestrator_agent = self._create_orchestrator_agent()
@@ -300,6 +302,122 @@ class DynamicAdaptationSystem:
             
         # Parse and return the result
         return ContextAnalysisResult.model_validate_json(result.final_output) if isinstance(result.final_output, str) else result.final_output
+
+    async def adapt_from_prediction_error(self, 
+                                       prediction_evaluation: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Adapt system parameters based on prediction error
+        
+        Args:
+            prediction_evaluation: Evaluation of a prediction
+            
+        Returns:
+            Adaptation results
+        """
+        # Store evaluation
+        self.last_prediction_evaluation = prediction_evaluation
+        
+        # Extract error information
+        prediction_error = prediction_evaluation.get("prediction_error", 0.0)
+        error_details = prediction_evaluation.get("error_details", {})
+        
+        # Check if error exceeds threshold
+        if prediction_error <= self.prediction_error_threshold:
+            # Error is below threshold, no adaptation needed
+            return {
+                "adapted": False,
+                "reason": "Prediction error below threshold",
+                "error": prediction_error,
+                "threshold": self.prediction_error_threshold
+            }
+        
+        # Error exceeds threshold, adaptation is needed
+        
+        # Create adaptable context based on prediction details
+        adaptation_context = {
+            "prediction_error": prediction_error,
+            "error_details": error_details,
+            "prediction_id": prediction_evaluation.get("prediction_id"),
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        # Run adaptation cycle with the context
+        adaptation_result = await self.adaptation_cycle(
+            adaptation_context,
+            {"prediction_error": prediction_error}
+        )
+        
+        # Add prediction-specific information to result
+        adaptation_result["adapted_from_prediction"] = True
+        adaptation_result["prediction_error"] = prediction_error
+        
+        # If adaptation resulted in strategy change, adjust prediction parameters
+        if "selected_strategy" in adaptation_result:
+            strategy_params = adaptation_result["selected_strategy"].get("parameters", {})
+            
+            # Higher exploration rate leads to more varied predictions
+            if "exploration_rate" in strategy_params:
+                exploration_rate = strategy_params["exploration_rate"]
+                # Apply to prediction systems
+                # This is a placeholder for implementation
+                
+            # Higher adaptation rate leads to faster learning from errors
+            if "adaptation_rate" in strategy_params:
+                adaptation_rate = strategy_params["adaptation_rate"]
+                # Apply to prediction learning rate
+        
+        return adaptation_result
+    
+    async def get_prediction_based_strategy(self, 
+                                         prediction_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Get recommended strategy based on a prediction
+        
+        Args:
+            prediction_result: Prediction result
+            
+        Returns:
+            Recommended strategy
+        """
+        # Extract confidence and horizon
+        confidence = prediction_result.get("confidence", 0.5)
+        horizon = prediction_result.get("prediction_horizon", "immediate")
+        
+        # Map prediction parameters to strategy selection
+        
+        # For high confidence, immediate horizon predictions
+        if confidence > 0.7 and horizon == "immediate":
+            # Use conservative strategy - we're confident about what's coming
+            recommended_strategy = "conservative"
+            reason = "High confidence in immediate predictions suggests optimizing precision"
+        
+        # For low confidence, immediate horizon
+        elif confidence < 0.4 and horizon == "immediate":
+            # Use exploratory strategy - we're uncertain about what's coming
+            recommended_strategy = "exploratory"
+            reason = "Low confidence in immediate predictions suggests exploration needed"
+        
+        # For medium to long-term horizons
+        elif horizon in ["medium_term", "long_term"]:
+            # Use adaptive strategy for longer horizons
+            recommended_strategy = "adaptive"
+            reason = f"Longer horizon ({horizon}) predictions require adaptability"
+        
+        # Default to balanced approach
+        else:
+            recommended_strategy = "balanced"
+            reason = "Default balanced approach for moderate prediction parameters"
+        
+        # Get the full strategy
+        strategy = await self._get_strategy(recommended_strategy)
+        
+        return {
+            "recommended_strategy_id": recommended_strategy,
+            "reason": reason,
+            "confidence": confidence,
+            "horizon": horizon,
+            "strategy": strategy.model_dump() if hasattr(strategy, "model_dump") else strategy
+        }
     
     async def select_strategy(self, context: Dict[str, Any], performance: Dict[str, Any]) -> StrategySelectionResult:
         """
