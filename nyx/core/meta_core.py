@@ -21,6 +21,8 @@ from agents import (
 )
 from pydantic import BaseModel
 
+from nyx.core.prediction_engine import PredictionEngine, PredictionInput
+
 logger = logging.getLogger(__name__)
 
 # Pydantic models for structured I/O
@@ -129,6 +131,7 @@ class MetaCore:
         self.strategy_agent = self._create_strategy_agent()
         self.reflection_agent = self._create_reflection_agent()
         self.improvement_agent = self._create_improvement_agent()
+        self.prediction_engine = PredictionEngine() 
         
         # Create orchestration agent that can handoff to other agents
         self.meta_agent = self._create_meta_agent()
@@ -195,6 +198,70 @@ class MetaCore:
         
         self.context.initialized = True
         logger.info("MetaCore initialized")
+
+    async def generate_prediction(self, context_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate predictions about future inputs and optimal responses
+        
+        Args:
+            context_data: Current context information
+            
+        Returns:
+            Prediction results
+        """
+        # Create prediction input from context data
+        prediction_input = PredictionInput(
+            context=context_data,
+            history=self.context.reflections[-10:] if len(self.context.reflections) >= 10 else self.context.reflections,
+            query_type=context_data.get("prediction_type")
+        )
+        
+        # Generate prediction
+        prediction_result = await self.prediction_engine.generate_prediction(prediction_input)
+        
+        # Store prediction in context for later evaluation
+        self.context.insights.append({
+            "type": "prediction",
+            "prediction_id": prediction_result.prediction_id,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "prediction": prediction_result.model_dump() if hasattr(prediction_result, "model_dump") else prediction_result,
+            "evaluated": False
+        })
+        
+        return prediction_result.model_dump() if hasattr(prediction_result, "model_dump") else prediction_result
+    
+    async def evaluate_prediction(self, prediction_id: str, actual_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Evaluate a previous prediction against actual outcomes
+        
+        Args:
+            prediction_id: ID of the prediction to evaluate
+            actual_data: Actual data to compare against prediction
+            
+        Returns:
+            Evaluation results
+        """
+        try:
+            # Evaluate prediction
+            evaluation_result = await self.prediction_engine.evaluate_prediction(
+                prediction_id, actual_data
+            )
+            
+            # Mark prediction as evaluated in insights
+            for insight in self.context.insights:
+                if insight.get("type") == "prediction" and insight.get("prediction_id") == prediction_id:
+                    insight["evaluated"] = True
+                    insight["evaluation"] = evaluation_result.model_dump() if hasattr(evaluation_result, "model_dump") else evaluation_result
+                    break
+                    
+            # Update prediction priors based on evaluation
+            await self.prediction_engine.update_prediction_priors(evaluation_result)
+            
+            return evaluation_result.model_dump() if hasattr(evaluation_result, "model_dump") else evaluation_result
+            
+        except ValueError as e:
+            logger.error(f"Error evaluating prediction: {str(e)}")
+            return {"error": str(e)}
     
     async def cognitive_cycle(self, context_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -231,6 +298,29 @@ class MetaCore:
             
         # Update system metrics
         self._update_system_metrics(cycle_start)
+
+        prediction_result = await self.generate_prediction(context_data)
+        result["prediction"] = prediction_result
+        
+        # Check for previous predictions to evaluate
+        recent_insights = [i for i in self.context.insights 
+                          if i.get("type") == "prediction" and not i.get("evaluated", False)]
+        
+        # Evaluate most recent prediction if available
+        if recent_insights and "user_input" in context_data:
+            most_recent = recent_insights[-1]
+            prediction_id = most_recent.get("prediction_id")
+            
+            # Create actual data for evaluation
+            actual_data = {
+                "actual_input": context_data.get("user_input"),
+                "actual_response": context_data.get("response"),
+                "actual_emotional_state": context_data.get("emotional_state")
+            }
+            
+            # Evaluate the prediction
+            evaluation_result = await self.evaluate_prediction(prediction_id, actual_data)
+            result["prediction_evaluation"] = evaluation_result        
         
         # Parse and return the result
         return json.loads(result.final_output) if isinstance(result.final_output, str) else result.final_output
