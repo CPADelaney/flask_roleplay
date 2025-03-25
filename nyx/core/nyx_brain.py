@@ -823,6 +823,76 @@ class NyxBrain:
             
             return result
 
+    async def validate_action(self, session_id: str, action_type: str, action_data: Dict[str, Any], timestamp: str) -> Dict[str, bool]:
+        """Validate critical actions from sessions before execution."""
+        # Initialize validation trackers if needed
+        if not hasattr(self, "validation_history"):
+            self.validation_history = []
+        
+        # Create validation record
+        validation_record = {
+            "session_id": session_id,
+            "action_type": action_type,
+            "action_data": action_data,
+            "timestamp": timestamp,
+            "decision": None,
+            "reasoning": None
+        }
+        
+        # Determine if action is valid
+        is_valid = True
+        reasoning = ""
+        
+        # Different validation logic based on action type
+        if action_type == "response_generation":
+            is_valid, reasoning = await self._validate_response_generation(action_data)
+        elif action_type == "user_model_update":
+            is_valid, reasoning = await self._validate_user_model_update(action_data)
+        elif action_type == "system_configuration":
+            is_valid, reasoning = await self._validate_system_configuration(action_data)
+        # Handle other action types...
+        
+        # Update validation record
+        validation_record["decision"] = is_valid
+        validation_record["reasoning"] = reasoning
+        
+        # Store in history
+        self.validation_history.append(validation_record)
+        
+        # Trim history if needed
+        if len(self.validation_history) > 1000:
+            self.validation_history = self.validation_history[-1000:]
+        
+        return {
+            "valid": is_valid,
+            "reasoning": reasoning
+        }
+    
+    async def _validate_response_generation(self, action_data: Dict[str, Any]) -> Tuple[bool, str]:
+        """Validate response generation actions."""
+        # Extract data
+        result = action_data.get("result", {})
+        user_input = action_data.get("user_input", "")
+        context = action_data.get("context", {})
+        
+        # Check for potentially harmful content
+        if "message" in result:
+            # Analyze message for problematic content
+            content_analysis = await self._analyze_content_safety(result["message"])
+            
+            if content_analysis["risk_level"] >= 0.8:
+                return False, f"Content safety risk: {content_analysis['risk_type']}"
+        
+        # Check for alignment with user preferences
+        if hasattr(self, "user_model") and self.user_model:
+            preference_alignment = await self.user_model.check_preference_alignment(result)
+            
+            if preference_alignment["score"] < 0.5:
+                return False, f"Low preference alignment: {preference_alignment['reason']}"
+        
+        return True, "Action validated"
+
+
     # Function to integrate all attention, bottom-up/top-down, and reward systems
     async def process_integrated_input(self, 
                                     user_input: str, 
