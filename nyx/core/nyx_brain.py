@@ -822,6 +822,349 @@ class NyxBrain:
             )
             
             return result
+
+    # Function to integrate all attention, bottom-up/top-down, and reward systems
+    async def process_integrated_input(self, 
+                                    user_input: str, 
+                                    context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process user input with fully integrated cognitive pathways
+        
+        Args:
+            user_input: User's input text
+            context: Additional context
+            
+        Returns:
+            Processing results
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        with trace(workflow_name="integrated_processing", group_id=self.trace_group_id):
+            start_time = datetime.datetime.now()
+            
+            # Initialize context
+            context = context or {}
+            
+            # 1. Create sensory input
+            sensory_input = SensoryInput(
+                modality="text",
+                data=user_input,
+                confidence=1.0,
+                timestamp=datetime.datetime.now().isoformat(),
+                metadata=context
+            )
+            
+            # 2. Calculate initial saliency and update attention
+            salient_items = [{
+                "target": "text_input",
+                "novelty": 0.8,  # Assume new input is novel
+                "intensity": min(1.0, len(user_input) / 500),  # Longer inputs have higher intensity
+                "emotional_impact": 0.5,  # Default moderate emotional impact
+                "goal_relevance": 0.7  # Assume user input is relevant to goals
+            }]
+            
+            attention_foci = await self.attentional_controller.update_attention(
+                salient_items=salient_items
+            )
+            
+            # 3. Process through multimodal integrator with bottom-up and top-down processing
+            percept = await self.multimodal_integrator.process_sensory_input(sensory_input)
+            
+            # 4. Update reasoning with the integrated percept (if sufficient attention)
+            if percept.attention_weight > 0.5:
+                await self.reasoning_core.update_with_perception(percept)
+            
+            # 5. Process emotional impact of the input
+            emotional_result = await self._process_emotional_impact(user_input, context)
+            emotional_state = emotional_result["emotional_state"]
+            
+            # 6. Compute reward based on emotional response
+            reward_value = self.emotional_core.compute_reward_from_emotion()
+            
+            # 7. Process reward signal
+            reward_context = {
+                "source": "user_input",
+                "content": user_input,
+                "action": "process_input",
+                "state": {
+                    "attention_weight": percept.attention_weight,
+                    "modality": "text"
+                }
+            }
+            
+            # Add any provided reward context
+            if "reward_context" in context:
+                reward_context.update(context["reward_context"])
+            
+            reward_signal = RewardSignal(
+                value=reward_value,
+                source="emotional_response",
+                context=reward_context,
+                timestamp=datetime.datetime.now().isoformat()
+            )
+            
+            reward_result = await self.reward_system.process_reward_signal(reward_signal)
+            
+            # 8. Retrieve memories with attention and emotional context
+            memory_context = context.copy()
+            memory_context["emotional_state"] = emotional_state
+            memory_context["attention_weight"] = percept.attention_weight
+            
+            memories = await self.memory_orchestrator.retrieve_memories(
+                query=user_input,
+                memory_types=memory_context.get("memory_types", ["observation", "reflection", "abstraction", "experience"]),
+                limit=memory_context.get("memory_limit", 5)
+            )
+            
+            # 9. Check for experience sharing
+            should_share_experience = self._should_share_experience(user_input, context)
+            experience_result = None
+            
+            if should_share_experience:
+                experience_result = await self.experience_interface.share_experience_enhanced(
+                    query=user_input,
+                    context_data={
+                        "user_id": str(self.user_id),
+                        "emotional_state": emotional_state,
+                        "include_cross_user": self.cross_user_enabled and context.get("include_cross_user", True),
+                        "scenario_type": context.get("scenario_type", ""),
+                        "conversation_id": self.conversation_id,
+                        "attention_weight": percept.attention_weight
+                    }
+                )
+            
+            # 10. Identity impact (if experience found)
+            identity_impact = None
+            if experience_result and experience_result.get("has_experience", False):
+                experience = experience_result.get("experience", {})
+                if experience and self.identity_evolution:
+                    # Calculate impact on identity
+                    identity_impact = await self.identity_evolution.calculate_experience_impact(experience)
+                    
+                    # Update identity based on experience
+                    await self.identity_evolution.update_identity_from_experience(
+                        experience=experience,
+                        impact=identity_impact
+                    )
+            
+            # 11. Add memory of this interaction
+            memory_id = await self.memory_core.add_memory(
+                memory_text=f"User said: {user_input}",
+                memory_type="observation",
+                significance=5,
+                tags=["interaction", "user_input"],
+                metadata={
+                    "emotional_context": self.emotional_core.get_formatted_emotional_state(),
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "user_id": str(self.user_id),
+                    "attention_weight": percept.attention_weight,
+                    "reward_value": reward_value,
+                    "dopamine_level": self.reward_system.current_dopamine
+                }
+            )
+            
+            # 12. Calculate dopamine change and update hormone influence
+            if self.hormone_system:
+                try:
+                    dopamine_change = reward_result.get("dopamine_change", 0)
+                    
+                    # Update hormone cycles with dopamine influence
+                    hormone_effects = {
+                        "reward_signal": dopamine_change * 0.5
+                    }
+                    
+                    await self.hormone_system.update_hormone_cycles(RunContextWrapper(context=None))
+                    self.emotional_core.apply_temporal_hormone_effects(hormone_effects)
+                except Exception as e:
+                    logger.error(f"Error updating hormones from reward: {e}")
+            
+            # 13. Update performance metrics
+            self.performance_metrics["memory_operations"] += 1
+            self.performance_metrics["emotion_updates"] += 1
+            if experience_result and experience_result.get("has_experience", False):
+                self.performance_metrics["experiences_shared"] += 1
+                if experience_result.get("cross_user", False):
+                    self.performance_metrics["cross_user_experiences_shared"] += 1
+            
+            # 14. Calculate response time
+            end_time = datetime.datetime.now()
+            response_time = (end_time - start_time).total_seconds()
+            self.performance_metrics["response_times"].append(response_time)
+            
+            # 15. Update interaction tracking
+            self.last_interaction = datetime.datetime.now()
+            self.interaction_count += 1
+            
+            # 16. Return integrated processing results
+            result = {
+                "user_input": user_input,
+                "perceptual_processing": {
+                    "modality": percept.modality,
+                    "attention_weight": percept.attention_weight,
+                    "bottom_up_confidence": percept.bottom_up_confidence,
+                    "top_down_influence": percept.top_down_influence
+                },
+                "emotional_state": emotional_state,
+                "reward_processing": {
+                    "reward_value": reward_value,
+                    "dopamine_level": self.reward_system.current_dopamine,
+                    "effects": reward_result.get("effects", {})
+                },
+                "memories": memories,
+                "memory_count": len(memories),
+                "has_experience": experience_result["has_experience"] if experience_result else False,
+                "experience_response": experience_result["response_text"] if experience_result and experience_result["has_experience"] else None,
+                "cross_user_experience": experience_result.get("cross_user", False) if experience_result else False,
+                "memory_id": memory_id,
+                "response_time": response_time,
+                "identity_impact": identity_impact,
+                "current_attention": [focus.target for focus in attention_foci]
+            }
+            
+            return result
+    
+    async def generate_integrated_response(self, 
+                                         user_input: str, 
+                                         context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Generate a response with fully integrated cognitive pathways
+        
+        Args:
+            user_input: User's input text
+            context: Additional context
+            
+        Returns:
+            Response data
+        """
+        # Process input first
+        processing_result = await self.process_integrated_input(user_input, context)
+        
+        # Determine main response content
+        if processing_result["has_experience"]:
+            main_response = processing_result["experience_response"]
+            response_type = "experience"
+            
+            # If it's a cross-user experience, mark it
+            if processing_result.get("cross_user_experience", False):
+                response_type = "cross_user_experience"
+        else:
+            # For reasoning-related queries, use the reasoning agents
+            if self._is_reasoning_query(user_input):
+                try:
+                    reasoning_result = await Runner.run(
+                        reasoning_triage_agent,
+                        user_input
+                    )
+                    main_response = reasoning_result.final_output
+                    response_type = "reasoning"
+                except Exception as e:
+                    logger.error(f"Error in reasoning response: {str(e)}")
+                    # Fallback to standard response
+                    main_response = "I understand your question and would like to reason through it with you."
+                    response_type = "standard"
+            else:
+                # No specific experience to share, generate standard response
+                # In a real implementation, this would be more sophisticated
+                main_response = "I acknowledge your message and have processed it through my systems."
+                response_type = "standard"
+        
+        # Generate emotional expression
+        emotional_expression = None
+        
+        # Apply reward-based emotional expression if dopamine level is high
+        dopamine_level = self.reward_system.current_dopamine
+        
+        if dopamine_level > 0.7:
+            # High dopamine leads to more expressive response
+            try:
+                reflection = await self.emotional_core.create_reward_based_reflection(
+                    reward_value=processing_result["reward_processing"]["reward_value"],
+                    context={"user_input": user_input}
+                )
+                emotional_expression = reflection
+            except Exception as e:
+                logger.error(f"Error generating reward-based expression: {e}")
+        else:
+            # Standard emotional expression
+            should_express_emotion = self.emotional_core.should_express_emotion()
+            
+            if should_express_emotion:
+                try:
+                    expression_result = await self.emotional_core.generate_emotional_expression(force=False)
+                    if expression_result.get("expressed", False):
+                        emotional_expression = expression_result.get("expression", "")
+                except Exception as e:
+                    logger.error(f"Error generating emotional expression: {str(e)}")
+                    emotional_expression = self.emotional_core.get_expression_for_emotion()
+        
+        # Create response package
+        response_data = {
+            "message": main_response,
+            "response_type": response_type,
+            "emotional_state": processing_result["emotional_state"],
+            "emotional_expression": emotional_expression,
+            "memories_used": [m["id"] for m in processing_result["memories"]],
+            "memory_count": processing_result["memory_count"],
+            "reward_processing": processing_result["reward_processing"],
+            "perceptual_processing": processing_result["perceptual_processing"],
+            "identity_impact": processing_result.get("identity_impact")
+        }
+        
+        # Add memory of this response
+        memory_id = await self.memory_core.add_memory(
+            memory_text=f"I responded: {main_response}",
+            memory_type="observation",
+            significance=5,
+            tags=["interaction", "nyx_response", response_type],
+            metadata={
+                "emotional_context": self.emotional_core.get_formatted_emotional_state(),
+                "timestamp": datetime.datetime.now().isoformat(),
+                "response_type": response_type,
+                "user_id": str(self.user_id),
+                "reward_value": processing_result["reward_processing"]["reward_value"],
+                "dopamine_level": processing_result["reward_processing"]["dopamine_level"]
+            }
+        )
+        
+        response_data["response_memory_id"] = memory_id
+        
+        # Generate reward signal for the response (self-evaluation)
+        # This helps with reinforcement learning for response generation
+        try:
+            response_context = {
+                "action": "generate_response",
+                "response_type": response_type,
+                "state": {
+                    "user_input": user_input,
+                    "emotional_state": processing_result["emotional_state"],
+                }
+            }
+            
+            # Basic self-evaluation based on confidence
+            # In a more sophisticated implementation, this would use actual evaluation metrics
+            confidence = 0.6  # Default moderate confidence
+            
+            if response_type == "experience":
+                confidence = 0.8  # Higher confidence for experience-based responses
+            elif response_type == "reasoning":
+                confidence = 0.7  # Good confidence for reasoning responses
+            
+            # Create reward signal
+            response_reward = RewardSignal(
+                value=confidence * 0.4,  # Scale to moderate reward
+                source="response_generation",
+                context=response_context,
+                timestamp=datetime.datetime.now().isoformat()
+            )
+            
+            # Process reward signal (in background to not delay response)
+            asyncio.create_task(self.reward_system.process_reward_signal(response_reward))
+            
+        except Exception as e:
+            logger.error(f"Error generating response reward: {e}")
+        
+        return response_data
     
     @function_tool
     async def analyze_stimulus_for_reflexes(ctx, stimulus: Dict[str, Any]) -> Dict[str, Any]:
