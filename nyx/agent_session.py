@@ -600,3 +600,34 @@ class NyxAgentSession:
                 logger.error(f"Error validating action with brain: {e}")
                 # Default to rejecting the action if validation fails
                 return False
+
+    async def _safe_brain_request(self, method: str, data: Dict[str, Any]) -> Any:
+        """Make a brain request with error handling."""
+        try:
+            return await self._brain_request(method, data)
+        except Exception as e:
+            # Register error with the brain
+            try:
+                error_data = {
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "component": "agent_session",
+                    "context": {
+                        "method": method,
+                        "data": data,
+                        "session_id": self.session_id,
+                        "user_id": self.user_id,
+                        "conversation_id": self.conversation_id
+                    },
+                    "severity": "medium"  # Default to medium severity
+                }
+                
+                # Try to register error with brain
+                brain = await NyxBrain.get_instance(self.user_id, self.conversation_id)
+                await brain.register_error(error_data)
+            except Exception as register_error:
+                # If we can't even register the error, log it locally
+                logger.error(f"Failed to register error with brain: {register_error}")
+            
+            # Re-raise for local handling
+            raise
