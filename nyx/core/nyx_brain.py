@@ -3558,7 +3558,18 @@ async def process_user_input_enhanced(self, user_input: str, context: Dict[str, 
                 "success_rate": context.get("success_rate", 0.7),
                 "error_rate": context.get("error_rate", 0.1),
                 "efficiency": context.get("efficiency", 0.8),
-                "response_time": 0.5
+                "response_time": 0.5  # Default value since we don't have full timing yet
+            }
+            
+            # Run adaptation cycle
+            adaptation_result = await self.dynamic_adaptation.adaptation_cycle(
+                context_for_adaptation, current_performance
+            )
+        
+        return {
+            "context_change": context_change_result.model_dump() if hasattr(context_change_result, "model_dump") else context_change_result,
+            "adaptation_result": adaptation_result
+        }
 
 # For backward compatibility in case directly imported
 NyxBrainInstance = NyxBrain
