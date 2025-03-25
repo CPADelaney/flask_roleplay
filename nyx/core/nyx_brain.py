@@ -999,6 +999,203 @@ class NyxBrain:
                 
                 return response
 
+    async def process_input_parallel(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process user input with parallel operations for improved performance
+        
+        Args:
+            user_input: User's input text
+            context: Additional context information
+            
+        Returns:
+            Processing results with relevant memories, emotional state, etc.
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        with trace(workflow_name="process_input_parallel", group_id=self.trace_group_id):
+            start_time = datetime.datetime.now()
+            
+            # Initialize context
+            context = context or {}
+            
+            # Add user_id to context if not present
+            if "user_id" not in context:
+                context["user_id"] = str(self.user_id)
+            
+            # Create tasks for parallel processing
+            tasks = {}
+            
+            # Task 1: Process emotional impact
+            tasks["emotional"] = asyncio.create_task(
+                self._process_emotional_impact(user_input, context)
+            )
+            
+            # Task 2: Run meta-cognitive cycle
+            if self.meta_core:
+                meta_context = context.copy()
+                meta_context["user_input"] = user_input
+                tasks["meta"] = asyncio.create_task(
+                    self.meta_core.cognitive_cycle(meta_context)
+                )
+            
+            # Task 3: Check for experience sharing opportunity
+            tasks["experience_check"] = asyncio.create_task(
+                self._check_experience_sharing(user_input, context)
+            )
+            
+            # Wait for emotional processing to complete
+            try:
+                emotional_result = await tasks["emotional"]
+                emotional_state = emotional_result["emotional_state"]
+                
+                # Add emotional state to context for memory retrieval
+                context["emotional_state"] = emotional_state
+                
+                # Now start memory retrieval with emotional context
+                tasks["memory"] = asyncio.create_task(
+                    self._retrieve_memories_with_emotion(user_input, context, emotional_state)
+                )
+            except Exception as e:
+                logger.error(f"Error in emotional processing: {str(e)}")
+                emotional_state = {}
+                
+                # Start memory retrieval without emotional context
+                tasks["memory"] = asyncio.create_task(
+                    self._retrieve_memories_with_emotion(user_input, context, {})
+                )
+            
+            # Wait for experience sharing check to complete
+            try:
+                should_share_experience = await tasks["experience_check"]
+            except Exception as e:
+                logger.error(f"Error checking experience sharing: {str(e)}")
+                should_share_experience = False
+            
+            # Start experience sharing task if needed
+            experience_result = None
+            if should_share_experience:
+                tasks["experience"] = asyncio.create_task(
+                    self._share_experience(user_input, context, emotional_state)
+                )
+            
+            # Wait for memory retrieval to complete
+            try:
+                memories = await tasks["memory"]
+            except Exception as e:
+                logger.error(f"Error retrieving memories: {str(e)}")
+                memories = []
+            
+            # Update emotional state based on retrieved memories
+            if memories:
+                try:
+                    memory_emotional_impact = await self._calculate_memory_emotional_impact(memories)
+                    
+                    # Apply memory-to-emotion influence
+                    for emotion, value in memory_emotional_impact.items():
+                        self.emotional_core.update_emotion(emotion, value * self.memory_to_emotion_influence)
+                    
+                    # Get updated emotional state
+                    emotional_state = self.emotional_core.get_emotional_state()
+                except Exception as e:
+                    logger.error(f"Error updating emotion from memories: {str(e)}")
+            
+            # Wait for experience sharing to complete if started
+            identity_impact = None
+            if should_share_experience and "experience" in tasks:
+                try:
+                    experience_result = await tasks["experience"]
+                    
+                    # Calculate potential identity impact if experience found
+                    if experience_result.get("has_experience", False) and self.identity_evolution:
+                        experience = experience_result.get("experience", {})
+                        if experience:
+                            try:
+                                # Calculate impact on identity
+                                identity_impact = await self.identity_evolution.calculate_experience_impact(experience)
+                                
+                                # Update identity based on experience
+                                await self.identity_evolution.update_identity_from_experience(
+                                    experience=experience,
+                                    impact=identity_impact
+                                )
+                            except Exception as e:
+                                logger.error(f"Error updating identity from experience: {str(e)}")
+                except Exception as e:
+                    logger.error(f"Error sharing experience: {str(e)}")
+                    experience_result = {"has_experience": False}
+            
+            # Add memory of this interaction
+            memory_text = f"User said: {user_input}"
+            
+            memory_id = await self.memory_core.add_memory(
+                memory_text=memory_text,
+                memory_type="observation",
+                significance=5,
+                tags=["interaction", "user_input"],
+                metadata={
+                    "emotional_context": self.emotional_core.get_formatted_emotional_state(),
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "user_id": str(self.user_id)
+                }
+            )
+            
+            # Check for context change using dynamic adaptation
+            context_change_result = None
+            adaptation_result = None
+            
+            if self.dynamic_adaptation:
+                # Process adaptation in parallel
+                tasks["adaptation"] = asyncio.create_task(
+                    self._process_adaptation(user_input, context, emotional_state, 
+                                          experience_result, identity_impact)
+                )
+                
+                try:
+                    adaptation_results = await tasks["adaptation"]
+                    context_change_result = adaptation_results.get("context_change")
+                    adaptation_result = adaptation_results.get("adaptation_result")
+                except Exception as e:
+                    logger.error(f"Error in adaptation: {str(e)}")
+            
+            # Wait for meta cognitive cycle to complete
+            meta_result = {}
+            if self.meta_core and "meta" in tasks:
+                try:
+                    meta_result = await tasks["meta"]
+                except Exception as e:
+                    logger.error(f"Error in meta-cognitive cycle: {str(e)}")
+                    meta_result = {"error": str(e)}
+            
+            # Update interaction tracking
+            self.last_interaction = datetime.datetime.now()
+            self.interaction_count += 1
+            
+            # Calculate response time
+            end_time = datetime.datetime.now()
+            response_time = (end_time - start_time).total_seconds()
+            self.performance_metrics["response_times"].append(response_time)
+            
+            # Return processing results in a structured format
+            result = {
+                "user_input": user_input,
+                "emotional_state": emotional_state,
+                "memories": memories,
+                "memory_count": len(memories),
+                "has_experience": experience_result["has_experience"] if experience_result else False,
+                "experience_response": experience_result["response_text"] if experience_result and experience_result["has_experience"] else None,
+                "cross_user_experience": experience_result.get("cross_user", False) if experience_result else False,
+                "memory_id": memory_id,
+                "response_time": response_time,
+                "context_change": context_change_result,
+                "adaptation_result": adaptation_result,
+                "identity_impact": identity_impact,
+                "meta_result": meta_result,
+                "parallel_processing": True  # Flag to indicate parallel processing was used
+            }
+            
+            return result
+
     async def process_user_feedback(self, user_input: str, feedback_type: str):
         """Process explicit or implicit user feedback to identify issues"""
         # Check for implicit negative feedback
