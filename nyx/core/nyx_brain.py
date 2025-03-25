@@ -64,6 +64,14 @@ from nyx.api.thinking_tools import (
 
 from nyx.streamer.integration import setup_enhanced_streaming
 
+from nyx.nyx_agent_sdk import (
+    memory_agent, reflection_agent, decision_agent, nyx_main_agent,
+    retrieve_memories, add_memory, determine_image_generation, 
+    get_user_model_guidance, generate_image_from_scene,
+    AgentContext, MemoryReflection, NarrativeResponse, ContentModeration,
+    initialize_agents, ResponseFilter, Runner
+)
+
 # Import function tools
 from nyx.api.function_tools import (
     add_memory, retrieve_memories, create_reflection, create_abstraction,
@@ -662,6 +670,23 @@ class NyxBrain:
             "error_recovery_strategies": {},
             "error_recovery_stats": {}
         }
+
+    async def initialize_agent_capabilities(self):
+        """Initialize the roleplaying agent capabilities directly in the brain"""
+        if not hasattr(self, "agent_capabilities_initialized"):
+            # Initialize agents
+            await initialize_agents()
+            
+            # Create an agent context for this brain
+            self.agent_context = AgentContext(self.user_id, self.conversation_id)
+            
+            # Initialize response filter
+            self.response_filter = ResponseFilter(self.user_id, self.conversation_id)
+            
+            # Set initialization flag
+            self.agent_capabilities_initialized = True
+            
+            logger.info(f"Agent capabilities initialized for brain {self.user_id}/{self.conversation_id}")
     
     async def register_error(self, error_data: Dict[str, Any]) -> Dict[str, Any]:
         """Register an error from any component for central management."""
@@ -4720,7 +4745,8 @@ class NyxBrain:
         
         # Register feature extractors and integration strategies
         await self._register_processing_modules()
-        
+
+        await self.initialize_agent_capabilities()
         
         # Initialize dynamic adaptation system
         self.dynamic_adaptation = DynamicAdaptationSystem()
@@ -4733,6 +4759,15 @@ class NyxBrain:
         self.reasoning_core = integrated_reasoning_agent
 
         await self.temporal_perception.initialize(self, first_interaction_timestamp=None)
+
+        await self.initialize_agent_capabilities()
+
+        self.processing_mode = "auto"
+        
+        # Initialize session tracking for processing mode
+        if hasattr(self, "sessions") and self.conversation_id in self.sessions:
+            self.sessions[self.conversation_id]["processing_mode"] = self.processing_mode
+            self.sessions[self.conversation_id]["mode_switch_history"] = []    
         
         await initialize_reflexive_system(self)
         
@@ -4757,6 +4792,344 @@ class NyxBrain:
         
         self.initialized = True
         logger.info(f"NyxBrain initialized for user {self.user_id}, conversation {self.conversation_id}")
+
+    async def process_with_agent(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Process user input directly with roleplaying agent capabilities with meta-tone adjustments"""
+        if not hasattr(self, "agent_capabilities_initialized") or not self.agent_capabilities_initialized:
+            await self.initialize_agent_capabilities()
+        
+        # Get base agent response
+        agent_result = await self._generate_base_agent_response(user_input, context)
+        
+        # Apply meta-tone adjustments based on Nyx-2's current state
+        adjusted_result = await self._apply_meta_tone_adjustments(agent_result)
+
+        memory_id = await self.add_enhanced_memory(
+            f"User said: {user_input}\nI responded with: {narrative_response.narrative}",
+            "observation",
+            7,
+            "agent",
+            "Used agent processing due to narrative content in user query"
+        )        
+                
+        # Store memory of the adjustment if one was made
+        if adjusted_result.get("tone_adjusted", False) and hasattr(self, "memory_core"):
+            await self.memory_core.add_memory(
+                memory_text=f"I adjusted my tone in response to '{user_input[:50]}...' based on my current state.",
+                memory_type="observation",
+                significance=5,
+                tags=["meta_tone", "personality_expression"],
+                metadata={
+                    "original_tone": adjusted_result.get("original_tone", "neutral"),
+                    "adjusted_tone": adjusted_result.get("applied_tone", "unknown"),
+                    "adjustment_reason": adjusted_result.get("adjustment_reason", "")
+                }
+            )
+        
+        return adjusted_result
+
+
+    async def _generate_base_agent_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Process user input directly with roleplaying agent capabilities"""
+        if not hasattr(self, "agent_capabilities_initialized") or not self.agent_capabilities_initialized:
+            await self.initialize_agent_capabilities()
+        
+        # Get memories to enhance context
+        memories = await retrieve_memories(self.agent_context, user_input)
+        enhanced_context = context.copy() if context else {}
+        enhanced_context["relevant_memories"] = memories
+        
+        # Get user model guidance
+        user_guidance = await get_user_model_guidance(self.agent_context)
+        enhanced_context["user_guidance"] = user_guidance
+        
+        # Handle emotional state - use brain's emotional state
+        emotional_state = self.emotional_core.get_emotional_state() if hasattr(self, "emotional_core") else {}
+        enhanced_context["emotional_state"] = emotional_state
+        
+        # Generate response using the main agent
+        try:
+            # Run the main agent
+            result = await Runner.run(
+                nyx_main_agent,
+                user_input,
+                context=self.agent_context,
+                run_context=enhanced_context
+            )
+            
+            # Get structured output
+            narrative_response = result.final_output_as(NarrativeResponse)
+            
+            # Filter and enhance response
+            filtered_response = await self.response_filter.filter_response(
+                narrative_response.narrative,
+                enhanced_context
+            )
+            
+            # Update response with filtered version
+            narrative_response.narrative = filtered_response
+            
+            # Add memory of this interaction
+            await add_memory(
+                self.agent_context,
+                f"User said: {user_input}\nI responded with: {narrative_response.narrative}",
+                "observation",
+                7
+            )
+            
+            # Convert to dictionary 
+            response_dict = narrative_response.dict()
+            
+            return {
+                "success": True,
+                "message": response_dict["narrative"],
+                "response": response_dict,
+                "has_experience": True,
+                "memory_id": None, # Would fill with actual memory ID
+                "emotional_state": emotional_state,
+                "memories_used": memories,
+                "generate_image": response_dict.get("generate_image", False),
+                "image_prompt": response_dict.get("image_prompt")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing with agent: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "message": "I apologize, but I encountered an error while processing your input."
+            }
+
+    async def add_enhanced_memory(self, memory_text: str, memory_type: str = "observation", significance: int = 5, 
+                                source_agent: str = None, reasoning: str = None) -> str:
+        """Add a memory with enhanced metadata about the agent source and reasoning"""
+        if not hasattr(self, "memory_core"):
+            return None
+        
+        # Determine source agent if not provided
+        if source_agent is None:
+            source_agent = getattr(self, "processing_mode", "brain")
+        
+        # Create metadata
+        metadata = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "source_agent": source_agent,
+            "user_id": str(self.user_id)
+        }
+        
+        # Add reasoning if provided
+        if reasoning:
+            metadata["reasoning"] = reasoning
+        
+        # Add memory
+        memory_id = await self.memory_core.add_memory(
+            memory_text=memory_text,
+            memory_type=memory_type,
+            memory_scope="game",
+            significance=significance,
+            tags=["agent_tracked", source_agent],
+            metadata=metadata
+        )
+        
+        return memory_id
+
+    async def _apply_meta_tone_adjustments(self, agent_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply meta-tone adjustments based on Nyx-2's current state"""
+        # Clone the result to avoid modifying the original
+        adjusted_result = agent_result.copy()
+        
+        # Get original message
+        original_message = agent_result.get("message", "")
+        if not original_message:
+            return adjusted_result
+        
+        # Track if we made an adjustment
+        tone_adjusted = False
+        adjustment_reason = ""
+        original_tone = "neutral"
+        applied_tone = "neutral"
+        
+        # Check identity traits
+        if hasattr(self, "identity_evolution") and hasattr(self.identity_evolution, "get_identity_profile"):
+            identity = await self.identity_evolution.get_identity_profile()
+            traits = identity.get("traits", {})
+            
+            # Check for dominant traits that might affect tone
+            if traits.get("cruelty", 0) > 0.7:
+                original_tone = "standard"
+                applied_tone = "cruel"
+                adjustment_reason = "High cruelty trait activated"
+                adjusted_message = f"You don't deserve softness today. {original_message}"
+                tone_adjusted = True
+            
+            elif traits.get("playfulness", 0) > 0.8:
+                original_tone = "standard"
+                applied_tone = "playful"
+                adjustment_reason = "High playfulness trait activated"
+                adjusted_message = f"Oh, this is going to be fun! {original_message}"
+                tone_adjusted = True
+                
+            elif traits.get("strictness", 0) > 0.7:
+                original_tone = "standard" 
+                applied_tone = "strict"
+                adjustment_reason = "High strictness trait activated"
+                adjusted_message = f"Pay close attention. I expect perfection. {original_message}"
+                tone_adjusted = True
+        
+        # Check emotional state
+        if not tone_adjusted and hasattr(self, "emotional_core"):
+            emotional_state = self.emotional_core.get_emotional_state()
+            valence = self.emotional_core.get_emotional_valence()
+            arousal = self.emotional_core.get_emotional_arousal()
+            
+            # High arousal, positive emotion
+            if valence > 0.6 and arousal > 0.7:
+                original_tone = "standard"
+                applied_tone = "excited"
+                adjustment_reason = "High arousal positive emotional state"
+                adjusted_message = f"I'm absolutely thrilled about this! {original_message}"
+                tone_adjusted = True
+                
+            # High arousal, negative emotion
+            elif valence < -0.6 and arousal > 0.7:
+                original_tone = "standard"
+                applied_tone = "intense"
+                adjustment_reason = "High arousal negative emotional state"
+                adjusted_message = f"Listen carefully. I won't repeat myself. {original_message}"
+                tone_adjusted = True
+                
+            # Low arousal, positive emotion
+            elif valence > 0.6 and arousal < 0.3:
+                original_tone = "standard"
+                applied_tone = "gentle"
+                adjustment_reason = "Low arousal positive emotional state"
+                adjusted_message = f"Let me guide you gently. {original_message}"
+                tone_adjusted = True
+        
+        # Check hormone state if available
+        if not tone_adjusted and hasattr(self, "hormone_system"):
+            hormones = {name: data["value"] for name, data in self.hormone_system.hormones.items()}
+            
+            # High dopamine - more reward-oriented
+            if hormones.get("dopamine", 0) > 0.7:
+                original_tone = "standard"
+                applied_tone = "rewarding"
+                adjustment_reason = "High dopamine levels"
+                adjusted_message = f"You've earned this. {original_message}"
+                tone_adjusted = True
+                
+            # High cortisol - more stress-oriented
+            elif hormones.get("cortisol", 0) > 0.7:
+                original_tone = "standard"
+                applied_tone = "urgent"
+                adjustment_reason = "High cortisol levels"
+                adjusted_message = f"This is urgent. {original_message}"
+                tone_adjusted = True
+        
+        # Update the message if adjusted
+        if tone_adjusted:
+            adjusted_result["message"] = adjusted_message
+            
+            # Also update the response structure if it exists
+            if "response" in adjusted_result and "narrative" in adjusted_result["response"]:
+                adjusted_result["response"]["narrative"] = adjusted_message
+            
+            # Add adjustment metadata
+            adjusted_result["tone_adjusted"] = True
+            adjusted_result["original_tone"] = original_tone
+            adjusted_result["applied_tone"] = applied_tone
+            adjusted_result["adjustment_reason"] = adjustment_reason
+        
+        return adjusted_result
+
+    async def generate_agent_reflection(self, topic: Optional[str] = None) -> Dict[str, Any]:
+        """Generate a reflection using the reflection agent"""
+        if not hasattr(self, "agent_capabilities_initialized") or not self.agent_capabilities_initialized:
+            await self.initialize_agent_capabilities()
+        
+        # Create prompt for reflection
+        prompt = f"Generate a reflection about {topic}" if topic else "Generate a reflection about the user based on your memories"
+        
+        # Run the reflection agent
+        result = await Runner.run(
+            reflection_agent,
+            prompt,
+            context=self.agent_context
+        )
+        
+        # Get structured output
+        reflection = result.final_output_as(MemoryReflection)
+        
+        # Store reflection in memory
+        await add_memory(
+            self.agent_context,
+            reflection.reflection,
+            "reflection",
+            8
+        )
+        
+        return {
+            "reflection": reflection.reflection,
+            "confidence": reflection.confidence,
+            "topic": reflection.topic or topic
+        }
+
+    async def set_processing_mode(self, mode: str, reason: str = None) -> Dict[str, Any]:
+        """Set the processing mode for the brain with session tracking"""
+        valid_modes = ["brain", "agent", "integrated", "auto"]
+        if mode not in valid_modes:
+            return {
+                "success": False,
+                "error": f"Invalid mode: {mode}. Valid modes are: {valid_modes}"
+            }
+        
+        # Update brain-level mode
+        self.processing_mode = mode
+        
+        # Track mode in session metadata
+        if hasattr(self, "sessions") and self.conversation_id in self.sessions:
+            session = self.sessions[self.conversation_id]
+            
+            # Track previous mode for reflection
+            previous_mode = session.get("processing_mode", "brain")
+            
+            # Update session metadata
+            session["processing_mode"] = mode
+            session["last_mode_switch"] = datetime.datetime.now().isoformat()
+            session["mode_switch_reason"] = reason
+            session["mode_switch_history"] = session.get("mode_switch_history", [])
+            session["mode_switch_history"].append({
+                "from": previous_mode,
+                "to": mode,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "reason": reason
+            })
+            
+            # Create a memory of this decision if reason is provided
+            if reason and hasattr(self, "memory_core"):
+                await self.memory_core.add_memory(
+                    memory_text=f"I decided to change my processing mode from {previous_mode} to {mode} because: {reason}",
+                    memory_type="reflection",
+                    significance=6,
+                    tags=["meta_cognition", "processing_mode", mode],
+                    metadata={
+                        "previous_mode": previous_mode,
+                        "new_mode": mode,
+                        "reason": reason
+                    }
+                )
+        
+        # Initialize capabilities if needed
+        if mode in ["agent", "integrated"]:
+            if not hasattr(self, "agent_capabilities_initialized") or not self.agent_capabilities_initialized:
+                await self.initialize_agent_capabilities()
+        
+        return {
+            "success": True,
+            "mode": mode,
+            "agent_initialized": hasattr(self, "agent_capabilities_initialized") and self.agent_capabilities_initialized,
+            "session_updated": hasattr(self, "sessions") and self.conversation_id in self.sessions
+        }
 
     async def _register_processing_modules(self):
         """Register processing modules for multimodal integration"""
@@ -5301,21 +5674,52 @@ class NyxBrain:
         return results
     
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Process user input and update all systems.
+        """Process user input based on current processing mode"""
+        # Check processing mode
+        mode = getattr(self, "processing_mode", "brain")
         
-        This method now serves as the compatibility layer for the original serial processing.
-        For new code, use process_input_auto() with the desired mode.
-        
-        Args:
-            user_input: User's input text
-            context: Additional context information
+        if mode == "agent":
+            return await self.process_with_agent(user_input, context)
+        elif mode == "integrated":
+            return await self.process_integrated_input(user_input, context)
+        elif mode == "auto":
+            # Auto-determine best processing method
+            should_use_agent, reasons = await self._should_use_agent(user_input, context)
             
-        Returns:
-            Processing results with relevant memories, emotional state, etc.
-        """
-        # Use the original implementation for backward compatibility
-        return await self._process_input_serial(user_input, context)
+            # Store decision reasoning
+            decision_reasoning = ", ".join(reasons) if reasons else "No specific indicators detected"
+            
+            if should_use_agent:
+                result = await self.process_with_agent(user_input, context)
+                
+                # Add metadata about the decision
+                result["mode_selection"] = {
+                    "mode": "agent",
+                    "reasoning": decision_reasoning
+                }
+                
+                # Optionally store this decision in memory
+                await self.add_enhanced_memory(
+                    f"I chose to use agent processing for this input because: {decision_reasoning}",
+                    "reflection",
+                    4,
+                    "brain",
+                    decision_reasoning
+                )
+                
+                return result
+            else:
+                result = await self._process_input_serial(user_input, context)
+                
+                # Add metadata about the decision
+                result["mode_selection"] = {
+                    "mode": "brain",
+                    "reasoning": decision_reasoning
+                }
+                
+                return result
+        else:  # Default to brain mode
+            return await self._process_input_serial(user_input, context)
     
     # Rename the original implementation to _process_input_serial 
     async def _process_input_serial(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -5341,6 +5745,22 @@ class NyxBrain:
             # Add temporal context to the processing context
             context = context or {}
             context["temporal_context"] = temporal_effects
+
+            mode = getattr(self, "processing_mode", "brain")
+            
+            if mode == "agent":
+                return await self.process_with_agent(user_input, context)
+            elif mode == "integrated":
+                return await self.process_integrated_input(user_input, context)
+            elif mode == "auto":
+                # Auto-determine best processing method
+                should_use_agent = self._should_use_agent(user_input, context)
+                if should_use_agent:
+                    return await self.process_with_agent(user_input, context)
+                else:
+                    return await self._process_input_serial(user_input, context)
+            else:  # Default to brain mode
+                return await self._process_input_serial(user_input, context)
 
             # Create sensory input
             sensory_input = SensoryInput(
@@ -5770,6 +6190,23 @@ class NyxBrain:
             Response data including main message and supporting information
         """
         # Check if context specifies a processing mode
+
+        mode = getattr(self, "processing_mode", "brain")
+        
+        if mode == "agent":
+            return await self.process_with_agent(user_input, context)
+        elif mode == "integrated":
+            return await self.process_integrated_input(user_input, context)
+        elif mode == "auto":
+            # Auto-determine best processing method
+            should_use_agent = self._should_use_agent(user_input, context)
+            if should_use_agent:
+                return await self.process_with_agent(user_input, context)
+            else:
+                return await self._process_input_serial(user_input, context)
+        else:  # Default to brain mode
+            return await self._process_input_serial(user_input, context)
+        
         processing_mode = context.get("processing_mode", "auto") if context else "auto"
         
         # Process using appropriate mode
@@ -5794,6 +6231,22 @@ class NyxBrain:
         with trace(workflow_name="generate_response", group_id=self.trace_group_id):
             # Process the input first
             processing_result = await self.process_input(user_input, context)
+
+            mode = getattr(self, "processing_mode", "brain")
+            
+            if mode == "agent":
+                return await self.process_with_agent(user_input, context)
+            elif mode == "integrated":
+                return await self.process_integrated_input(user_input, context)
+            elif mode == "auto":
+                # Auto-determine best processing method
+                should_use_agent = self._should_use_agent(user_input, context)
+                if should_use_agent:
+                    return await self.process_with_agent(user_input, context)
+                else:
+                    return await self._process_input_serial(user_input, context)
+            else:  # Default to brain mode
+                return await self._process_input_serial(user_input, context)
             
             # Track if experience sharing was adapted
             experience_sharing_adapted = processing_result.get("context_change") is not None and \
@@ -5935,6 +6388,171 @@ class NyxBrain:
             await self.temporal_perception.on_interaction_end()
             
             return response_data
+
+    async def process_integrated_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Process using both brain and agent capabilities together"""
+        if not self.initialized:
+            await self.initialize()
+        
+        # Process with both systems in parallel
+        brain_task = asyncio.create_task(self._process_input_serial(user_input, context))
+        agent_task = asyncio.create_task(self.process_with_agent(user_input, context))
+        
+        # Wait for both to complete
+        brain_result, agent_result = await asyncio.gather(brain_task, agent_task)
+        
+        # Determine the best response based on various factors
+        has_brain_experience = brain_result.get("has_experience", False) and brain_result.get("experience_response")
+        agent_has_image = agent_result.get("generate_image", False)
+        
+        # Create integrated result
+        integrated_result = {
+            "brain_processing": brain_result,
+            "agent_processing": agent_result,
+            "integrated": True,
+        }
+        
+        # Use brain experience if available, otherwise use agent response
+        if has_brain_experience:
+            integrated_result["message"] = brain_result.get("experience_response", "")
+            integrated_result["response_source"] = "brain"
+        else:
+            integrated_result["message"] = agent_result.get("message", "")
+            integrated_result["response_source"] = "agent"
+        
+        # Add image generation if agent suggests it
+        if agent_has_image:
+            integrated_result["generate_image"] = True
+            integrated_result["image_prompt"] = agent_result.get("image_prompt")
+        
+        return integrated_result
+
+    def _should_use_agent(self, user_input: str, context: Dict[str, Any] = None) -> bool:
+        """Determine if agent mode should be used based on input, context, and internal state"""
+        # Track reasoning for the decision
+        reasons = []
+        
+        # Check if context explicitly specifies a mode
+        if context and "processing_mode" in context:
+            reasons.append(f"Context explicitly requested {context['processing_mode']} mode")
+            return context["processing_mode"] == "agent", reasons
+        
+        # Check for roleplay indicators in text
+        roleplay_indicators = [
+            "roleplay", "role play", "acting", "pretend", "scenario",
+            "imagine", "fantasy", "act as", "play as", "in-character"
+        ]
+        if any(indicator in user_input.lower() for indicator in roleplay_indicators):
+            matched = [i for i in roleplay_indicators if i in user_input.lower()]
+            reasons.append(f"Detected roleplay indicators: {', '.join(matched)}")
+            return True, reasons
+        
+        # Check for narrative indicators
+        narrative_indicators = [
+            "story", "scene", "setting", "character", "plot",
+            "describe", "tell me about", "what happens"
+        ]
+        if any(indicator in user_input.lower() for indicator in narrative_indicators):
+            matched = [i for i in narrative_indicators if i in user_input.lower()]
+            reasons.append(f"Detected narrative indicators: {', '.join(matched)}")
+            return True, reasons
+        
+        # Check for image generation requests
+        image_indicators = [
+            "picture", "image", "draw", "show me", "visualize"
+        ]
+        if any(indicator in user_input.lower() for indicator in image_indicators):
+            matched = [i for i in image_indicators if i in user_input.lower()]
+            reasons.append(f"Detected image generation indicators: {', '.join(matched)}")
+            return True, reasons
+        
+        # ---- STATE-BASED CRITERIA ----
+        
+        # Check identity state
+        use_agent_identity = False
+        if hasattr(self, "identity_evolution"):
+            try:
+                identity_state = await self.identity_evolution.get_identity_state()
+                traits = identity_state.get("top_traits", {})
+                
+                # High dominance or other performance-related traits
+                if traits.get("dominance", 0) > 0.85:
+                    reasons.append("High dominance trait indicates preference for performance")
+                    use_agent_identity = True
+                    
+                # High playfulness also suggests performance
+                if traits.get("playfulness", 0) > 0.8:
+                    reasons.append("High playfulness trait indicates preference for creative expression")
+                    use_agent_identity = True
+            except:
+                pass  # Continue without identity influence
+        
+        # Check emotional state
+        use_agent_emotion = False
+        if hasattr(self, "emotional_core"):
+            try:
+                arousal = self.emotional_core.get_emotional_arousal()
+                valence = self.emotional_core.get_emotional_valence()
+                
+                # High arousal suggests more expressive, performative responses
+                if arousal > 0.7:
+                    reasons.append("High emotional arousal indicates preference for expressive communication")
+                    use_agent_emotion = True
+                    
+                # Strong positive emotions may favor performance
+                if valence > 0.7:
+                    reasons.append("Strong positive emotions favor more engaging communication")
+                    use_agent_emotion = True
+            except:
+                pass  # Continue without emotional influence
+        
+        # Check hormone state
+        use_agent_hormones = False
+        if hasattr(self, "hormone_system"):
+            try:
+                hormone_levels = {name: data["value"] for name, data in self.hormone_system.hormones.items()}
+                
+                # High dopamine or oxytocin might favor performance
+                if hormone_levels.get("dopamine", 0) > 0.7:
+                    reasons.append("High dopamine levels favor reward-oriented communication")
+                    use_agent_hormones = True
+                    
+                if hormone_levels.get("oxytocin", 0) > 0.7:
+                    reasons.append("High oxytocin levels favor empathetic, engaging communication")
+                    use_agent_hormones = True
+            except:
+                pass  # Continue without hormone influence
+        
+        # Check recent memory context
+        use_agent_memory = False
+        if hasattr(self, "memory_core"):
+            try:
+                # Check if recent interactions have been roleplaying
+                recent_memories = await self.memory_core.retrieve_memories(
+                    query="roleplay performance character scenario",
+                    memory_types=["observation"],
+                    limit=5,
+                    recency_weighted=True
+                )
+                
+                if recent_memories and len(recent_memories) > 2:
+                    reasons.append("Recent memories indicate ongoing roleplay context")
+                    use_agent_memory = True
+            except:
+                pass  # Continue without memory influence
+        
+        # Combine all state-based criteria
+        use_agent_state = use_agent_identity or use_agent_emotion or use_agent_hormones or use_agent_memory
+        
+        # Final decision - use agent if content indicators OR state suggests it
+        should_use = use_agent_state
+        
+        # Store reasoning for reflection
+        if should_use:
+            if hasattr(self, "context_cache"):
+                self.context_cache["agent_selection_reasoning"] = reasons
+        
+        return should_use, reasons
     
     async def generate_enhanced_response(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
