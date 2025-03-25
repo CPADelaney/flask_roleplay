@@ -64,6 +64,50 @@ class NyxAgentSession:
         
         # Initialized flag
         self.initialized = False
+
+        self.brain_metrics = {
+            "requests_sent": 0,
+            "requests_succeeded": 0,
+            "requests_failed": 0,
+            "response_times": [],
+            "command_types": {},
+            "last_communication_error": None
+        }
+
+    async def _brain_request(self, method: str, data: Dict[str, Any]) -> Any:
+        """Make a request to the central brain with metrics tracking."""
+        start_time = time.time()
+        self.brain_metrics["requests_sent"] += 1
+        
+        # Track command type
+        if method not in self.brain_metrics["command_types"]:
+            self.brain_metrics["command_types"][method] = 0
+        self.brain_metrics["command_types"][method] += 1
+        
+        try:
+            # Existing brain request code
+            result = await super()._brain_request(method, data)
+            
+            # Track success
+            self.brain_metrics["requests_succeeded"] += 1
+            response_time = time.time() - start_time
+            self.brain_metrics["response_times"].append(response_time)
+            
+            # Trim response times list if needed
+            if len(self.brain_metrics["response_times"]) > 100:
+                self.brain_metrics["response_times"] = self.brain_metrics["response_times"][-100:]
+                
+            return result
+            
+        except Exception as e:
+            # Track failure
+            self.brain_metrics["requests_failed"] += 1
+            self.brain_metrics["last_communication_error"] = {
+                "method": method,
+                "error": str(e),
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+            raise
     
     async def initialize(self, initial_context: Optional[Dict[str, Any]] = None) -> str:
         """
