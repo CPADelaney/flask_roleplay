@@ -1334,6 +1334,127 @@ class NyxBrain:
             )
         
         return session
+
+    async def record_significant_event(self, session_id: str, event_type: str, event_data: Dict[str, Any], 
+                                    timestamp: str, source: str) -> Dict[str, Any]:
+        """Process and record significant events from sessions."""
+        
+        # Initialize event tracking if needed
+        if not hasattr(self, "significant_events"):
+            self.significant_events = []
+        
+        # Create event record
+        event_record = {
+            "session_id": session_id,
+            "event_type": event_type,
+            "event_data": event_data,
+            "timestamp": timestamp,
+            "source": source,
+            "processed": False
+        }
+        
+        # Add to events list
+        self.significant_events.append(event_record)
+        
+        # Process event based on type
+        if event_type == "emotional_spike":
+            await self._process_emotional_spike_event(event_record)
+        elif event_type == "context_change":
+            await self._process_context_change_event(event_record)
+        elif event_type == "user_revelation":
+            await self._process_user_revelation_event(event_record)
+        # Handle other event types...
+        
+        # Mark as processed
+        event_record["processed"] = True
+        
+        # Check if we should trigger meta-cognitive cycle
+        if len(self.significant_events) % 10 == 0:  # Every 10 events
+            asyncio.create_task(self.meta_core.cognitive_cycle({"triggered_by": "significant_events"}))
+        
+        return {"status": "recorded", "event_id": len(self.significant_events) - 1}
+    
+    # Add event processing methods
+    async def _process_emotional_spike_event(self, event_record: Dict[str, Any]) -> None:
+        """Process emotional spike events."""
+        # Extract data
+        emotional_state = event_record["event_data"]["emotional_state"]
+        user_input = event_record["event_data"]["user_input"]
+        
+        # Store in memory
+        await self.memory_core.add_memory(
+            memory_text=f"Observed emotional spike during interaction. User said: '{user_input}'",
+            memory_type="observation",
+            memory_scope="user",
+            significance=7,
+            tags=["emotional_spike"],
+            metadata={
+                "emotional_state": emotional_state,
+                "timestamp": event_record["timestamp"],
+                "session_id": event_record["session_id"]
+            }
+        )
+        
+        # Update emotional statistics
+        self.emotional_core.update_emotional_statistics(emotional_state)
+
+    # Add to nyx/core/nyx_brain.py
+    async def get_communication_metrics(self) -> Dict[str, Any]:
+        """Collect and aggregate communication metrics from all sessions."""
+        metrics = {
+            "total_requests": 0,
+            "success_rate": 0.0,
+            "avg_response_time": 0.0,
+            "command_distribution": {},
+            "failure_distribution": {}
+        }
+        
+        if not hasattr(self, "sessions"):
+            return metrics
+        
+        # Aggregate metrics across all sessions
+        for session_id, session_data in self.sessions.items():
+            if session_id in self.session_factory.sessions:
+                session = self.session_factory.sessions[session_id]
+                if hasattr(session, "brain_metrics"):
+                    # Aggregate total requests
+                    metrics["total_requests"] += session.brain_metrics["requests_sent"]
+                    
+                    # Add to command distribution
+                    for cmd, count in session.brain_metrics["command_types"].items():
+                        if cmd not in metrics["command_distribution"]:
+                            metrics["command_distribution"][cmd] = 0
+                        metrics["command_distribution"][cmd] += count
+                    
+                    # Add to failure distribution if errors
+                    if session.brain_metrics["last_communication_error"]:
+                        error = session.brain_metrics["last_communication_error"]
+                        if error["method"] not in metrics["failure_distribution"]:
+                            metrics["failure_distribution"][error["method"]] = 0
+                        metrics["failure_distribution"][error["method"]] += 1
+        
+        # Calculate success rate
+        total_succeeded = sum(session.brain_metrics["requests_succeeded"] 
+                            for session in self.session_factory.sessions.values() 
+                            if hasattr(session, "brain_metrics"))
+                            
+        total_sent = sum(session.brain_metrics["requests_sent"] 
+                       for session in self.session_factory.sessions.values() 
+                       if hasattr(session, "brain_metrics"))
+                       
+        if total_sent > 0:
+            metrics["success_rate"] = total_succeeded / total_sent
+        
+        # Calculate average response time
+        all_times = []
+        for session in self.session_factory.sessions.values():
+            if hasattr(session, "brain_metrics"):
+                all_times.extend(session.brain_metrics["response_times"])
+        
+        if all_times:
+            metrics["avg_response_time"] = sum(all_times) / len(all_times)
+        
+        return metrics
     
     async def resume_session(self, session_id: str) -> Dict[str, Any]:
         """
