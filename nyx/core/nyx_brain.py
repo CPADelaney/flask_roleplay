@@ -1665,6 +1665,1572 @@ class NyxBrain:
             
             return result
 
+    async def enable_self_configuration(self) -> Dict[str, Any]:
+        """
+        Enable Nyx to dynamically adjust her own configuration parameters
+        based on performance metrics, operational patterns, and user feedback.
+        
+        Returns:
+            Status information about the enabled functionality
+        """
+        if not hasattr(self, "self_config_enabled"):
+            self.self_config_enabled = False
+            self.config_change_history = []
+            self.param_performance_impact = {}
+            self.config_update_interval = 50  # Interactions between updates
+            self.last_config_update = 0
+            self.confidence_thresholds = {
+                "low": 0.4,
+                "medium": 0.7,
+                "high": 0.9
+            }
+            
+            # Define adaptation strategies
+            self.adaptation_strategies = {
+                "conservative": {
+                    "description": "Make small, cautious adjustments with high confidence requirements",
+                    "confidence_multiplier": 1.2,
+                    "step_multiplier": 0.7,
+                    "evaluation_frequency": 1.5  # Longer evaluation periods
+                },
+                "balanced": {
+                    "description": "Make moderate adjustments with balanced confidence requirements",
+                    "confidence_multiplier": 1.0,
+                    "step_multiplier": 1.0,
+                    "evaluation_frequency": 1.0
+                },
+                "exploratory": {
+                    "description": "Make larger adjustments with lower confidence requirements",
+                    "confidence_multiplier": 0.8,
+                    "step_multiplier": 1.3,
+                    "evaluation_frequency": 0.7  # Shorter evaluation periods
+                }
+            }
+            
+            # Current strategy - can be adjusted based on context
+            self.current_adaptation_strategy = "balanced"
+            
+            # Define parameter categories for organization
+            self.parameter_categories = {
+                "core": "Core operational parameters",
+                "memory": "Memory system parameters",
+                "emotion": "Emotional system parameters",
+                "reasoning": "Reasoning system parameters",
+                "social": "Cross-user and social parameters",
+                "attention": "Attentional system parameters",
+                "temporal": "Temporal processing parameters",
+                "hormonal": "Hormone system parameters",
+                "reflection": "Meta-cognitive reflection parameters",
+                "procedural": "Procedural memory parameters",
+                "reflexive": "Reflexive system parameters",
+                "performance": "System performance parameters"
+            }
+            
+            # Initialize parameter interdependence graph
+            self.parameter_dependencies = {}
+            
+            # Define adjustable parameters with safe ranges, defaults, and categories
+            self.adjustable_parameters = {
+                # Core parameters
+                "cross_user_sharing_threshold": {
+                    "current": self.cross_user_sharing_threshold,
+                    "min": 0.3,
+                    "max": 0.95,
+                    "default": 0.7,
+                    "step": 0.05,
+                    "description": "Threshold for sharing experiences across users",
+                    "category": "social",
+                    "related_to": ["cross_user_enabled"]
+                },
+                "memory_to_emotion_influence": {
+                    "current": self.memory_to_emotion_influence,
+                    "min": 0.1,
+                    "max": 0.8,
+                    "default": 0.3,
+                    "step": 0.05,
+                    "description": "How much memories influence emotions",
+                    "category": "emotion",
+                    "related_to": ["emotion_to_memory_influence"]
+                },
+                "emotion_to_memory_influence": {
+                    "current": self.emotion_to_memory_influence,
+                    "min": 0.1,
+                    "max": 0.8,
+                    "default": 0.4,
+                    "step": 0.05,
+                    "description": "How much emotions influence memory retrieval",
+                    "category": "memory",
+                    "related_to": ["memory_to_emotion_influence"]
+                },
+                "experience_to_identity_influence": {
+                    "current": self.experience_to_identity_influence,
+                    "min": 0.05,
+                    "max": 0.6,
+                    "default": 0.2,
+                    "step": 0.05,
+                    "description": "How much experiences influence identity",
+                    "category": "core",
+                    "related_to": []
+                },
+                "cross_user_enabled": {
+                    "current": self.cross_user_enabled,
+                    "min": 0,  # Boolean as 0/1
+                    "max": 1,
+                    "default": 1,
+                    "step": 1,
+                    "description": "Whether cross-user experiences are enabled",
+                    "category": "social",
+                    "related_to": ["cross_user_sharing_threshold"]
+                },
+                "consolidation_interval": {
+                    "current": self.consolidation_interval,
+                    "min": 6,
+                    "max": 72,
+                    "default": 24,
+                    "step": 6,
+                    "description": "Hours between experience consolidations",
+                    "category": "memory",
+                    "related_to": []
+                },
+                "identity_reflection_interval": {
+                    "current": self.identity_reflection_interval,
+                    "min": 5,
+                    "max": 50,
+                    "default": 10,
+                    "step": 5,
+                    "description": "Interactions between identity reflections",
+                    "category": "reflection",
+                    "related_to": []
+                },
+                
+                # Memory system parameters
+                "memory_recency_weight": {
+                    "current": 0.7 if hasattr(self.memory_orchestrator, "recency_weight") else 0.7,
+                    "min": 0.3,
+                    "max": 0.9,
+                    "default": 0.7,
+                    "step": 0.05,
+                    "description": "Weight given to recency in memory retrieval",
+                    "category": "memory",
+                    "related_to": ["memory_relevance_weight"]
+                },
+                "memory_relevance_weight": {
+                    "current": 0.8 if hasattr(self.memory_orchestrator, "relevance_weight") else 0.8,
+                    "min": 0.4,
+                    "max": 0.95,
+                    "default": 0.8,
+                    "step": 0.05,
+                    "description": "Weight given to relevance in memory retrieval",
+                    "category": "memory",
+                    "related_to": ["memory_recency_weight"]
+                },
+                "memory_significance_threshold": {
+                    "current": 3 if hasattr(self.memory_core, "significance_threshold") else 3,
+                    "min": 1,
+                    "max": 8,
+                    "default": 3,
+                    "step": 1,
+                    "description": "Minimum significance for memories to be retrieved",
+                    "category": "memory",
+                    "related_to": []
+                },
+                
+                # Emotional system parameters
+                "emotional_decay_rate": {
+                    "current": 0.05 if hasattr(self.emotional_core, "decay_rate") else 0.05,
+                    "min": 0.01,
+                    "max": 0.3,
+                    "default": 0.05,
+                    "step": 0.01,
+                    "description": "Rate at which emotions decay over time",
+                    "category": "emotion",
+                    "related_to": []
+                },
+                "emotional_expression_threshold": {
+                    "current": 0.7 if hasattr(self.emotional_core, "expression_threshold") else 0.7,
+                    "min": 0.4,
+                    "max": 0.9,
+                    "default": 0.7,
+                    "step": 0.05,
+                    "description": "Threshold for expressing emotions",
+                    "category": "emotion",
+                    "related_to": []
+                },
+                "emotional_complexity": {
+                    "current": 0.6 if hasattr(self.emotional_core, "complexity") else 0.6,
+                    "min": 0.1,
+                    "max": 1.0,
+                    "default": 0.6,
+                    "step": 0.1,
+                    "description": "Complexity of emotional expressions",
+                    "category": "emotion",
+                    "related_to": []
+                },
+                
+                # Attention system parameters
+                "attentional_focus_duration": {
+                    "current": 5 if hasattr(self, "attentional_controller") and hasattr(self.attentional_controller, "focus_duration") else 5,
+                    "min": 1,
+                    "max": 20,
+                    "default": 5,
+                    "step": 1,
+                    "description": "Duration of attentional focus (in interactions)",
+                    "category": "attention",
+                    "related_to": []
+                },
+                "novelty_weight": {
+                    "current": 0.7 if hasattr(self, "attentional_controller") and hasattr(self.attentional_controller, "novelty_weight") else 0.7,
+                    "min": 0.3,
+                    "max": 0.9,
+                    "default": 0.7,
+                    "step": 0.05,
+                    "description": "Weight given to novelty in attention",
+                    "category": "attention",
+                    "related_to": []
+                },
+                
+                # Hormone system parameters
+                "hormone_influence_factor": {
+                    "current": 0.6 if hasattr(self, "hormone_system") and hasattr(self.hormone_system, "influence_factor") else 0.6,
+                    "min": 0.2,
+                    "max": 1.0,
+                    "default": 0.6,
+                    "step": 0.1,
+                    "description": "Overall influence of hormones on other systems",
+                    "category": "hormonal",
+                    "related_to": []
+                },
+                "hormonal_cycle_speed": {
+                    "current": 1.0 if hasattr(self, "hormone_system") and hasattr(self.hormone_system, "cycle_speed") else 1.0,
+                    "min": 0.5,
+                    "max": 2.0,
+                    "default": 1.0,
+                    "step": 0.1,
+                    "description": "Speed of hormonal cycles (multiplier)",
+                    "category": "hormonal",
+                    "related_to": []
+                },
+                
+                # Reasoning system parameters
+                "reasoning_depth": {
+                    "current": 2 if hasattr(self.reasoning_core, "reasoning_depth") else 2,
+                    "min": 1,
+                    "max": 4,
+                    "default": 2,
+                    "step": 1,
+                    "description": "Depth of reasoning processes",
+                    "category": "reasoning",
+                    "related_to": []
+                },
+                "thinking_frequency": {
+                    "current": 0.4 if hasattr(self, "thinking_config") and "thinking_enabled" in self.thinking_config else 0.4,
+                    "min": 0.1,
+                    "max": 0.8,
+                    "default": 0.4,
+                    "step": 0.1,
+                    "description": "Frequency of using extended thinking",
+                    "category": "reasoning",
+                    "related_to": []
+                },
+                
+                # Reflexive system parameters
+                "reflex_threshold": {
+                    "current": 0.6 if hasattr(self, "reflexive_system") and hasattr(self.reflexive_system, "default_threshold") else 0.6,
+                    "min": 0.4,
+                    "max": 0.9,
+                    "default": 0.6,
+                    "step": 0.05,
+                    "description": "Threshold for triggering reflexes",
+                    "category": "reflexive",
+                    "related_to": []
+                },
+                "procedural_confidence_threshold": {
+                    "current": 0.7 if hasattr(self, "agent_enhanced_memory") and hasattr(self.agent_enhanced_memory, "confidence_threshold") else 0.7,
+                    "min": 0.5,
+                    "max": 0.95,
+                    "default": 0.7,
+                    "step": 0.05,
+                    "description": "Confidence threshold for procedural memory execution",
+                    "category": "procedural",
+                    "related_to": []
+                },
+                
+                # System performance parameters
+                "parallel_processing_threshold": {
+                    "current": 0.6,  # Complexity threshold for using parallel processing
+                    "min": 0.3,
+                    "max": 0.9,
+                    "default": 0.6,
+                    "step": 0.1,
+                    "description": "Complexity threshold for switching to parallel processing",
+                    "category": "performance",
+                    "related_to": []
+                },
+                "distributed_processing_threshold": {
+                    "current": 0.8,  # Complexity threshold for using distributed processing
+                    "min": 0.5,
+                    "max": 0.95,
+                    "default": 0.8,
+                    "step": 0.05,
+                    "description": "Complexity threshold for switching to distributed processing",
+                    "category": "performance",
+                    "related_to": ["parallel_processing_threshold"]
+                }
+            }
+            
+            # Build parameter dependency graph
+            for param_name, param_config in self.adjustable_parameters.items():
+                self.parameter_dependencies[param_name] = {
+                    "affects": [],
+                    "affected_by": param_config["related_to"]
+                }
+                
+            # Complete bidirectional dependencies
+            for param_name, dependencies in self.parameter_dependencies.items():
+                for related_param in dependencies["affected_by"]:
+                    if related_param in self.parameter_dependencies:
+                        if param_name not in self.parameter_dependencies[related_param]["affects"]:
+                            self.parameter_dependencies[related_param]["affects"].append(param_name)
+            
+            # Performance metrics to track for adaptation
+            self.parameter_metrics_map = {
+                # Core parameters
+                "cross_user_sharing_threshold": ["experiences_shared", "cross_user_experiences_shared"],
+                "memory_to_emotion_influence": ["emotion_updates"],
+                "emotion_to_memory_influence": ["memory_operations"],
+                "experience_to_identity_influence": ["experiences_shared"],
+                "cross_user_enabled": ["cross_user_experiences_shared"],
+                "consolidation_interval": ["experience_consolidations"],
+                "identity_reflection_interval": ["reflections_generated"],
+                
+                # Memory system parameters
+                "memory_recency_weight": ["memory_operations", "avg_response_time"],
+                "memory_relevance_weight": ["memory_operations", "experiences_shared"],
+                "memory_significance_threshold": ["memory_operations", "memory_count"],
+                
+                # Emotional system parameters
+                "emotional_decay_rate": ["emotion_updates"],
+                "emotional_expression_threshold": ["emotion_updates"],
+                "emotional_complexity": ["emotion_updates"],
+                
+                # Attention system parameters
+                "attentional_focus_duration": ["memory_operations", "experiences_shared"],
+                "novelty_weight": ["memory_operations", "experiences_shared"],
+                
+                # Hormone system parameters
+                "hormone_influence_factor": ["emotion_updates", "experiences_shared"],
+                "hormonal_cycle_speed": ["emotion_updates"],
+                
+                # Reasoning system parameters
+                "reasoning_depth": ["avg_response_time"],
+                "thinking_frequency": ["avg_response_time"],
+                
+                # Reflexive system parameters
+                "reflex_threshold": ["avg_response_time"],
+                "procedural_confidence_threshold": ["avg_response_time"],
+                
+                # System performance parameters
+                "parallel_processing_threshold": ["avg_response_time"],
+                "distributed_processing_threshold": ["avg_response_time"]
+            }
+            
+            # User feedback impact tracking
+            self.user_feedback_impact = {
+                "positive_feedback": {},
+                "negative_feedback": {},
+                "parameter_adjustments": {}
+            }
+            
+            # Meta-learning: track which parameters have the most impact
+            self.parameter_impact_ranking = {}
+            
+            self.self_config_enabled = True
+            
+            # Schedule periodic parameter evaluation
+            asyncio.create_task(self._parameter_evaluation_loop())
+            
+        return {
+            "enabled": self.self_config_enabled,
+            "adjustable_parameters_count": len(self.adjustable_parameters),
+            "categories": {k: v for k, v in self.parameter_categories.items()},
+            "available_strategies": {k: v["description"] for k, v in self.adaptation_strategies.items()},
+            "current_strategy": self.current_adaptation_strategy,
+            "update_interval": self.config_update_interval,
+            "last_update": self.last_config_update
+        }
+    
+    async def _parameter_evaluation_loop(self):
+        """Background task to periodically evaluate and adjust parameters"""
+        while self.self_config_enabled:
+            # Only evaluate after certain number of interactions
+            if self.interaction_count - self.last_config_update >= self.config_update_interval:
+                await self.evaluate_and_adjust_parameters()
+                self.last_config_update = self.interaction_count
+                
+                # Also update meta-learning
+                await self._update_parameter_meta_learning()
+                
+            # Wait before checking again
+            await asyncio.sleep(60)  # Check every minute
+    
+    async def _update_parameter_meta_learning(self):
+        """Update meta-learning about which parameters are most impactful"""
+        # Calculate impact scores for each parameter
+        impact_scores = {}
+        
+        for param_name, param_data in self.param_performance_impact.items():
+            if param_data["history"]:
+                # Calculate normalized impact
+                impacts = [abs(entry["impact"]) for entry in param_data["history"]]
+                avg_impact = sum(impacts) / len(impacts)
+                
+                # Consider number of samples for confidence
+                sample_confidence = min(1.0, len(impacts) / 10)
+                
+                # Calculate final score
+                impact_scores[param_name] = avg_impact * sample_confidence
+        
+        # Rank parameters by impact score
+        self.parameter_impact_ranking = {
+            k: {"score": v, "rank": i+1} 
+            for i, (k, v) in enumerate(sorted(impact_scores.items(), key=lambda x: x[1], reverse=True))
+        }
+        
+        # Adjust evaluation priorities
+        high_impact_params = [k for k, v in self.parameter_impact_ranking.items() 
+                              if v["rank"] <= 5]  # Top 5 parameters
+        
+        for param_name in high_impact_params:
+            # Increase evaluation frequency for high-impact parameters
+            if param_name not in self.parameter_evaluation_priority:
+                self.parameter_evaluation_priority[param_name] = 1.5  # 50% more likely to be evaluated
+    
+    async def evaluate_and_adjust_parameters(self) -> Dict[str, Any]:
+        """
+        Evaluate current performance metrics and adjust parameters if needed
+        
+        Returns:
+            Results of parameter adjustments
+        """
+        if not self.self_config_enabled:
+            return {"status": "disabled"}
+        
+        results = {
+            "evaluated": [],
+            "adjusted": [],
+            "timestamp": datetime.datetime.now().isoformat(),
+            "strategy": self.current_adaptation_strategy
+        }
+        
+        # Get current strategy configuration
+        strategy = self.adaptation_strategies[self.current_adaptation_strategy]
+        confidence_multiplier = strategy["confidence_multiplier"]
+        step_multiplier = strategy["step_multiplier"]
+        evaluation_frequency = strategy["evaluation_frequency"]
+        
+        # Get current performance metrics
+        stats = await self.get_system_stats()
+        performance = stats["performance_metrics"]
+        
+        # Check current emotional state to influence strategy
+        emotional_state = stats["emotional_state"]
+        dominant_emotion = emotional_state.get("dominant_emotion")
+        
+        # Adjust strategy based on emotion if needed
+        adjusted_step_multiplier = step_multiplier
+        if dominant_emotion in ["Joy", "Trust", "Anticipation"]:
+            # More positive emotions -> slightly more exploratory
+            adjusted_step_multiplier *= 1.1
+        elif dominant_emotion in ["Fear", "Anger", "Disgust"]:
+            # More negative emotions -> slightly more conservative
+            adjusted_step_multiplier *= 0.9
+        
+        # Check if brain is in an abnormal state to prioritize stability
+        abnormal_state = False
+        if performance.get("avg_response_time", 0) > 1.5:  # High response time
+            abnormal_state = True
+        
+        # Get highest priority parameters to evaluate
+        eval_params = []
+        
+        # Always evaluate high-impact or abnormal-state-related parameters
+        if abnormal_state:
+            # During abnormal state, prioritize performance parameters
+            eval_params.extend([p for p, c in self.adjustable_parameters.items() 
+                               if c["category"] == "performance"])
+        
+        # Add meta-learned high-impact parameters
+        if hasattr(self, "parameter_impact_ranking") and self.parameter_impact_ranking:
+            high_impact = [k for k, v in self.parameter_impact_ranking.items() 
+                          if v["rank"] <= 3]  # Top 3
+            eval_params.extend(high_impact)
+        
+        # Add random parameters to evaluate
+        remaining_params = [p for p in self.adjustable_parameters.keys() 
+                          if p not in eval_params]
+        
+        # Determine how many to evaluate based on strategy's evaluation frequency
+        eval_count = max(3, int(len(remaining_params) * 0.3 * evaluation_frequency))
+        random_params = random.sample(remaining_params, min(eval_count, len(remaining_params)))
+        eval_params.extend(random_params)
+        
+        # Ensure no duplicates
+        eval_params = list(set(eval_params))
+        
+        # For each parameter to evaluate
+        for param_name in eval_params:
+            if param_name not in self.adjustable_parameters:
+                continue
+                
+            param_config = self.adjustable_parameters[param_name]
+            results["evaluated"].append(param_name)
+            
+            # Get relevant metrics for this parameter
+            relevant_metrics = self.parameter_metrics_map.get(param_name, [])
+            if not relevant_metrics:
+                continue
+                
+            # Calculate current performance score for these metrics
+            current_score = sum(performance.get(metric, 0) for metric in relevant_metrics)
+            
+            # Analyze historical performance for this parameter
+            should_adjust, direction, confidence = await self._analyze_parameter_performance(
+                param_name, 
+                current_score,
+                relevant_metrics
+            )
+            
+            # Apply strategy confidence modifier
+            adjusted_confidence = confidence * confidence_multiplier
+            
+            if should_adjust and adjusted_confidence >= self.confidence_thresholds["medium"]:
+                # Calculate step size based on confidence and strategy
+                confidence_factor = min(1.0, adjusted_confidence / self.confidence_thresholds["high"])
+                step_size = param_config["step"] * direction * adjusted_step_multiplier
+                
+                # Check for parameter dependencies
+                dependency_adjusted_step = await self._adjust_for_dependencies(
+                    param_name, step_size, confidence_factor
+                )
+                
+                # Calculate new value using the adjusted step
+                current = param_config["current"]
+                new_value = current + dependency_adjusted_step
+                
+                # Clamp to safe range
+                new_value = max(param_config["min"], min(param_config["max"], new_value))
+                
+                # Special case for boolean parameters
+                if param_config["min"] == 0 and param_config["max"] == 1 and param_config["step"] == 1:
+                    new_value = round(new_value)
+                
+                # Only adjust if the value actually changed
+                if new_value != current:
+                    # Update the parameter
+                    await self._update_parameter(param_name, new_value)
+                    
+                    results["adjusted"].append({
+                        "parameter": param_name,
+                        "old_value": current,
+                        "new_value": new_value,
+                        "direction": "increase" if direction > 0 else "decrease",
+                        "confidence": adjusted_confidence,
+                        "relevant_metrics": relevant_metrics,
+                        "category": param_config["category"]
+                    })
+                    
+                    # If we changed an important parameter in abnormal state, stop
+                    # to observe its effects before making more changes
+                    if abnormal_state and param_config["category"] == "performance":
+                        break
+        
+        # If meta-cognitive reflection is available, generate a reflection on the changes
+        if hasattr(self, "reflection_engine") and self.reflection_engine and results["adjusted"]:
+            reflection = await self.reflection_engine.generate_reflection(
+                topic=f"parameter adjustment ({len(results['adjusted'])} changes)",
+                context={
+                    "adjustments": results["adjusted"],
+                    "performance": performance,
+                    "strategy": self.current_adaptation_strategy
+                }
+            )
+            results["reflection"] = reflection
+            
+            # Also check if we should change adaptation strategy
+            if len(results["adjusted"]) > 5:
+                # Many parameters changed, consider more conservative approach
+                if self.current_adaptation_strategy == "exploratory":
+                    results["strategy_recommendation"] = "Consider switching to balanced strategy after many parameters changed"
+            elif len(results["adjusted"]) == 0 and len(results["evaluated"]) > 10:
+                # Many evaluations but no changes, consider more exploratory approach
+                if self.current_adaptation_strategy == "conservative":
+                    results["strategy_recommendation"] = "Consider switching to balanced strategy after few parameter changes"
+        
+        return results
+    
+    async def _adjust_for_dependencies(self, param_name, step_size, confidence_factor):
+        """
+        Adjust step size based on parameter dependencies
+        
+        Args:
+            param_name: Parameter being adjusted
+            step_size: Proposed step size
+            confidence_factor: Confidence in the adjustment (0-1)
+            
+        Returns:
+            Adjusted step size
+        """
+        # Get dependencies
+        dependencies = self.parameter_dependencies.get(param_name, {"affects": [], "affected_by": []})
+        
+        # If no dependencies, return original step
+        if not dependencies["affected_by"] and not dependencies["affects"]:
+            return step_size
+        
+        # Check for conflicts with affected parameters
+        for affected_param in dependencies["affects"]:
+            if affected_param not in self.adjustable_parameters:
+                continue
+                
+            # Get affected parameter recent history
+            if affected_param in self.param_performance_impact:
+                history = self.param_performance_impact[affected_param]["history"]
+                if not history:
+                    continue
+                    
+                # Check if affected parameter is already improving
+                recent_entries = history[-3:]
+                if len(recent_entries) < 2:
+                    continue
+                    
+                avg_impact = sum(entry["impact"] for entry in recent_entries) / len(recent_entries)
+                
+                # If affected parameter is already improving well, reduce our step
+                if avg_impact > 0.1:
+                    step_size *= 0.8  # Reduce step size
+        
+        # Check if we're affected by other parameters
+        for affecting_param in dependencies["affected_by"]:
+            if affecting_param not in self.adjustable_parameters:
+                continue
+                
+            # Check if affecting parameter recently changed
+            if hasattr(self, "config_change_history") and self.config_change_history:
+                recent_changes = [change for change in self.config_change_history[-5:] 
+                                 if change["parameter"] == affecting_param]
+                
+                if recent_changes:
+                    # Recent change in a parameter that affects us
+                    # Reduce our step size to avoid interference
+                    step_size *= 0.7
+        
+        # Adjust based on confidence
+        final_step = step_size * (0.7 + (0.3 * confidence_factor))
+        
+        return final_step
+    
+    async def _analyze_parameter_performance(self, 
+                                           param_name: str, 
+                                           current_score: float,
+                                           relevant_metrics: List[str]) -> Tuple[bool, float, float]:
+        """
+        Analyze whether a parameter should be adjusted and in which direction
+        
+        Args:
+            param_name: Name of parameter to analyze
+            current_score: Current performance score
+            relevant_metrics: List of relevant metric names
+            
+        Returns:
+            Tuple of (should_adjust, direction, confidence)
+        """
+        # Initialize if not in history
+        if param_name not in self.param_performance_impact:
+            self.param_performance_impact[param_name] = {
+                "history": [],
+                "baseline": current_score
+            }
+        
+        param_data = self.param_performance_impact[param_name]
+        history = param_data["history"]
+        
+        # If no history yet, establish baseline and make exploratory change
+        if not history:
+            # Direction based on user feedback if available
+            direction = 0.0
+            
+            if hasattr(self, "user_feedback_impact") and param_name in self.user_feedback_impact["parameter_adjustments"]:
+                feedback_data = self.user_feedback_impact["parameter_adjustments"][param_name]
+                if feedback_data.get("recommended_direction") is not None:
+                    direction = feedback_data["recommended_direction"]
+            
+            # Default to increase if no feedback
+            if direction == 0.0:
+                direction = 1.0
+                
+            return True, direction, 0.5  # Exploratory with medium confidence
+        
+        # Calculate average performance change per direction
+        increases = [entry for entry in history if entry["direction"] > 0]
+        decreases = [entry for entry in history if entry["direction"] < 0]
+        
+        # Weight recent results more heavily
+        recent_increases = [entry for entry in increases if entry.get("change_id", 0) >= len(self.config_change_history) - 5]
+        recent_decreases = [entry for entry in decreases if entry.get("change_id", 0) >= len(self.config_change_history) - 5]
+        
+        # Calculate weighted impacts
+        avg_increase_impact = 0
+        if increases:
+            if recent_increases:
+                avg_increase_impact = sum(entry["impact"] * 1.5 for entry in recent_increases) / len(recent_increases)
+            else:
+                avg_increase_impact = sum(entry["impact"] for entry in increases) / len(increases)
+        
+        avg_decrease_impact = 0
+        if decreases:
+            if recent_decreases:
+                avg_decrease_impact = sum(entry["impact"] * 1.5 for entry in recent_decreases) / len(recent_decreases)
+            else:
+                avg_decrease_impact = sum(entry["impact"] for entry in decreases) / len(decreases)
+        
+        # Consider user feedback
+        if hasattr(self, "user_feedback_impact") and param_name in self.user_feedback_impact["parameter_adjustments"]:
+            feedback_data = self.user_feedback_impact["parameter_adjustments"][param_name]
+            
+            if feedback_data.get("recommended_direction") == 1.0:
+                # User feedback suggests increase
+                avg_increase_impact += 0.1
+            elif feedback_data.get("recommended_direction") == -1.0:
+                # User feedback suggests decrease
+                avg_decrease_impact += 0.1
+        
+        # Decide direction based on historical impact
+        if avg_increase_impact > avg_decrease_impact and avg_increase_impact > 0:
+            direction = 1.0  # Increase
+            expected_impact = avg_increase_impact
+        elif avg_decrease_impact > 0:
+            direction = -1.0  # Decrease
+            expected_impact = avg_decrease_impact
+        else:
+            # If both negative or no data for one direction, explore
+            if not increases:
+                direction = 1.0  # Try increasing
+                expected_impact = 0.1  # Assumed positive impact
+            elif not decreases:
+                direction = -1.0  # Try decreasing
+                expected_impact = 0.1  # Assumed positive impact
+            else:
+                # Both directions tried with negative results, revert to default
+                param_config = self.adjustable_parameters[param_name]
+                current = param_config["current"]
+                default = param_config["default"]
+                
+                if abs(current - default) > param_config["step"]:
+                    # Move toward default
+                    direction = 1.0 if default > current else -1.0
+                    expected_impact = 0.1  # Assumed positive impact
+                else:
+                    # Already at/near default, don't change
+                    return False, 0.0, 0.0
+        
+        # Calculate confidence based on history consistency
+        if direction > 0:
+            samples = increases
+        else:
+            samples = decreases
+        
+        if samples:
+            # Calculate consistency of results
+            if len(samples) > 1:
+                try:
+                    consistency = statistics.stdev([entry["impact"] for entry in samples])
+                    consistency = max(0.1, min(1.0, 1.0 - consistency))  # Lower variance = higher consistency
+                except statistics.StatisticsError:
+                    consistency = 0.5  # Default if stdev fails
+            else:
+                consistency = 0.5  # Single sample
+                
+            # Calculate trend (if recent results show improving trend)
+            if len(samples) >= 3:
+                recent = sorted(samples, key=lambda x: x.get("change_id", 0), reverse=True)[:3]
+                if len(recent) >= 2:
+                    first_impacts = [e["impact"] for e in recent[1:]]
+                    latest_impact = recent[0]["impact"]
+                    avg_first = sum(first_impacts) / len(first_impacts)
+                    
+                    if latest_impact > avg_first:
+                        # Improving trend
+                        trend_bonus = 0.1
+                    else:
+                        # Declining trend
+                        trend_bonus = -0.1
+                else:
+                    trend_bonus = 0
+            else:
+                trend_bonus = 0
+                
+            confidence = min(0.9, len(samples) / 10 + consistency * 0.3 + trend_bonus)
+        else:
+            confidence = 0.3  # Low confidence for exploration
+        
+        # Check if this parameter is important according to meta-learning
+        if hasattr(self, "parameter_impact_ranking") and param_name in self.parameter_impact_ranking:
+            rank = self.parameter_impact_ranking[param_name]["rank"]
+            if rank <= 5:  # Top 5 important parameter
+                confidence *= 1.1  # Slight confidence boost
+        
+        # Whether to adjust depends on confidence and expected impact
+        should_adjust = confidence >= self.confidence_thresholds["low"] and expected_impact > 0
+        
+        return should_adjust, direction, confidence
+    
+    async def _update_parameter(self, param_name: str, new_value: float) -> None:
+        """
+        Update a parameter to a new value and record the change
+        
+        Args:
+            param_name: Name of parameter to update
+            new_value: New value for the parameter
+        """
+        param_config = self.adjustable_parameters[param_name]
+        old_value = param_config["current"]
+        
+        # Record history before change
+        stats_before = await self.get_system_stats()
+        baseline_score = sum(stats_before["performance_metrics"].get(metric, 0) 
+                            for metric in self.parameter_metrics_map.get(param_name, []))
+        
+        # Update parameter config tracking
+        param_config["current"] = new_value
+        self.adjustable_parameters[param_name] = param_config
+        
+        # Update actual parameter
+        if hasattr(self, param_name):
+            setattr(self, param_name, new_value)
+        
+        # Record change
+        change_record = {
+            "parameter": param_name,
+            "old_value": old_value,
+            "new_value": new_value,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "interaction_count": self.interaction_count,
+            "direction": 1.0 if new_value > old_value else -1.0,
+            "baseline_score": baseline_score,
+            "category": param_config["category"],
+            "strategy": self.current_adaptation_strategy
+        }
+        
+        self.config_change_history.append(change_record)
+        
+        # Schedule impact evaluation
+        asyncio.create_task(self._evaluate_parameter_impact(param_name, change_record))
+        
+        # Log the change
+        logger.info(f"Self-adjusted parameter {param_name}: {old_value} -> {new_value} (using {self.current_adaptation_strategy} strategy)")
+    
+    async def _evaluate_parameter_impact(self, param_name: str, change_record: Dict[str, Any]) -> None:
+        """
+        Evaluate the impact of a parameter change after a period of time
+        
+        Args:
+            param_name: Name of parameter that was changed
+            change_record: Record of the parameter change
+        """
+        # Wait for sufficient interactions to evaluate impact
+        interactions_to_wait = min(self.config_update_interval // 2, 25)
+        
+        # Either wait for X interactions or a timeout
+        start_interaction = self.interaction_count
+        start_time = datetime.datetime.now()
+        
+        while (self.interaction_count - start_interaction < interactions_to_wait and
+               (datetime.datetime.now() - start_time).total_seconds() < 3600):
+            await asyncio.sleep(30)  # Check every 30 seconds
+        
+        # Get current metrics
+        stats_after = await self.get_system_stats()
+        current_score = sum(stats_after["performance_metrics"].get(metric, 0) 
+                           for metric in self.parameter_metrics_map.get(param_name, []))
+        
+        # Calculate impact
+        baseline_score = change_record["baseline_score"]
+        raw_impact = current_score - baseline_score
+        
+        # Normalize by interaction count
+        interaction_diff = self.interaction_count - change_record["interaction_count"]
+        if interaction_diff > 0:
+            normalized_impact = raw_impact / interaction_diff
+        else:
+            normalized_impact = raw_impact
+        
+        # Adjust for global performance trends
+        # If overall performance improved/declined, adjust individual impact
+        overall_before = sum(stats_before["performance_metrics"].values()) if "stats_before" in locals() else 0
+        overall_after = sum(stats_after["performance_metrics"].values())
+        overall_change = overall_after - overall_before
+        
+        if overall_change != 0 and "stats_before" in locals():
+            # Remove global trend component
+            global_component = overall_change * 0.3  # Only attribute 30% to global trends
+            adjusted_impact = normalized_impact - global_component
+        else:
+            adjusted_impact = normalized_impact
+        
+        # Update parameter history
+        if param_name not in self.param_performance_impact:
+            self.param_performance_impact[param_name] = {
+                "history": [],
+                "baseline": baseline_score
+            }
+        
+        # Add impact record
+        impact_record = {
+            "change_id": len(self.config_change_history) - 1,
+            "old_value": change_record["old_value"],
+            "new_value": change_record["new_value"],
+            "direction": change_record["direction"],
+            "baseline_score": baseline_score,
+            "current_score": current_score,
+            "raw_impact": raw_impact,
+            "normalized_impact": normalized_impact,
+            "adjusted_impact": adjusted_impact,
+            "impact": adjusted_impact,  # Alias for simple reference
+            "interactions_measured": interaction_diff,
+            "time_measured": (datetime.datetime.now() - start_time).total_seconds(),
+            "category": change_record["category"],
+            "strategy": change_record["strategy"]
+        }
+        
+        self.param_performance_impact[param_name]["history"].append(impact_record)
+        
+        # Log the impact evaluation
+        logger.info(f"Parameter {param_name} change impact: {adjusted_impact:.4f}")
+        
+        # Check for extreme impact (very positive or negative)
+        if abs(adjusted_impact) > 0.3:
+            # Generate reflection on significant impact
+            if hasattr(self, "reflection_engine") and self.reflection_engine:
+                impact_direction = "positive" if adjusted_impact > 0 else "negative"
+                asyncio.create_task(
+                    self.reflection_engine.generate_reflection(
+                        topic=f"significant {impact_direction} parameter impact",
+                        context={
+                            "parameter": param_name,
+                            "impact": adjusted_impact,
+                            "change": {
+                                "old_value": change_record["old_value"],
+                                "new_value": change_record["new_value"]
+                            }
+                        }
+                    )
+                )
+    
+    async def process_user_feedback_for_configuration(self, 
+                                                   feedback_type: str, 
+                                                   feedback_text: str,
+                                                   context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Process user feedback to influence configuration parameters
+        
+        Args:
+            feedback_type: Type of feedback ("positive", "negative", "specific")
+            feedback_text: Text of user feedback
+            context: Additional context information
+            
+        Returns:
+            Processing results
+        """
+        if not hasattr(self, "self_config_enabled") or not self.self_config_enabled:
+            return {"status": "self-configuration not enabled"}
+        
+        results = {
+            "processed": True,
+            "feedback_type": feedback_type,
+            "affected_parameters": []
+        }
+        
+        # Initialize context
+        context = context or {}
+        
+        # Track feedback
+        if feedback_type not in self.user_feedback_impact:
+            self.user_feedback_impact[feedback_type] = {}
+        
+        # Process based on feedback type
+        if feedback_type == "positive":
+            # Positive feedback reinforces current parameter settings
+            recent_changes = self.config_change_history[-5:] if self.config_change_history else []
+            
+            for change in recent_changes:
+                param_name = change["parameter"]
+                
+                if param_name not in self.user_feedback_impact["positive_feedback"]:
+                    self.user_feedback_impact["positive_feedback"][param_name] = {
+                        "count": 0,
+                        "recent_directions": []
+                    }
+                
+                self.user_feedback_impact["positive_feedback"][param_name]["count"] += 1
+                self.user_feedback_impact["positive_feedback"][param_name]["recent_directions"].append(change["direction"])
+                
+                if param_name not in self.user_feedback_impact["parameter_adjustments"]:
+                    self.user_feedback_impact["parameter_adjustments"][param_name] = {
+                        "positive_count": 0,
+                        "negative_count": 0,
+                        "recommended_direction": None
+                    }
+                
+                self.user_feedback_impact["parameter_adjustments"][param_name]["positive_count"] += 1
+                
+                # Update recommended direction based on positive feedback
+                recent_dirs = self.user_feedback_impact["positive_feedback"][param_name]["recent_directions"]
+                if len(recent_dirs) >= 2:
+                    # If recent changes have been consistently in one direction and got positive feedback,
+                    # recommend continuing in that direction
+                    if all(d > 0 for d in recent_dirs):
+                        self.user_feedback_impact["parameter_adjustments"][param_name]["recommended_direction"] = 1.0
+                    elif all(d < 0 for d in recent_dirs):
+                        self.user_feedback_impact["parameter_adjustments"][param_name]["recommended_direction"] = -1.0
+                
+                results["affected_parameters"].append({
+                    "parameter": param_name,
+                    "current_value": self.adjustable_parameters[param_name]["current"],
+                    "positive_reinforcement": True
+                })
+        
+        elif feedback_type == "negative":
+            # Negative feedback suggests possibly reverting recent changes
+            recent_changes = self.config_change_history[-5:] if self.config_change_history else []
+            
+            for change in recent_changes:
+                param_name = change["parameter"]
+                
+                if param_name not in self.user_feedback_impact["negative_feedback"]:
+                    self.user_feedback_impact["negative_feedback"][param_name] = {
+                        "count": 0,
+                        "recent_directions": []
+                    }
+                
+                self.user_feedback_impact["negative_feedback"][param_name]["count"] += 1
+                self.user_feedback_impact["negative_feedback"][param_name]["recent_directions"].append(change["direction"])
+                
+                if param_name not in self.user_feedback_impact["parameter_adjustments"]:
+                    self.user_feedback_impact["parameter_adjustments"][param_name] = {
+                        "positive_count": 0,
+                        "negative_count": 0,
+                        "recommended_direction": None
+                    }
+                
+                self.user_feedback_impact["parameter_adjustments"][param_name]["negative_count"] += 1
+                
+                # Update recommended direction based on negative feedback (opposite of recent change)
+                self.user_feedback_impact["parameter_adjustments"][param_name]["recommended_direction"] = -1 * change["direction"]
+                
+                results["affected_parameters"].append({
+                    "parameter": param_name,
+                    "current_value": self.adjustable_parameters[param_name]["current"],
+                    "recommended_direction": -1 * change["direction"]
+                })
+        
+        elif feedback_type == "specific" and feedback_text:
+            # Try to extract specific parameter feedback
+            for param_name, param_config in self.adjustable_parameters.items():
+                # Check if parameter is mentioned
+                if param_name.replace("_", " ") in feedback_text.lower():
+                    # Determine sentiment
+                    positive_terms = ["good", "better", "improve", "well", "like", "great", "excellent", "perfect"]
+                    negative_terms = ["bad", "worse", "poor", "issue", "problem", "dislike", "terrible", "wrong"]
+                    
+                    positive_sentiment = any(term in feedback_text.lower() for term in positive_terms)
+                    negative_sentiment = any(term in feedback_text.lower() for term in negative_terms)
+                    
+                    # Determine direction
+                    increase_terms = ["increase", "higher", "more", "stronger", "boost", "raise"]
+                    decrease_terms = ["decrease", "lower", "less", "weaker", "reduce", "lessen"]
+                    
+                    increase_direction = any(term in feedback_text.lower() for term in increase_terms)
+                    decrease_direction = any(term in feedback_text.lower() for term in decrease_terms)
+                    
+                    # Record feedback
+                    if param_name not in self.user_feedback_impact["parameter_adjustments"]:
+                        self.user_feedback_impact["parameter_adjustments"][param_name] = {
+                            "positive_count": 0,
+                            "negative_count": 0,
+                            "recommended_direction": None
+                        }
+                    
+                    if positive_sentiment:
+                        self.user_feedback_impact["parameter_adjustments"][param_name]["positive_count"] += 1
+                    if negative_sentiment:
+                        self.user_feedback_impact["parameter_adjustments"][param_name]["negative_count"] += 1
+                    
+                    # Set recommended direction
+                    if increase_direction:
+                        self.user_feedback_impact["parameter_adjustments"][param_name]["recommended_direction"] = 1.0
+                    elif decrease_direction:
+                        self.user_feedback_impact["parameter_adjustments"][param_name]["recommended_direction"] = -1.0
+                    
+                    results["affected_parameters"].append({
+                        "parameter": param_name,
+                        "current_value": param_config["current"],
+                        "sentiment": "positive" if positive_sentiment else "negative" if negative_sentiment else "neutral",
+                        "direction": "increase" if increase_direction else "decrease" if decrease_direction else "unspecified"
+                    })
+                    
+                    # If there's a clear recommendation, make an immediate adjustment
+                    if (positive_sentiment or negative_sentiment) and (increase_direction or decrease_direction):
+                        direction = 1.0 if increase_direction else -1.0
+                        new_value = param_config["current"] + (param_config["step"] * direction)
+                        
+                        # Clamp to safe range
+                        new_value = max(param_config["min"], min(param_config["max"], new_value))
+                        
+                        # Only adjust if the value actually changed
+                        if new_value != param_config["current"]:
+                            await self._update_parameter(param_name, new_value)
+                            results["immediate_adjustment"] = {
+                                "parameter": param_name,
+                                "old_value": param_config["current"],
+                                "new_value": new_value,
+                                "based_on": "explicit user feedback"
+                            }
+        
+        # If multiple parameters were negatively affected, consider switching strategy
+        if feedback_type == "negative" and len(results["affected_parameters"]) >= 3:
+            if self.current_adaptation_strategy == "exploratory":
+                # Switch to more conservative strategy
+                self.current_adaptation_strategy = "balanced"
+                results["strategy_change"] = {
+                    "old_strategy": "exploratory",
+                    "new_strategy": "balanced",
+                    "reason": "multiple parameters received negative feedback"
+                }
+            elif self.current_adaptation_strategy == "balanced":
+                # Switch to more conservative strategy
+                self.current_adaptation_strategy = "conservative"
+                results["strategy_change"] = {
+                    "old_strategy": "balanced",
+                    "new_strategy": "conservative",
+                    "reason": "multiple parameters received negative feedback"
+                }
+        
+        return results
+    
+    async def change_adaptation_strategy(self, strategy_name: str) -> Dict[str, Any]:
+        """
+        Change the current adaptation strategy
+        
+        Args:
+            strategy_name: Name of strategy to use
+            
+        Returns:
+            Strategy change results
+        """
+        if not hasattr(self, "self_config_enabled") or not self.self_config_enabled:
+            return {"status": "self-configuration not enabled"}
+        
+        if strategy_name not in self.adaptation_strategies:
+            return {
+                "status": "error",
+                "message": f"Unknown strategy: {strategy_name}. Available strategies: {list(self.adaptation_strategies.keys())}"
+            }
+        
+        old_strategy = self.current_adaptation_strategy
+        self.current_adaptation_strategy = strategy_name
+        
+        return {
+            "status": "changed",
+            "old_strategy": old_strategy,
+            "new_strategy": strategy_name,
+            "strategy_description": self.adaptation_strategies[strategy_name]["description"]
+        }
+    
+    async def get_self_configuration_status(self) -> Dict[str, Any]:
+        """
+        Get status of the self-configuration system
+        
+        Returns:
+            Current status and history of the self-configuration system
+        """
+        if not hasattr(self, "self_config_enabled") or not self.self_config_enabled:
+            return {"enabled": False}
+        
+        # Get current parameter values by category
+        current_params = {}
+        for category in self.parameter_categories:
+            current_params[category] = {}
+        
+        for name, config in self.adjustable_parameters.items():
+            category = config["category"]
+            current_params[category][name] = {
+                "current": config["current"],
+                "default": config["default"],
+                "min": config["min"],
+                "max": config["max"],
+                "description": config["description"]
+            }
+        
+        # Summarize change history
+        recent_changes = self.config_change_history[-10:] if self.config_change_history else []
+        
+        # Get change statistics by category
+        category_changes = {}
+        for category in self.parameter_categories:
+            category_changes[category] = 0
+        
+        for change in self.config_change_history:
+            category = self.adjustable_parameters[change["parameter"]]["category"]
+            category_changes[category] += 1
+        
+        # Summarize performance impact
+        param_impact = {}
+        for param_name, data in self.param_performance_impact.items():
+            if data["history"]:
+                # Calculate overall impact trend
+                impacts = [entry["impact"] for entry in data["history"]]
+                avg_impact = sum(impacts) / len(impacts)
+                
+                # Calculate best direction
+                increases = [entry for entry in data["history"] if entry["direction"] > 0]
+                decreases = [entry for entry in data["history"] if entry["direction"] < 0]
+                
+                avg_increase_impact = sum(entry["impact"] for entry in increases) / len(increases) if increases else 0
+                avg_decrease_impact = sum(entry["impact"] for entry in decreases) / len(decreases) if decreases else 0
+                
+                best_direction = "increase" if avg_increase_impact > avg_decrease_impact else "decrease"
+                
+                param_impact[param_name] = {
+                    "avg_impact": avg_impact,
+                    "changes": len(data["history"]),
+                    "best_direction": best_direction,
+                    "category": self.adjustable_parameters[param_name]["category"]
+                }
+        
+        # Get meta-learning insights if available
+        meta_learning = None
+        if hasattr(self, "parameter_impact_ranking") and self.parameter_impact_ranking:
+            meta_learning = {
+                "high_impact_parameters": [
+                    {"parameter": k, "impact_score": v["score"], "rank": v["rank"]}
+                    for k, v in self.parameter_impact_ranking.items()
+                    if v["rank"] <= 5  # Top 5
+                ],
+                "parameter_evaluation_priority": self.parameter_evaluation_priority if hasattr(self, "parameter_evaluation_priority") else {}
+            }
+        
+        # Get user feedback summary
+        user_feedback = None
+        if hasattr(self, "user_feedback_impact"):
+            user_feedback = {
+                "positive_parameters": list(self.user_feedback_impact.get("positive_feedback", {}).keys()),
+                "negative_parameters": list(self.user_feedback_impact.get("negative_feedback", {}).keys()),
+                "parameter_adjustments": self.user_feedback_impact.get("parameter_adjustments", {})
+            }
+        
+        return {
+            "enabled": self.self_config_enabled,
+            "parameters_by_category": current_params,
+            "recent_changes": recent_changes,
+            "change_counts_by_category": category_changes,
+            "parameter_impact": param_impact,
+            "strategy": {
+                "current": self.current_adaptation_strategy,
+                "description": self.adaptation_strategies[self.current_adaptation_strategy]["description"],
+                "available": {k: v["description"] for k, v in self.adaptation_strategies.items()}
+            },
+            "meta_learning": meta_learning,
+            "user_feedback_impact": user_feedback,
+            "update_interval": self.config_update_interval,
+            "interactions_since_update": self.interaction_count - self.last_config_update,
+            "next_update_in": max(0, self.config_update_interval - (self.interaction_count - self.last_config_update))
+        }
+    
+    async def reset_parameter_to_default(self, param_name: str) -> Dict[str, Any]:
+        """
+        Reset a parameter to its default value
+        
+        Args:
+            param_name: Name of parameter to reset
+            
+        Returns:
+            Reset result
+        """
+        if not hasattr(self, "self_config_enabled") or not self.self_config_enabled:
+            return {"status": "self-configuration not enabled"}
+        
+        if param_name not in self.adjustable_parameters:
+            return {"status": "error", "message": f"Unknown parameter: {param_name}"}
+        
+        param_config = self.adjustable_parameters[param_name]
+        old_value = param_config["current"]
+        default_value = param_config["default"]
+        
+        # Only reset if not already at default
+        if old_value == default_value:
+            return {"status": "unchanged", "message": f"Parameter {param_name} already at default value: {default_value}"}
+        
+        # Update the parameter
+        await self._update_parameter(param_name, default_value)
+        
+        return {
+            "status": "reset",
+            "parameter": param_name,
+            "old_value": old_value,
+            "new_value": default_value,
+            "category": param_config["category"]
+        }
+    
+    async def reset_category_to_default(self, category: str) -> Dict[str, Any]:
+        """
+        Reset all parameters in a category to their default values
+        
+        Args:
+            category: Category name
+            
+        Returns:
+            Reset results
+        """
+        if not hasattr(self, "self_config_enabled") or not self.self_config_enabled:
+            return {"status": "self-configuration not enabled"}
+        
+        if category not in self.parameter_categories:
+            return {
+                "status": "error", 
+                "message": f"Unknown category: {category}. Available categories: {list(self.parameter_categories.keys())}"
+            }
+        
+        results = {
+            "status": "reset",
+            "category": category,
+            "reset_parameters": []
+        }
+        
+        # Find all parameters in the category
+        category_params = [
+            name for name, config in self.adjustable_parameters.items()
+            if config["category"] == category
+        ]
+        
+        # Reset each parameter
+        for param_name in category_params:
+            param_config = self.adjustable_parameters[param_name]
+            old_value = param_config["current"]
+            default_value = param_config["default"]
+            
+            # Only reset if not already at default
+            if old_value != default_value:
+                # Update the parameter
+                await self._update_parameter(param_name, default_value)
+                
+                results["reset_parameters"].append({
+                    "parameter": param_name,
+                    "old_value": old_value,
+                    "new_value": default_value
+                })
+        
+        return results
+    
+    async def add_custom_parameter(self, 
+                               param_name: str,
+                               current_value: float,
+                               min_value: float,
+                               max_value: float,
+                               default_value: float,
+                               step_size: float,
+                               description: str,
+                               category: str,
+                               related_params: List[str] = None) -> Dict[str, Any]:
+        """
+        Add a custom parameter to the self-configuration system
+        
+        Args:
+            param_name: Name of the parameter
+            current_value: Current value
+            min_value: Minimum allowed value
+            max_value: Maximum allowed value
+            default_value: Default value
+            step_size: Step size for adjustments
+            description: Parameter description
+            category: Parameter category
+            related_params: List of related parameter names
+            
+        Returns:
+            Addition result
+        """
+        if not hasattr(self, "self_config_enabled") or not self.self_config_enabled:
+            return {"status": "self-configuration not enabled"}
+        
+        if param_name in self.adjustable_parameters:
+            return {"status": "error", "message": f"Parameter already exists: {param_name}"}
+        
+        if category not in self.parameter_categories:
+            return {
+                "status": "error", 
+                "message": f"Unknown category: {category}. Available categories: {list(self.parameter_categories.keys())}"
+            }
+        
+        related_params = related_params or []
+        
+        # Validate related parameters
+        valid_related = [p for p in related_params if p in self.adjustable_parameters]
+        invalid_related = [p for p in related_params if p not in self.adjustable_parameters]
+        
+        # Add parameter
+        self.adjustable_parameters[param_name] = {
+            "current": current_value,
+            "min": min_value,
+            "max": max_value,
+            "default": default_value,
+            "step": step_size,
+            "description": description,
+            "category": category,
+            "related_to": valid_related
+        }
+        
+        # Update parameter dependencies
+        self.parameter_dependencies[param_name] = {
+            "affects": [],
+            "affected_by": valid_related
+        }
+        
+        # Update bidirectional relationships
+        for related_param in valid_related:
+            if related_param in self.parameter_dependencies:
+                if param_name not in self.parameter_dependencies[related_param]["affects"]:
+                    self.parameter_dependencies[related_param]["affects"].append(param_name)
+        
+        # Add to parameter metrics map (initially empty)
+        self.parameter_metrics_map[param_name] = []
+        
+        return {
+            "status": "added",
+            "parameter": param_name,
+            "current_value": current_value,
+            "category": category,
+            "valid_related_params": valid_related,
+            "invalid_related_params": invalid_related
+        }
+    
+    async def get_parameter_details(self, param_name: str) -> Dict[str, Any]:
+        """
+        Get detailed information about a specific parameter
+        
+        Args:
+            param_name: Name of parameter
+            
+        Returns:
+            Detailed parameter information
+        """
+        if not hasattr(self, "self_config_enabled") or not self.self_config_enabled:
+            return {"status": "self-configuration not enabled"}
+        
+        if param_name not in self.adjustable_parameters:
+            return {"status": "error", "message": f"Unknown parameter: {param_name}"}
+        
+        param_config = self.adjustable_parameters[param_name]
+        
+        # Get change history for this parameter
+        changes = [
+            change for change in self.config_change_history
+            if change["parameter"] == param_name
+        ]
+        
+        # Get impact history
+        impacts = []
+        if param_name in self.param_performance_impact:
+            impacts = self.param_performance_impact[param_name]["history"]
+        
+        # Get dependencies
+        dependencies = self.parameter_dependencies.get(param_name, {"affects": [], "affected_by": []})
+        
+        # Get relevant metrics
+        relevant_metrics = self.parameter_metrics_map.get(param_name, [])
+        
+        # Get user feedback
+        user_feedback = {}
+        if hasattr(self, "user_feedback_impact"):
+            if param_name in self.user_feedback_impact.get("positive_feedback", {}):
+                user_feedback["positive"] = self.user_feedback_impact["positive_feedback"][param_name]
+            
+            if param_name in self.user_feedback_impact.get("negative_feedback", {}):
+                user_feedback["negative"] = self.user_feedback_impact["negative_feedback"][param_name]
+            
+            if param_name in self.user_feedback_impact.get("parameter_adjustments", {}):
+                user_feedback["adjustments"] = self.user_feedback_impact["parameter_adjustments"][param_name]
+        
+        # Get meta-learning ranking
+        meta_ranking = None
+        if hasattr(self, "parameter_impact_ranking") and param_name in self.parameter_impact_ranking:
+            meta_ranking = self.parameter_impact_ranking[param_name]
+        
+        return {
+            "name": param_name,
+            "config": param_config,
+            "changes": changes,
+            "impacts": impacts,
+            "dependencies": dependencies,
+            "relevant_metrics": relevant_metrics,
+            "user_feedback": user_feedback,
+            "meta_ranking": meta_ranking
+        }
+    
+    async def generate_self_configuration_reflection(self) -> Dict[str, Any]:
+        """
+        Generate a reflection on the self-configuration system's performance
+        
+        Returns:
+            Reflection on the system's self-configuration
+        """
+        if not hasattr(self, "self_config_enabled") or not self.self_config_enabled:
+            return {"status": "self-configuration not enabled"}
+        
+        if not hasattr(self, "reflection_engine") or not self.reflection_engine:
+            return {"status": "reflection engine not available"}
+        
+        # Get summary stats
+        status = await self.get_self_configuration_status()
+        
+        # Calculate overall effectiveness
+        positive_impacts = 0
+        negative_impacts = 0
+        
+        for param_name, impact_data in status.get("parameter_impact", {}).items():
+            avg_impact = impact_data.get("avg_impact", 0)
+            if avg_impact > 0.05:
+                positive_impacts += 1
+            elif avg_impact < -0.05:
+                negative_impacts += 1
+        
+        total_params = len(self.adjustable_parameters)
+        adjusted_params = len(status.get("parameter_impact", {}))
+        
+        effectiveness_metrics = {
+            "total_parameters": total_parameters,
+            "parameters_adjusted": adjusted_params,
+            "positive_impact_parameters": positive_impacts,
+            "negative_impact_parameters": negative_impacts,
+            "adjustment_rate": adjusted_params / total_params if total_params > 0 else 0,
+            "success_rate": positive_impacts / adjusted_params if adjusted_params > 0 else 0
+        }
+        
+        # Generate reflection
+        reflection = await self.reflection_engine.generate_reflection(
+            topic="self-configuration system performance",
+            context={
+                "effectiveness_metrics": effectiveness_metrics,
+                "current_strategy": status["strategy"]["current"],
+                "high_impact_parameters": status.get("meta_learning", {}).get("high_impact_parameters", []),
+                "recent_changes": status["recent_changes"]
+            }
+        )
+        
+        return {
+            "status": "generated",
+            "reflection": reflection,
+            "effectiveness_metrics": effectiveness_metrics
+        }
+
     async def process_user_feedback(self, user_input: str, feedback_type: str):
         """Process explicit or implicit user feedback to identify issues"""
         # Check for implicit negative feedback
@@ -2683,6 +4249,8 @@ class NyxBrain:
             - Thinking Capability: Enables deliberate reasoning before responding when appropriate
             - Procedural Memory: Manages, executes, and transfers procedural knowledge
             - Reflexes: Ability to react quickly and instinctively when appropriate
+
+            Additionally, you have the ability to dynamically adjust your own configuration values.
             
             You can process inputs using different cognitive paths:
             1. Reflexive path: Fast, instinctive reactions without deliberate thought
@@ -2730,6 +4298,18 @@ class NyxBrain:
                 function_tool(self.generate_response_with_reflexes),
                 function_tool(self.analyze_stimulus_for_reflexes),
                 function_tool(self.evaluate_reflex_performance),
+
+                # Self-configuration tools
+                function_tool(self.enable_self_configuration),
+                function_tool(self.evaluate_and_adjust_parameters),
+                function_tool(self.get_self_configuration_status),
+                function_tool(self.reset_parameter_to_default),
+                function_tool(self.change_adaptation_strategy),
+                function_tool(self.reset_category_to_default),
+                function_tool(self.process_user_feedback_for_configuration),
+                function_tool(self.add_custom_parameter),
+                function_tool(self.get_parameter_details),
+                function_tool(self.generate_self_configuration_reflection),
                 
                 # Thinking tools
                 function_tool(self.process_user_input_with_thinking),
