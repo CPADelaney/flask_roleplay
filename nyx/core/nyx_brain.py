@@ -32,6 +32,9 @@ from nyx.core.reasoning_agents import integrated_reasoning_agent, triage_agent a
 from nyx.core.experience_consolidation import ExperienceConsolidationSystem
 from nyx.core.identity_evolution import IdentityEvolutionSystem
 from nyx.core.cross_user_experience import CrossUserExperienceManager
+from nyx.core.multimodal_integrator import EnhancedMultiModalIntegrator, SensoryInput, ExpectationSignal
+from nyx.core.attentional_controller import AttentionalController, AttentionalControl
+from nyx.core.reward_system import RewardSignalProcessor, RewardSignal
 
 from nyx.core.procedural_memory import (
     ProceduralMemoryManager, EnhancedProceduralMemoryManager,
@@ -1952,6 +1955,11 @@ class NyxBrain:
         
         # Initialize emotional core with hormone system
         self.emotional_core = EmotionalCore(hormone_system=self.hormone_system)
+
+        self.reward_system = RewardSignalProcessor(
+            emotional_core=self.emotional_core,
+            identity_evolution=self.identity_evolution
+        )
         
         # Initialize memory system
         self.memory_core = MemoryCore(self.user_id, self.conversation_id)
@@ -1984,6 +1992,19 @@ class NyxBrain:
         
         # Initialize internal feedback system
         self.internal_feedback = InternalFeedbackSystem()
+
+        # Initialize new components
+        self.attentional_controller = AttentionalController(
+            emotional_core=self.emotional_core
+        )
+        
+        self.multimodal_integrator = EnhancedMultiModalIntegrator(
+            reasoning_core=self.reasoning_core,
+            attentional_controller=self.attentional_controller
+        )
+        
+        # Register feature extractors and integration strategies
+        await self._register_processing_modules()
         
         
         # Initialize dynamic adaptation system
@@ -2022,6 +2043,23 @@ class NyxBrain:
         self.initialized = True
         logger.info(f"NyxBrain initialized for user {self.user_id}, conversation {self.conversation_id}")
 
+    async def _register_processing_modules(self):
+        """Register processing modules for multimodal integration"""
+        # Register text modality processors
+        await self.multimodal_integrator.register_feature_extractor(
+            "text", self._extract_text_features
+        )
+        
+        await self.multimodal_integrator.register_expectation_modulator(
+            "text", self._modulate_text_perception
+        )
+        
+        await self.multimodal_integrator.register_integration_strategy(
+            "text", self._integrate_text_pathways
+        )
+        # Additional modalities would be registered here
+        # e.g., visual, auditory, etc.       
+
     async def add_procedure(self, 
                           name: str, 
                           steps: List[Dict[str, Any]],
@@ -2048,6 +2086,157 @@ class NyxBrain:
             description=description,
             domain=domain
         )
+
+
+    async def _extract_text_features(self, text_data):
+        """Extract features from text input (bottom-up processing)"""
+        features = {
+            "length": len(text_data),
+            "word_count": len(text_data.split()),
+            "sentiment": 0.0,  # Placeholder for actual sentiment analysis
+            "entities": [],  # Placeholder for named entity recognition
+            "commands": [],  # Placeholder for command recognition
+            "questions": text_data.endswith("?"),
+            "raw_text": text_data
+        }
+        
+        # Simple sentiment detection
+        positive_words = ["good", "great", "excellent", "happy", "love", "like", "enjoy"]
+        negative_words = ["bad", "terrible", "awful", "sad", "hate", "dislike", "angry"]
+        
+        words = text_data.lower().split()
+        pos_count = sum(1 for word in words if word in positive_words)
+        neg_count = sum(1 for word in words if word in negative_words)
+        
+        if pos_count + neg_count > 0:
+            features["sentiment"] = (pos_count - neg_count) / (pos_count + neg_count)
+        
+        # Detect entities (simple placeholder implementation)
+        features["entities"] = [word for word in words if word[0].isupper()]
+        
+        # Detect commands (simple placeholder implementation)
+        command_starters = ["please", "could you", "would you", "can you"]
+        for starter in command_starters:
+            if starter in text_data.lower():
+                features["commands"].append(text_data)
+                break
+        
+        return features
+
+    async def _modulate_text_perception(self, bottom_up_features, expectations):
+        """Apply top-down expectations to modulate text perception"""
+        # Start with unmodified features
+        modulated_features = bottom_up_features.copy()
+        
+        # Track which expectations influenced perception
+        influenced_by = []
+        total_influence = 0.0
+        
+        # Apply each expectation
+        for expectation in expectations:
+            # Skip if modality doesn't match
+            if expectation.target_modality != "text":
+                continue
+                
+            # Get expectation pattern and strength
+            pattern = expectation.pattern
+            strength = expectation.strength
+            
+            # Apply expectation based on type
+            if isinstance(pattern, dict):
+                # Complex pattern with specific expectations
+                for key, value in pattern.items():
+                    if key in modulated_features:
+                        # Blend expected value with actual value if numerical
+                        if isinstance(modulated_features[key], (int, float)) and isinstance(value, (int, float)):
+                            original = modulated_features[key]
+                            expected = value
+                            
+                            # Weighted average based on expectation strength
+                            modulated_features[key] = (original * (1 - strength) + expected * strength)
+                            
+                            # Track influence
+                            influenced_by.append(f"{expectation.source}:{key}")
+                            total_influence += strength
+            else:
+                # Simple pattern (e.g., expected text)
+                # For text, could enhance recognition of expected phrases
+                if isinstance(pattern, str) and "raw_text" in modulated_features:
+                    original_text = modulated_features["raw_text"]
+                    
+                    # Check if expected pattern is in text
+                    if pattern.lower() in original_text.lower():
+                        # Boost entities that match the pattern
+                        if "entities" in modulated_features:
+                            for i, entity in enumerate(modulated_features["entities"]):
+                                if pattern.lower() in entity.lower():
+                                    # Mark this entity as important
+                                    if "entity_importance" not in modulated_features:
+                                        modulated_features["entity_importance"] = {}
+                                    
+                                    modulated_features["entity_importance"][entity] = strength
+                                    
+                                    # Track influence
+                                    influenced_by.append(f"{expectation.source}:entity:{entity}")
+                                    total_influence += strength
+        
+        # Calculate overall influence strength
+        influence_strength = min(1.0, total_influence / max(1, len(influenced_by)))
+        
+        return {
+            "features": modulated_features,
+            "influence_strength": influence_strength,
+            "influenced_by": influenced_by
+        }
+    
+    async def _integrate_text_pathways(self, bottom_up_result, top_down_result):
+        """Integrate bottom-up and top-down processing for text"""
+        # Get features from both pathways
+        bottom_up_features = bottom_up_result["features"]
+        top_down_features = top_down_result["features"]
+        
+        # For text, we might prioritize different aspects:
+        # - Bottom-up for raw content and basic features
+        # - Top-down for interpretation and salience
+        
+        # Create integrated result
+        integrated = {
+            "content": bottom_up_features["raw_text"],  # Keep original text
+            "bottom_up_ratio": 1.0 - top_down_result["influence_strength"],
+            "top_down_ratio": top_down_result["influence_strength"],
+            "bottom_up_features": bottom_up_features,
+            "top_down_features": top_down_features
+        }
+        
+        # Integrate sentiment (weighted average if both pathways have it)
+        if "sentiment" in bottom_up_features and "sentiment" in top_down_features:
+            bottom_weight = integrated["bottom_up_ratio"]
+            top_weight = integrated["top_down_ratio"]
+            
+            integrated["sentiment"] = (
+                bottom_up_features["sentiment"] * bottom_weight +
+                top_down_features["sentiment"] * top_weight
+            )
+        elif "sentiment" in bottom_up_features:
+            integrated["sentiment"] = bottom_up_features["sentiment"]
+        elif "sentiment" in top_down_features:
+            integrated["sentiment"] = top_down_features["sentiment"]
+        
+        # Integrate entities (combine lists but mark importance from top-down)
+        if "entities" in bottom_up_features:
+            integrated["entities"] = bottom_up_features["entities"].copy()
+            
+            # Apply importance from top-down if available
+            if "entity_importance" in top_down_features:
+                integrated["entity_importance"] = top_down_features["entity_importance"]
+        
+        # Integrate other features as needed
+        for key in ["questions", "commands"]:
+            if key in bottom_up_features:
+                integrated[key] = bottom_up_features[key]
+        
+        return integrated
+
     
     async def execute_procedure(self,
                               name: str,
@@ -2423,6 +2612,33 @@ class NyxBrain:
             # Add temporal context to the processing context
             context = context or {}
             context["temporal_context"] = temporal_effects
+
+            # Create sensory input
+            sensory_input = SensoryInput(
+                modality="text",
+                data=user_input,
+                confidence=1.0,
+                timestamp=datetime.datetime.now().isoformat(),
+                metadata=context or {}
+            )
+            
+            # Update attention with this new input
+            salient_items = [{
+                "target": "text_input",
+                "novelty": 0.8,  # Assume new input is novel
+                "intensity": min(1.0, len(user_input) / 500),  # Longer inputs have higher intensity
+                "emotional_impact": 0.5,  # Default moderate emotional impact
+                "goal_relevance": 0.7,  # Assume user input is relevant to goals
+            }]
+            
+            await self.attentional_controller.update_attention(salient_items=salient_items)
+            
+            # Process through multimodal integrator
+            percept = await self.multimodal_integrator.process_sensory_input(sensory_input)
+            
+            # Update reasoning with the integrated percept
+            if percept.attention_weight > 0.5:  # Only process if it got sufficient attention
+                await self.reasoning_core.update_with_perception(percept)    
             
             # Update environmental factors for hormone system
             if self.hormone_system:
@@ -2631,6 +2847,16 @@ class NyxBrain:
                 "identity_impact": identity_impact,
                 "meta_result": meta_result
             }
+
+            if context and "reward_outcome" in context:
+                reward_result = await self.process_reward(
+                    context=context,
+                    outcome=context["reward_outcome"],
+                    success_level=context.get("success_level", 0.5)
+                )
+                
+                # Add reward result to overall result
+                result["reward_processing"] = reward_result
             
             # Add hormone information if available
             if self.hormone_system:
@@ -2655,6 +2881,13 @@ class NyxBrain:
                 )
                 
             result["temporal_context"] = temporal_effects
+
+             result["perceptual_processing"] = {
+                "modality": percept.modality,
+                "attention_weight": percept.attention_weight,
+                "bottom_up_confidence": percept.bottom_up_confidence,
+                "top_down_influence": percept.top_down_influence
+            }           
               
             return result
             
@@ -2664,6 +2897,49 @@ class NyxBrain:
                 context=f"User input: '{user_input[:50]}...'"
             )
             raise
+
+    async def process_reward(self, 
+                           context: Dict[str, Any],
+                           outcome: str,
+                           success_level: float = 0.5) -> Dict[str, Any]:
+        """
+        Process a reward event
+        
+        Args:
+            context: Context information
+            outcome: Outcome description (success, failure, neutral)
+            success_level: Level of success (0.0-1.0)
+            
+        Returns:
+            Reward processing results
+        """
+        # Generate reward signal
+        reward_signal = await self.reward_system.generate_reward_signal(
+            context=context,
+            outcome=outcome,
+            success_level=success_level
+        )
+        
+        # Process reward signal
+        result = await self.reward_system.process_reward_signal(reward_signal)
+        
+        # Return processing results
+        return result
+    
+    async def predict_best_action(self, 
+                               state: Dict[str, Any],
+                               available_actions: List[str]) -> Dict[str, Any]:
+        """
+        Predict the best action to take in a given state
+        
+        Args:
+            state: Current state
+            available_actions: List of available actions
+            
+        Returns:
+            Prediction results with best action and confidence
+        """
+        return await self.reward_system.predict_best_action(state, available_actions)
 
     async def get_identity_profile(self) -> Dict[str, Any]:
         """
@@ -3242,6 +3518,10 @@ class NyxBrain:
                 except Exception as e:
                     logger.error(f"Error getting hormone stats: {str(e)}")
                     hormone_stats = {"error": str(e)}
+
+            # Add reward system stats
+            if hasattr(self, "reward_system"):
+                result["reward_stats"] = await self.reward_system.get_reward_statistics()
             
             # Get meta core stats if available
             meta_stats = {}
