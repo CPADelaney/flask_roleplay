@@ -985,262 +985,262 @@ class ReasoningCore:
         
         return node_id
 
-# Add to nyx/core/reasoning_core.py
-
-async def generate_perceptual_expectations(self, modality: str = None) -> List[ExpectationSignal]:
-    """
-    Generate top-down expectations for perceptual processing based on
-    current causal models and conceptual understanding.
+    # Add to nyx/core/reasoning_core.py
     
-    Args:
-        modality: Optional specific modality to generate expectations for
+    async def generate_perceptual_expectations(self, modality: str = None) -> List[ExpectationSignal]:
+        """
+        Generate top-down expectations for perceptual processing based on
+        current causal models and conceptual understanding.
         
-    Returns:
-        List of expectation signals to influence perception
-    """
-    expectations = []
-    
-    # 1. Generate expectations from active causal models
-    for model_id, model in self.causal_models.items():
-        # Find highly predictive nodes in the model
-        try:
-            # Get nodes with high causal influence
-            central_nodes = []
+        Args:
+            modality: Optional specific modality to generate expectations for
             
-            try:
-                # Use network centrality if available
-                centrality = nx.betweenness_centrality(model.graph)
-                # Get top nodes by centrality
-                central_nodes = sorted(centrality.keys(), key=lambda n: centrality[n], reverse=True)[:5]
-            except:
-                # Fallback to random selection of nodes
-                central_nodes = list(model.nodes.keys())[:min(5, len(model.nodes))]
-            
-            # For each central node, generate expectations
-            for node_id in central_nodes:
-                node = model.nodes.get(node_id)
-                if not node:
-                    continue
-                    
-                # Get current state and high-probability descendants
-                current_state = node.get_current_state()
-                descendants = model.get_descendants(node_id)
-                
-                for desc_id in descendants[:3]:  # Limit to 3 descendants
-                    desc_node = model.nodes.get(desc_id)
-                    if not desc_node:
-                        continue
-                        
-                    # Generate expectation
-                    target_modality = desc_node.metadata.get("modality", "unknown")
-                    
-                    # Skip if modality filter applied and doesn't match
-                    if modality and target_modality != modality:
-                        continue
-                    
-                    # Calculate expectation strength based on causal relation strength
-                    relations = model.get_relations_between(node_id, desc_id)
-                    if not relations:
-                        continue
-                        
-                    # Use strongest relation
-                    strongest_relation = max(relations, key=lambda r: r.strength)
-                    
-                    # Create expectation signal
-                    expectation = ExpectationSignal(
-                        target_modality=target_modality,
-                        pattern=desc_node.get_current_state(),
-                        strength=strongest_relation.strength,
-                        source=f"causal_model:{model_id}:{node_id}",
-                        priority=0.7  # High priority for causal expectations
-                    )
-                    
-                    expectations.append(expectation)
-        except Exception as e:
-            logger.error(f"Error generating causal expectations: {e}")
-    
-    # 2. Generate expectations from conceptual blends
-    for blend_id, blend in self.blends.items():
-        try:
-            # Focus on emergent structures as they often represent novel patterns
-            for structure in blend.emergent_structure:
-                # Get concepts involved in the structure
-                concept_ids = structure.get("concepts", [])
-                
-                for concept_id in concept_ids:
-                    if concept_id not in blend.concepts:
-                        continue
-                        
-                    concept = blend.concepts[concept_id]
-                    
-                    # Determine target modality from concept properties
-                    target_modality = "unknown"
-                    for prop_name, prop_value in concept.get("properties", {}).items():
-                        if "modality" in prop_name.lower():
-                            target_modality = str(prop_value)
-                            break
-                    
-                    # Skip if modality filter applied and doesn't match
-                    if modality and target_modality != modality:
-                        continue
-                    
-                    # Get most salient property for expectation
-                    salient_prop = None
-                    for prop_name, prop_value in concept.get("properties", {}).items():
-                        if isinstance(prop_value, (str, int, float, bool)):
-                            salient_prop = prop_value
-                            break
-                    
-                    if salient_prop is None:
-                        continue
-                    
-                    # Create expectation signal
-                    expectation = ExpectationSignal(
-                        target_modality=target_modality,
-                        pattern=salient_prop,
-                        strength=0.6,  # Moderate strength for conceptual expectations
-                        source=f"conceptual_blend:{blend_id}:{concept_id}",
-                        priority=0.5  # Medium priority
-                    )
-                    
-                    expectations.append(expectation)
-        except Exception as e:
-            logger.error(f"Error generating conceptual expectations: {e}")
-    
-    # 3. Limit number of expectations to avoid overwhelming the system
-    if len(expectations) > 10:
-        # Prioritize by strength and priority
-        expectations.sort(key=lambda x: x.strength * x.priority, reverse=True)
-        expectations = expectations[:10]
-    
-    return expectations
-
-async def update_with_perception(self, percept: IntegratedPercept):
-    """
-    Update causal models and conceptual understanding
-    based on new perceptual information.
-    
-    Args:
-        percept: Integrated percept from multimodal integrator
-    """
-    try:
-        # 1. Update relevant causal models
-        updated_models = []
+        Returns:
+            List of expectation signals to influence perception
+        """
+        expectations = []
         
+        # 1. Generate expectations from active causal models
         for model_id, model in self.causal_models.items():
-            # Look for nodes that match this modality
-            matching_nodes = []
-            
-            for node_id, node in model.nodes.items():
-                # Check if node modality matches percept modality
-                if node.metadata.get("modality") == percept.modality:
-                    matching_nodes.append(node_id)
-            
-            if matching_nodes:
-                # Add observation to matching nodes
-                for node_id in matching_nodes:
-                    # Add observation
-                    model.nodes[node_id].add_observation(
-                        value=percept.content,
-                        confidence=percept.bottom_up_confidence * percept.attention_weight
-                    )
+            # Find highly predictive nodes in the model
+            try:
+                # Get nodes with high causal influence
+                central_nodes = []
                 
-                updated_models.append(model_id)
+                try:
+                    # Use network centrality if available
+                    centrality = nx.betweenness_centrality(model.graph)
+                    # Get top nodes by centrality
+                    central_nodes = sorted(centrality.keys(), key=lambda n: centrality[n], reverse=True)[:5]
+                except:
+                    # Fallback to random selection of nodes
+                    central_nodes = list(model.nodes.keys())[:min(5, len(model.nodes))]
                 
-                # If automatic discovery is enabled, check for new relations
-                if self.causal_config["enable_auto_discovery"] and \
-                   len(matching_nodes) > 1 and percept.attention_weight > 0.7:
-                    # Schedule discovery task
-                    asyncio.create_task(self.discover_causal_relations(model_id))
+                # For each central node, generate expectations
+                for node_id in central_nodes:
+                    node = model.nodes.get(node_id)
+                    if not node:
+                        continue
+                        
+                    # Get current state and high-probability descendants
+                    current_state = node.get_current_state()
+                    descendants = model.get_descendants(node_id)
+                    
+                    for desc_id in descendants[:3]:  # Limit to 3 descendants
+                        desc_node = model.nodes.get(desc_id)
+                        if not desc_node:
+                            continue
+                            
+                        # Generate expectation
+                        target_modality = desc_node.metadata.get("modality", "unknown")
+                        
+                        # Skip if modality filter applied and doesn't match
+                        if modality and target_modality != modality:
+                            continue
+                        
+                        # Calculate expectation strength based on causal relation strength
+                        relations = model.get_relations_between(node_id, desc_id)
+                        if not relations:
+                            continue
+                            
+                        # Use strongest relation
+                        strongest_relation = max(relations, key=lambda r: r.strength)
+                        
+                        # Create expectation signal
+                        expectation = ExpectationSignal(
+                            target_modality=target_modality,
+                            pattern=desc_node.get_current_state(),
+                            strength=strongest_relation.strength,
+                            source=f"causal_model:{model_id}:{node_id}",
+                            priority=0.7  # High priority for causal expectations
+                        )
+                        
+                        expectations.append(expectation)
+            except Exception as e:
+                logger.error(f"Error generating causal expectations: {e}")
         
-        # 2. Update conceptual spaces
-        for space_id, space in self.concept_spaces.items():
-            # Find concepts that might relate to this percept
-            updated = False
-            
-            for concept_id, concept in space.concepts.items():
-                # Check if concept relates to this modality
-                modality_match = False
-                
-                for prop_name, prop_value in concept.get("properties", {}).items():
-                    if "modality" in prop_name.lower() and str(prop_value) == percept.modality:
-                        modality_match = True
-                        break
-                
-                if modality_match:
-                    # Update concept with new property based on percept
-                    property_name = f"observed_{percept.modality}_{len(concept.get('properties', {}))}"
-                    concept["properties"][property_name] = percept.content
-                    updated = True
+        # 2. Generate expectations from conceptual blends
+        for blend_id, blend in self.blends.items():
+            try:
+                # Focus on emergent structures as they often represent novel patterns
+                for structure in blend.emergent_structure:
+                    # Get concepts involved in the structure
+                    concept_ids = structure.get("concepts", [])
                     
-                    # If percept has high attention weight, update more properties
-                    if percept.attention_weight > 0.8:
-                        concept["properties"]["attention_weight"] = percept.attention_weight
-                        concept["properties"]["bottom_up_confidence"] = percept.bottom_up_confidence
-                        concept["properties"]["top_down_influence"] = percept.top_down_influence
-            
-            if updated:
-                # If blending is enabled, consider creating new blend
-                if self.integrated_config["enable_auto_blending"] and random.random() < 0.2:
-                    # Schedule background task to avoid blocking
-                    asyncio.create_task(self._create_background_blend(space_id))
+                    for concept_id in concept_ids:
+                        if concept_id not in blend.concepts:
+                            continue
+                            
+                        concept = blend.concepts[concept_id]
+                        
+                        # Determine target modality from concept properties
+                        target_modality = "unknown"
+                        for prop_name, prop_value in concept.get("properties", {}).items():
+                            if "modality" in prop_name.lower():
+                                target_modality = str(prop_value)
+                                break
+                        
+                        # Skip if modality filter applied and doesn't match
+                        if modality and target_modality != modality:
+                            continue
+                        
+                        # Get most salient property for expectation
+                        salient_prop = None
+                        for prop_name, prop_value in concept.get("properties", {}).items():
+                            if isinstance(prop_value, (str, int, float, bool)):
+                                salient_prop = prop_value
+                                break
+                        
+                        if salient_prop is None:
+                            continue
+                        
+                        # Create expectation signal
+                        expectation = ExpectationSignal(
+                            target_modality=target_modality,
+                            pattern=salient_prop,
+                            strength=0.6,  # Moderate strength for conceptual expectations
+                            source=f"conceptual_blend:{blend_id}:{concept_id}",
+                            priority=0.5  # Medium priority
+                        )
+                        
+                        expectations.append(expectation)
+            except Exception as e:
+                logger.error(f"Error generating conceptual expectations: {e}")
+        
+        # 3. Limit number of expectations to avoid overwhelming the system
+        if len(expectations) > 10:
+            # Prioritize by strength and priority
+            expectations.sort(key=lambda x: x.strength * x.priority, reverse=True)
+            expectations = expectations[:10]
+        
+        return expectations
     
-    except Exception as e:
-        logger.error(f"Error updating with perception: {e}")
-
-    async def _create_background_blend(self, space_id: str):
-        """Create a background conceptual blend based on recent updates"""
+    async def update_with_perception(self, percept: IntegratedPercept):
+        """
+        Update causal models and conceptual understanding
+        based on new perceptual information.
+        
+        Args:
+            percept: Integrated percept from multimodal integrator
+        """
         try:
-            # Find another space to blend with
-            other_spaces = [s_id for s_id in self.concept_spaces.keys() if s_id != space_id]
+            # 1. Update relevant causal models
+            updated_models = []
             
-            if not other_spaces:
-                return
+            for model_id, model in self.causal_models.items():
+                # Look for nodes that match this modality
+                matching_nodes = []
                 
-            # Pick random other space
-            other_space_id = random.choice(other_spaces)
-            
-            # Create blend
-            space1 = self.concept_spaces[space_id]
-            space2 = self.concept_spaces[other_space_id]
-            
-            # Find mappings between spaces
-            mappings = []
-            
-            for concept1_id, concept1 in space1.concepts.items():
-                for concept2_id, concept2 in space2.concepts.items():
-                    # Calculate similarity
-                    similarity = self._calculate_concept_similarity(
-                        concept1, concept2, space1, space2
-                    )
+                for node_id, node in model.nodes.items():
+                    # Check if node modality matches percept modality
+                    if node.metadata.get("modality") == percept.modality:
+                        matching_nodes.append(node_id)
+                
+                if matching_nodes:
+                    # Add observation to matching nodes
+                    for node_id in matching_nodes:
+                        # Add observation
+                        model.nodes[node_id].add_observation(
+                            value=percept.content,
+                            confidence=percept.bottom_up_confidence * percept.attention_weight
+                        )
                     
-                    # If above threshold, add mapping
-                    if similarity >= self.blending_config["default_mapping_threshold"]:
-                        mappings.append({
-                            "concept1": concept1_id,
-                            "concept2": concept2_id,
-                            "similarity": similarity
-                        })
+                    updated_models.append(model_id)
+                    
+                    # If automatic discovery is enabled, check for new relations
+                    if self.causal_config["enable_auto_discovery"] and \
+                       len(matching_nodes) > 1 and percept.attention_weight > 0.7:
+                        # Schedule discovery task
+                        asyncio.create_task(self.discover_causal_relations(model_id))
             
-            if mappings:
-                # Generate a blend
-                blend_types = ["composition", "fusion", "elaboration", "contrast"]
-                blend_type = random.choice(blend_types)
+            # 2. Update conceptual spaces
+            for space_id, space in self.concept_spaces.items():
+                # Find concepts that might relate to this percept
+                updated = False
                 
-                if blend_type == "composition":
-                    self._generate_composition_blend(space1, space2, mappings)
-                elif blend_type == "fusion":
-                    self._generate_fusion_blend(space1, space2, mappings)
-                elif blend_type == "elaboration":
-                    self._generate_elaboration_blend(space1, space2, mappings)
-                elif blend_type == "contrast":
-                    self._generate_contrast_blend(space1, space2, mappings)
+                for concept_id, concept in space.concepts.items():
+                    # Check if concept relates to this modality
+                    modality_match = False
+                    
+                    for prop_name, prop_value in concept.get("properties", {}).items():
+                        if "modality" in prop_name.lower() and str(prop_value) == percept.modality:
+                            modality_match = True
+                            break
+                    
+                    if modality_match:
+                        # Update concept with new property based on percept
+                        property_name = f"observed_{percept.modality}_{len(concept.get('properties', {}))}"
+                        concept["properties"][property_name] = percept.content
+                        updated = True
+                        
+                        # If percept has high attention weight, update more properties
+                        if percept.attention_weight > 0.8:
+                            concept["properties"]["attention_weight"] = percept.attention_weight
+                            concept["properties"]["bottom_up_confidence"] = percept.bottom_up_confidence
+                            concept["properties"]["top_down_influence"] = percept.top_down_influence
                 
-                # Update statistics
-                self.stats["blends_created"] += 1
+                if updated:
+                    # If blending is enabled, consider creating new blend
+                    if self.integrated_config["enable_auto_blending"] and random.random() < 0.2:
+                        # Schedule background task to avoid blocking
+                        asyncio.create_task(self._create_background_blend(space_id))
         
         except Exception as e:
-            logger.error(f"Error creating background blend: {e}")
+            logger.error(f"Error updating with perception: {e}")
+    
+        async def _create_background_blend(self, space_id: str):
+            """Create a background conceptual blend based on recent updates"""
+            try:
+                # Find another space to blend with
+                other_spaces = [s_id for s_id in self.concept_spaces.keys() if s_id != space_id]
+                
+                if not other_spaces:
+                    return
+                    
+                # Pick random other space
+                other_space_id = random.choice(other_spaces)
+                
+                # Create blend
+                space1 = self.concept_spaces[space_id]
+                space2 = self.concept_spaces[other_space_id]
+                
+                # Find mappings between spaces
+                mappings = []
+                
+                for concept1_id, concept1 in space1.concepts.items():
+                    for concept2_id, concept2 in space2.concepts.items():
+                        # Calculate similarity
+                        similarity = self._calculate_concept_similarity(
+                            concept1, concept2, space1, space2
+                        )
+                        
+                        # If above threshold, add mapping
+                        if similarity >= self.blending_config["default_mapping_threshold"]:
+                            mappings.append({
+                                "concept1": concept1_id,
+                                "concept2": concept2_id,
+                                "similarity": similarity
+                            })
+                
+                if mappings:
+                    # Generate a blend
+                    blend_types = ["composition", "fusion", "elaboration", "contrast"]
+                    blend_type = random.choice(blend_types)
+                    
+                    if blend_type == "composition":
+                        self._generate_composition_blend(space1, space2, mappings)
+                    elif blend_type == "fusion":
+                        self._generate_fusion_blend(space1, space2, mappings)
+                    elif blend_type == "elaboration":
+                        self._generate_elaboration_blend(space1, space2, mappings)
+                    elif blend_type == "contrast":
+                        self._generate_contrast_blend(space1, space2, mappings)
+                    
+                    # Update statistics
+                    self.stats["blends_created"] += 1
+            
+            except Exception as e:
+                logger.error(f"Error creating background blend: {e}")
     
     async def add_relation_to_model(self, model_id: str, source_id: str, target_id: str,
                              relation_type: str = "causal", strength: float = 0.5,
