@@ -22,7 +22,7 @@ class SerialProcessor(BaseProcessor):
             context: Additional context information
             
         Returns:
-            Processing results
+            Processing results with relevant memories, emotional state, etc.
         """
         if not self.brain.initialized:
             await self.brain.initialize()
@@ -99,19 +99,12 @@ class SerialProcessor(BaseProcessor):
                     logger.error(f"Error in meta-cognitive cycle: {str(e)}")
                     meta_result = {"error": str(e)}
             
-            # Process emotional impact of input
-            if hasattr(self.brain, "emotional_core") and self.brain.emotional_core:
-                emotional_stimuli = self.brain.emotional_core.analyze_text_sentiment(user_input)
-                emotional_state = self.brain.emotional_core.update_from_stimuli(emotional_stimuli)
-                
-                # Add to performance metrics if they exist
-                if hasattr(self.brain, "performance_metrics"):
-                    self.brain.performance_metrics["emotion_updates"] = self.brain.performance_metrics.get("emotion_updates", 0) + 1
-                
-                # Add emotional state to context for memory retrieval
-                context["emotional_state"] = emotional_state
-            else:
-                emotional_state = {}
+            # Process emotional impact of input - using base class method
+            emotional_result = await self._process_emotional_impact(user_input, context)
+            emotional_state = emotional_result["emotional_state"]
+            
+            # Add emotional state to context for memory retrieval
+            context["emotional_state"] = emotional_state
             
             # Check for procedural knowledge
             procedural_knowledge = None
@@ -133,18 +126,8 @@ class SerialProcessor(BaseProcessor):
                 interaction_quality = (valence + 1.0) / 2.0  # Convert from -1:1 to 0:1 range
                 self.brain.hormone_system.environmental_factors["interaction_quality"] = interaction_quality
             
-            # Retrieve relevant memories using memory orchestrator
-            memories = []
-            if hasattr(self.brain, "memory_orchestrator"):
-                memories = await self.brain.memory_orchestrator.retrieve_memories(
-                    query=user_input,
-                    memory_types=context.get("memory_types", ["observation", "reflection", "abstraction", "experience"]), 
-                    limit=context.get("memory_limit", 5)
-                )
-                
-                # Add to performance metrics if they exist
-                if hasattr(self.brain, "performance_metrics"):
-                    self.brain.performance_metrics["memory_operations"] = self.brain.performance_metrics.get("memory_operations", 0) + 1
+            # Retrieve relevant memories using memory orchestrator - using base class method
+            memories = await self._retrieve_memories_with_emotion(user_input, context, emotional_state)
             
             # Update emotional state based on retrieved memories
             if memories and hasattr(self.brain, "emotional_core"):
@@ -159,32 +142,14 @@ class SerialProcessor(BaseProcessor):
                 # Get updated emotional state
                 emotional_state = self.brain.emotional_core.get_emotional_state()
             
-            # Check if experience sharing is appropriate
+            # Check if experience sharing is appropriate - using base class method
             should_share_experience = self._should_share_experience(user_input, context)
             experience_result = None
             identity_impact = None
             
-            if should_share_experience and hasattr(self.brain, "experience_interface"):
-                # Enhanced experience sharing with cross-user support
-                cross_user_enabled = getattr(self.brain, "cross_user_enabled", False)
-                experience_result = await self.brain.experience_interface.share_experience_enhanced(
-                    query=user_input,
-                    context_data={
-                        "user_id": str(self.brain.user_id),
-                        "emotional_state": emotional_state,
-                        "include_cross_user": cross_user_enabled and context.get("include_cross_user", True),
-                        "scenario_type": context.get("scenario_type", ""),
-                        "conversation_id": self.brain.conversation_id
-                    }
-                )
-                
-                # Update performance metrics
-                if hasattr(self.brain, "performance_metrics") and experience_result.get("has_experience", False):
-                    self.brain.performance_metrics["experiences_shared"] = self.brain.performance_metrics.get("experiences_shared", 0) + 1
-                    
-                    # Track cross-user experiences
-                    if experience_result.get("cross_user", False):
-                        self.brain.performance_metrics["cross_user_experiences_shared"] = self.brain.performance_metrics.get("cross_user_experiences_shared", 0) + 1
+            if should_share_experience:
+                # Share experience - using base class method
+                experience_result = await self._share_experience(user_input, context, emotional_state)
                 
                 # Calculate identity impact if experience was found and identity evolution exists
                 if experience_result.get("has_experience", False) and hasattr(self.brain, "identity_evolution"):
@@ -201,6 +166,8 @@ class SerialProcessor(BaseProcessor):
                             )
                         except Exception as e:
                             logger.error(f"Error updating identity from experience: {str(e)}")
+            else:
+                experience_result = {"has_experience": False}
             
             # Add memory of this interaction
             memory_id = None
@@ -343,83 +310,20 @@ class SerialProcessor(BaseProcessor):
             experience_sharing_adapted = processing_result.get("context_change") is not None and \
                                        processing_result.get("adaptation_result") is not None
             
-            # Determine if experience response should be used
-            if processing_result["has_experience"]:
-                main_response = processing_result["experience_response"]
-                response_type = "experience"
-                
-                # If it's a cross-user experience, mark it
-                if processing_result.get("cross_user_experience", False):
-                    response_type = "cross_user_experience"
-            else:
-                # For reasoning-related queries, use the reasoning agents
-                if self._is_reasoning_query(user_input) and hasattr(self.brain, "reasoning_core"):
-                    try:
-                        reasoning_result = await Runner.run(
-                            self.brain.reasoning_triage_agent,
-                            user_input
-                        )
-                        main_response = reasoning_result.final_output
-                        response_type = "reasoning"
-                    except Exception as e:
-                        logger.error(f"Error in reasoning response: {str(e)}")
-                        # Fallback to standard response
-                        main_response = "I understand your question and would like to reason through it with you."
-                        response_type = "standard"
-                else:
-                    # Check if procedural knowledge can be used
-                    procedural_knowledge = processing_result.get("procedural_knowledge", None)
-                    if procedural_knowledge and procedural_knowledge.get("can_execute", False) and len(procedural_knowledge.get("relevant_procedures", [])) > 0:
-                        try:
-                            # Get the most relevant procedure
-                            top_procedure = procedural_knowledge["relevant_procedures"][0]
-                            
-                            # Execute the procedure
-                            procedure_result = await self.brain.agent_enhanced_memory.execute_procedure(
-                                top_procedure["name"],
-                                context={"user_input": user_input, **(context or {})}
-                            )
-                            
-                            # If successful, use the procedure's response
-                            if procedure_result.get("success", False) and "output" in procedure_result:
-                                main_response = procedure_result["output"]
-                                response_type = "procedural"
-                            else:
-                                # Standard response
-                                main_response = "I understand your input and have processed it."
-                                response_type = "standard"
-                        except Exception as e:
-                            logger.error(f"Error executing procedure: {str(e)}")
-                            main_response = "I understand your input and have processed it."
-                            response_type = "standard"
-                    else:
-                        # No specific type, standard response
-                        main_response = "I understand your input and have processed it."
-                        response_type = "standard"
+            # Determine main response using base class method
+            main_response_result = await self._determine_main_response(user_input, processing_result, context)
+            main_response = main_response_result["message"]
+            response_type = main_response_result["response_type"]
             
-            # Determine if emotion should be expressed
-            emotional_expression = None
-            if hasattr(self.brain, "emotional_core"):
-                should_express_emotion = self.brain.emotional_core.should_express_emotion()
-                
-                if should_express_emotion:
-                    try:
-                        expression_result = await self.brain.emotional_core.generate_emotional_expression(force=False)
-                        if expression_result.get("expressed", False):
-                            emotional_expression = expression_result.get("expression", "")
-                    except Exception as e:
-                        logger.error(f"Error generating emotional expression: {str(e)}")
-                        if hasattr(self.brain.emotional_core, "get_expression_for_emotion"):
-                            emotional_expression = self.brain.emotional_core.get_expression_for_emotion()
-            
-            # Get emotional state from processing result or update if needed
-            emotional_state = processing_result.get("emotional_state", {})
+            # Generate emotional expression using base class method
+            emotional_expression_result = await self._generate_emotional_expression(processing_result["emotional_state"])
+            emotional_expression = emotional_expression_result["expression"]
             
             # Package the response
             response_data = {
                 "message": main_response,
                 "response_type": response_type,
-                "emotional_state": emotional_state,
+                "emotional_state": processing_result["emotional_state"],
                 "emotional_expression": emotional_expression,
                 "memories_used": [m["id"] for m in processing_result["memories"]] if "memories" in processing_result else [],
                 "memory_count": processing_result.get("memory_count", 0),
