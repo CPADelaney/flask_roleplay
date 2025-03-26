@@ -5,18 +5,13 @@ import datetime
 from typing import Dict, List, Any, Optional
 
 from agents import trace
+from nyx.core.brain.utils.task_manager import TaskManager
+from nyx.core.brain.processing.base_processor import BaseProcessor
 
 logger = logging.getLogger(__name__)
 
-class DistributedProcessor:
+class DistributedProcessor(BaseProcessor):
     """Handles distributed processing across multiple subsystems"""
-    
-    def __init__(self, brain):
-        self.brain = brain
-    
-    async def initialize(self):
-        """Initialize the processor"""
-        logger.info("Distributed processor initialized")
     
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -42,19 +37,8 @@ class DistributedProcessor:
             if "user_id" not in context:
                 context["user_id"] = str(self.brain.user_id)
             
-            # Initialize distributed processing manager
-            distributed_processing = getattr(self.brain, "distributed_processing", None)
-            
-            # If no distributed processing manager, use parallel processing as fallback
-            if not distributed_processing:
-                logger.warning("Distributed processing manager not available, falling back to parallel processing")
-                if hasattr(self.brain, "processing_manager") and "parallel" in self.brain.processing_manager.processors:
-                    return await self.brain.processing_manager.processors["parallel"].process_input(user_input, context)
-                else:
-                    # Create a simple task manager
-                    task_manager = TaskManager()
-            else:
-                task_manager = distributed_processing
+            # Create task manager for distributed processing
+            task_manager = TaskManager()
             
             # 1. Register emotional processing task (no dependencies)
             task_manager.register_task(
@@ -120,6 +104,12 @@ class DistributedProcessor:
             # 7. Register memory storage task (no dependencies)
             if hasattr(self.brain, "memory_core") and self.brain.memory_core:
                 memory_text = f"User said: {user_input}"
+                
+                # Get emotional context formatting if available
+                emotional_context = {}
+                if hasattr(self.brain, "emotional_core") and hasattr(self.brain.emotional_core, "get_formatted_emotional_state"):
+                    emotional_context = self.brain.emotional_core.get_formatted_emotional_state()
+                
                 task_manager.register_task(
                     task_id="memory_storage",
                     coroutine=self.brain.memory_core.add_memory(
@@ -128,6 +118,7 @@ class DistributedProcessor:
                         significance=5,
                         tags=["interaction", "user_input"],
                         metadata={
+                            "emotional_context": emotional_context,
                             "timestamp": datetime.datetime.now().isoformat(),
                             "user_id": str(self.brain.user_id)
                         }
@@ -260,113 +251,59 @@ class DistributedProcessor:
         Returns:
             Response data
         """
-        # Use the parallel processor's generation method since it works well for distributed too
-        if hasattr(self.brain, "processing_manager") and "parallel" in self.brain.processing_manager.processors:
-            parallel_processor = self.brain.processing_manager.processors["parallel"]
-            return await parallel_processor.generate_response(user_input, processing_result, context)
+        # Use the base class's _determine_main_response method to get the response content
+        context = context or {}
         
-        # Fallback implementation
         with trace(workflow_name="generate_response_distributed", group_id=self.brain.trace_group_id):
-            # Determine if experience response should be used
-            if processing_result["has_experience"]:
-                main_response = processing_result["experience_response"]
-                response_type = "experience"
+            # Use TaskManager for response generation tasks
+            task_manager = TaskManager()
+            
+            # Register main response task
+            task_manager.register_task(
+                task_id="main_response",
+                coroutine=self._determine_main_response(user_input, processing_result, context),
+                priority=3,
+                group="response"
+            )
+            
+            # Register emotional expression task
+            task_manager.register_task(
+                task_id="emotional_expression",
+                coroutine=self._generate_emotional_expression(processing_result.get("emotional_state", {})),
+                priority=2,
+                group="response"
+            )
+            
+            # Register memory storage task for response if brain has memory core
+            if hasattr(self.brain, "memory_core"):
+                # We'll add this task after we get the main response
+                pass
+            
+            # Execute tasks
+            results = await task_manager.execute_tasks()
+            
+            # Extract results
+            main_response_result = results.get("main_response", {"message": "I understand your input.", "response_type": "standard"})
+            main_response = main_response_result.get("message")
+            response_type = main_response_result.get("response_type")
+            emotional_expression_result = results.get("emotional_expression", {"expression": None})
+            emotional_expression = emotional_expression_result.get("expression")
+            
+            # Now that we have the main response, add a task for memory storage
+            if hasattr(self.brain, "memory_core"):
+                memory_text = f"I responded: {main_response}"
                 
-                # If it's a cross-user experience, mark it
-                if processing_result.get("cross_user_experience", False):
-                    response_type = "cross_user_experience"
-            else:
-                # Check if procedural knowledge can be used
-                procedural_knowledge = processing_result.get("procedural_knowledge")
-                if procedural_knowledge and procedural_knowledge.get("can_execute", False) and hasattr(self.brain, "agent_enhanced_memory"):
-                    try:
-                        # Get the most relevant procedure
-                        top_procedure = procedural_knowledge["relevant_procedures"][0]
-                        
-                        # Execute the procedure
-                        procedure_result = await self.brain.agent_enhanced_memory.execute_procedure(
-                            top_procedure["name"],
-                            context={"user_input": user_input, **(context or {})}
-                        )
-                        
-                        # If successful, use the procedure's response
-                        if procedure_result.get("success", False) and "output" in procedure_result:
-                            main_response = procedure_result["output"]
-                            response_type = "procedural"
-                        else:
-                            # For reasoning-related queries, use the reasoning agents
-                            if hasattr(self.brain, "_is_reasoning_query") and self.brain._is_reasoning_query(user_input):
-                                try:
-                                    if hasattr(self.brain, "reasoning_triage_agent") and hasattr(self.brain, "Runner"):
-                                        reasoning_result = await self.brain.Runner.run(
-                                            self.brain.reasoning_triage_agent,
-                                            user_input
-                                        )
-                                        main_response = reasoning_result.final_output if hasattr(reasoning_result, "final_output") else str(reasoning_result)
-                                    else:
-                                        main_response = "I understand your question and would like to reason through it with you."
-                                    response_type = "reasoning"
-                                except Exception as e:
-                                    logger.error(f"Error in reasoning response: {str(e)}")
-                                    main_response = "I understand your question and would like to reason through it with you."
-                                    response_type = "standard"
-                            else:
-                                # No specific type, standard response
-                                main_response = "I understand your input and have processed it."
-                                response_type = "standard"
-                    except Exception as e:
-                        logger.error(f"Error executing procedure: {str(e)}")
-                        main_response = "I understand your input and have processed it."
-                        response_type = "standard"
-                else:
-                    # For reasoning-related queries, use the reasoning agents
-                    if hasattr(self.brain, "_is_reasoning_query") and self.brain._is_reasoning_query(user_input):
-                        try:
-                            if hasattr(self.brain, "reasoning_triage_agent") and hasattr(self.brain, "Runner"):
-                                reasoning_result = await self.brain.Runner.run(
-                                    self.brain.reasoning_triage_agent,
-                                    user_input
-                                )
-                                main_response = reasoning_result.final_output if hasattr(reasoning_result, "final_output") else str(reasoning_result)
-                            else:
-                                main_response = "I understand your question and would like to reason through it with you."
-                            response_type = "reasoning"
-                        except Exception as e:
-                            logger.error(f"Error in reasoning response: {str(e)}")
-                            main_response = "I understand your question and would like to reason through it with you."
-                            response_type = "standard"
-                    else:
-                        # No specific type, standard response
-                        main_response = "I understand your input and have processed it."
-                        response_type = "standard"
-            
-            # Determine if emotion should be expressed
-            emotional_expression = None
-            if hasattr(self.brain, "emotional_core") and self.brain.emotional_core:
-                try:
-                    should_express_emotion = self.brain.emotional_core.should_express_emotion()
-                    
-                    if should_express_emotion:
-                        if hasattr(self.brain.emotional_core, "generate_emotional_expression"):
-                            expression_result = await self.brain.emotional_core.generate_emotional_expression(force=False)
-                            if expression_result.get("expressed", False):
-                                emotional_expression = expression_result.get("expression", "")
-                        elif hasattr(self.brain.emotional_core, "get_expression_for_emotion"):
-                            emotional_expression = self.brain.emotional_core.get_expression_for_emotion()
-                except Exception as e:
-                    logger.error(f"Error generating emotional expression: {str(e)}")
-            
-            # Add memory of this response
-            response_memory_id = None
-            if hasattr(self.brain, "memory_core") and self.brain.memory_core:
-                try:
-                    # Get emotional context formatting if available
-                    emotional_context = {}
-                    if hasattr(self.brain, "emotional_core") and hasattr(self.brain.emotional_core, "get_formatted_emotional_state"):
-                        emotional_context = self.brain.emotional_core.get_formatted_emotional_state()
-                    
-                    response_memory_id = await self.brain.memory_core.add_memory(
-                        memory_text=f"I responded: {main_response}",
+                # Get emotional context formatting if available
+                emotional_context = {}
+                if hasattr(self.brain, "emotional_core") and hasattr(self.brain.emotional_core, "get_formatted_emotional_state"):
+                    emotional_context = self.brain.emotional_core.get_formatted_emotional_state()
+                
+                # Create a new task manager for this memory storage task
+                memory_task_manager = TaskManager()
+                memory_task_manager.register_task(
+                    task_id="response_memory",
+                    coroutine=self.brain.memory_core.add_memory(
+                        memory_text=memory_text,
                         memory_type="observation",
                         significance=5,
                         tags=["interaction", "nyx_response", response_type],
@@ -376,9 +313,16 @@ class DistributedProcessor:
                             "response_type": response_type,
                             "user_id": str(self.brain.user_id)
                         }
-                    )
-                except Exception as e:
-                    logger.error(f"Error adding response memory: {str(e)}")
+                    ),
+                    priority=1,
+                    group="memory"
+                )
+                
+                # Execute memory task
+                memory_results = await memory_task_manager.execute_tasks()
+                response_memory_id = memory_results.get("response_memory")
+            else:
+                response_memory_id = None
             
             # Package the response
             response_data = {
@@ -394,24 +338,6 @@ class DistributedProcessor:
             
             return response_data
     
-    async def _process_emotional_impact(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Process emotional impact of user input"""
-        # Process emotional impact
-        if hasattr(self.brain, "emotional_core") and self.brain.emotional_core:
-            emotional_stimuli = self.brain.emotional_core.analyze_text_sentiment(user_input)
-            emotional_state = self.brain.emotional_core.update_from_stimuli(emotional_stimuli)
-            
-            # Update performance counter
-            if hasattr(self.brain, "performance_metrics"):
-                self.brain.performance_metrics["emotion_updates"] = self.brain.performance_metrics.get("emotion_updates", 0) + 1
-            
-            return {
-                "emotional_state": emotional_state,
-                "stimuli": emotional_stimuli
-            }
-        
-        return {"emotional_state": {}, "stimuli": {}}
-    
     async def _retrieve_memories_placeholder(self, user_input: str, context: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Placeholder method for memory retrieval that will be updated with emotional context"""
         # This would normally wait for emotional processing, but in distributed processing,
@@ -421,51 +347,13 @@ class DistributedProcessor:
         if hasattr(self.brain, "emotional_core") and self.brain.emotional_core:
             emotional_state = self.brain.emotional_core.get_emotional_state()
         
-        # Now call the regular method
-        if hasattr(self.brain, "processing_manager") and "parallel" in self.brain.processing_manager.processors:
-            parallel_processor = self.brain.processing_manager.processors["parallel"]
-            return await parallel_processor._retrieve_memories_with_emotion(user_input, context, emotional_state)
-        
-        # Fallback to direct retrieval
-        if hasattr(self.brain, "memory_orchestrator") and self.brain.memory_orchestrator:
-            return await self.brain.memory_orchestrator.retrieve_memories(
-                query=user_input,
-                memory_types=context.get("memory_types", ["observation", "reflection", "abstraction", "experience"]), 
-                limit=context.get("memory_limit", 5)
-            )
-        
-        return []
+        # Use the base class method to retrieve memories with emotional influence
+        return await self._retrieve_memories_with_emotion(user_input, context, emotional_state)
     
     async def _check_experience_sharing(self, user_input: str, context: Dict[str, Any]) -> bool:
         """Check if experience sharing should be used"""
-        if hasattr(self.brain, "_should_share_experience"):
-            return self.brain._should_share_experience(user_input, context)
-        
-        # Default implementation if brain doesn't have the method
-        # Check for explicit experience requests
-        explicit_request = any(phrase in user_input.lower() for phrase in 
-                             ["remember", "recall", "tell me about", "have you done", 
-                              "previous", "before", "past", "experience", "what happened",
-                              "have you ever", "did you ever", "similar", "others"])
-        
-        if explicit_request:
-            return True
-        
-        # Check if it's a question that could benefit from experience sharing
-        is_question = user_input.endswith("?") or user_input.lower().startswith(("what", "how", "when", "where", "why", "who", "can", "could", "do", "did"))
-        
-        if is_question and context and "share_experiences" in context and context["share_experiences"]:
-            return True
-        
-        # Check for personal references that might trigger experience sharing
-        personal_references = any(phrase in user_input.lower() for phrase in 
-                               ["your experience", "you like", "you prefer", "you enjoy",
-                                "you think", "you feel", "your opinion", "your view"])
-        
-        if personal_references:
-            return True
-        
-        return False
+        # Use the base class method
+        return self._should_share_experience(user_input, context)
     
     async def _share_experience_placeholder(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Placeholder method for experience sharing that will be updated with emotional context"""
@@ -474,35 +362,8 @@ class DistributedProcessor:
         if hasattr(self.brain, "emotional_core") and self.brain.emotional_core:
             emotional_state = self.brain.emotional_core.get_emotional_state()
         
-        # Check if we should share experience
-        should_share = await self._check_experience_sharing(user_input, context)
-        
-        if not should_share:
-            return {"has_experience": False}
-        
-        # Call the appropriate sharing method
-        if hasattr(self.brain, "processing_manager") and "parallel" in self.brain.processing_manager.processors:
-            parallel_processor = self.brain.processing_manager.processors["parallel"]
-            return await parallel_processor._share_experience(user_input, context, emotional_state)
-        
-        # Fallback to direct experience sharing
-        if hasattr(self.brain, "experience_interface") and self.brain.experience_interface:
-            cross_user_enabled = getattr(self.brain, "cross_user_enabled", True)
-            cross_user_sharing_threshold = getattr(self.brain, "cross_user_sharing_threshold", 0.7)
-            
-            return await self.brain.experience_interface.share_experience_enhanced(
-                query=user_input,
-                context_data={
-                    "user_id": str(self.brain.user_id),
-                    "emotional_state": emotional_state,
-                    "include_cross_user": cross_user_enabled and context.get("include_cross_user", True),
-                    "cross_user_threshold": cross_user_sharing_threshold,
-                    "scenario_type": context.get("scenario_type", ""),
-                    "conversation_id": self.brain.conversation_id
-                }
-            )
-        
-        return {"has_experience": False}
+        # Use the base class method to share experiences
+        return await self._share_experience(user_input, context, emotional_state)
     
     async def _process_adaptation_placeholder(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Placeholder method for adaptation processing"""
@@ -535,16 +396,12 @@ class DistributedProcessor:
             logger.error(f"Error checking experience in adaptation placeholder: {str(e)}")
             experience_result = {"has_experience": False}
         
-        # Call the regular adaptation method
-        if hasattr(self.brain, "processing_manager") and "parallel" in self.brain.processing_manager.processors:
-            parallel_processor = self.brain.processing_manager.processors["parallel"]
-            return await parallel_processor._process_adaptation(
-                user_input, 
-                context, 
-                emotional_state, 
-                experience_result, 
-                None  # No identity impact yet
-            )
+        if not experience_result:
+            experience_result = {"has_experience": False}
+        
+        # Call the adaptation process method of ParallelProcessor
+        if hasattr(self, "_process_adaptation"):
+            return await self._process_adaptation(user_input, context, emotional_state, experience_result, None)
         
         # Fallback if no adaptation processing available
         return {"context_change": None, "adaptation_result": None}
@@ -580,5 +437,6 @@ class DistributedProcessor:
                     return identity_impact
         except Exception as e:
             logger.error(f"Error processing identity impact: {str(e)}")
+            await self._handle_error(e, {"phase": "identity_impact", "user_input": user_input})
         
         return None
