@@ -5,18 +5,12 @@ import datetime
 from typing import Dict, List, Any, Optional
 
 from agents import trace
+from nyx.core.brain.processing.base_processor import BaseProcessor
 
 logger = logging.getLogger(__name__)
 
-class ParallelProcessor:
+class ParallelProcessor(BaseProcessor):
     """Handles parallel processing of inputs using multiple tasks"""
-    
-    def __init__(self, brain):
-        self.brain = brain
-    
-    async def initialize(self):
-        """Initialize the processor"""
-        logger.info("Parallel processor initialized")
     
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -45,11 +39,10 @@ class ParallelProcessor:
             # Create tasks for parallel processing
             tasks = {}
             
-            # Task 1: Process emotional impact
-            if hasattr(self.brain, "emotional_core") and self.brain.emotional_core:
-                tasks["emotional"] = asyncio.create_task(
-                    self._process_emotional_impact(user_input, context)
-                )
+            # Task 1: Process emotional impact - using base class method
+            tasks["emotional"] = asyncio.create_task(
+                self._process_emotional_impact(user_input, context)
+            )
             
             # Task 2: Run meta-cognitive cycle
             if hasattr(self.brain, "meta_core") and self.brain.meta_core:
@@ -59,11 +52,10 @@ class ParallelProcessor:
                     self.brain.meta_core.cognitive_cycle(meta_context)
                 )
             
-            # Task 3: Check for experience sharing opportunity
-            if hasattr(self.brain, "experience_interface") and self.brain.experience_interface:
-                tasks["experience_check"] = asyncio.create_task(
-                    self._check_experience_sharing(user_input, context)
-                )
+            # Task 3: Check for experience sharing opportunity - using base class method
+            tasks["experience_check"] = asyncio.create_task(
+                self._should_share_experience(user_input, context)
+            )
             
             # Wait for emotional processing to complete
             emotional_state = {}
@@ -76,12 +68,12 @@ class ParallelProcessor:
                     context["emotional_state"] = emotional_state
             except Exception as e:
                 logger.error(f"Error in emotional processing: {str(e)}")
+                await self._handle_error(e, {"phase": "emotional_processing", "user_input": user_input})
             
-            # Start memory retrieval with emotional context
-            if hasattr(self.brain, "memory_orchestrator") and self.brain.memory_orchestrator:
-                tasks["memory"] = asyncio.create_task(
-                    self._retrieve_memories_with_emotion(user_input, context, emotional_state)
-                )
+            # Start memory retrieval with emotional context - using base class method
+            tasks["memory"] = asyncio.create_task(
+                self._retrieve_memories_with_emotion(user_input, context, emotional_state)
+            )
             
             # Wait for experience sharing check to complete
             should_share_experience = False
@@ -90,10 +82,11 @@ class ParallelProcessor:
                     should_share_experience = await tasks["experience_check"]
             except Exception as e:
                 logger.error(f"Error checking experience sharing: {str(e)}")
+                await self._handle_error(e, {"phase": "experience_check", "user_input": user_input})
             
-            # Start experience sharing task if needed
+            # Start experience sharing task if needed - using base class method
             experience_result = None
-            if should_share_experience and hasattr(self.brain, "experience_interface"):
+            if should_share_experience:
                 tasks["experience"] = asyncio.create_task(
                     self._share_experience(user_input, context, emotional_state)
                 )
@@ -105,6 +98,7 @@ class ParallelProcessor:
                     memories = await tasks["memory"]
             except Exception as e:
                 logger.error(f"Error retrieving memories: {str(e)}")
+                await self._handle_error(e, {"phase": "memory_retrieval", "user_input": user_input})
             
             # Update emotional state based on retrieved memories
             if memories and hasattr(self.brain, "emotional_core"):
@@ -120,6 +114,7 @@ class ParallelProcessor:
                     emotional_state = self.brain.emotional_core.get_emotional_state()
                 except Exception as e:
                     logger.error(f"Error updating emotion from memories: {str(e)}")
+                    await self._handle_error(e, {"phase": "emotional_update_from_memories", "user_input": user_input})
             
             # Wait for experience sharing to complete if started
             identity_impact = None
@@ -142,8 +137,10 @@ class ParallelProcessor:
                                 )
                             except Exception as e:
                                 logger.error(f"Error updating identity from experience: {str(e)}")
+                                await self._handle_error(e, {"phase": "identity_impact", "user_input": user_input})
                 except Exception as e:
                     logger.error(f"Error sharing experience: {str(e)}")
+                    await self._handle_error(e, {"phase": "experience_sharing", "user_input": user_input})
                     experience_result = {"has_experience": False}
             
             # Add memory of this interaction
@@ -156,23 +153,27 @@ class ParallelProcessor:
                 if hasattr(self.brain, "emotional_core") and hasattr(self.brain.emotional_core, "get_formatted_emotional_state"):
                     emotional_context = self.brain.emotional_core.get_formatted_emotional_state()
                 
-                memory_id = await self.brain.memory_core.add_memory(
-                    memory_text=memory_text,
-                    memory_type="observation",
-                    significance=5,
-                    tags=["interaction", "user_input"],
-                    metadata={
-                        "emotional_context": emotional_context,
-                        "timestamp": datetime.datetime.now().isoformat(),
-                        "user_id": str(self.brain.user_id)
-                    }
-                )
+                try:
+                    memory_id = await self.brain.memory_core.add_memory(
+                        memory_text=memory_text,
+                        memory_type="observation",
+                        significance=5,
+                        tags=["interaction", "user_input"],
+                        metadata={
+                            "emotional_context": emotional_context,
+                            "timestamp": datetime.datetime.now().isoformat(),
+                            "user_id": str(self.brain.user_id)
+                        }
+                    )
+                except Exception as e:
+                    logger.error(f"Error adding memory: {str(e)}")
+                    await self._handle_error(e, {"phase": "memory_storage", "user_input": user_input})
             
             # Check for context change using dynamic adaptation
             context_change_result = None
             adaptation_result = None
             
-            if hasattr(self.brain, "dynamic_adaptation") and self.brain.dynamic_adaptation:
+            if hasattr(self.brain, "dynamic_adaptation"):
                 # Process adaptation in parallel
                 tasks["adaptation"] = asyncio.create_task(
                     self._process_adaptation(user_input, context, emotional_state, 
@@ -185,6 +186,7 @@ class ParallelProcessor:
                     adaptation_result = adaptation_results.get("adaptation_result")
                 except Exception as e:
                     logger.error(f"Error in adaptation: {str(e)}")
+                    await self._handle_error(e, {"phase": "adaptation", "user_input": user_input})
             
             # Wait for meta cognitive cycle to complete
             meta_result = {}
@@ -193,6 +195,7 @@ class ParallelProcessor:
                     meta_result = await tasks["meta"]
                 except Exception as e:
                     logger.error(f"Error in meta-cognitive cycle: {str(e)}")
+                    await self._handle_error(e, {"phase": "meta_cognitive_cycle", "user_input": user_input})
                     meta_result = {"error": str(e)}
             
             # Check procedural knowledge
@@ -208,6 +211,7 @@ class ParallelProcessor:
                         }
                 except Exception as e:
                     logger.error(f"Error checking procedural knowledge: {str(e)}")
+                    await self._handle_error(e, {"phase": "procedural_knowledge", "user_input": user_input})
             
             # Update interaction tracking
             if hasattr(self.brain, "last_interaction"):
@@ -274,16 +278,15 @@ class ParallelProcessor:
             # Start response generation tasks in parallel
             tasks = {}
             
-            # Task 1: Determine main response content
+            # Task 1: Determine main response content - using base class method
             tasks["main_response"] = asyncio.create_task(
                 self._determine_main_response(user_input, processing_result, context)
             )
             
-            # Task 2: Generate emotional expression
-            if hasattr(self.brain, "emotional_core"):
-                tasks["emotional_expression"] = asyncio.create_task(
-                    self._generate_emotional_expression(processing_result["emotional_state"])
-                )
+            # Task 2: Generate emotional expression - using base class method
+            tasks["emotional_expression"] = asyncio.create_task(
+                self._generate_emotional_expression(processing_result["emotional_state"])
+            )
             
             # Wait for main response content
             main_response_result = await tasks["main_response"]
@@ -298,6 +301,7 @@ class ParallelProcessor:
                     emotional_expression = emotional_expression_result["expression"]
             except Exception as e:
                 logger.error(f"Error generating emotional expression: {str(e)}")
+                await self._handle_error(e, {"phase": "emotional_expression", "user_input": user_input})
             
             # Add memory of this response
             memory_id = None
@@ -309,18 +313,22 @@ class ParallelProcessor:
                 if hasattr(self.brain, "emotional_core") and hasattr(self.brain.emotional_core, "get_formatted_emotional_state"):
                     emotional_context = self.brain.emotional_core.get_formatted_emotional_state()
                 
-                memory_id = await self.brain.memory_core.add_memory(
-                    memory_text=memory_text,
-                    memory_type="observation",
-                    significance=5,
-                    tags=["interaction", "nyx_response", response_type],
-                    metadata={
-                        "emotional_context": emotional_context,
-                        "timestamp": datetime.datetime.now().isoformat(),
-                        "response_type": response_type,
-                        "user_id": str(self.brain.user_id)
-                    }
-                )
+                try:
+                    memory_id = await self.brain.memory_core.add_memory(
+                        memory_text=memory_text,
+                        memory_type="observation",
+                        significance=5,
+                        tags=["interaction", "nyx_response", response_type],
+                        metadata={
+                            "emotional_context": emotional_context,
+                            "timestamp": datetime.datetime.now().isoformat(),
+                            "response_type": response_type,
+                            "user_id": str(self.brain.user_id)
+                        }
+                    )
+                except Exception as e:
+                    logger.error(f"Error adding response memory: {str(e)}")
+                    await self._handle_error(e, {"phase": "response_memory_storage", "user_input": user_input})
             
             # Start evaluation in parallel if internal feedback system is available
             evaluation = None
@@ -337,6 +345,7 @@ class ParallelProcessor:
                     evaluation = await tasks["evaluation"]
                 except Exception as e:
                     logger.error(f"Error evaluating response: {str(e)}")
+                    await self._handle_error(e, {"phase": "evaluation", "user_input": user_input})
             
             # Check if it's time for experience consolidation in parallel
             if hasattr(self.brain, "last_consolidation") and hasattr(self.brain, "consolidation_interval"):
@@ -362,6 +371,7 @@ class ParallelProcessor:
                             identity_reflection = await tasks["identity"]
                     except Exception as e:
                         logger.error(f"Error generating identity reflection: {str(e)}")
+                        await self._handle_error(e, {"phase": "identity_reflection", "user_input": user_input})
             
             # Package the response
             response_data = {
@@ -381,165 +391,12 @@ class ParallelProcessor:
             
             return response_data
     
-    async def _process_emotional_impact(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Process emotional impact of user input"""
-        # Process emotional impact
-        if hasattr(self.brain, "emotional_core") and self.brain.emotional_core:
-            emotional_stimuli = self.brain.emotional_core.analyze_text_sentiment(user_input)
-            emotional_state = self.brain.emotional_core.update_from_stimuli(emotional_stimuli)
-            
-            # Update performance counter
-            if hasattr(self.brain, "performance_metrics"):
-                self.brain.performance_metrics["emotion_updates"] = self.brain.performance_metrics.get("emotion_updates", 0) + 1
-            
-            return {
-                "emotional_state": emotional_state,
-                "stimuli": emotional_stimuli
-            }
-        
-        return {"emotional_state": {}, "stimuli": {}}
-    
-    async def _retrieve_memories_with_emotion(self, 
-                                          user_input: str, 
-                                          context: Dict[str, Any],
-                                          emotional_state: Dict[str, float]) -> List[Dict[str, Any]]:
-        """Retrieve relevant memories with emotional influence"""
-        if not hasattr(self.brain, "memory_orchestrator") or not self.brain.memory_orchestrator:
-            return []
-        
-        # Create emotional prioritization for memory types
-        # Based on current emotional state, prioritize different memory types
-        
-        # Check if emotional valence is available
-        valence = 0
-        arousal = 0.5
-        if hasattr(self.brain, "emotional_core") and self.brain.emotional_core:
-            valence = self.brain.emotional_core.get_emotional_valence()
-            arousal = self.brain.emotional_core.get_emotional_arousal()
-        
-        # Prioritize experiences and reflections for high emotional states
-        if abs(valence) > 0.6 or arousal > 0.7:
-            prioritization = {
-                "experience": 0.5,
-                "reflection": 0.3,
-                "abstraction": 0.1,
-                "observation": 0.1
-            }
-        # Prioritize abstractions and reflections for low emotional states
-        elif arousal < 0.3:
-            prioritization = {
-                "abstraction": 0.4,
-                "reflection": 0.3,
-                "experience": 0.2,
-                "observation": 0.1
-            }
-        # Balanced prioritization for moderate emotional states
-        else:
-            prioritization = {
-                "experience": 0.3,
-                "reflection": 0.3,
-                "abstraction": 0.2,
-                "observation": 0.2
-            }
-        
-        # Adjust prioritization based on emotion-to-memory influence
-        influence = getattr(self.brain, "emotion_to_memory_influence", 0.4)
-        for memory_type, priority in prioritization.items():
-            prioritization[memory_type] = priority * (1 + influence)
-        
-        # Use prioritized retrieval if available
-        if hasattr(self.brain.memory_orchestrator, "retrieve_memories_with_prioritization"):
-            memories = await self.brain.memory_orchestrator.retrieve_memories_with_prioritization(
-                query=user_input,
-                memory_types=context.get("memory_types", ["observation", "reflection", "abstraction", "experience"]),
-                prioritization=prioritization,
-                limit=context.get("memory_limit", 5)
-            )
-        else:
-            # Fallback to regular retrieval
-            memories = await self.brain.memory_orchestrator.retrieve_memories(
-                query=user_input,
-                memory_types=context.get("memory_types", ["observation", "reflection", "abstraction", "experience"]), 
-                limit=context.get("memory_limit", 5)
-            )
-        
-        # Update performance counter
-        if hasattr(self.brain, "performance_metrics"):
-            self.brain.performance_metrics["memory_operations"] = self.brain.performance_metrics.get("memory_operations", 0) + 1
-        
-        return memories
-    
-    async def _check_experience_sharing(self, user_input: str, context: Dict[str, Any]) -> bool:
-        """Check if experience sharing should be used"""
-        if hasattr(self.brain, "_should_share_experience"):
-            return self.brain._should_share_experience(user_input, context)
-        
-        # Default implementation if brain doesn't have the method
-        # Check for explicit experience requests
-        explicit_request = any(phrase in user_input.lower() for phrase in 
-                             ["remember", "recall", "tell me about", "have you done", 
-                              "previous", "before", "past", "experience", "what happened",
-                              "have you ever", "did you ever", "similar", "others"])
-        
-        if explicit_request:
-            return True
-        
-        # Check if it's a question that could benefit from experience sharing
-        is_question = user_input.endswith("?") or user_input.lower().startswith(("what", "how", "when", "where", "why", "who", "can", "could", "do", "did"))
-        
-        if is_question and context and "share_experiences" in context and context["share_experiences"]:
-            return True
-        
-        # Check for personal references that might trigger experience sharing
-        personal_references = any(phrase in user_input.lower() for phrase in 
-                               ["your experience", "you like", "you prefer", "you enjoy",
-                                "you think", "you feel", "your opinion", "your view"])
-        
-        if personal_references:
-            return True
-        
-        return False
-    
-    async def _share_experience(self, 
-                            user_input: str, 
-                            context: Dict[str, Any], 
-                            emotional_state: Dict[str, float]) -> Dict[str, Any]:
-        """Share experience based on user input"""
-        if not hasattr(self.brain, "experience_interface") or not self.brain.experience_interface:
-            return {"has_experience": False}
-        
-        # Enhanced experience sharing with cross-user support and adaptation
-        cross_user_enabled = getattr(self.brain, "cross_user_enabled", True)
-        cross_user_sharing_threshold = getattr(self.brain, "cross_user_sharing_threshold", 0.7)
-        
-        experience_result = await self.brain.experience_interface.share_experience_enhanced(
-            query=user_input,
-            context_data={
-                "user_id": str(self.brain.user_id),
-                "emotional_state": emotional_state,
-                "include_cross_user": cross_user_enabled and context.get("include_cross_user", True),
-                "cross_user_threshold": cross_user_sharing_threshold,
-                "scenario_type": context.get("scenario_type", ""),
-                "conversation_id": self.brain.conversation_id
-            }
-        )
-        
-        # Update performance metrics
-        if hasattr(self.brain, "performance_metrics") and experience_result.get("has_experience", False):
-            self.brain.performance_metrics["experiences_shared"] = self.brain.performance_metrics.get("experiences_shared", 0) + 1
-            
-            # Track cross-user experiences
-            if experience_result.get("cross_user", False):
-                self.brain.performance_metrics["cross_user_experiences_shared"] = self.brain.performance_metrics.get("cross_user_experiences_shared", 0) + 1
-        
-        return experience_result
-    
     async def _process_adaptation(self,
-                               user_input: str,
-                               context: Dict[str, Any],
-                               emotional_state: Dict[str, float],
-                               experience_result: Optional[Dict[str, Any]],
-                               identity_impact: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+                              user_input: str,
+                              context: Dict[str, Any],
+                              emotional_state: Dict[str, float],
+                              experience_result: Optional[Dict[str, Any]],
+                              identity_impact: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Process adaptation based on context change"""
         if not hasattr(self.brain, "dynamic_adaptation") or not self.brain.dynamic_adaptation:
             return {"context_change": None, "adaptation_result": None}
@@ -579,165 +436,3 @@ class ParallelProcessor:
             "context_change": context_change_result,
             "adaptation_result": adaptation_result
         }
-    
-    async def _determine_main_response(self, 
-                                   user_input: str, 
-                                   processing_result: Dict[str, Any],
-                                   context: Dict[str, Any]) -> Dict[str, str]:
-        """Determine the main response content based on processing results"""
-        # Determine if experience response should be used
-        if processing_result["has_experience"]:
-            main_response = processing_result["experience_response"]
-            response_type = "experience"
-            
-            # If it's a cross-user experience, mark it
-            if processing_result.get("cross_user_experience", False):
-                response_type = "cross_user_experience"
-        else:
-            # Check if procedural knowledge can be used
-            procedural_knowledge = processing_result.get("procedural_knowledge", None)
-            if procedural_knowledge and procedural_knowledge.get("can_execute", False) and len(procedural_knowledge.get("relevant_procedures", [])) > 0:
-                try:
-                    # Get the most relevant procedure
-                    top_procedure = procedural_knowledge["relevant_procedures"][0]
-                    
-                    # Execute the procedure
-                    if hasattr(self.brain, "agent_enhanced_memory"):
-                        procedure_result = await self.brain.agent_enhanced_memory.execute_procedure(
-                            top_procedure["name"],
-                            context={"user_input": user_input, **(context or {})}
-                        )
-                        
-                        # If successful, use the procedure's response
-                        if procedure_result.get("success", False) and "output" in procedure_result:
-                            main_response = procedure_result["output"]
-                            response_type = "procedural"
-                        else:
-                            # For reasoning-related queries, use the reasoning agents
-                            if hasattr(self.brain, "_is_reasoning_query") and self.brain._is_reasoning_query(user_input):
-                                main_response = await self._generate_reasoning_response(user_input)
-                                response_type = "reasoning"
-                            else:
-                                # Fallback
-                                main_response = "I understand your input and have processed it."
-                                response_type = "standard"
-                    else:
-                        # For reasoning-related queries, use the reasoning agents
-                        if hasattr(self.brain, "_is_reasoning_query") and self.brain._is_reasoning_query(user_input):
-                            main_response = await self._generate_reasoning_response(user_input)
-                            response_type = "reasoning"
-                        else:
-                            # Fallback
-                            main_response = "I understand your input and have processed it."
-                            response_type = "standard"
-                except Exception as e:
-                    logger.error(f"Error executing procedure: {str(e)}")
-                    
-                    # For reasoning-related queries, use the reasoning agents
-                    if hasattr(self.brain, "_is_reasoning_query") and self.brain._is_reasoning_query(user_input):
-                        main_response = await self._generate_reasoning_response(user_input)
-                        response_type = "reasoning"
-                    else:
-                        # Fallback
-                        main_response = "I understand your input and have processed it."
-                        response_type = "standard"
-            else:
-                # For reasoning-related queries, use the reasoning agents
-                if hasattr(self.brain, "_is_reasoning_query") and self.brain._is_reasoning_query(user_input):
-                    main_response = await self._generate_reasoning_response(user_input)
-                    response_type = "reasoning"
-                else:
-                    # No specific type, standard response
-                    main_response = "I understand your input and have processed it."
-                    response_type = "standard"
-        
-        return {
-            "message": main_response,
-            "response_type": response_type
-        }
-    
-    async def _generate_reasoning_response(self, user_input: str) -> str:
-        """Generate a response using reasoning capabilities"""
-        try:
-            if hasattr(self.brain, "reasoning_triage_agent") and hasattr(self.brain, "Runner"):
-                reasoning_result = await self.brain.Runner.run(
-                    self.brain.reasoning_triage_agent,
-                    user_input
-                )
-                return reasoning_result.final_output if hasattr(reasoning_result, "final_output") else str(reasoning_result)
-            else:
-                return "I understand your question and would like to reason through it with you."
-        except Exception as e:
-            logger.error(f"Error in reasoning response: {str(e)}")
-            return "I understand your question and would like to reason through it with you."
-    
-    async def _generate_emotional_expression(self, emotional_state: Dict[str, float]) -> Dict[str, Any]:
-        """Generate emotional expression based on emotional state"""
-        # Determine if emotion should be expressed
-        if not hasattr(self.brain, "emotional_core") or not self.brain.emotional_core:
-            return {"expression": None, "should_express": False}
-        
-        should_express_emotion = False
-        if hasattr(self.brain.emotional_core, "should_express_emotion"):
-            should_express_emotion = self.brain.emotional_core.should_express_emotion()
-        
-        emotional_expression = None
-        
-        if should_express_emotion:
-            try:
-                if hasattr(self.brain.emotional_core, "generate_emotional_expression"):
-                    expression_result = await self.brain.emotional_core.generate_emotional_expression(force=False)
-                    if expression_result.get("expressed", False):
-                        emotional_expression = expression_result.get("expression", "")
-                elif hasattr(self.brain.emotional_core, "get_expression_for_emotion"):
-                    emotional_expression = self.brain.emotional_core.get_expression_for_emotion()
-            except Exception as e:
-                logger.error(f"Error generating emotional expression: {str(e)}")
-                if hasattr(self.brain.emotional_core, "get_expression_for_emotion"):
-                    emotional_expression = self.brain.emotional_core.get_expression_for_emotion()
-        
-        return {
-            "expression": emotional_expression,
-            "should_express": should_express_emotion
-        }
-    
-    async def _calculate_memory_emotional_impact(self, memories: List[Dict[str, Any]]) -> Dict[str, float]:
-        """Calculate emotional impact from relevant memories"""
-        impact = {}
-        
-        for memory in memories:
-            # Extract emotional context
-            emotional_context = memory.get("metadata", {}).get("emotional_context", {})
-            
-            if not emotional_context:
-                continue
-                
-            # Get primary emotion
-            primary_emotion = emotional_context.get("primary_emotion")
-            primary_intensity = emotional_context.get("primary_intensity", 0.5)
-            
-            if primary_emotion:
-                # Calculate impact based on relevance and recency
-                relevance = memory.get("relevance", 0.5)
-                
-                # Get timestamp if available
-                timestamp_str = memory.get("metadata", {}).get("timestamp")
-                recency_factor = 1.0
-                if timestamp_str:
-                    try:
-                        timestamp = datetime.datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                        days_old = (datetime.datetime.now() - timestamp).days
-                        recency_factor = max(0.5, 1.0 - (days_old / 30))  # Decay over 30 days, minimum 0.5
-                    except (ValueError, TypeError):
-                        # If timestamp can't be parsed, use default
-                        pass
-                
-                # Calculate final impact value
-                impact_value = primary_intensity * relevance * recency_factor * 0.1
-                
-                # Add to impact dict
-                if primary_emotion not in impact:
-                    impact[primary_emotion] = 0
-                impact[primary_emotion] += impact_value
-        
-        return impact
