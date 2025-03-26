@@ -1288,6 +1288,7 @@ class NyxBrain:
             # Use standard response generation
             return await self.generate_response(user_input, context)
     
+    # nyx/core/brain/base.py (continued)
     async def register_error(self, error_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Register an error from any component for central management
@@ -1320,3 +1321,395 @@ class NyxBrain:
         
         # Update error counts
         if error_type not in self.error_registry["error_counts"]:
+            self.error_registry["error_counts"][error_type] = 0
+        self.error_registry["error_counts"][error_type] += 1
+        
+        # Check if we have a recovery strategy
+        recovery_success = False
+        if error_type in self.error_registry["error_recovery_strategies"]:
+            try:
+                # Execute recovery strategy
+                recovery_strategy = self.error_registry["error_recovery_strategies"][error_type]
+                recovery_result = await self._execute_recovery_strategy(recovery_strategy, error_record)
+                
+                # Update error record
+                error_record["handled"] = True
+                error_record["recovery_action"] = recovery_strategy["name"]
+                error_record["recovery_success"] = recovery_result["success"]
+                recovery_success = recovery_result["success"]
+                
+                # Update recovery stats
+                if error_type not in self.error_registry["error_recovery_stats"]:
+                    self.error_registry["error_recovery_stats"][error_type] = {
+                        "attempts": 0,
+                        "successes": 0
+                    }
+                self.error_registry["error_recovery_stats"][error_type]["attempts"] += 1
+                if recovery_result["success"]:
+                    self.error_registry["error_recovery_stats"][error_type]["successes"] += 1
+                
+                # Add to handled errors
+                self.error_registry["handled_errors"].append(error_record)
+            except Exception as e:
+                # Failed to execute recovery strategy
+                error_record["recovery_error"] = str(e)
+                self.error_registry["unhandled_errors"].append(error_record)
+        else:
+            # No recovery strategy available
+            self.error_registry["unhandled_errors"].append(error_record)
+        
+        # If critical error, trigger immediate handling
+        if severity == "critical" and not recovery_success:
+            await self._handle_critical_error(error_record)
+        
+        # Clean up old errors
+        self._clean_up_error_registry()
+        
+        return {
+            "registered": True,
+            "handled": error_record["handled"],
+            "recovery_success": error_record.get("recovery_success", False)
+        }
+    
+    async def _execute_recovery_strategy(self, strategy: Dict[str, Any], error_record: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute a recovery strategy for an error
+        
+        Args:
+            strategy: Recovery strategy to execute
+            error_record: Error information
+            
+        Returns:
+            Recovery result
+        """
+        strategy_type = strategy["type"]
+        
+        if strategy_type == "retry":
+            # Retry the operation
+            return await self._execute_retry_strategy(strategy, error_record)
+        elif strategy_type == "fallback":
+            # Use fallback mechanism
+            return await self._execute_fallback_strategy(strategy, error_record)
+        elif strategy_type == "reset":
+            # Reset component
+            return await self._execute_reset_strategy(strategy, error_record)
+        else:
+            return {"success": False, "message": f"Unknown strategy type: {strategy_type}"}
+    
+    async def _execute_retry_strategy(self, strategy: Dict[str, Any], error_record: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a retry strategy"""
+        component_name = error_record["component"]
+        operation = strategy.get("operation")
+        args = error_record.get("context", {}).get("args", [])
+        kwargs = error_record.get("context", {}).get("kwargs", {})
+        max_retries = strategy.get("max_retries", 3)
+        
+        # Get component
+        component = getattr(self, component_name, None)
+        if not component:
+            return {"success": False, "message": f"Component not found: {component_name}"}
+        
+        # Get operation
+        method = getattr(component, operation, None)
+        if not method:
+            return {"success": False, "message": f"Operation not found: {operation}"}
+        
+        # Retry with exponential backoff
+        for i in range(max_retries):
+            try:
+                # Retry operation
+                result = await method(*args, **kwargs)
+                return {"success": True, "result": result, "retries": i+1}
+            except Exception as e:
+                # Wait before retrying
+                await asyncio.sleep(0.5 * (2**i))  # Exponential backoff
+        
+        # Max retries reached
+        return {"success": False, "message": f"Max retries reached ({max_retries})"}
+    
+    async def _execute_fallback_strategy(self, strategy: Dict[str, Any], error_record: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a fallback strategy"""
+        fallback_component = strategy.get("fallback_component")
+        fallback_operation = strategy.get("fallback_operation")
+        args = error_record.get("context", {}).get("args", [])
+        kwargs = error_record.get("context", {}).get("kwargs", {})
+        
+        # Get fallback component
+        component = getattr(self, fallback_component, None)
+        if not component:
+            return {"success": False, "message": f"Fallback component not found: {fallback_component}"}
+        
+        # Get fallback operation
+        method = getattr(component, fallback_operation, None)
+        if not method:
+            return {"success": False, "message": f"Fallback operation not found: {fallback_operation}"}
+        
+        try:
+            # Execute fallback
+            result = await method(*args, **kwargs)
+            return {"success": True, "result": result, "fallback_used": True}
+        except Exception as e:
+            return {"success": False, "message": f"Fallback failed: {str(e)}"}
+    
+    async def _execute_reset_strategy(self, strategy: Dict[str, Any], error_record: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a reset strategy"""
+        component_name = error_record["component"]
+        reset_method = strategy.get("reset_method", "reset")
+        
+        # Get component
+        component = getattr(self, component_name, None)
+        if not component:
+            return {"success": False, "message": f"Component not found: {component_name}"}
+        
+        # Get reset method
+        method = getattr(component, reset_method, None)
+        if not method:
+            return {"success": False, "message": f"Reset method not found: {reset_method}"}
+        
+        try:
+            # Execute reset
+            result = await method()
+            return {"success": True, "result": result, "component_reset": True}
+        except Exception as e:
+            return {"success": False, "message": f"Reset failed: {str(e)}"}
+    
+    async def _handle_critical_error(self, error_record: Dict[str, Any]) -> None:
+        """Handle a critical error"""
+        # Log critical error
+        logger.critical(f"Critical error: {error_record['error_type']} in {error_record['component']}: {error_record['error_message']}")
+        
+        # Try to stabilize the system
+        try:
+            # Check component status
+            component_name = error_record["component"]
+            component = getattr(self, component_name, None)
+            
+            if component and hasattr(component, "health_check"):
+                # Run health check
+                health = await component.health_check()
+                
+                if not health["healthy"]:
+                    # Try to reinitialize component
+                    logger.warning(f"Attempting to reinitialize {component_name} after critical error")
+                    if hasattr(component, "initialize"):
+                        await component.initialize()
+        except Exception as e:
+            logger.error(f"Error handling critical error: {str(e)}")
+    
+    def _clean_up_error_registry(self) -> None:
+        """Clean up old errors from the registry"""
+        # Keep only the latest 1000 errors
+        if len(self.error_registry["unhandled_errors"]) > 1000:
+            self.error_registry["unhandled_errors"] = self.error_registry["unhandled_errors"][-1000:]
+        if len(self.error_registry["handled_errors"]) > 1000:
+            self.error_registry["handled_errors"] = self.error_registry["handled_errors"][-1000:]
+    
+    async def register_recovery_strategy(self, error_type: str, strategy: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Register a recovery strategy for an error type
+        
+        Args:
+            error_type: Error type to handle
+            strategy: Strategy information
+            
+        Returns:
+            Registration result
+        """
+        self.error_registry["error_recovery_strategies"][error_type] = strategy
+        return {"registered": True, "error_type": error_type, "strategy": strategy["name"]}
+    
+    async def process_streaming_event(self, event_type: str, event_data: dict, significance: float = 5.0) -> Dict[str, Any]:
+        """
+        Process a significant streaming event through the brain's cognitive systems
+        
+        Args:
+            event_type: Type of event (e.g., "commentary", "question_answer")
+            event_data: Data about the event
+            significance: Importance level (1-10)
+            
+        Returns:
+            Processing results including memory_id and any cognitive processing
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        results = {}
+        
+        # Get game name from streaming system if available
+        game_name = "Unknown Game"
+        if hasattr(self, "streaming_core") and hasattr(self.streaming_core.streaming_system, "game_state"):
+            game_name = self.streaming_core.streaming_system.game_state.game_name or "Unknown Game"
+        
+        # 1. Store in memory system
+        if self.memory_core:
+            memory_text = f"While streaming {game_name}, observed {event_type}: {event_data.get('text', str(event_data))}"
+            memory_id = await self.memory_core.add_memory(
+                memory_text=memory_text,
+                memory_type="observation",
+                memory_scope="game",
+                significance=significance,
+                tags=["streaming", event_type, game_name],
+                metadata={
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "game_name": game_name,
+                    "event_type": event_type,
+                    "event_data": event_data,
+                    "streaming": True
+                }
+            )
+            results["memory_id"] = memory_id
+        
+        # 2. Impact emotional state if available
+        if self.emotional_core:
+            # Analyze emotional impact
+            if event_type == "commentary":
+                # Commentary might reflect emotional state
+                self.emotional_core.update_emotion("Joy", 0.1)
+            elif event_type == "question_answer":
+                # Answering questions might increase engagement
+                self.emotional_core.update_emotion("Interest", 0.1)
+            elif event_type == "significant_moment":
+                # Game moments might have stronger impact
+                intensity = event_data.get("significance", 5.0) / 10.0
+                if "combat" in str(event_data).lower():
+                    self.emotional_core.update_emotion("Excitement", intensity)
+                elif "story" in str(event_data).lower():
+                    self.emotional_core.update_emotion("Interest", intensity)
+            
+            # Get updated emotional state
+            results["emotional_state"] = self.emotional_core.get_emotional_state()
+        
+        # 3. Process through reasoning system if significant enough
+        if significance >= 7.0 and self.reasoning_core:
+            try:
+                reasoning_result = await Runner.run(
+                    self.reasoning_core,
+                    f"Analyze this streaming event: {event_type} - {event_data}",
+                    context={"domain": "gaming", "event_type": event_type}
+                )
+                results["reasoning"] = reasoning_result.final_output if hasattr(reasoning_result, "final_output") else str(reasoning_result)
+            except Exception as e:
+                logger.error(f"Error in reasoning about streaming event: {e}")
+        
+        # 4. Process through identity system if available
+        if self.identity_evolution and event_type in ["question_answer", "commentary"]:
+            try:
+                # Streaming affects identity over time
+                if event_type == "commentary":
+                    # Commentary style affects identity
+                    style = event_data.get("focus", "")
+                    if style == "strategy":
+                        await self.identity_evolution.update_trait("analytical", 0.05)
+                    elif style == "lore":
+                        await self.identity_evolution.update_trait("curious", 0.05)
+                
+                results["identity_updated"] = True
+            except Exception as e:
+                logger.error(f"Error updating identity from streaming event: {e}")
+        
+        return results
+    
+    async def integrate_streaming_knowledge(self, game_name: str) -> Dict[str, Any]:
+        """
+        Integrate knowledge from streaming into long-term knowledge systems
+        
+        Args:
+            game_name: Name of the game to integrate knowledge for
+            
+        Returns:
+            Integration results
+        """
+        if not self.initialized:
+            await self.initialize()
+        
+        results = {}
+        
+        # 1. Create reflection on streaming experience
+        if hasattr(self, "streaming_core") and hasattr(self.streaming_core, "memory_mapper"):
+            reflection = await self.streaming_core.memory_mapper.create_streaming_reflection(
+                game_name=game_name,
+                aspect="knowledge_integration",
+                context="knowledge integration"
+            )
+            results["reflection"] = reflection
+        
+        # 2. Store cross-game insights as knowledge
+        if hasattr(self, "streaming_core") and hasattr(self.streaming_core, "cross_game_knowledge"):
+            insights = self.streaming_core.cross_game_knowledge.get_applicable_insights(
+                target_game=game_name,
+                min_relevance=0.7
+            )
+            
+            if insights and self.knowledge_core:
+                try:
+                    for insight in insights:
+                        await self.knowledge_core.add_knowledge_item(
+                            domain="gaming",
+                            content=insight["insight"],
+                            source=f"Cross-game insight: {insight['source_game']} → {insight['target_game']}",
+                            confidence=insight["relevance"]
+                        )
+                    
+                    results["insights_added"] = len(insights)
+                except Exception as e:
+                    logger.error(f"Error storing cross-game insights: {e}")
+        
+        # 3. Consolidate experiences if available
+        if self.experience_consolidation and self.memory_core:
+            try:
+                query = f"streaming {game_name}"
+                experiences = await self.memory_core.retrieve_memories(
+                    query=query,
+                    memory_types=["experience"],
+                    limit=10
+                )
+                
+                if len(experiences) >= 3:
+                    consolidation = await self.experience_consolidation.consolidate_experiences(
+                        experiences=experiences,
+                        topic=f"Streaming {game_name}",
+                        min_count=3
+                    )
+                    results["consolidation"] = consolidation
+            except Exception as e:
+                logger.error(f"Error consolidating streaming experiences: {e}")
+        
+        return results
+    
+    @classmethod
+    async def get_instance(cls, user_id: int, conversation_id: int) -> 'NyxBrain':
+        """
+        Get or create a singleton instance for the specified user and conversation
+        
+        Args:
+            user_id: User ID
+            conversation_id: Conversation ID
+            
+        Returns:
+            Brain instance
+        """
+        # Use a key for the specific user/conversation
+        key = f"brain_{user_id}_{conversation_id}"
+        
+        # Check if instance exists in a global registry
+        if not hasattr(cls, '_instances'):
+            cls._instances = {}
+            
+        if key not in cls._instances:
+            instance = cls(user_id, conversation_id)
+            await instance.initialize()
+            cls._instances[key] = instance
+            
+            # Register in cross-conversation registry by user
+            if not hasattr(cls, '_user_instances'):
+                cls._user_instances = {}
+                
+            if user_id not in cls._user_instances:
+                cls._user_instances[user_id] = []
+                
+            cls._user_instances[user_id].append(instance)
+            
+            # Store reference to registry
+            instance.instance_registry = cls._user_instances
+        
+        return cls._instances[key]
