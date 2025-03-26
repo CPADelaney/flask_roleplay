@@ -455,3 +455,182 @@ async def run_thinking(ctx, user_input: str, thinking_level: int = 1, context: O
         return result
     
     return {"error": "Thinking tools not available"}
+# Add these new function tools to nyx/core/brain/function_tools.py
+
+@function_tool
+async def enable_self_configuration(ctx) -> Dict[str, Any]:
+    """
+    Enable the self-configuration system
+    
+    Returns:
+        Enablement result
+    """
+    brain = ctx.context
+    
+    # Enable self-configuration
+    if hasattr(brain, "self_config_manager") and brain.self_config_manager:
+        result = await brain.self_config_manager.enable()
+        return result
+    
+    return {"error": "Self-configuration manager not initialized"}
+
+@function_tool
+async def evaluate_and_adjust_parameters(ctx) -> Dict[str, Any]:
+    """
+    Evaluate current parameters and adjust if needed
+    
+    Returns:
+        Adjustment results
+    """
+    brain = ctx.context
+    
+    # Evaluate parameters
+    if hasattr(brain, "self_config_manager") and brain.self_config_manager:
+        result = await brain.self_config_manager.evaluate_and_adjust_parameters()
+        return result
+    
+    return {"error": "Self-configuration manager not initialized"}
+
+@function_tool
+async def change_adaptation_strategy(ctx, strategy: str) -> Dict[str, Any]:
+    """
+    Change the adaptation strategy
+    
+    Args:
+        strategy: Strategy name to use
+    
+    Returns:
+        Change result
+    """
+    brain = ctx.context
+    
+    # Change strategy
+    if hasattr(brain, "self_config_manager") and brain.self_config_manager:
+        result = await brain.self_config_manager.change_adaptation_strategy(strategy)
+        return result
+    
+    return {"error": "Self-configuration manager not initialized"}
+
+@function_tool
+async def process_user_feedback_for_configuration(ctx, 
+                                              feedback_type: str, 
+                                              feedback_text: str,
+                                              context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Process user feedback to influence configuration
+    
+    Args:
+        feedback_type: Type of feedback ("positive", "negative", "specific")
+        feedback_text: Text of user feedback
+        context: Additional context information
+    
+    Returns:
+        Processing results
+    """
+    brain = ctx.context
+    
+    # Process feedback
+    if hasattr(brain, "self_config_manager") and brain.self_config_manager:
+        result = await brain.self_config_manager.process_user_feedback(feedback_type, feedback_text, context)
+        return result
+    
+    return {"error": "Self-configuration manager not initialized"}
+
+@function_tool
+async def set_processing_mode(ctx, mode: str, reason: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Set the processing mode for the brain
+    
+    Args:
+        mode: Processing mode ("serial", "parallel", "distributed", "reflexive", "agent", "integrated", "auto")
+        reason: Optional reason for the mode change
+    
+    Returns:
+        Mode change results
+    """
+    brain = ctx.context
+    
+    # Set processing mode
+    if hasattr(brain, "processing_manager") and brain.processing_manager:
+        result = await brain.processing_manager.set_processing_mode(mode, reason)
+        return result
+    
+    return {"error": "Processing manager not initialized"}
+
+@function_tool
+async def get_processing_stats(ctx) -> Dict[str, Any]:
+    """
+    Get processing statistics
+    
+    Returns:
+        Processing statistics
+    """
+    brain = ctx.context
+    
+    # Get processing stats
+    if hasattr(brain, "processing_manager") and brain.processing_manager:
+        result = await brain.processing_manager.get_processing_stats()
+        return result
+    
+    return {"error": "Processing manager not initialized"}
+
+@function_tool
+async def register_issue(ctx, 
+                      issue_data: Dict[str, Any], 
+                      auto_attempt_resolution: bool = True) -> Dict[str, Any]:
+    """
+    Register an issue with the issue tracking system
+    
+    Args:
+        issue_data: Issue information
+        auto_attempt_resolution: Whether to attempt automatic resolution
+        
+    Returns:
+        Registration result
+    """
+    brain = ctx.context
+    
+    # Register issue
+    if hasattr(brain, "issue_tracker") and brain.issue_tracker:
+        result = await brain.issue_tracker.register_issue(issue_data, auto_attempt_resolution)
+        return result
+    
+    return {"error": "Issue tracker not initialized"}
+
+@function_tool
+async def set_meta_tone(ctx, tone_name: str, reason: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Set the meta-tone for agent responses
+    
+    Args:
+        tone_name: Name of the meta-tone to use
+        reason: Optional reason for the tone change
+        
+    Returns:
+        Tone change status
+    """
+    brain = ctx.context
+    
+    # Set meta-tone
+    if hasattr(brain, "agent_integration") and brain.agent_integration:
+        result = await brain.agent_integration.set_meta_tone(tone_name, reason)
+        return result
+    
+    return {"error": "Agent integration not initialized"}
+
+@function_tool
+async def get_agent_stats(ctx) -> Dict[str, Any]:
+    """
+    Get agent system statistics
+    
+    Returns:
+        Agent statistics
+    """
+    brain = ctx.context
+    
+    # Get agent stats
+    if hasattr(brain, "agent_integration") and brain.agent_integration:
+        result = await brain.agent_integration.get_system_statistics()
+        return result
+    
+    return {"error": "Agent integration not initialized"}
