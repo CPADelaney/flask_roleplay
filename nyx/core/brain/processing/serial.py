@@ -2,23 +2,16 @@
 import logging
 import asyncio
 import datetime
-import random
 from typing import Dict, List, Any, Optional
 
 from agents import trace, Runner
 from nyx.core.brain.models import SensoryInput
+from nyx.core.brain.processing.base_processor import BaseProcessor
 
 logger = logging.getLogger(__name__)
 
-class SerialProcessor:
+class SerialProcessor(BaseProcessor):
     """Handles serial processing of inputs"""
-    
-    def __init__(self, brain):
-        self.brain = brain
-    
-    async def initialize(self):
-        """Initialize the processor"""
-        logger.info("Serial processor initialized")
     
     async def process_input(self, user_input: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -274,16 +267,6 @@ class SerialProcessor:
             if hasattr(self.brain, "interaction_count"):
                 self.brain.interaction_count += 1
             
-            # Add perceptual processing info if available
-            perceptual_processing = None
-            if 'percept' in locals() and percept:
-                perceptual_processing = {
-                    "modality": percept.modality,
-                    "attention_weight": percept.attention_weight,
-                    "bottom_up_confidence": percept.bottom_up_confidence,
-                    "top_down_influence": percept.top_down_influence
-                }
-            
             # Calculate response time
             end_time = datetime.datetime.now()
             response_time = (end_time - start_time).total_seconds()
@@ -315,8 +298,13 @@ class SerialProcessor:
                 result["temporal_context"] = temporal_effects
             
             # Add perceptual processing if available
-            if perceptual_processing:
-                result["perceptual_processing"] = perceptual_processing
+            if 'percept' in locals() and percept:
+                result["perceptual_processing"] = {
+                    "modality": percept.modality,
+                    "attention_weight": percept.attention_weight,
+                    "bottom_up_confidence": percept.bottom_up_confidence,
+                    "top_down_influence": percept.top_down_influence
+                }
             
             # Add hormone info if available
             if hasattr(self.brain, "hormone_system") and self.brain.hormone_system:
@@ -326,17 +314,13 @@ class SerialProcessor:
                 except Exception as e:
                     logger.error(f"Error getting hormone levels: {str(e)}")
             
-            # Add reward result if available in context
-            if context and "reward_outcome" in context and hasattr(self.brain, "process_reward"):
-                try:
-                    reward_result = await self.brain.process_reward(
-                        context=context,
-                        outcome=context["reward_outcome"],
-                        success_level=context.get("success_level", 0.5)
-                    )
-                    result["reward_processing"] = reward_result
-                except Exception as e:
-                    logger.error(f"Error processing reward: {str(e)}")
+            # Publish event for processing completion if event system exists
+            if hasattr(self.brain, "event_system"):
+                await self.brain.event_system.publish("input_processed", {
+                    "processor": "serial",
+                    "user_input": user_input,
+                    "result": result
+                })
             
             return result
     
@@ -480,152 +464,12 @@ class SerialProcessor:
                 except Exception as e:
                     logger.error(f"Error evaluating response: {str(e)}")
             
-            # Check if it's time for experience consolidation
-            self._check_and_run_consolidation()
-            
-            # Check if it's time for identity reflection
-            identity_reflection_interval = getattr(self.brain, "identity_reflection_interval", 10)
-            if hasattr(self.brain, "interaction_count") and self.brain.interaction_count % identity_reflection_interval == 0:
-                try:
-                    if hasattr(self.brain, "get_identity_state"):
-                        identity_state = await self.brain.get_identity_state()
-                        response_data["identity_reflection"] = identity_state
-                except Exception as e:
-                    logger.error(f"Error generating identity reflection: {str(e)}")
-            
-            # Add temporal expressions if appropriate
-            if hasattr(self.brain, "temporal_perception") and (random.random() < 0.2 or context.get("include_time_expression", False)):
-                try:
-                    time_expression = await self.brain.temporal_perception.generate_temporal_expression()
-                    if time_expression:
-                        # Prepend or append the time expression to the response
-                        if random.random() < 0.5 and not response_data["message"].startswith(time_expression["expression"]):
-                            response_data["message"] = f"{time_expression['expression']} {response_data['message']}"
-                        elif not response_data["message"].endswith(time_expression["expression"]):
-                            response_data["message"] = f"{response_data['message']} {time_expression['expression']}"
-                        
-                        response_data["time_expression"] = time_expression
-                except Exception as e:
-                    logger.error(f"Error generating time expression: {str(e)}")
-            
-            # Process end of interaction for temporal tracking
-            if hasattr(self.brain, "temporal_perception"):
-                await self.brain.temporal_perception.on_interaction_end()
+            # Publish event for response generated if event system exists
+            if hasattr(self.brain, "event_system"):
+                await self.brain.event_system.publish("response_generated", {
+                    "processor": "serial",
+                    "response_type": response_type,
+                    "response_data": response_data
+                })
             
             return response_data
-    
-    async def _calculate_memory_emotional_impact(self, memories: List[Dict[str, Any]]) -> Dict[str, float]:
-        """Calculate emotional impact from relevant memories"""
-        impact = {}
-        
-        for memory in memories:
-            # Extract emotional context
-            emotional_context = memory.get("metadata", {}).get("emotional_context", {})
-            
-            if not emotional_context:
-                continue
-                
-            # Get primary emotion
-            primary_emotion = emotional_context.get("primary_emotion")
-            primary_intensity = emotional_context.get("primary_intensity", 0.5)
-            
-            if primary_emotion:
-                # Calculate impact based on relevance and recency
-                relevance = memory.get("relevance", 0.5)
-                
-                # Get timestamp if available
-                timestamp_str = memory.get("metadata", {}).get("timestamp")
-                recency_factor = 1.0
-                if timestamp_str:
-                    try:
-                        timestamp = datetime.datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                        days_old = (datetime.datetime.now() - timestamp).days
-                        recency_factor = max(0.5, 1.0 - (days_old / 30))  # Decay over 30 days, minimum 0.5
-                    except (ValueError, TypeError):
-                        # If timestamp can't be parsed, use default
-                        pass
-                
-                # Calculate final impact value
-                impact_value = primary_intensity * relevance * recency_factor * 0.1
-                
-                # Add to impact dict
-                if primary_emotion not in impact:
-                    impact[primary_emotion] = 0
-                impact[primary_emotion] += impact_value
-        
-        return impact
-    
-    def _should_share_experience(self, user_input: str, context: Dict[str, Any]) -> bool:
-        """Determine if we should share an experience based on input and context"""
-        # Check for explicit experience requests
-        explicit_request = any(phrase in user_input.lower() for phrase in 
-                             ["remember", "recall", "tell me about", "have you done", 
-                              "previous", "before", "past", "experience", "what happened",
-                              "have you ever", "did you ever", "similar", "others"])
-        
-        if explicit_request:
-            return True
-        
-        # Check if it's a question that could benefit from experience sharing
-        is_question = user_input.endswith("?") or user_input.lower().startswith(("what", "how", "when", "where", "why", "who", "can", "could", "do", "did"))
-        
-        if is_question and context and "share_experiences" in context and context["share_experiences"]:
-            return True
-        
-        # Check for personal references that might trigger experience sharing
-        personal_references = any(phrase in user_input.lower() for phrase in 
-                               ["your experience", "you like", "you prefer", "you enjoy",
-                                "you think", "you feel", "your opinion", "your view"])
-        
-        if personal_references:
-            return True
-        
-        # Get user preference for experience sharing if available
-        user_id = str(self.brain.user_id)
-        if hasattr(self.brain, "experience_interface") and hasattr(self.brain.experience_interface, "_get_user_preference_profile"):
-            try:
-                profile = self.brain.experience_interface._get_user_preference_profile(user_id)
-                sharing_preference = profile.get("experience_sharing_preference", 0.5)
-                
-                # Higher preference means more likely to share experiences even without explicit request
-                random_factor = random.random()
-                if random_factor < sharing_preference * 0.5:  # Scale down to make this path less common
-                    return True
-            except:
-                pass
-        
-        # Default to not sharing experiences unless explicitly requested
-        return False
-    
-    def _is_reasoning_query(self, user_input: str) -> bool:
-        """Determine if a query is likely to need reasoning capabilities"""
-        reasoning_indicators = [
-            "why", "how come", "explain", "what if", "cause", "reason", "logic", 
-            "analyze", "understand", "think through", "consider", "would happen",
-            "hypothetical", "scenario", "reasoning", "connect", "relationship",
-            "causality", "counterfactual", "consequence", "impact", "effect"
-        ]
-        
-        return any(indicator in user_input.lower() for indicator in reasoning_indicators)
-    
-    def _check_and_run_consolidation(self) -> None:
-        """Check if it's time for consolidation and run if needed"""
-        if not hasattr(self.brain, "experience_interface"):
-            return
-        
-        # Check time since last consolidation
-        now = datetime.datetime.now()
-        
-        if hasattr(self.brain, "last_consolidation") and hasattr(self.brain, "consolidation_interval"):
-            time_since_last = (now - self.brain.last_consolidation).total_seconds() / 3600  # hours
-            
-            if time_since_last >= self.brain.consolidation_interval:
-                try:
-                    # Run consolidation in background
-                    if hasattr(self.brain, "run_experience_consolidation"):
-                        asyncio.create_task(self.brain.run_experience_consolidation())
-                    
-                    # Update last consolidation time
-                    self.brain.last_consolidation = now
-                except Exception as e:
-                    logger.error(f"Error scheduling consolidation: {str(e)}")
