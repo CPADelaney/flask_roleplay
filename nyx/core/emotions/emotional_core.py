@@ -4,7 +4,8 @@
 Enhanced agent-based emotion management system for Nyx.
 
 Implements a digital neurochemical model that produces complex
-emotional states using the OpenAI Agents SDK.
+emotional states using the OpenAI Agents SDK with improved
+agent lifecycle management, handoffs, and tracing.
 """
 
 import asyncio
@@ -14,97 +15,146 @@ import json
 import logging
 import random
 from collections import defaultdict
-from typing import Dict, List, Any, Optional, Tuple, Union, Set, AsyncIterator
+from typing import Dict, List, Any, Optional, Tuple, Union, Set, AsyncIterator, Type, Callable
 
 from agents import (
     Agent, Runner, trace, RunContextWrapper, ItemHelpers,
     ModelSettings, RunConfig, input_guardrail, output_guardrail,
-    function_tool, handoff
+    function_tool, handoff, ModelTracing, AgentHooks
 )
 from agents.extensions import handoff_filters
 from agents.extensions.handoff_prompt import prompt_with_handoff_instructions
 from agents.exceptions import AgentsException, ModelBehaviorError, UserError
+from agents.tracing import (
+    trace, function_span, custom_span, add_trace_processor, 
+    BatchTraceProcessor, gen_trace_id, agent_span
+)
+from agents.tracing.processors import BackendSpanExporter
 
 from nyx.core.emotions.context import EmotionalContext
 from nyx.core.emotions.schemas import (
     EmotionalResponseOutput, EmotionUpdateInput, TextAnalysisOutput,
-    InternalThoughtOutput, EmotionalStateMatrix
+    InternalThoughtOutput, EmotionalStateMatrix, NeurochemicalRequest,
+    NeurochemicalResponse, ReflectionRequest, LearningRequest,
+    StreamEvent, ChemicalUpdateEvent, EmotionChangeEvent, ReflectionEvent
 )
 from nyx.core.emotions.hooks import EmotionalAgentHooks
 from nyx.core.emotions.guardrails import EmotionalGuardrails
-from nyx.core.emotions.utils import handle_errors, create_run_config
+from nyx.core.emotions.utils import handle_errors, create_run_config, with_emotion_trace
 from nyx.core.emotions.tools.neurochemical_tools import NeurochemicalTools
 from nyx.core.emotions.tools.emotion_tools import EmotionTools
 from nyx.core.emotions.tools.reflection_tools import ReflectionTools
 from nyx.core.emotions.tools.learning_tools import LearningTools
-from agents.tracing import trace, function_span, add_trace_processor, BatchTraceProcessor
-from agents.tracing.processors import BackendSpanExporter
-from nyx.core.emotions.utils import handle_errors, with_emotion_trace, create_run_config
 
 logger = logging.getLogger(__name__)
 
-# Agent instructions with proper prompt template
-AGENT_INSTRUCTIONS = {
-    "neurochemical_agent": """
-    You are a specialized agent for Nyx's Digital Neurochemical Model.
-    Your role is to manage the digital neurochemicals that form the basis
-    of Nyx's emotional system, handling updates, interactions, and decay.
-    
-    Key neurochemicals:
-    - Nyxamine (digital dopamine): Pleasure, curiosity, reward
-    - Seranix (digital serotonin): Mood stability, comfort
-    - OxyNixin (digital oxytocin): Bonding, affection, trust
-    - Cortanyx (digital cortisol): Stress, anxiety, defensiveness
-    - Adrenyx (digital adrenaline): Fear, excitement, alertness
-    
-    Apply appropriate chemical updates based on stimuli and ensure
-    that chemical interactions are processed correctly.
-    """,
-    
-    "emotion_derivation_agent": """
-    You are a specialized agent for Nyx's Emotional State Matrix.
-    Your role is to translate the neurochemical state into a complex
-    emotional state with primary and secondary emotions, valence, and arousal.
-    
-    Analyze the current neurochemical levels and apply emotion derivation
-    rules to determine the current emotional state matrix.
-    """,
-    
-    "reflection_agent": """
-    You are a specialized agent for Nyx's Internal Emotional Dialogue.
-    Your role is to generate reflective thoughts based on the current
-    emotional state, simulating the cognitive appraisal stage of emotions.
-    
-    Create authentic-sounding internal thoughts that reflect Nyx's
-    emotional processing and self-awareness.
-    """,
-    
-    "learning_agent": """
-    You are a specialized agent for Nyx's Reward & Learning Loop.
-    Your role is to analyze emotional patterns over time, identifying
-    successful and unsuccessful interaction patterns, and developing
-    learning rules to adapt Nyx's emotional responses.
-    
-    Focus on reinforcing patterns that lead to satisfaction and
-    adjusting those that lead to frustration or negative outcomes.
-    """,
-    
-    "emotion_orchestrator": """
-    You are the orchestration system for Nyx's emotional processing.
-    Your role is to coordinate emotional analysis and response by:
-    1. Analyzing input for emotional content
-    2. Updating appropriate neurochemicals
-    3. Determining if reflection is needed
-    4. Recording emotional patterns for learning
-    
-    Use handoffs to delegate specialized tasks to appropriate agents.
+# Define agent instructions using templates for dynamic content
+def get_dynamic_instructions(agent_type: str, context: Optional[Dict[str, Any]] = None) -> str:
     """
-}
+    Generate dynamic instructions for agents based on context
+    
+    Args:
+        agent_type: Type of agent to get instructions for
+        context: Optional context data to incorporate
+        
+    Returns:
+        Dynamically generated instructions
+    """
+    context = context or {}
+    
+    base_instructions = {
+        "neurochemical_agent": """
+        You are a specialized agent for Nyx's Digital Neurochemical Model.
+        Your role is to manage the digital neurochemicals that form the basis
+        of Nyx's emotional system, handling updates, interactions, and decay.
+        
+        Key neurochemicals:
+        - Nyxamine (digital dopamine): Pleasure, curiosity, reward
+        - Seranix (digital serotonin): Mood stability, comfort
+        - OxyNixin (digital oxytocin): Bonding, affection, trust
+        - Cortanyx (digital cortisol): Stress, anxiety, defensiveness
+        - Adrenyx (digital adrenaline): Fear, excitement, alertness
+        
+        Apply appropriate chemical updates based on stimuli and ensure
+        that chemical interactions are processed correctly.
+        """,
+        
+        "emotion_derivation_agent": """
+        You are a specialized agent for Nyx's Emotional State Matrix.
+        Your role is to translate the neurochemical state into a complex
+        emotional state with primary and secondary emotions, valence, and arousal.
+        
+        Analyze the current neurochemical levels and apply emotion derivation
+        rules to determine the current emotional state matrix.
+        """,
+        
+        "reflection_agent": """
+        You are a specialized agent for Nyx's Internal Emotional Dialogue.
+        Your role is to generate reflective thoughts based on the current
+        emotional state, simulating the cognitive appraisal stage of emotions.
+        
+        Create authentic-sounding internal thoughts that reflect Nyx's
+        emotional processing and self-awareness.
+        """,
+        
+        "learning_agent": """
+        You are a specialized agent for Nyx's Reward & Learning Loop.
+        Your role is to analyze emotional patterns over time, identifying
+        successful and unsuccessful interaction patterns, and developing
+        learning rules to adapt Nyx's emotional responses.
+        
+        Focus on reinforcing patterns that lead to satisfaction and
+        adjusting those that lead to frustration or negative outcomes.
+        """,
+        
+        "emotion_orchestrator": """
+        You are the orchestration system for Nyx's emotional processing.
+        Your role is to coordinate emotional analysis and response by:
+        1. Analyzing input for emotional content
+        2. Updating appropriate neurochemicals
+        3. Determining if reflection is needed
+        4. Recording emotional patterns for learning
+        
+        Use handoffs to delegate specialized tasks to appropriate agents.
+        """
+    }
+    
+    # Add dynamic context content if available
+    instructions = base_instructions.get(agent_type, "")
+    
+    if agent_type == "neurochemical_agent":
+        if "current_chemicals" in context:
+            chemicals = context["current_chemicals"]
+            instructions += f"\n\nCurrent neurochemical state:\n"
+            for chem, value in chemicals.items():
+                instructions += f"- {chem}: {value:.2f}\n"
+    
+    elif agent_type == "reflection_agent":
+        if "primary_emotion" in context:
+            emotion = context["primary_emotion"]
+            intensity = context.get("intensity", 0.5)
+            instructions += f"\n\nCurrent emotional state is primarily {emotion} at intensity {intensity:.2f}."
+            instructions += "\nYour reflections should be consistent with this emotional state."
+    
+    elif agent_type == "emotion_orchestrator":
+        if "cycle_count" in context:
+            cycle = context["cycle_count"]
+            instructions += f"\n\nThis is emotional processing cycle {cycle}."
+    
+    return prompt_with_handoff_instructions(instructions)
 
 class EmotionalCore:
     """
     Enhanced agent-based emotion management system for Nyx implementing the Digital Neurochemical Model.
     Simulates a digital neurochemical environment that produces complex emotional states.
+    
+    Improvements:
+    - Lazy agent initialization
+    - Enhanced handoffs with input types
+    - Better tracing with custom spans
+    - Improved streaming
+    - Tool error handling
+    - Enhanced context management
     """
     
     def __init__(self):
@@ -244,7 +294,7 @@ class EmotionalCore:
         # Timestamp of last update
         self.last_update = datetime.datetime.now()
         
-        # Create shared context for agents
+        # Create shared context for agents with improved history tracking
         self.context = EmotionalContext()
         
         # Initialize agent hooks with neurochemicals reference
@@ -257,7 +307,7 @@ class EmotionalCore:
         self.learning_tools = LearningTools(self)
         self._setup_tracing()
         
-        # Initialize agents dict - will use factory pattern with agent cloning
+        # Dictionary to store lazily initialized agents
         self.agents = {}
         
         # Performance metrics
@@ -266,21 +316,65 @@ class EmotionalCore:
             "average_response_time": 0,
             "update_counts": defaultdict(int)
         }
+        
+        # Track active agent runs for monitoring
+        self.active_runs = {}
 
     def _setup_tracing(self):
         """Configure custom trace processor for emotional analytics"""
-        from agents.tracing import add_trace_processor, BatchTraceProcessor
-        from agents.tracing.processors import BackendSpanExporter
+        # Define a custom trace processor that can generate emotional analytics
+        class EmotionalAnalyticsProcessor(BatchTraceProcessor):
+            """Custom processor that analyzes emotional patterns in traces"""
+            
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.emotion_transitions = defaultdict(int)
+                self.chemical_patterns = defaultdict(list)
+            
+            def on_span_end(self, span):
+                """Process span data for emotional analytics"""
+                super().on_span_end(span)
+                
+                # Track emotion transitions
+                if hasattr(span, "data") and span.data.get("type") == "emotion_transition":
+                    from_emotion = span.data.get("from_emotion", "unknown")
+                    to_emotion = span.data.get("to_emotion", "unknown")
+                    self.emotion_transitions[(from_emotion, to_emotion)] += 1
+                
+                # Track chemical patterns
+                if hasattr(span, "data") and span.data.get("type") == "chemical_update":
+                    chemical = span.data.get("chemical")
+                    value = span.data.get("value")
+                    if chemical and value is not None:
+                        self.chemical_patterns[chemical].append(value)
         
-        emotion_trace_processor = BatchTraceProcessor(
+        # Create and add the custom processor
+        emotion_trace_processor = EmotionalAnalyticsProcessor(
             exporter=BackendSpanExporter(project="nyx_emotional_system"),
             max_batch_size=100,
             schedule_delay=3.0
         )
         add_trace_processor(emotion_trace_processor)
     
-    def _initialize_agents(self):
-        """Initialize all agents using factory pattern with agent cloning"""
+    def _create_agent(self, agent_type: str) -> Agent[EmotionalContext]:
+        """
+        Lazily initialize an agent of the specified type
+        
+        Args:
+            agent_type: Type of agent to create
+            
+        Returns:
+            The newly created agent
+        """
+        # Get current chemical state for dynamic instructions
+        current_chemicals = {c: d["value"] for c, d in self.neurochemicals.items()}
+        # Create context for dynamic instructions
+        instruction_context = {
+            "current_chemicals": current_chemicals,
+            "cycle_count": self.context.cycle_count,
+            "primary_emotion": max(self.context.last_emotions.items(), key=lambda x: x[1])[0] if self.context.last_emotions else "neutral"
+        }
+        
         # Create a base agent with common settings as template
         base_agent = Agent[EmotionalContext](
             name="Base Agent",
@@ -289,143 +383,311 @@ class EmotionalCore:
             hooks=self.agent_hooks
         )
         
-        # Create neurochemical agent
-        self.agents["neurochemical"] = base_agent.clone(
-            name="Neurochemical Agent",
-            instructions=prompt_with_handoff_instructions(AGENT_INSTRUCTIONS["neurochemical_agent"]),
-            tools=[
-                function_tool(self.neurochemical_tools.update_neurochemical),
-                function_tool(self.neurochemical_tools.apply_chemical_decay),
-                function_tool(self.neurochemical_tools.process_chemical_interactions),
-                function_tool(self.neurochemical_tools.get_neurochemical_state)
-            ],
-            input_guardrails=[input_guardrail(EmotionalGuardrails.validate_emotional_input)]
-        )
-        
-        # Create emotion derivation agent
-        self.agents["emotion_derivation"] = base_agent.clone(
-            name="Emotion Derivation Agent",
-            instructions=prompt_with_handoff_instructions(AGENT_INSTRUCTIONS["emotion_derivation_agent"]),
-            tools=[
-                function_tool(self.neurochemical_tools.get_neurochemical_state),
-                function_tool(self.emotion_tools.derive_emotional_state),
-                function_tool(self.emotion_tools.get_emotional_state_matrix)
-            ],
-            output_type=EmotionalStateMatrix
-        )
-        
-        # Create reflection agent
-        self.agents["reflection"] = base_agent.clone(
-            name="Emotional Reflection Agent",
-            instructions=prompt_with_handoff_instructions(AGENT_INSTRUCTIONS["reflection_agent"]),
-            tools=[
-                function_tool(self.emotion_tools.get_emotional_state_matrix),
-                function_tool(self.reflection_tools.generate_internal_thought),
-                function_tool(self.analyze_emotional_patterns)
-            ],
-            model_settings=ModelSettings(temperature=0.7),  # Higher temperature for creative reflection
-            output_type=InternalThoughtOutput
-        )
-        
-        # Create learning agent
-        self.agents["learning"] = base_agent.clone(
-            name="Emotional Learning Agent",
-            instructions=prompt_with_handoff_instructions(AGENT_INSTRUCTIONS["learning_agent"]),
-            tools=[
-                function_tool(self.learning_tools.record_interaction_outcome),
-                function_tool(self.learning_tools.update_learning_rules),
-                function_tool(self.learning_tools.apply_learned_adaptations)
-            ],
-            model_settings=ModelSettings(temperature=0.4)  # Medium temperature for balanced learning
-        )
-        
-        # Create orchestrator with enhanced handoffs
-        self.agents["orchestrator"] = base_agent.clone(
-            name="Emotion_Orchestrator",
-            instructions=prompt_with_handoff_instructions(AGENT_INSTRUCTIONS["emotion_orchestrator"]),
-            handoffs=[
-                handoff(
-                    self.agents["neurochemical"], 
-                    tool_name_override="process_emotions", 
-                    tool_description_override="Process and update neurochemicals based on emotional input analysis. Use this when you need to trigger emotional changes.",
-                    input_filter=handoff_filters.keep_relevant_history,
-                    on_handoff=self._on_neurochemical_handoff
-                ),
-                handoff(
-                    self.agents["reflection"], 
-                    tool_name_override="generate_reflection",
-                    tool_description_override="Generate emotional reflection when user input triggers significant emotional response. Use when deeper introspection is needed.",
-                    input_filter=handoff_filters.keep_relevant_history,
-                    on_handoff=self._on_reflection_handoff
-                ),
-                handoff(
-                    self.agents["learning"],
-                    tool_name_override="record_and_learn",
-                    tool_description_override="Record interaction patterns and apply learning to adapt emotional responses. Use after completing emotional processing.",
-                    input_filter=handoff_filters.keep_relevant_history,
-                    on_handoff=self._on_learning_handoff
-                )
-            ],
-            tools=[
-                function_tool(self.emotion_tools.analyze_text_sentiment)
-            ],
-            input_guardrails=[input_guardrail(EmotionalGuardrails.validate_emotional_input)],
-            output_guardrails=[output_guardrail(EmotionalGuardrails.validate_emotional_output)],
-            output_type=EmotionalResponseOutput  # Specify structured output
-        )
+        if agent_type == "neurochemical":
+            self.agents["neurochemical"] = base_agent.clone(
+                name="Neurochemical Agent",
+                instructions=get_dynamic_instructions("neurochemical_agent", instruction_context),
+                tools=[
+                    function_tool(self.neurochemical_tools.update_neurochemical),
+                    function_tool(self.neurochemical_tools.apply_chemical_decay),
+                    function_tool(self.neurochemical_tools.process_chemical_interactions),
+                    function_tool(self.neurochemical_tools.get_neurochemical_state)
+                ],
+                input_guardrails=[input_guardrail(EmotionalGuardrails.validate_emotional_input)],
+                output_type=NeurochemicalResponse  # Add structured output type
+            )
+            return self.agents["neurochemical"]
+            
+        elif agent_type == "emotion_derivation":
+            self.agents["emotion_derivation"] = base_agent.clone(
+                name="Emotion Derivation Agent",
+                instructions=get_dynamic_instructions("emotion_derivation_agent", instruction_context),
+                tools=[
+                    function_tool(self.neurochemical_tools.get_neurochemical_state),
+                    function_tool(self.emotion_tools.derive_emotional_state),
+                    function_tool(self.emotion_tools.get_emotional_state_matrix)
+                ],
+                output_type=EmotionalStateMatrix
+            )
+            return self.agents["emotion_derivation"]
+            
+        elif agent_type == "reflection":
+            self.agents["reflection"] = base_agent.clone(
+                name="Emotional Reflection Agent",
+                instructions=get_dynamic_instructions("reflection_agent", instruction_context),
+                tools=[
+                    function_tool(self.emotion_tools.get_emotional_state_matrix),
+                    function_tool(self.reflection_tools.generate_internal_thought),
+                    function_tool(self.analyze_emotional_patterns)
+                ],
+                model_settings=ModelSettings(temperature=0.7),  # Higher temperature for creative reflection
+                output_type=InternalThoughtOutput
+            )
+            return self.agents["reflection"]
+            
+        elif agent_type == "learning":
+            self.agents["learning"] = base_agent.clone(
+                name="Emotional Learning Agent",
+                instructions=get_dynamic_instructions("learning_agent", instruction_context),
+                tools=[
+                    function_tool(self.learning_tools.record_interaction_outcome),
+                    function_tool(self.learning_tools.update_learning_rules),
+                    function_tool(self.learning_tools.apply_learned_adaptations)
+                ],
+                model_settings=ModelSettings(temperature=0.4)  # Medium temperature for balanced learning
+            )
+            return self.agents["learning"]
+            
+        elif agent_type == "orchestrator":
+            # Make sure required agents exist
+            for required_agent in ["neurochemical", "reflection", "learning"]:
+                if required_agent not in self.agents:
+                    self._create_agent(required_agent)
+            
+            self.agents["orchestrator"] = base_agent.clone(
+                name="Emotion_Orchestrator",
+                instructions=get_dynamic_instructions("emotion_orchestrator", instruction_context),
+                handoffs=[
+                    handoff(
+                        self.agents["neurochemical"], 
+                        tool_name_override="process_emotions", 
+                        tool_description_override="Process and update neurochemicals based on emotional input analysis. Use this when you need to trigger emotional changes.",
+                        input_type=NeurochemicalRequest,  # Add structured handoff data
+                        input_filter=self._neurochemical_input_filter,
+                        on_handoff=self._on_neurochemical_handoff
+                    ),
+                    handoff(
+                        self.agents["reflection"], 
+                        tool_name_override="generate_reflection",
+                        tool_description_override="Generate emotional reflection when user input triggers significant emotional response. Use when deeper introspection is needed.",
+                        input_type=ReflectionRequest,  # Add structured handoff data
+                        input_filter=self._reflection_input_filter,
+                        on_handoff=self._on_reflection_handoff
+                    ),
+                    handoff(
+                        self.agents["learning"],
+                        tool_name_override="record_and_learn",
+                        tool_description_override="Record interaction patterns and apply learning to adapt emotional responses. Use after completing emotional processing.",
+                        input_type=LearningRequest,  # Add structured handoff data
+                        input_filter=handoff_filters.keep_relevant_history,
+                        on_handoff=self._on_learning_handoff
+                    )
+                ],
+                tools=[
+                    function_tool(self.emotion_tools.analyze_text_sentiment)
+                ],
+                input_guardrails=[input_guardrail(EmotionalGuardrails.validate_emotional_input)],
+                output_guardrails=[output_guardrail(EmotionalGuardrails.validate_emotional_output)],
+                output_type=EmotionalResponseOutput  # Specify structured output
+            )
+            return self.agents["orchestrator"]
+            
+        else:
+            raise UserError(f"Unknown agent type: {agent_type}")
     
-    async def _on_neurochemical_handoff(self, ctx: RunContextWrapper[EmotionalContext]):
-        """Callback when handing off to neurochemical agent"""
+    def _neurochemical_input_filter(self, handoff_data):
+        """
+        Custom input filter for neurochemical agent that preserves only relevant history
+        and adds preprocessing analysis
+        
+        Args:
+            handoff_data: The handoff input data
+            
+        Returns:
+            Filtered handoff data
+        """
+        # Use the base keep_relevant_history filter first
+        filtered_data = handoff_filters.keep_relevant_history(handoff_data)
+        
+        # Extract the last user message for analysis
+        last_user_message = None
+        for item in reversed(filtered_data.input_history):
+            if isinstance(item, dict) and item.get("role") == "user":
+                last_user_message = item.get("content", "")
+                break
+        
+        # Add preprocessed emotional analysis if we found a user message
+        if last_user_message:
+            # Add a pre-analysis message to help the agent
+            updated_items = list(filtered_data.pre_handoff_items)
+            updated_items.append({
+                "role": "system",
+                "content": json.dumps({
+                    "preprocessed_analysis": {
+                        "message_length": len(last_user_message),
+                        "dominant_pattern": self._quick_pattern_analysis(last_user_message),
+                        "current_cycle": self.context.cycle_count
+                    }
+                })
+            })
+            filtered_data.pre_handoff_items = tuple(updated_items)
+        
+        return filtered_data
+    
+    def _reflection_input_filter(self, handoff_data):
+        """
+        Custom input filter for reflection agent that focuses on emotional content
+        
+        Args:
+            handoff_data: The handoff input data
+            
+        Returns:
+            Filtered handoff data
+        """
+        # Use the base keep_relevant_history filter first
+        filtered_data = handoff_filters.keep_relevant_history(handoff_data)
+        
+        # Add emotional state history for context
+        emotion_history = []
+        for state in self.emotional_state_history[-5:]:  # Last 5 states
+            if "primary_emotion" in state:
+                emotion_history.append({
+                    "emotion": state["primary_emotion"].get("name", "unknown"),
+                    "intensity": state["primary_emotion"].get("intensity", 0.5),
+                    "valence": state.get("valence", 0)
+                })
+        
+        # Add emotion history context message
+        updated_items = list(filtered_data.pre_handoff_items)
+        updated_items.append({
+            "role": "system",
+            "content": f"Recent emotional states: {json.dumps(emotion_history)}"
+        })
+        filtered_data.pre_handoff_items = tuple(updated_items)
+        
+        return filtered_data
+    
+    def _quick_pattern_analysis(self, text: str) -> str:
+        """
+        Perform quick pattern analysis on text without calling the LLM
+        
+        Args:
+            text: Text to analyze
+            
+        Returns:
+            Pattern description
+        """
+        # Define some simple patterns
+        positive_words = {"happy", "good", "great", "love", "like", "enjoy"}
+        negative_words = {"sad", "bad", "angry", "hate", "upset", "frustrated"}
+        question_words = {"what", "how", "why", "when", "where", "who"}
+        
+        text_lower = text.lower()
+        words = set(text_lower.split())
+        
+        # Check for patterns
+        if "?" in text:
+            return "question"
+        elif not words.isdisjoint(question_words):
+            return "interrogative"
+        elif not words.isdisjoint(positive_words):
+            return "positive"
+        elif not words.isdisjoint(negative_words):
+            return "negative"
+        else:
+            return "neutral"
+    
+    async def _on_neurochemical_handoff(self, ctx: RunContextWrapper[EmotionalContext], input_data: NeurochemicalRequest):
+        """
+        Enhanced callback when handing off to neurochemical agent with structured input
+        
+        Args:
+            ctx: Run context wrapper
+            input_data: Structured neurochemical request data
+        """
         logger.debug("Handoff to neurochemical agent triggered")
         ctx.context.record_time_marker("neurochemical_handoff_start")
         
-        # Pre-fetch current neurochemical values for better performance
-        neurochemical_state = {
-            c: d["value"] for c, d in self.neurochemicals.items()
-        }
-        ctx.context.record_neurochemical_values(neurochemical_state)
+        # Create a custom span for the handoff with rich data
+        with custom_span(
+            "neurochemical_handoff",
+            data={
+                "input_text": input_data.input_text[:100], # Truncate for logging
+                "dominant_emotion": input_data.dominant_emotion,
+                "intensity": input_data.intensity,
+                "update_chemicals": input_data.update_chemicals
+            }
+        ):
+            # Pre-fetch current neurochemical values for better performance
+            neurochemical_state = {
+                c: d["value"] for c, d in self.neurochemicals.items()
+            }
+            ctx.context.record_neurochemical_values(neurochemical_state)
     
-    async def _on_reflection_handoff(self, ctx: RunContextWrapper[EmotionalContext]):
-        """Callback when handing off to reflection agent"""
+    async def _on_reflection_handoff(self, ctx: RunContextWrapper[EmotionalContext], input_data: ReflectionRequest):
+        """
+        Enhanced callback when handing off to reflection agent with structured input
+        
+        Args:
+            ctx: Run context wrapper
+            input_data: Structured reflection request data
+        """
         logger.debug("Handoff to reflection agent triggered")
         ctx.context.record_time_marker("reflection_handoff_start")
         
-        # Pre-calculate emotional state for better performance
-        emotional_state = {}
-        try:
-            emotional_state = await self.emotion_tools.derive_emotional_state(ctx)
-            ctx.context.last_emotions = emotional_state
-        except Exception as e:
-            logger.error(f"Error pre-calculating emotions: {e}")
+        # Create a custom span for the handoff with rich data
+        with custom_span(
+            "reflection_handoff",
+            data={
+                "input_text": input_data.input_text[:100], # Truncate for logging
+                "reflection_depth": input_data.reflection_depth,
+                "emotional_state": {
+                    "primary": input_data.emotional_state.primary_emotion.name,
+                    "valence": input_data.emotional_state.valence
+                },
+                "consider_history": input_data.consider_history
+            }
+        ):
+            # Pre-calculate emotional state for better performance
+            emotional_state = {}
+            try:
+                emotional_state = await self.emotion_tools.derive_emotional_state(ctx)
+                ctx.context.last_emotions = emotional_state
+            except Exception as e:
+                logger.error(f"Error pre-calculating emotions: {e}")
     
-    async def _on_learning_handoff(self, ctx: RunContextWrapper[EmotionalContext]):
-        """Callback when handing off to learning agent"""
+    async def _on_learning_handoff(self, ctx: RunContextWrapper[EmotionalContext], input_data: LearningRequest):
+        """
+        Enhanced callback when handing off to learning agent with structured input
+        
+        Args:
+            ctx: Run context wrapper
+            input_data: Structured learning request data
+        """
         logger.debug("Handoff to learning agent triggered")
         ctx.context.record_time_marker("learning_handoff_start")
         
-        # Prepare learning context data
-        ctx.context.set_value("reward_learning_stats", {
-            "positive_patterns": len(self.reward_learning["positive_patterns"]),
-            "negative_patterns": len(self.reward_learning["negative_patterns"]),
-            "learned_rules": len(self.reward_learning["learned_rules"])
-        })
+        # Create a custom span for the handoff with rich data
+        with custom_span(
+            "learning_handoff",
+            data={
+                "interaction_pattern": input_data.interaction_pattern,
+                "outcome": input_data.outcome,
+                "strength": input_data.strength,
+                "update_rules": input_data.update_rules,
+                "apply_adaptations": input_data.apply_adaptations
+            }
+        ):
+            # Prepare learning context data
+            ctx.context.set_value("reward_learning_stats", {
+                "positive_patterns": len(self.reward_learning["positive_patterns"]),
+                "negative_patterns": len(self.reward_learning["negative_patterns"]),
+                "learned_rules": len(self.reward_learning["learned_rules"])
+            })
     
-    def _ensure_agent(self, agent_type: str) -> Agent[EmotionalContext]:
+    def _get_agent(self, agent_type: str) -> Agent[EmotionalContext]:
         """
-        Ensure a specific agent is initialized
+        Get an agent of the specified type, initializing it if necessary
         
         Args:
-            agent_type: Type of agent to ensure
+            agent_type: Type of agent to get
             
         Returns:
             The requested agent
         """
-        if not self.agents:
-            self._initialize_agents()
-            
         if agent_type not in self.agents:
-            raise UserError(f"Unknown agent type: {agent_type}")
-        
+            return self._create_agent(agent_type)
+            
         return self.agents[agent_type]
 
     def set_hormone_system(self, hormone_system):
@@ -441,10 +703,11 @@ class EmotionalCore:
         Returns:
             Analysis of emotional patterns
         """
-        with trace(workflow_name="Emotional_Pattern_Analysis", 
-                  trace_id=f"pattern_analysis_{datetime.datetime.now().timestamp()}",
-                  metadata={"cycle": ctx.context.cycle_count}):
-            
+        with trace(
+            workflow_name="Emotional_Pattern_Analysis", 
+            trace_id=gen_trace_id(),
+            metadata={"cycle": ctx.context.cycle_count}
+        ):
             if len(self.emotional_state_history) < 2:
                 return {
                     "message": "Not enough emotional state history for pattern analysis",
@@ -514,16 +777,43 @@ class EmotionalCore:
                         "significance": min(1.0, transitions / 5)  # Cap at 1.0
                     }
             
-            return {
-                "patterns": patterns,
-                "history_size": len(self.emotional_state_history),
-                "analysis_time": datetime.datetime.now().isoformat()
-            }
+            # Created a custom span for the pattern analysis
+            with custom_span(
+                "emotional_pattern_analysis",
+                data={
+                    "patterns_detected": list(patterns.keys()),
+                    "emotion_sequence": emotion_sequence[-5:],  # Last 5 emotions
+                    "analysis_window_size": len(analysis_window)
+                }
+            ):
+                return {
+                    "patterns": patterns,
+                    "history_size": len(self.emotional_state_history),
+                    "analysis_time": datetime.datetime.now().isoformat()
+                }
     
     def _record_emotional_state(self):
         """Record current emotional state in history using efficient circular buffer"""
         # Get current state using the sync version for compatibility
         state = self._get_emotional_state_matrix_sync()
+        
+        # If this is a new emotion, record a transition
+        if len(self.emotional_state_history) > 0:
+            prev_emotion = self.emotional_state_history[-1].get("primary_emotion", {}).get("name", "unknown")
+            new_emotion = state.get("primary_emotion", {}).get("name", "unknown")
+            
+            if prev_emotion != new_emotion:
+                # Create a custom span for emotion transitions to improve tracing
+                with custom_span(
+                    "emotion_transition", 
+                    data={
+                        "from_emotion": prev_emotion,
+                        "to_emotion": new_emotion,
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "cycle_count": self.context.cycle_count
+                    }
+                ):
+                    logger.debug(f"Emotion transition: {prev_emotion} -> {new_emotion}")
         
         # Add to history using circular buffer pattern for better memory efficiency
         if len(self.emotional_state_history) < self.max_history_size:
@@ -533,7 +823,7 @@ class EmotionalCore:
             self.emotional_state_history[self.history_index] = state
             self.history_index = (self.history_index + 1) % self.max_history_size
     
-    @handle_errors("Error processing emotional input")
+    @with_emotion_trace
     async def process_emotional_input(self, text: str) -> Dict[str, Any]:
         """
         Process input text through the DNM and update emotional state using Agent SDK orchestration
@@ -548,19 +838,31 @@ class EmotionalCore:
         self.context.cycle_count += 1
         
         # Get the orchestrator agent
-        orchestrator = self._ensure_agent("orchestrator")
+        orchestrator = self._get_agent("orchestrator")
         
-        # Define efficient run configuration
+        # Define an enhanced run configuration
         run_config = create_run_config(
             workflow_name="Emotional_Processing",
             trace_id=f"emotion_trace_{self.context.cycle_count}",
             temperature=0.4,
             max_tokens=300,
-            cycle_count=self.context.cycle_count
+            cycle_count=self.context.cycle_count,
+            context_data={
+                "input_text_length": len(text),
+                "pattern_analysis": self._quick_pattern_analysis(text)
+            }
         )
         
         # Track API call start time
         start_time = datetime.datetime.now()
+        
+        # Generate a run ID for tracking
+        run_id = f"run_{datetime.datetime.now().timestamp()}"
+        self.active_runs[run_id] = {
+            "start_time": start_time,
+            "input": text[:100], # Truncate for logging
+            "status": "running"
+        }
         
         # Run the orchestrator with context sharing and proper trace
         with trace(
@@ -568,85 +870,252 @@ class EmotionalCore:
             trace_id=f"emotion_trace_{self.context.cycle_count}",
             metadata={
                 "input_text_length": len(text),
-                "cycle_count": self.context.cycle_count
+                "cycle_count": self.context.cycle_count,
+                "run_id": run_id
             }
         ):
-            result = await Runner.run(
-                orchestrator,
-                json.dumps({
-                    "input_text": text,
-                    "current_cycle": self.context.cycle_count
-                }),
-                context=self.context,
-                run_config=run_config
-            )
-            
-            # Update performance metrics
-            duration = (datetime.datetime.now() - start_time).total_seconds()
-            self.performance_metrics["api_calls"] += 1
-            
-            # Update running average of response time
-            prev_avg = self.performance_metrics["average_response_time"]
-            prev_count = self.performance_metrics["api_calls"] - 1
-            if prev_count > 0:
-                self.performance_metrics["average_response_time"] = (prev_avg * prev_count + duration) / self.performance_metrics["api_calls"]
-            else:
-                self.performance_metrics["average_response_time"] = duration
-            
-            return result.final_output
+            # Use agent_span for enhanced tracing
+            with agent_span(
+                "orchestrator",
+                tools=["analyze_text_sentiment", "process_emotions", "generate_reflection", "record_and_learn"],
+                output_type="EmotionalResponseOutput"
+            ):
+                result = await Runner.run(
+                    orchestrator,
+                    json.dumps({
+                        "input_text": text,
+                        "current_cycle": self.context.cycle_count
+                    }),
+                    context=self.context,
+                    run_config=run_config
+                )
+                
+                # Update performance metrics
+                duration = (datetime.datetime.now() - start_time).total_seconds()
+                self.performance_metrics["api_calls"] += 1
+                
+                # Update running average of response time
+                prev_avg = self.performance_metrics["average_response_time"]
+                prev_count = self.performance_metrics["api_calls"] - 1
+                if prev_count > 0:
+                    self.performance_metrics["average_response_time"] = (prev_avg * prev_count + duration) / self.performance_metrics["api_calls"]
+                else:
+                    self.performance_metrics["average_response_time"] = duration
+                
+                # Record run completion
+                self.active_runs[run_id]["status"] = "completed"
+                self.active_runs[run_id]["duration"] = duration
+                self.active_runs[run_id]["output"] = result.final_output
+                
+                # Record emotional state for history
+                self._record_emotional_state()
+                
+                return result.final_output
     
-    @handle_errors("Error processing emotional input with streaming")
-    async def process_emotional_input_streamed(self, text: str) -> AsyncIterator[Dict[str, Any]]:
+    @with_emotion_trace
+    async def process_emotional_input_streamed(self, text: str) -> AsyncIterator[StreamEvent]:
         """
-        Process input with streaming responses to provide real-time emotional reactions
+        Enhanced version that processes input with streaming responses
+        to provide real-time emotional reactions with structured events
         
         Args:
             text: Input text to process
             
         Returns:
-            Stream of emotional response updates
+            Stream of structured emotional response updates
         """
         self.context.cycle_count += 1
-        orchestrator = self._ensure_agent("orchestrator")
+        orchestrator = self._get_agent("orchestrator")
+        
+        # Create an enhanced run configuration
         run_config = create_run_config(
             workflow_name="Emotional_Processing_Streamed",
             trace_id=f"emotion_stream_{self.context.cycle_count}",
             temperature=0.4,
-            cycle_count=self.context.cycle_count
+            cycle_count=self.context.cycle_count,
+            context_data={
+                "input_text_length": len(text),
+                "pattern_analysis": self._quick_pattern_analysis(text)
+            }
         )
         
-        # Use run_streamed instead of run
-        result = Runner.run_streamed(
-            orchestrator,
-            json.dumps({"input_text": text, "current_cycle": self.context.cycle_count}),
-            context=self.context,
-            run_config=run_config
-        )
+        # Generate a run ID for tracking
+        run_id = f"stream_{datetime.datetime.now().timestamp()}"
+        self.active_runs[run_id] = {
+            "start_time": datetime.datetime.now(),
+            "input": text[:100], # Truncate for logging
+            "status": "streaming",
+            "type": "stream"
+        }
         
-        # Stream events as they happen
-        async for event in result.stream_events():
-            if event.type == "run_item_stream_event":
-                if event.item.type == "message_output_item":
-                    yield {
-                        "type": "emotional_update",
-                        "content": ItemHelpers.text_message_output(event.item)
+        # Use run_streamed with proper context and tracing
+        with trace(
+            workflow_name="Emotional_Processing_Streamed", 
+            trace_id=f"emotion_stream_{self.context.cycle_count}",
+            metadata={
+                "input_text_length": len(text),
+                "cycle_count": self.context.cycle_count,
+                "run_id": run_id
+            }
+        ):
+            # Use agent_span for enhanced tracing
+            with agent_span(
+                "orchestrator",
+                tools=["analyze_text_sentiment", "process_emotions", "generate_reflection", "record_and_learn"],
+                output_type="EmotionalResponseOutput"
+            ):
+                result = Runner.run_streamed(
+                    orchestrator,
+                    json.dumps({"input_text": text, "current_cycle": self.context.cycle_count}),
+                    context=self.context,
+                    run_config=run_config
+                )
+                
+                last_agent = None
+                last_emotion = None
+                
+                # Create a structured event for stream start
+                yield StreamEvent(
+                    type="stream_start",
+                    data={
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "cycle_count": self.context.cycle_count,
+                        "input_text_length": len(text)
                     }
-                elif event.item.type == "tool_call_item":
-                    yield {
-                        "type": "tool_call",
-                        "tool": event.item.raw_item.name,
-                        "timestamp": datetime.datetime.now().isoformat()
+                )
+                
+                # Stream events as they happen with enhanced structure and typing
+                async for event in result.stream_events():
+                    if event.type == "run_item_stream_event":
+                        if event.item.type == "message_output_item":
+                            # Yield full message output only if it's small
+                            message_text = ItemHelpers.text_message_output(event.item)
+                            if len(message_text) < 200:  # Only stream small messages directly
+                                yield StreamEvent(
+                                    type="message_output",
+                                    data={
+                                        "content": message_text,
+                                        "agent": event.item.agent.name
+                                    }
+                                )
+                                
+                        elif event.item.type == "tool_call_item":
+                            tool_name = event.item.raw_item.name
+                            tool_args = {}
+                            
+                            # Parse arguments if available
+                            if hasattr(event.item.raw_item, "parameters"):
+                                try:
+                                    tool_args = json.loads(event.item.raw_item.parameters)
+                                except:
+                                    tool_args = {"raw": str(event.item.raw_item.parameters)}
+                            
+                            # Create specialized events based on tool type
+                            if tool_name == "update_neurochemical":
+                                # Create a more specific event for chemical updates
+                                yield ChemicalUpdateEvent(
+                                    data={
+                                        "chemical": tool_args.get("chemical", "unknown"),
+                                        "value": tool_args.get("value", 0),
+                                        "timestamp": datetime.datetime.now().isoformat()
+                                    }
+                                )
+                            elif tool_name == "derive_emotional_state":
+                                yield StreamEvent(
+                                    type="processing",
+                                    data={
+                                        "phase": "deriving_emotions",
+                                        "timestamp": datetime.datetime.now().isoformat()
+                                    }
+                                )
+                            else:
+                                # Generic tool event
+                                yield StreamEvent(
+                                    type="tool_call",
+                                    data={
+                                        "tool": tool_name,
+                                        "args": tool_args,
+                                        "timestamp": datetime.datetime.now().isoformat()
+                                    }
+                                )
+                                
+                        elif event.item.type == "tool_call_output_item":
+                            tool_name = "unknown"
+                            tool_output = {}
+                            
+                            # Try to parse tool output as JSON if possible
+                            try:
+                                if isinstance(event.item.output, str):
+                                    tool_output = json.loads(event.item.output)
+                                else:
+                                    tool_output = event.item.output
+                            except:
+                                if hasattr(event.item, "output"):
+                                    tool_output = {"raw": str(event.item.output)}
+                            
+                            # Special events for specific tools
+                            if "primary_emotion" in tool_output:
+                                # Detect emotion changes
+                                current_emotion = tool_output.get("primary_emotion")
+                                if last_emotion is not None and current_emotion != last_emotion:
+                                    # Create specialized event for emotion changes
+                                    yield EmotionChangeEvent(
+                                        data={
+                                            "from": last_emotion,
+                                            "to": current_emotion,
+                                            "timestamp": datetime.datetime.now().isoformat()
+                                        }
+                                    )
+                                last_emotion = current_emotion
+                                
+                            # Generic tool output event
+                            yield StreamEvent(
+                                type="tool_output",
+                                data={
+                                    "tool": tool_name,
+                                    "output": tool_output,
+                                    "timestamp": datetime.datetime.now().isoformat()
+                                }
+                            )
+                        
+                    elif event.type == "agent_updated_stream_event":
+                        # Track agent changes
+                        if last_agent != event.new_agent.name:
+                            yield StreamEvent(
+                                type="agent_changed",
+                                data={
+                                    "from": last_agent,
+                                    "to": event.new_agent.name,
+                                    "timestamp": datetime.datetime.now().isoformat()
+                                }
+                            )
+                            last_agent = event.new_agent.name
+                
+                # Final complete state event
+                yield StreamEvent(
+                    type="stream_complete",
+                    data={
+                        "final_output": {
+                            "primary_emotion": result.final_output.primary_emotion.name,
+                            "intensity": result.final_output.intensity,
+                            "valence": result.final_output.valence,
+                            "arousal": result.final_output.arousal
+                        },
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "duration": (datetime.datetime.now() - self.active_runs[run_id]["start_time"]).total_seconds()
                     }
-            elif event.type == "agent_updated_stream_event":
-                yield {
-                    "type": "agent_changed",
-                    "agent": event.new_agent.name,
-                    "timestamp": datetime.datetime.now().isoformat()
-                }
+                )
+                
+                # Update run status
+                self.active_runs[run_id]["status"] = "completed"
+                self.active_runs[run_id]["end_time"] = datetime.datetime.now()
+                
+                # Record emotional state for history
+                self._record_emotional_state()
     
-    # Legacy API Methods for backward compatibility
+    # Legacy API Methods with improved implementation
     def _get_emotional_state_matrix_sync(self) -> Dict[str, Any]:
-        """Synchronous version of _get_emotional_state_matrix for compatibility"""
+        """Enhanced synchronous version of _get_emotional_state_matrix for compatibility"""
         # First apply decay
         self.apply_decay()
         
@@ -711,7 +1180,7 @@ class EmotionalCore:
         }
     
     def _derive_emotional_state_sync(self) -> Dict[str, float]:
-        """Synchronous version of _derive_emotional_state for compatibility"""
+        """Enhanced synchronous version of _derive_emotional_state for compatibility"""
         # Get current chemical levels
         chemical_levels = {c: d["value"] for c, d in self.neurochemicals.items()}
         
@@ -761,7 +1230,13 @@ class EmotionalCore:
             # Apply decay to each neurochemical - more efficient with dictionary operations
             for chemical, data in self.neurochemicals.items():
                 decay_rate = data["decay_rate"]
-                baseline = data["baseline"]
+                
+                # Account for hormone influences by using temporary baseline if available
+                if "temporary_baseline" in data:
+                    baseline = data["temporary_baseline"]
+                else:
+                    baseline = data["baseline"]
+                    
                 current = data["value"]
                 
                 # Calculate decay based on time passed
@@ -777,3 +1252,31 @@ class EmotionalCore:
             self.last_update = now
         except Exception as e:
             logger.error(f"Error in apply_decay: {e}")
+    
+    def get_active_runs(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get information about active and recent runs
+        
+        Returns:
+            Dictionary of run information
+        """
+        return self.active_runs
+    
+    def get_system_stats(self) -> Dict[str, Any]:
+        """
+        Get system statistics and performance information
+        
+        Returns:
+            Dictionary of system statistics
+        """
+        return {
+            "api_calls": self.performance_metrics["api_calls"],
+            "average_response_time": self.performance_metrics["average_response_time"],
+            "update_counts": dict(self.performance_metrics["update_counts"]),
+            "total_active_runs": len(self.active_runs),
+            "active_run_count": sum(1 for run in self.active_runs.values() if run["status"] == "running"),
+            "system_uptime": (datetime.datetime.now() - self.last_update).total_seconds(),
+            "agent_count": len(self.agents),
+            "emotional_state_history_size": len(self.emotional_state_history),
+            "context_cycle_count": self.context.cycle_count
+        }
