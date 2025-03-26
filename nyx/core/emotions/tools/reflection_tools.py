@@ -76,3 +76,41 @@ class ReflectionTools:
                     if sec_patterns:
                         secondary_thought = random.choice(sec_patterns)
                         thought_text += f" {secondary_thought}"
+            
+            # Calculate insight level based on emotional complexity
+            insight_level = min(1.0, 0.4 + (len(emotional_state.secondary_emotions) * 0.1) + (intensity * 0.3))
+            
+            # 30% chance to generate an adaptive change suggestion
+            adaptive_change = None
+            if random.random() < 0.3:
+                # Suggest a small adaptation to a random neurochemical baseline
+                chemical = random.choice(list(self.neurochemicals.keys()))
+                current = self.neurochemicals[chemical]["baseline"]
+                
+                # Small random adjustment (-0.05 to +0.05)
+                adjustment = (random.random() - 0.5) * 0.1
+                
+                # Ensure we stay in bounds
+                new_baseline = max(0.1, min(0.9, current + adjustment))
+                
+                adaptive_change = {
+                    "chemical": chemical,
+                    "current_baseline": current,
+                    "suggested_baseline": new_baseline,
+                    "reason": f"Based on observed emotional patterns related to {primary_emotion}"
+                }
+            
+            # Store interaction information in context
+            ctx.context.add_interaction({
+                "timestamp": datetime.datetime.now().isoformat(),
+                "primary_emotion": primary_emotion,
+                "intensity": intensity,
+                "thought": thought_text
+            })
+            
+            return InternalThoughtOutput(
+                thought_text=thought_text,
+                source_emotion=primary_emotion,
+                insight_level=insight_level,
+                adaptive_change=adaptive_change
+            )
