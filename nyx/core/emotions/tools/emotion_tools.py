@@ -1,25 +1,34 @@
 # nyx/core/emotions/tools/emotion_tools.py
 
 """
-Function tools for emotion derivation and analysis.
-These tools handle deriving emotions from neurochemicals and analyzing text.
+Enhanced function tools for emotion derivation and analysis.
+These tools handle deriving emotions from neurochemicals and analyzing text
+with improved performance and error handling.
 """
 
 import datetime
 import logging
-from typing import Dict, Any, Set, List, Optional
+from typing import Dict, Any, Set, List, Optional, Tuple, TypedDict, Union
+import json
 
-from agents import function_tool, RunContextWrapper, function_span
+from agents import function_tool, RunContextWrapper, function_span, custom_span
+from agents.exceptions import UserError
 
 from nyx.core.emotions.context import EmotionalContext
 from nyx.core.emotions.schemas import (
     EmotionalStateMatrix, DerivedEmotion, TextAnalysisOutput
 )
+from nyx.core.emotions.utils import handle_errors, EmotionalToolUtils
 
 logger = logging.getLogger(__name__)
 
+# Define types for improved type hinting
+EmotionData = Dict[str, float]
+NeurochemicalState = Dict[str, float]
+EmotionRule = Dict[str, Any]
+
 class EmotionTools:
-    """Function tools for emotion derivation and analysis"""
+    """Enhanced function tools for emotion derivation and analysis"""
     
     def __init__(self, emotion_system):
         """
@@ -31,11 +40,46 @@ class EmotionTools:
         self.neurochemicals = emotion_system.neurochemicals
         self.emotion_derivation_rules = emotion_system.emotion_derivation_rules
         self.apply_chemical_decay = emotion_system._apply_chemical_decay
+        
+        # Create indexed lookup tables for more efficient processing
+        self._emotion_rule_index = self._index_emotion_rules()
+        self._valence_arousal_map = self._create_valence_arousal_map()
+    
+    def _index_emotion_rules(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Create an indexed version of emotion rules for faster lookups
+        
+        Returns:
+            Dictionary mapping chemicals to relevant emotion rules
+        """
+        chemical_rules = {}
+        
+        for chemical in set(chem for rule in self.emotion_derivation_rules 
+                            for chem in rule.get("chemical_conditions", {})):
+            # For each chemical, find all rules where it appears
+            chemical_rules[chemical] = [
+                rule for rule in self.emotion_derivation_rules
+                if chemical in rule.get("chemical_conditions", {})
+            ]
+        
+        return chemical_rules
+    
+    def _create_valence_arousal_map(self) -> Dict[str, Tuple[float, float]]:
+        """
+        Create a mapping of emotions to their valence and arousal values
+        
+        Returns:
+            Dictionary mapping emotion names to (valence, arousal) tuples
+        """
+        return {
+            rule["emotion"]: (rule.get("valence", 0.0), rule.get("arousal", 0.5))
+            for rule in self.emotion_derivation_rules
+        }
     
     @function_tool
     async def derive_emotional_state(self, ctx: RunContextWrapper[EmotionalContext]) -> Dict[str, float]:
         """
-        Derive emotional state from current neurochemical levels
+        Derive emotional state from current neurochemical levels with optimized processing
         
         Returns:
             Dictionary of emotion names and intensities
@@ -54,27 +98,48 @@ class EmotionTools:
             # Process each emotion rule using a more efficient approach
             emotion_scores = {}
             
+            # Use a two-phase approach for better efficiency
+            # First, filter relevant rules based on chemical levels
+            relevant_rules = set()
+            for chemical, level in chemical_levels.items():
+                if chemical in self._emotion_rule_index:
+                    # Only consider rules where the chemical level is significant
+                    for rule in self._emotion_rule_index[chemical]:
+                        threshold = rule["chemical_conditions"].get(chemical, 0)
+                        if level >= threshold * 0.7:  # At least 70% of threshold
+                            relevant_rules.add(rule["emotion"])
+            
+            # Then score only the relevant emotion rules
             for rule in self.emotion_derivation_rules:
+                if rule["emotion"] not in relevant_rules:
+                    continue
+                    
                 conditions = rule["chemical_conditions"]
                 emotion = rule["emotion"]
                 rule_weight = rule.get("weight", 1.0)
                 
-                # Calculate match score more efficiently using list comprehension
+                # Calculate match score using list comprehension for efficiency
                 match_scores = [
                     min(chemical_levels.get(chemical, 0) / threshold, 1.0)
                     for chemical, threshold in conditions.items()
                     if chemical in chemical_levels and threshold > 0
                 ]
                 
-                # Average match scores if any exist
-                avg_match_score = sum(match_scores) / len(match_scores) if match_scores else 0
-                
-                # Apply rule weight
-                weighted_score = avg_match_score * rule_weight
-                
-                # Only include non-zero scores
-                if weighted_score > 0:
-                    emotion_scores[emotion] = max(emotion_scores.get(emotion, 0), weighted_score)
+                # Only process rules with all chemicals present
+                if len(match_scores) == len(conditions):
+                    # Average match scores
+                    avg_match_score = sum(match_scores) / len(match_scores) if match_scores else 0
+                    
+                    # Apply rule weight
+                    weighted_score = avg_match_score * rule_weight
+                    
+                    # Only include non-zero scores
+                    if weighted_score > 0.1:  # Threshold to reduce noise
+                        emotion_scores[emotion] = max(emotion_scores.get(emotion, 0), weighted_score)
+            
+            # If no emotions were detected, add neutral state
+            if not emotion_scores:
+                emotion_scores["Neutral"] = 0.5
             
             # Normalize if total intensity is too high
             total_intensity = sum(emotion_scores.values())
@@ -85,12 +150,24 @@ class EmotionTools:
             # Cache the results in context
             ctx.context.last_emotions = emotion_scores
             
-            return emotion_scores
+            # Create a custom span for emotion state
+            with custom_span(
+                "emotional_state", 
+                data={
+                    "emotions": {
+                        k: round(v, 2) for k, v in emotion_scores.items() 
+                        if v > 0.1  # Only include significant emotions
+                    },
+                    "cycle": ctx.context.cycle_count,
+                    "primary": max(emotion_scores.items(), key=lambda x: x[1])[0] if emotion_scores else "Neutral"
+                }
+            ):
+                return emotion_scores
     
     @function_tool
     async def get_emotional_state_matrix(self, ctx: RunContextWrapper[EmotionalContext]) -> EmotionalStateMatrix:
         """
-        Get the full emotional state matrix derived from neurochemicals
+        Get the full emotional state matrix derived from neurochemicals with optimized calculations
         
         Returns:
             Emotional state matrix with primary and secondary emotions
@@ -102,11 +179,8 @@ class EmotionTools:
             # Get derived emotions
             emotion_intensities = await self.derive_emotional_state(ctx)
             
-            # Pre-compute emotion valence and arousal map for efficiency
-            emotion_valence_map = {
-                rule["emotion"]: (rule.get("valence", 0.0), rule.get("arousal", 0.5)) 
-                for rule in self.emotion_derivation_rules
-            }
+            # Use pre-computed emotion valence and arousal map for efficiency
+            emotion_valence_map = self._valence_arousal_map
             
             # Find primary emotion (highest intensity)
             primary_emotion = max(emotion_intensities.items(), key=lambda x: x[1]) if emotion_intensities else ("Neutral", 0.5)
@@ -124,32 +198,27 @@ class EmotionTools:
                     arousal=emotion_valence_map.get(emotion, (0.0, 0.5))[1]
                 )
                 for emotion, intensity in emotion_intensities.items()
-                if emotion != primary_name and intensity > 0.3
+                if emotion != primary_name and intensity > 0.2  # Lower threshold to include more emotions
             }
             
             # Calculate overall valence and arousal (weighted average) more efficiently
             total_intensity = primary_intensity + sum(e.intensity for e in secondary_emotions.values())
             
             if total_intensity > 0:
-                # Start with primary emotion contribution
-                overall_valence = primary_valence * primary_intensity
-                overall_arousal = primary_arousal * primary_intensity
+                # Use EmotionalToolUtils for cleaner calculation
+                valence_values = [primary_valence] + [e.valence for e in secondary_emotions.values()]
+                arousal_values = [primary_arousal] + [e.arousal for e in secondary_emotions.values()]
+                intensity_weights = [primary_intensity] + [e.intensity for e in secondary_emotions.values()]
                 
-                # Add contributions from secondary emotions
-                for emotion in secondary_emotions.values():
-                    overall_valence += emotion.valence * emotion.intensity
-                    overall_arousal += emotion.arousal * emotion.intensity
-                    
-                # Normalize by total intensity
-                overall_valence /= total_intensity
-                overall_arousal /= total_intensity
+                overall_valence = EmotionalToolUtils.calculate_weighted_average(valence_values, intensity_weights)
+                overall_arousal = EmotionalToolUtils.calculate_weighted_average(arousal_values, intensity_weights)
             else:
                 overall_valence = 0.0
                 overall_arousal = 0.5
             
             # Ensure values are within range
-            overall_valence = max(-1.0, min(1.0, overall_valence))
-            overall_arousal = max(0.0, min(1.0, overall_arousal))
+            overall_valence = EmotionalToolUtils.normalize_value(overall_valence, -1.0, 1.0)
+            overall_arousal = EmotionalToolUtils.normalize_value(overall_arousal, 0.0, 1.0)
             
             # Create the complete state matrix
             state_matrix = EmotionalStateMatrix(
@@ -168,13 +237,25 @@ class EmotionTools:
             # Record primary emotion in context for quick access
             ctx.context.record_emotion(primary_name, primary_intensity)
             
-            return state_matrix
+            # Create a custom span for the final emotional state
+            with custom_span(
+                "emotional_state_matrix", 
+                data={
+                    "primary": primary_name,
+                    "intensity": round(primary_intensity, 2),
+                    "valence": round(overall_valence, 2),
+                    "arousal": round(overall_arousal, 2),
+                    "secondary_count": len(secondary_emotions),
+                    "cycle": ctx.context.cycle_count
+                }
+            ):
+                return state_matrix
     
     @function_tool
     async def analyze_text_sentiment(self, ctx: RunContextWrapper[EmotionalContext],
                                  text: str) -> TextAnalysisOutput:
         """
-        Analyze the emotional content of text
+        Analyze the emotional content of text with improved efficiency and accuracy
         
         Args:
             text: Text to analyze
@@ -188,38 +269,107 @@ class EmotionTools:
             words = set(text_lower.split())
             
             # Define word sets for more efficient lookup
-            word_categories = {
-                "nyxamine": {"happy", "good", "great", "love", "like", "fun", "enjoy", "curious", 
-                            "interested", "pleasure", "delight", "joy"},
-                "seranix": {"calm", "peaceful", "relaxed", "content", "satisfied", "gentle", 
-                           "quiet", "serene", "tranquil", "composed"},
-                "oxynixin": {"trust", "close", "together", "bond", "connect", "loyal", "friend", 
-                            "relationship", "intimate", "attachment"},
-                "cortanyx": {"worried", "scared", "afraid", "nervous", "stressed", "sad", "sorry", 
-                            "angry", "upset", "frustrated", "anxious", "distressed"},
-                "adrenyx": {"excited", "alert", "surprised", "wow", "amazing", "intense", "sudden", 
-                           "quick", "shock", "unexpected", "startled"}
+            # Use a more structured approach with emotional categories
+            emotional_categories = {
+                "positive": {
+                    "nyxamine": {"happy", "good", "great", "love", "like", "fun", "enjoy", "curious", 
+                                "interested", "pleasure", "delight", "joy", "excited", "awesome",
+                                "excellent", "wonderful", "amazing", "fantastic", "terrific"}
+                },
+                "calm": {
+                    "seranix": {"calm", "peaceful", "relaxed", "content", "satisfied", "gentle", 
+                               "quiet", "serene", "tranquil", "composed", "patient", "steady",
+                               "stable", "balanced", "harmonious", "comfortable"}
+                },
+                "social": {
+                    "oxynixin": {"trust", "close", "together", "bond", "connect", "loyal", "friend", 
+                                "relationship", "intimate", "attachment", "connection", "team",
+                                "family", "care", "support", "help", "understanding", "empathy"}
+                },
+                "negative": {
+                    "cortanyx": {"worried", "scared", "afraid", "nervous", "stressed", "sad", "sorry", 
+                                "angry", "upset", "frustrated", "anxious", "distressed", "hurt",
+                                "pain", "suffering", "miserable", "terrible", "awful", "horrible"}
+                },
+                "arousing": {
+                    "adrenyx": {"excited", "alert", "surprised", "wow", "amazing", "intense", "sudden", 
+                               "quick", "shock", "unexpected", "startled", "astonished", "astounded",
+                               "urgent", "emergency", "crisis", "danger", "important", "critical"}
+                }
             }
             
             intensifiers = {"very", "extremely", "incredibly", "so", "deeply", "absolutely", 
-                          "truly", "utterly", "completely", "totally"}
+                          "truly", "utterly", "completely", "totally", "highly", "exceptionally",
+                          "remarkably", "extraordinarily", "insanely", "super", "immensely"}
             
-            # Compute intersection of words for efficient scoring using dictionary comprehension
-            matches = {
-                category: words.intersection(word_set)
-                for category, word_set in word_categories.items()
-            }
+            negators = {"not", "never", "no", "none", "neither", "nor", "hardly", "barely",
+                       "scarcely", "seldom", "rarely"}
             
+            # Check for sentence structure patterns
+            has_negation = any(negator in words for negator in negators)
+            exclamation_count = text.count("!")
+            question_count = text.count("?")
+            
+            # Compute chemical impacts more efficiently
+            chemical_impacts = {}
+            
+            # First pass - find direct word matches
+            for category, chemicals in emotional_categories.items():
+                for chemical, word_set in chemicals.items():
+                    # Calculate the intersection of words
+                    matches = words.intersection(word_set)
+                    if matches:
+                        # Calculate base impact
+                        base_impact = min(0.5, len(matches) * 0.1)
+                        
+                        # Adjust for negation
+                        if has_negation:
+                            # Convert to opposite valence
+                            if category in ["positive", "calm", "social"]:
+                                chemical = "cortanyx"  # Convert positive to negative
+                            elif category == "negative":
+                                chemical = "nyxamine"  # Convert negative to positive
+                        
+                        # Add to chemical impacts
+                        chemical_impacts[chemical] = max(chemical_impacts.get(chemical, 0), base_impact)
+            
+            # Second pass - look for phrases and patterns
+            phrase_patterns = [
+                # Positive patterns
+                ({"thank you", "thanks", "appreciate"}, {"nyxamine": 0.3}),
+                ({"congratulations", "congrats", "well done"}, {"nyxamine": 0.4, "oxynixin": 0.2}),
+                ({"miss you", "thinking of you"}, {"oxynixin": 0.4}),
+                
+                # Negative patterns
+                ({"go away", "leave me alone"}, {"cortanyx": 0.3}),
+                ({"help me", "please help"}, {"cortanyx": 0.2, "adrenyx": 0.3}),
+                ({"angry with", "mad at"}, {"cortanyx": 0.4}),
+                
+                # Arousal patterns
+                ({"can't wait", "looking forward"}, {"adrenyx": 0.3, "nyxamine": 0.2}),
+                ({"hurry", "quickly", "emergency"}, {"adrenyx": 0.5})
+            ]
+            
+            for pattern_words, impacts in phrase_patterns:
+                # Check if any of the pattern words exist in the text
+                if any(phrase in text_lower for phrase in pattern_words):
+                    # Apply the impacts
+                    for chemical, impact in impacts.items():
+                        chemical_impacts[chemical] = max(chemical_impacts.get(chemical, 0), impact)
+            
+            # Account for punctuation and structure
+            if exclamation_count > 0:
+                # Exclamations increase arousal
+                chemical_impacts["adrenyx"] = max(chemical_impacts.get("adrenyx", 0), 
+                                               min(0.5, exclamation_count * 0.15))
+            
+            if question_count > 0:
+                # Questions indicate curiosity
+                chemical_impacts["nyxamine"] = max(chemical_impacts.get("nyxamine", 0), 
+                                                min(0.3, question_count * 0.1))
+            
+            # Intensifier count affects all chemicals
             intensifier_count = len(words.intersection(intensifiers))
-            
-            # Calculate chemical impacts more efficiently
-            chemical_impacts = {
-                chemical: min(0.5, len(matches[chemical]) * 0.1)
-                for chemical in word_categories.keys()
-                if matches[chemical]
-            }
-            
-            # Apply intensity modifiers
             if intensifier_count > 0:
                 intensity_multiplier = 1.0 + (intensifier_count * 0.2)  # Up to 1.0 + (5 * 0.2) = 2.0
                 chemical_impacts = {
@@ -233,10 +383,17 @@ class EmotionTools:
                     "adrenyx": 0.1
                 }
             
+            # Record the chemical impacts for future reference
+            ctx.context.set_value("last_text_analysis", {
+                "text": text[:100],  # Truncate for storage
+                "chemicals": chemical_impacts,
+                "timestamp": datetime.datetime.now().isoformat()
+            })
+            
             # Create a temporary neurochemical state for analysis
             temp_chemicals = {
                 c: {
-                    "value": self.neurochemicals[c]["value"] + chemical_impacts.get(c, 0),
+                    "value": min(1.0, self.neurochemicals[c]["value"] + chemical_impacts.get(c, 0)),
                     "baseline": self.neurochemicals[c]["baseline"],
                     "decay_rate": self.neurochemicals[c]["decay_rate"]
                 }
@@ -245,59 +402,160 @@ class EmotionTools:
             
             # Apply bounds checking to values
             for chemical in temp_chemicals:
-                temp_chemicals[chemical]["value"] = max(0.0, min(1.0, temp_chemicals[chemical]["value"]))
+                temp_chemicals[chemical]["value"] = EmotionalToolUtils.normalize_value(
+                    temp_chemicals[chemical]["value"])
             
             # Derive emotions from this temporary state using emotion rules
             chemical_levels = {c: d["value"] for c, d in temp_chemicals.items()}
             
-            # Pre-calculate emotion rule map for faster lookup
-            emotion_valence_map = {
-                rule["emotion"]: (rule.get("valence", 0.0), rule.get("arousal", 0.5)) 
-                for rule in self.emotion_derivation_rules
-            }
-            
-            # Process each emotion rule more efficiently
+            # Use optimized emotion derivation code
             derived_emotions = {}
+            valence_sum = 0.0
+            intensity_sum = 0.0
+            
+            # Similar logic to derive_emotional_state but specialized for text analysis
             for rule in self.emotion_derivation_rules:
                 conditions = rule["chemical_conditions"]
                 emotion = rule["emotion"]
                 rule_weight = rule.get("weight", 1.0)
                 
-                # Calculate match score using comprehension for efficiency
+                # Calculate match score using list comprehension
                 match_scores = [
                     min(chemical_levels.get(chemical, 0) / threshold, 1.0)
                     for chemical, threshold in conditions.items()
                     if chemical in chemical_levels and threshold > 0
                 ]
                 
-                # Average match scores
-                avg_match_score = sum(match_scores) / len(match_scores) if match_scores else 0
-                
-                # Apply rule weight
-                weighted_score = avg_match_score * rule_weight
-                
-                # Only include non-zero scores
-                if weighted_score > 0:
-                    derived_emotions[emotion] = max(derived_emotions.get(emotion, 0), weighted_score)
+                # Average match scores if they exist
+                if match_scores and len(match_scores) == len(conditions):
+                    avg_match_score = sum(match_scores) / len(match_scores)
+                    
+                    # Apply rule weight
+                    weighted_score = avg_match_score * rule_weight
+                    
+                    # Apply a threshold to reduce noise
+                    if weighted_score > 0.1:
+                        derived_emotions[emotion] = max(derived_emotions.get(emotion, 0), weighted_score)
+                        valence_sum += rule.get("valence", 0.0) * weighted_score
+                        intensity_sum += weighted_score
+            
+            # Ensure we have at least one emotion - add neutral if none found
+            if not derived_emotions:
+                derived_emotions["Neutral"] = 0.5
+                intensity_sum = 0.5
             
             # Find dominant emotion
-            dominant_emotion = max(derived_emotions.items(), key=lambda x: x[1]) if derived_emotions else ("neutral", 0.5)
+            dominant_emotion = max(derived_emotions.items(), key=lambda x: x[1]) if derived_emotions else ("Neutral", 0.5)
             
-            # Calculate overall valence and intensity more efficiently
-            valence_contributions = [
-                emotion_valence_map.get(emotion, (0.0, 0.5))[0] * intensity
-                for emotion, intensity in derived_emotions.items()
-            ]
+            # Calculate overall intensity and valence
+            intensity = intensity_sum / len(derived_emotions) if derived_emotions else 0.5
+            valence = valence_sum / intensity_sum if intensity_sum > 0 else 0.0
             
-            valence = sum(valence_contributions) / sum(derived_emotions.values()) if derived_emotions else 0.0
+            # Create a custom span for the sentiment analysis
+            with custom_span(
+                "text_sentiment", 
+                data={
+                    "text_length": len(text),
+                    "dominant_emotion": dominant_emotion[0],
+                    "intensity": round(intensity, 2),
+                    "valence": round(valence, 2),
+                    "chemicals": {
+                        k: round(v, 2) for k, v in chemical_impacts.items()
+                    },
+                    "cycle": ctx.context.cycle_count
+                }
+            ):
+                return TextAnalysisOutput(
+                    chemicals_affected=chemical_impacts,
+                    derived_emotions=derived_emotions,
+                    dominant_emotion=dominant_emotion[0],
+                    intensity=intensity,
+                    valence=valence
+                )
+    
+    @function_tool
+    async def get_emotion_trends(self, ctx: RunContextWrapper[EmotionalContext], 
+                            limit: int = 10) -> Dict[str, Any]:
+        """
+        Get emotional trends over time
+        
+        Args:
+            limit: Maximum number of historical data points to consider
             
-            # Calculate overall intensity
-            intensity = sum(derived_emotions.values()) / max(1, len(derived_emotions))
+        Returns:
+            Dictionary of emotion trends
+        """
+        with function_span("get_emotion_trends"):
+            # Get emotion history from context
+            emotion_history = ctx.context.get_emotion_trends(limit=limit)
             
-            return TextAnalysisOutput(
-                chemicals_affected=chemical_impacts,
-                derived_emotions=derived_emotions,
-                dominant_emotion=dominant_emotion[0],
-                intensity=intensity,
-                valence=valence
-            )
+            if not emotion_history:
+                return {
+                    "message": "Not enough emotion history data",
+                    "trends": {}
+                }
+            
+            trends = {}
+            
+            # Analyze each emotion's trend
+            for emotion, data_points in emotion_history.items():
+                if len(data_points) < 2:
+                    continue
+                    
+                intensities = [point["intensity"] for point in data_points]
+                
+                # Calculate trend statistics
+                start_value = intensities[0]
+                end_value = intensities[-1]
+                change = end_value - start_value
+                
+                # Determine trend direction
+                if abs(change) < 0.1:
+                    direction = "stable"
+                elif change > 0:
+                    direction = "increasing"
+                else:
+                    direction = "decreasing"
+                
+                # Calculate volatility (average change between consecutive points)
+                volatility = sum(abs(intensities[i] - intensities[i-1]) 
+                               for i in range(1, len(intensities))) / (len(intensities) - 1)
+                
+                trends[emotion] = {
+                    "direction": direction,
+                    "change": change,
+                    "volatility": volatility,
+                    "current_value": end_value,
+                    "points": len(data_points)
+                }
+            
+            # Calculate overall emotional stability
+            if trends:
+                avg_volatility = sum(t["volatility"] for t in trends.values()) / len(trends)
+                stability = 1.0 - min(1.0, avg_volatility * 5.0)  # Invert and scale volatility
+                
+                # Add stability rating
+                stability_rating = "very stable" if stability > 0.8 else \
+                                  "stable" if stability > 0.6 else \
+                                  "somewhat unstable" if stability > 0.4 else \
+                                  "unstable" if stability > 0.2 else "very unstable"
+            else:
+                stability = 0.5
+                stability_rating = "unknown"
+            
+            # Create a custom span for the trend analysis
+            with custom_span(
+                "emotion_trends", 
+                data={
+                    "emotions_analyzed": list(trends.keys()),
+                    "stability": round(stability, 2),
+                    "stability_rating": stability_rating,
+                    "cycle": ctx.context.cycle_count
+                }
+            ):
+                return {
+                    "trends": trends,
+                    "stability": stability,
+                    "stability_rating": stability_rating,
+                    "analysis_time": datetime.datetime.now().isoformat()
+                }
