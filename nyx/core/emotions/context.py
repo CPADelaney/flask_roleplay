@@ -1,36 +1,75 @@
 # nyx/core/emotions/context.py
 
 """
-Context management for the Nyx emotional system.
-Enhanced context class with better typing and helper methods.
+Enhanced context management for the Nyx emotional system.
+Provides improved typing, helper methods, and serialization support.
 """
 
 import datetime
-from collections import defaultdict
-from typing import Dict, List, Any, Optional, TypeVar, Generic
+import json
+from collections import defaultdict, deque
+from typing import Dict, List, Any, Optional, TypeVar, Generic, Set, Deque
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, root_validator
 
 # Create a TypeVar for the EmotionalContext to be used in type hints
 TEmotionalContext = TypeVar('TEmotionalContext', bound='EmotionalContext')
 
 class EmotionalContext(BaseModel):
-    """Enhanced context for emotional processing between agent runs"""
+    """Enhanced context for emotional processing between agent runs with serialization support"""
     cycle_count: int = Field(default=0, description="Current processing cycle count")
     last_emotions: Dict[str, float] = Field(default_factory=dict)
     interaction_history: List[Dict[str, Any]] = Field(default_factory=list, max_length=20)
-    temp_data: Dict[str, Any] = Field(default_factory=dict)
+    temp_data: Dict[str, Any] = Field(default_factory=dict, exclude=True)
+    # Using a more efficient circular buffer for history tracking
+    _circular_history: Dict[str, Deque] = Field(default_factory=lambda: defaultdict(lambda: deque(maxlen=20)), exclude=True)
     
-    # Add helper methods directly to the context
+    class Config:
+        """Pydantic configuration"""
+        arbitrary_types_allowed = True
+        extra = "allow"
+    
+    # Serialization/deserialization support
+    def to_json(self) -> str:
+        """Serialize context to JSON for persistence"""
+        # Exclude temp_data and other non-serializable fields
+        serializable_data = self.dict(exclude={"temp_data", "_circular_history"})
+        return json.dumps(serializable_data)
+    
+    @classmethod
+    def from_json(cls, json_str: str) -> 'EmotionalContext':
+        """Create context from JSON serialized data"""
+        data = json.loads(json_str)
+        return cls(**data)
+    
+    # Add helper methods directly to the context with improved implementations
     def record_emotion(self, emotion: str, intensity: float) -> None:
         """Record an emotion with its intensity"""
         self.last_emotions[emotion] = intensity
+        # Also add to history for trend analysis
+        self._add_to_circular_buffer("emotion_history", {
+            "emotion": emotion,
+            "intensity": intensity,
+            "timestamp": datetime.datetime.now().isoformat()
+        })
         
     def add_interaction(self, data: Dict[str, Any]) -> None:
-        """Add an interaction to history with automatic trimming"""
+        """Add an interaction to history with automatic trimming using circular buffer"""
+        # Add timestamp if not present
+        if "timestamp" not in data:
+            data["timestamp"] = datetime.datetime.now().isoformat()
+            
         self.interaction_history.append(data)
         if len(self.interaction_history) > 20:
             self.interaction_history.pop(0)
+    
+    def _add_to_circular_buffer(self, buffer_name: str, item: Any) -> None:
+        """Add item to a named circular buffer"""
+        self._circular_history[buffer_name].append(item)
+    
+    def get_circular_buffer(self, buffer_name: str) -> List[Any]:
+        """Get contents of a named circular buffer as a list"""
+        return list(self._circular_history[buffer_name])
     
     def get_agent_usage(self) -> Dict[str, int]:
         """Get the agent usage statistics"""
@@ -81,9 +120,15 @@ class EmotionalContext(BaseModel):
         return (end_time - start_time).total_seconds()
     
     def record_neurochemical_values(self, chemical_values: Dict[str, float]) -> None:
-        """Record current neurochemical values for quick access"""
+        """Record current neurochemical values for quick access with timestamp"""
         self.temp_data["cached_neurochemical_state"] = chemical_values
         self.temp_data["cached_time"] = datetime.datetime.now().timestamp()
+        
+        # Also add to history for trend analysis
+        self._add_to_circular_buffer("neurochemical_history", {
+            "values": dict(chemical_values),  # Create a copy
+            "timestamp": datetime.datetime.now().isoformat()
+        })
     
     def get_cached_neurochemicals(self, max_age_seconds: float = 1.0) -> Optional[Dict[str, float]]:
         """Get cached neurochemical values if not too old"""
@@ -98,3 +143,39 @@ class EmotionalContext(BaseModel):
             return self.temp_data["cached_neurochemical_state"]
         
         return None
+    
+    def get_neurochemical_trends(self, limit: int = 10) -> Dict[str, List[Dict[str, Any]]]:
+        """Get neurochemical trends over time for analysis"""
+        history = self.get_circular_buffer("neurochemical_history")[-limit:]
+        
+        # Transform into per-chemical trends
+        if not history:
+            return {}
+            
+        trends = defaultdict(list)
+        for entry in history:
+            timestamp = entry["timestamp"]
+            for chemical, value in entry["values"].items():
+                trends[chemical].append({
+                    "value": value,
+                    "timestamp": timestamp
+                })
+                
+        return dict(trends)
+    
+    def get_emotion_trends(self, limit: int = 10) -> Dict[str, List[Dict[str, Any]]]:
+        """Get emotion trends over time for analysis"""
+        history = self.get_circular_buffer("emotion_history")[-limit:]
+        
+        # Transform into per-emotion trends
+        if not history:
+            return {}
+            
+        trends = defaultdict(list)
+        for entry in history:
+            trends[entry["emotion"]].append({
+                "intensity": entry["intensity"],
+                "timestamp": entry["timestamp"]
+            })
+                
+        return dict(trends)
