@@ -743,6 +743,8 @@ class EmotionalCore:
             emotion_scores = {e: i * factor for e, i in emotion_scores.items()}
         
         return emotion_scores
+        
+    self._setup_tracing()
     
     def apply_decay(self):
         """Apply emotional decay based on time elapsed since last update"""
