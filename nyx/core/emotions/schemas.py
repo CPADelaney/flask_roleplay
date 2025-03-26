@@ -1,14 +1,14 @@
 # nyx/core/emotions/schemas.py
 """
-Schema definitions for the Nyx emotional system.
-Contains all Pydantic models used throughout the emotional core.
-
+Enhanced schema definitions for the Nyx emotional system.
+Contains all Pydantic models used throughout the emotional core with 
+added handoff request/response structures.
 """
 
 import datetime
 from typing import Dict, List, Any, Optional, Tuple, Union, Set, TypedDict
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, root_validator
 
 # =============================================================================
 # Schema Models
@@ -117,3 +117,75 @@ class EmotionalResponseOutput(BaseModel):
     neurochemical_changes: Dict[str, float]
     valence: float = Field(..., ge=-1.0, le=1.0)
     arousal: float = Field(..., ge=0.0, le=1.0)
+
+# =============================================================================
+# New Handoff Request/Response Models
+# =============================================================================
+
+class NeurochemicalRequest(BaseModel):
+    """Schema for handoff request to the neurochemical agent"""
+    input_text: str = Field(..., description="Input text that triggered the handoff")
+    dominant_emotion: Optional[str] = Field(None, description="Pre-analyzed dominant emotion")
+    intensity: float = Field(0.5, description="Emotion intensity", ge=0.0, le=1.0)
+    update_chemicals: bool = Field(True, description="Whether to update chemicals")
+    
+    @root_validator
+    def check_trigger_data(cls, values):
+        """Ensure either input_text or dominant_emotion is provided"""
+        if not values.get('input_text') and not values.get('dominant_emotion'):
+            raise ValueError("Either input_text or dominant_emotion must be provided")
+        return values
+
+class NeurochemicalResponse(BaseModel):
+    """Schema for handoff response from the neurochemical agent"""
+    updated_chemicals: Dict[str, Dict[str, float]] = Field(..., description="Updated chemical values")
+    derived_emotions: Dict[str, float] = Field(..., description="Derived emotions")
+    primary_emotion: str = Field(..., description="Primary emotion after update")
+    analysis: Dict[str, Any] = Field(..., description="Additional analysis data")
+
+class ReflectionRequest(BaseModel):
+    """Schema for handoff request to the reflection agent"""
+    emotional_state: EmotionalStateMatrix = Field(..., description="Current emotional state")
+    input_text: str = Field(..., description="Input text that triggered reflection")
+    reflection_depth: float = Field(0.5, description="Depth of reflection", ge=0.0, le=1.0)
+    consider_history: bool = Field(True, description="Whether to consider emotional history")
+
+class LearningRequest(BaseModel):
+    """Schema for handoff request to the learning agent"""
+    interaction_pattern: str = Field(..., description="Description of interaction pattern")
+    outcome: str = Field(..., description="positive or negative")
+    strength: float = Field(1.0, description="Strength of reinforcement", ge=0.0, le=1.0)
+    update_rules: bool = Field(True, description="Whether to update learning rules")
+    apply_adaptations: bool = Field(False, description="Whether to apply adaptations")
+    
+    @validator('outcome')
+    def validate_outcome(cls, v):
+        if v not in ["positive", "negative", "neutral"]:
+            raise ValueError("Outcome must be 'positive', 'negative', or 'neutral'")
+        return v
+
+class StreamEvent(BaseModel):
+    """Schema for streaming events during emotional processing"""
+    type: str = Field(..., description="Event type")
+    data: Dict[str, Any] = Field(..., description="Event data")
+    timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+    
+    class Config:
+        """Pydantic configuration"""
+        extra = "allow"
+
+# Add specialized stream event types
+class ChemicalUpdateEvent(StreamEvent):
+    """Specialized event for chemical updates"""
+    type: str = Field("chemical_update", const=True)
+    data: Dict[str, Any] = Field(..., description="Chemical update data")
+    
+class EmotionChangeEvent(StreamEvent):
+    """Specialized event for emotion changes"""
+    type: str = Field("emotion_change", const=True)
+    data: Dict[str, Any] = Field(..., description="Emotion change data")
+    
+class ReflectionEvent(StreamEvent):
+    """Specialized event for reflections"""
+    type: str = Field("reflection", const=True)
+    data: Dict[str, Any] = Field(..., description="Reflection data")
