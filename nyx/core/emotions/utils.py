@@ -2,21 +2,28 @@
 
 """
 Enhanced utility functions for the Nyx emotional system.
-Provides improved error handling, tracing, and run configuration utilities.
+Provides improved error handling, tracing, and run configuration utilities
+with better OpenAI Agents SDK integration.
 """
 
 import functools
 import logging
 import datetime
 import json
-from typing import Callable, Any, Dict, Optional, TypeVar, List, Awaitable, Type, Union, Literal, cast
+import inspect
+from typing import (
+    Callable, Any, Dict, Optional, TypeVar, List, Awaitable, Type, 
+    Union, Literal, cast, Tuple, Set, Generic, overload
+)
 
 from agents import (
     RunConfig, ModelSettings, InputGuardrail, OutputGuardrail, 
-    trace, custom_span, gen_trace_id, function_span, Agent
+    trace, custom_span, gen_trace_id, function_span, Agent, 
+    Model, ModelProvider, OpenAIProvider
 )
 from agents.exceptions import UserError, AgentsException, ModelBehaviorError
-from agents.tracing import Trace, Span
+from agents.tracing import Trace, Span, gen_span_id, add_trace_processor
+from agents.extensions.handoff_filters import keep_relevant_history
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +34,7 @@ TContext = TypeVar('TContext')
 TReturn = TypeVar('TReturn')
 
 def handle_errors(logger_message: str = "An error occurred", 
-                 log_level: Literal["debug", "info", "warning", "error"] = "error") -> Callable[[TFunc], TFunc]:
+                log_level: Literal["debug", "info", "warning", "error"] = "error") -> Callable[[TFunc], TFunc]:
     """
     Enhanced decorator for consistent error handling across emotional system functions
     
@@ -42,45 +49,157 @@ def handle_errors(logger_message: str = "An error occurred",
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
-                return await func(*args, **kwargs)
+                # Get function signature for better error context
+                sig = inspect.signature(func)
+                param_names = list(sig.parameters.keys())
+                
+                # Extract context from parameters if available (for better error tracking)
+                ctx = None
+                if len(args) > 0 and param_names and param_names[0] == "ctx":
+                    ctx = args[0]
+                
+                # Track start time for performance monitoring
+                start_time = datetime.datetime.now()
+                
+                # Execute the function with tracing
+                with function_span(func.__name__, input=str(args)[:100] if args else "{}"):
+                    result = await func(*args, **kwargs)
+                
+                # Track execution time
+                duration = (datetime.datetime.now() - start_time).total_seconds()
+                
+                # Log success if needed
+                if log_level == "debug":
+                    getattr(logger, "debug")(f"{func.__name__} completed in {duration:.3f}s")
+                
+                # Record timing information in context if available
+                if ctx and hasattr(ctx, "context") and hasattr(ctx.context, "get_value"):
+                    # Store function timing in context
+                    function_timing = ctx.context.get_value("function_timing", {})
+                    
+                    if func.__name__ not in function_timing:
+                        function_timing[func.__name__] = {"count": 0, "total_time": 0}
+                    
+                    function_timing[func.__name__]["count"] += 1
+                    function_timing[func.__name__]["total_time"] += duration
+                    function_timing[func.__name__]["avg_time"] = (
+                        function_timing[func.__name__]["total_time"] / 
+                        function_timing[func.__name__]["count"]
+                    )
+                    
+                    ctx.context.set_value("function_timing", function_timing)
+                
+                return result
+                
             except UserError as e:
                 # Handle user errors (invalid inputs, etc.)
                 getattr(logger, log_level)(f"{logger_message}: {e}")
-                return {
-                    "success": False, 
-                    "error": str(e), 
-                    "error_type": "user_error",
-                    "timestamp": datetime.datetime.now().isoformat()
-                }
+                
+                # Create a custom error span for better tracing
+                with custom_span(
+                    "error", 
+                    data={
+                        "type": "user_error",
+                        "message": str(e),
+                        "function": func.__name__,
+                        "timestamp": datetime.datetime.now().isoformat()
+                    }
+                ):
+                    # Return structured error response
+                    return {
+                        "success": False, 
+                        "error": str(e), 
+                        "error_type": "user_error",
+                        "timestamp": datetime.datetime.now().isoformat()
+                    }
+                    
             except ModelBehaviorError as e:
                 # Handle model-specific errors
                 getattr(logger, "warning")(f"{logger_message} (Model behavior): {e}")
-                return {
-                    "success": False, 
-                    "error": str(e), 
-                    "error_type": "model_behavior_error",
-                    "timestamp": datetime.datetime.now().isoformat()
-                }
+                
+                # Create a custom error span for better tracing
+                with custom_span(
+                    "error", 
+                    data={
+                        "type": "model_behavior_error",
+                        "message": str(e),
+                        "function": func.__name__,
+                        "timestamp": datetime.datetime.now().isoformat()
+                    }
+                ):
+                    # Return structured error response
+                    return {
+                        "success": False, 
+                        "error": str(e), 
+                        "error_type": "model_behavior_error",
+                        "timestamp": datetime.datetime.now().isoformat()
+                    }
+                    
             except AgentsException as e:
                 # Handle Agent SDK errors
                 getattr(logger, "error")(f"{logger_message} (Agent SDK): {e}")
-                return {
-                    "success": False, 
-                    "error": str(e), 
-                    "error_type": "agent_error",
-                    "timestamp": datetime.datetime.now().isoformat()
-                }
+                
+                # Create a custom error span for better tracing
+                with custom_span(
+                    "error", 
+                    data={
+                        "type": "agent_error",
+                        "message": str(e),
+                        "function": func.__name__,
+                        "timestamp": datetime.datetime.now().isoformat()
+                    }
+                ):
+                    # Return structured error response
+                    return {
+                        "success": False, 
+                        "error": str(e), 
+                        "error_type": "agent_error",
+                        "timestamp": datetime.datetime.now().isoformat()
+                    }
+                    
             except Exception as e:
                 # Handle unexpected errors
                 getattr(logger, "error")(f"{logger_message} (Unexpected): {e}", exc_info=True)
-                return {
-                    "success": False, 
-                    "error": "An unexpected error occurred", 
-                    "error_type": "system_error",
-                    "timestamp": datetime.datetime.now().isoformat()
-                }
+                
+                # Create a custom error span for better tracing
+                with custom_span(
+                    "error", 
+                    data={
+                        "type": "system_error",
+                        "message": str(e),
+                        "function": func.__name__,
+                        "timestamp": datetime.datetime.now().isoformat()
+                    }
+                ):
+                    # Return structured error response for unexpected errors
+                    return {
+                        "success": False, 
+                        "error": "An unexpected error occurred", 
+                        "error_type": "system_error",
+                        "timestamp": datetime.datetime.now().isoformat(),
+                        "function": func.__name__
+                    }
+                    
         return cast(TFunc, wrapper)
     return decorator
+
+@overload
+def create_run_config(
+    workflow_name: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    temperature: float = 0.4,
+    max_tokens: int = 300,
+    include_sensitive_data: bool = True,
+    cycle_count: int = 0,
+    model: str = "o3-mini",
+    model_provider: Optional[ModelProvider] = None,
+    input_guardrails: Optional[List[InputGuardrail[Any]]] = None,
+    output_guardrails: Optional[List[OutputGuardrail[Any]]] = None,
+    context_data: Optional[Dict[str, Any]] = None,
+    handoff_input_filter: Optional[Callable] = None,
+    group_id: Optional[str] = None
+) -> RunConfig:
+    ...
 
 def create_run_config(
     workflow_name: Optional[str] = None,
@@ -90,9 +209,12 @@ def create_run_config(
     include_sensitive_data: bool = True,
     cycle_count: int = 0,
     model: str = "o3-mini",
+    model_provider: Optional[ModelProvider] = None,
     input_guardrails: Optional[List[InputGuardrail[Any]]] = None,
     output_guardrails: Optional[List[OutputGuardrail[Any]]] = None,
-    context_data: Optional[Dict[str, Any]] = None
+    context_data: Optional[Dict[str, Any]] = None,
+    handoff_input_filter: Optional[Callable] = None,
+    group_id: Optional[str] = None
 ) -> RunConfig:
     """
     Enhanced factory function for creating standardized run configurations
@@ -105,21 +227,23 @@ def create_run_config(
         include_sensitive_data: Whether to include sensitive data in traces
         cycle_count: Current processing cycle count
         model: Model to use for inference
+        model_provider: Provider for model lookup (OpenAIProvider by default)
         input_guardrails: Optional list of input guardrails
         output_guardrails: Optional list of output guardrails
         context_data: Additional context metadata
+        handoff_input_filter: Function to filter handoff inputs
+        group_id: Group ID for linking related traces
         
     Returns:
         Run configuration for the Agent SDK
     """
-    from agents.extensions import handoff_filters
-    
     # Generate a proper trace ID if not provided
     if not trace_id:
         trace_id = gen_trace_id()
     elif not trace_id.startswith("trace_"):
         trace_id = f"trace_{trace_id}"
     
+    # Build metadata dictionary with standard fields
     metadata = {
         "system": "nyx_emotional_core",
         "version": "1.0",
@@ -131,16 +255,19 @@ def create_run_config(
     if context_data:
         metadata.update(context_data)
     
+    # Create run configuration with SDK features
     return RunConfig(
         workflow_name=workflow_name or f"Emotion_{cycle_count}",
         trace_id=trace_id,
+        group_id=group_id,
         model=model,
+        model_provider=model_provider or OpenAIProvider(),
         model_settings=ModelSettings(
             temperature=temperature,
             top_p=0.95,
             max_tokens=max_tokens
         ),
-        handoff_input_filter=handoff_filters.keep_relevant_history,
+        handoff_input_filter=handoff_input_filter or keep_relevant_history,
         trace_include_sensitive_data=include_sensitive_data,
         trace_metadata=metadata,
         input_guardrails=input_guardrails or [],
@@ -165,11 +292,34 @@ def with_emotion_trace(func: Callable[..., Awaitable[T]]) -> Callable[..., Await
         # Generate a unique trace ID
         trace_id = gen_trace_id()
         
+        # Extract conversation ID from context or kwargs if available
+        context = getattr(self, "context", None)
+        conversation_id = kwargs.get("conversation_id")
+        
+        if not conversation_id and context:
+            # Try to get conversation ID from context
+            if hasattr(context, "get_value"):
+                conversation_id = context.get_value("conversation_id")
+            elif hasattr(context, "temp_data"):
+                conversation_id = context.temp_data.get("conversation_id")
+        
+        if not conversation_id:
+            # Generate a new conversation ID if none exists
+            conversation_id = f"conversation_{datetime.datetime.now().timestamp()}"
+            
+            # Store in context if possible
+            if context:
+                if hasattr(context, "set_value"):
+                    context.set_value("conversation_id", conversation_id)
+                elif hasattr(context, "temp_data"):
+                    context.temp_data["conversation_id"] = conversation_id
+        
         # Add useful metadata
         metadata = {
             "function": func.__name__,
             "cycle_count": getattr(self, "context", {}).cycle_count if hasattr(self, "context") else 0,
-            "timestamp": datetime.datetime.now().isoformat()
+            "timestamp": datetime.datetime.now().isoformat(),
+            "conversation_id": conversation_id
         }
         
         # Add dominant emotion information if available
@@ -181,37 +331,45 @@ def with_emotion_trace(func: Callable[..., Awaitable[T]]) -> Callable[..., Await
             except:
                 pass
         
-        # Add performance metrics if available
-        if hasattr(self, "performance_metrics"):
-            try:
-                metrics = {
-                    k: v for k, v in self.performance_metrics.items() 
-                    if k in ["api_calls", "average_response_time"]
-                }
-                metadata["performance_metrics"] = metrics
-            except:
-                pass
-        
-        # Get conversation ID from context if available
-        conversation_id = "default"
-        if hasattr(self, "context") and hasattr(self.context, "temp_data"):
-            conversation_id = self.context.temp_data.get("conversation_id", "default")
-        
-        # Create the trace
+        # Create the trace with SDK features
         with trace(
             workflow_name=workflow_name, 
             trace_id=trace_id,
-            group_id=f"conversation_{conversation_id}",
+            group_id=conversation_id,
             metadata=metadata
         ):
             # Create a span specifically for this function
-            with function_span(func.__name__, input=str(args)[:100]):
-                return await func(self, *args, **kwargs)
+            function_id = gen_span_id()
+            with function_span(
+                func.__name__, 
+                input=str(args)[:100] if args else "{}", 
+                span_id=function_id
+            ):
+                # Execute the function and return its result
+                result = await func(self, *args, **kwargs)
+                
+                # Add result metadata to the function span
+                if isinstance(result, dict) and "success" in result:
+                    # For error results or status reports
+                    with custom_span(
+                        "function_result",
+                        data={
+                            "function": func.__name__,
+                            "success": result.get("success", False),
+                            "duration": self.context.get_elapsed_time(
+                                f"start_{func.__name__}", 
+                                f"end_{func.__name__}"
+                            ) if hasattr(self, "context") else 0
+                        }
+                    ):
+                        pass
+                
+                return result
     
     return wrapper
 
 class EmotionalToolUtils:
-    """Static utility functions for emotional tools"""
+    """Static utility functions for emotional tools with improved SDK integration"""
     
     @staticmethod
     def normalize_value(value: float, min_val: float = 0.0, max_val: float = 1.0) -> float:
@@ -349,3 +507,93 @@ class EmotionalToolUtils:
                 config["max_tokens"] = 200  # More concise when calm
         
         return config
+
+    @staticmethod
+    def create_trace_metadata(context: Any) -> Dict[str, Any]:
+        """
+        Create metadata dictionary for traces from context
+        
+        Args:
+            context: Context object
+            
+        Returns:
+            Metadata dictionary for tracing
+        """
+        metadata = {
+            "system": "nyx_emotional_core",
+            "version": "1.0",
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        # Add context data if available
+        if hasattr(context, "cycle_count"):
+            metadata["cycle"] = context.cycle_count
+            
+        if hasattr(context, "create_trace_metadata"):
+            # Use context's built-in method if available
+            return context.create_trace_metadata()
+            
+        # Try to extract information from context manually
+        if hasattr(context, "last_emotions") and context.last_emotions:
+            # Find dominant emotion
+            try:
+                dominant = max(context.last_emotions.items(), key=lambda x: x[1])
+                metadata["dominant_emotion"] = dominant[0]
+                metadata["intensity"] = dominant[1]
+            except:
+                pass
+        
+        # Add conversation ID if available
+        if hasattr(context, "get_value"):
+            conversation_id = context.get_value("conversation_id")
+            if conversation_id:
+                metadata["conversation_id"] = conversation_id
+        elif hasattr(context, "temp_data"):
+            conversation_id = context.temp_data.get("conversation_id")
+            if conversation_id:
+                metadata["conversation_id"] = conversation_id
+                
+        return metadata
+    
+    @staticmethod
+    def configure_trace_processor():
+        """
+        Configure a custom trace processor for emotional analysis
+        """
+        from agents.tracing import add_trace_processor, BatchTraceProcessor
+        from agents.tracing.processors import BackendSpanExporter
+        from collections import defaultdict
+        
+        # Define a custom trace processor that can generate emotional analytics
+        class EmotionalAnalyticsProcessor(BatchTraceProcessor):
+            """Custom processor that analyzes emotional patterns in traces"""
+            
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.emotion_transitions = defaultdict(int)
+                self.chemical_patterns = defaultdict(list)
+            
+            def on_span_end(self, span):
+                """Process span data for emotional analytics"""
+                super().on_span_end(span)
+                
+                # Track emotion transitions
+                if hasattr(span, "data") and span.data.get("type") == "emotion_transition":
+                    from_emotion = span.data.get("from_emotion", "unknown")
+                    to_emotion = span.data.get("to_emotion", "unknown")
+                    self.emotion_transitions[(from_emotion, to_emotion)] += 1
+                
+                # Track chemical patterns
+                if hasattr(span, "data") and span.data.get("type") == "chemical_update":
+                    chemical = span.data.get("chemical")
+                    value = span.data.get("value")
+                    if chemical and value is not None:
+                        self.chemical_patterns[chemical].append(value)
+        
+        # Create and add the custom processor
+        emotion_trace_processor = EmotionalAnalyticsProcessor(
+            exporter=BackendSpanExporter(project="nyx_emotional_system"),
+            max_batch_size=100,
+            schedule_delay=3.0
+        )
+        add_trace_processor(emotion_trace_processor)
