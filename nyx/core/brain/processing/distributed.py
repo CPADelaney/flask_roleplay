@@ -550,3 +550,35 @@ class DistributedProcessor:
         return {"context_change": None, "adaptation_result": None}
     
     async def _process_identity_impact_placeholder(self, user_input: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Placeholder method for identity impact processing"""
+        # Check if identity evolution system is available
+        if not hasattr(self.brain, "identity_evolution") or not self.brain.identity_evolution:
+            return None
+        
+        # Try to get experience information
+        try:
+            if hasattr(self.brain, "experience_interface") and self.brain.experience_interface:
+                # Get the most recent experience
+                experiences = await self.brain.experience_interface.retrieve_experiences_enhanced(
+                    query=user_input,
+                    limit=1,
+                    user_id=str(self.brain.user_id)
+                )
+                
+                if experiences:
+                    experience = experiences[0]
+                    
+                    # Calculate impact on identity
+                    identity_impact = await self.brain.identity_evolution.calculate_experience_impact(experience)
+                    
+                    # Update identity based on experience
+                    await self.brain.identity_evolution.update_identity_from_experience(
+                        experience=experience,
+                        impact=identity_impact
+                    )
+                    
+                    return identity_impact
+        except Exception as e:
+            logger.error(f"Error processing identity impact: {str(e)}")
+        
+        return None
