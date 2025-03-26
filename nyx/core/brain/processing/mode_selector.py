@@ -1,4 +1,5 @@
 # nyx/core/brain/processing/mode_selector.py
+
 import logging
 import asyncio
 import datetime
@@ -87,8 +88,8 @@ class ModeSelector:
         logger.info("Mode selector initialized")
     
     async def determine_processing_mode(self, 
-                                    user_input: str, 
-                                    context: Dict[str, Any] = None) -> str:
+                                     user_input: str, 
+                                     context: Dict[str, Any] = None) -> str:
         """
         Determine optimal processing mode based on input complexity and context
         
@@ -345,9 +346,9 @@ class ModeSelector:
         return task_types
     
     def _apply_task_type_modifiers(self, 
-                               complexity_score: float, 
-                               task_types: Dict[str, float],
-                               context: Dict[str, Any]) -> float:
+                                complexity_score: float, 
+                                task_types: Dict[str, float],
+                                context: Dict[str, Any]) -> float:
         """Apply task type-specific modifiers to complexity score"""
         modified_score = complexity_score
         
@@ -432,8 +433,8 @@ class ModeSelector:
         return agent_suitability
     
     def _apply_performance_adjustments(self, 
-                                   selected_mode: str, 
-                                   context: Dict[str, Any]) -> str:
+                                    selected_mode: str, 
+                                    context: Dict[str, Any]) -> str:
         """Apply performance-based adjustments to mode selection"""
         # If success rate for selected mode is lower than another mode,
         # consider switching based on relative performance
@@ -536,9 +537,9 @@ class ModeSelector:
             self.mode_metrics[mode]["usage_count"] += 1
     
     def update_mode_metrics(self, 
-                         mode: str, 
-                         success: bool, 
-                         response_time: float) -> None:
+                          mode: str, 
+                          success: bool, 
+                          response_time: float) -> None:
         """
         Update performance metrics for a mode
         
@@ -583,7 +584,7 @@ class ModeSelector:
         
         # Extract complexity scores and modes
         complexity_modes = [(s["complexity_score"], s["mode"]) for s in recent_selections 
-                         if "complexity_score" in s and s["complexity_score"] is not None]
+                          if "complexity_score" in s and s["complexity_score"] is not None]
         
         if not complexity_modes:
             return
@@ -624,9 +625,9 @@ class ModeSelector:
                 self.complexity_thresholds["distributed"] = new_distributed_threshold
     
     def learn_from_user_feedback(self, 
-                               user_id: str, 
-                               feedback: Dict[str, Any],
-                               context: Dict[str, Any] = None) -> Dict[str, Any]:
+                                user_id: str, 
+                                feedback: Dict[str, Any],
+                                context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Update user preferences based on feedback
         
@@ -810,110 +811,3 @@ class ModeSelector:
                 } for mode, metrics in self.mode_metrics.items()
             }
         }
-    
-    async def generate_selection_insight(self) -> Dict[str, Any]:
-        """
-        Generate insight about mode selection patterns
-        
-        Returns:
-            Selection insight data
-        """
-        # Check if we have enough history
-        if len(self.selection_history) < 10:
-            return {
-                "status": "insufficient_data",
-                "message": "Not enough mode selection history for meaningful insights"
-            }
-        
-        # Get usage analysis
-        analysis = await self.analyze_mode_usage()
-        
-        # Identify the most used mode
-        most_used_mode = max(analysis["usage_distribution"].items(), key=lambda x: x[1])
-        
-        # Identify the highest success rate mode
-        highest_success_mode = max(
-            [(mode, metrics["success_rate"]) for mode, metrics in self.mode_metrics.items()],
-            key=lambda x: x[1]
-        )
-        
-        # Identify the fastest mode
-        fastest_mode = min(
-            [(mode, metrics["avg_time"]) for mode, metrics in self.mode_metrics.items() if metrics["avg_time"] > 0],
-            key=lambda x: x[1] if x[1] > 0 else float('inf')
-        ) if any(metrics["avg_time"] > 0 for metrics in self.mode_metrics.values()) else None
-        
-        # Check for underutilized high-performance modes
-        underutilized_modes = []
-        for mode, metrics in self.mode_metrics.items():
-            usage_pct = analysis["usage_distribution"].get(mode, 0) * 100
-            if usage_pct < 10 and metrics["success_rate"] > 0.85:
-                underutilized_modes.append({
-                    "mode": mode,
-                    "usage_percentage": usage_pct,
-                    "success_rate": metrics["success_rate"]
-                })
-        
-        # Generate insights about task type patterns
-        task_insights = []
-        for task_type, pattern in analysis.get("task_type_patterns", {}).items():
-            if pattern["percentage"] > 0.7:  # Strong pattern
-                task_insights.append({
-                    "task_type": task_type,
-                    "preferred_mode": pattern["mode"],
-                    "confidence": pattern["percentage"],
-                    "recommendation": f"Consider defaulting to {pattern['mode']} mode for {task_type} tasks"
-                })
-        
-        # Learn patterns for future reference
-        new_pattern = None
-        if task_insights and len(task_insights) > 0:
-            new_pattern = {
-                "timestamp": datetime.datetime.now().isoformat(),
-                "type": "task_mode_affinity",
-                "details": task_insights[0]  # Add strongest pattern
-            }
-            self.selection_insights["learned_patterns"].append(new_pattern)
-        
-        # Generate recommendations
-        recommendations = []
-        
-        # Recommend exploring underutilized modes
-        if underutilized_modes:
-            recommendations.append({
-                "type": "explore_underutilized",
-                "details": underutilized_modes[0],
-                "message": f"Consider using {underutilized_modes[0]['mode']} mode more often as it has a high success rate"
-            })
-        
-        # Recommend adjusting thresholds if needed
-        mode_coverage = list(analysis["usage_distribution"].values())
-        if max(mode_coverage) > 0.5:  # One mode is used more than 50% of the time
-            recommendations.append({
-                "type": "adjust_thresholds",
-                "message": "Consider adjusting complexity thresholds to better distribute mode usage"
-            })
-        
-        # Return insights
-        insight_data = {
-            "status": "success",
-            "most_used_mode": {
-                "mode": most_used_mode[0],
-                "usage_percentage": most_used_mode[1] * 100
-            },
-            "highest_success_mode": {
-                "mode": highest_success_mode[0],
-                "success_rate": highest_success_mode[1]
-            },
-            "task_type_insights": task_insights,
-            "recommendations": recommendations,
-            "new_learned_pattern": new_pattern
-        }
-        
-        if fastest_mode:
-            insight_data["fastest_mode"] = {
-                "mode": fastest_mode[0],
-                "avg_time": fastest_mode[1]
-            }
-        
-        return insight_data
