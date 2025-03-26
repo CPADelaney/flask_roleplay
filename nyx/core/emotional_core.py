@@ -1816,7 +1816,7 @@ class EmotionalCore:
     
     async def process_emotional_input(self, text: str) -> Dict[str, Any]:
         """
-        Process input text through the DNM and update emotional state
+        Process input text through the DNM and update emotional state using Agent SDK orchestration
         
         Args:
             text: Input text to process
@@ -1824,131 +1824,52 @@ class EmotionalCore:
         Returns:
             Processing results with updated emotional state
         """
-        # Check for reflection trigger
-        now = datetime.datetime.now()
-        should_reflect = now > self.next_reflection_time
+        # Define an orchestrator agent for emotional processing
+        emotion_orchestrator = Agent(
+            name="Emotion_Orchestrator",
+            instructions="""
+            You are the orchestration system for Nyx's emotional processing.
+            Your role is to coordinate emotional analysis and response by:
+            1. Analyzing input for emotional content
+            2. Updating appropriate neurochemicals
+            3. Determining if reflection is needed
+            4. Recording emotional patterns for learning
+            """,
+            handoffs=[
+                handoff(self.neurochemical_agent, 
+                       tool_name_override="update_neurochemicals", 
+                       tool_description_override="Update neurochemicals based on emotional analysis"),
+                
+                handoff(self.reflection_agent, 
+                       tool_name_override="generate_reflection",
+                       tool_description_override="Generate emotional reflection if appropriate"),
+                
+                handoff(self.learning_agent,
+                       tool_name_override="record_and_learn",
+                       tool_description_override="Record and learn from emotional interactions")
+            ],
+            tools=[
+                function_tool(self._analyze_text_sentiment)
+            ]
+        )
         
-        # Use the neurochemical agent
-        with trace(workflow_name="EmotionalInput"):
-            try:
-                # Analyze text for neurochemical impacts
-                stimuli = {}
-                text_lower = text.lower()
-                
-                # Enhanced pattern recognition for each neurochemical
-                # Nyxamine (pleasure, curiosity) triggers
-                if any(word in text_lower for word in ["happy", "good", "great", "love", "like", "fun", "enjoy", "curious", "interested"]):
-                    stimuli["nyxamine"] = 0.2
-                
-                # Seranix (calm, satisfaction) triggers
-                if any(word in text_lower for word in ["calm", "peaceful", "relaxed", "content", "satisfied", "gentle", "quiet"]):
-                    stimuli["seranix"] = 0.2
-                
-                # OxyNixin (bonding, trust) triggers
-                if any(word in text_lower for word in ["trust", "close", "together", "bond", "connect", "loyal", "friend", "relationship"]):
-                    stimuli["oxynixin"] = 0.2
-                
-                # Cortanyx (stress, anxiety) triggers
-                if any(word in text_lower for word in ["worried", "scared", "afraid", "nervous", "stressed", "sad", "sorry", "angry", "upset", "frustrated"]):
-                    stimuli["cortanyx"] = 0.2
-                
-                # Adrenyx (excitement, alertness) triggers
-                if any(word in text_lower for word in ["excited", "alert", "surprised", "wow", "amazing", "intense", "sudden", "quick"]):
-                    stimuli["adrenyx"] = 0.2
-                
-                # Update each affected neurochemical
-                updated_chemicals = {}
-                for chemical, value in stimuli.items():
-                    result = await self._update_neurochemical(
-                        RunContextWrapper(context=None),
-                        chemical=chemical,
-                        value=value
-                    )
-                    
-                    if result.get("success", False):
-                        updated_chemicals[chemical] = result
-                
-                # Get the derived emotional state
-                emotional_state_matrix = await self._get_emotional_state_matrix(RunContextWrapper(context=None))
-                
-                # Generate internal reflection if due
-                reflection = None
-                if should_reflect:
-                    reflection_result = await self._generate_internal_thought(RunContextWrapper(context=None))
-                    reflection = reflection_result.get("thought_text")
-                    
-                    # Apply any adaptive change suggested
-                    adaptive_change = reflection_result.get("adaptive_change")
-                    if adaptive_change:
-                        chemical = adaptive_change.get("chemical")
-                        new_baseline = adaptive_change.get("suggested_baseline")
-                        
-                        if chemical in self.neurochemicals and new_baseline is not None:
-                            self.neurochemicals[chemical]["baseline"] = new_baseline
-                    
-                    # Set next reflection time
-                    self.next_reflection_time = now + datetime.timedelta(minutes=random.randint(5, 15))
-                
-                # Learn from this interaction if appropriate
-                if len(self.emotional_state_history) >= 2:
-                    # Get previous emotional state
-                    prev_state = self.emotional_state_history[-2]
-                    current_state = emotional_state_matrix
-                    
-                    # Evaluate if the change was positive or negative
-                    prev_valence = prev_state.get("valence", 0)
-                    current_valence = current_state.get("valence", 0)
-                    
-                    valence_change = current_valence - prev_valence
-                    
-                    # Record pattern with outcome
-                    if abs(valence_change) > 0.2:  # Only record significant changes
-                        pattern = f"Text input with {[key for key in stimuli.keys()]} triggers"
-                        
-                        if valence_change > 0:
-                            await self._record_interaction_outcome(
-                                RunContextWrapper(context=None),
-                                interaction_pattern=pattern,
-                                outcome="positive",
-                                strength=min(1.0, abs(valence_change) * 2)
-                            )
-                        else:
-                            await self._record_interaction_outcome(
-                                RunContextWrapper(context=None),
-                                interaction_pattern=pattern,
-                                outcome="negative",
-                                strength=min(1.0, abs(valence_change) * 2)
-                            )
-                        
-                        # Periodically update learning rules
-                        if random.random() < 0.2:  # 20% chance each time
-                            await self._update_learning_rules(RunContextWrapper(context=None))
-                
-                return {
-                    "input_processed": True,
-                    "chemicals_affected": {c: v for c, v in stimuli.items() if v > 0},
-                    "emotional_state": {
-                        "primary_emotion": emotional_state_matrix["primary_emotion"],
-                        "secondary_emotions": emotional_state_matrix["secondary_emotions"],
-                        "valence": emotional_state_matrix["valence"],
-                        "arousal": emotional_state_matrix["arousal"]
-                    },
-                    "internal_reflection": reflection
-                }
-                
-            except Exception as e:
-                logger.error(f"Error processing emotional input: {e}")
-                
-                # Fallback: use simple stimuli processing
-                stimuli = self.analyze_text_sentiment(text)
-                self.update_from_stimuli(stimuli)
-                
-                return {
-                    "input_processed": True,
-                    "detected_emotions": stimuli,
-                    "updated_state": self.get_formatted_emotional_state(),
-                    "error": str(e)
-                }
+        with trace(workflow_name="Emotional_Processing"):
+            result = await Runner.run(
+                emotion_orchestrator,
+                json.dumps({
+                    "input_text": text,
+                    "current_cycle": self.context.cycle_count if hasattr(self, "context") else 0
+                })
+            )
+        
+        # Process the result
+        processed_result = json.loads(result.final_output) if isinstance(result.final_output, str) else result.final_output
+        
+        # Update timestamp and record history
+        self.last_update = datetime.datetime.now()
+        self._record_emotional_state()
+        
+        return processed_result
     
     async def generate_emotional_expression(self, force: bool = False) -> Dict[str, Any]:
         """
